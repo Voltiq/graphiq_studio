@@ -1,0 +1,14 @@
+.page {
+  min-height: 100vh;
+  padding: 2rem;
+  background: radial-gradient(circle at top, rgba(48, 58, 99, 0.35), transparent 60%), #050608;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (max-width: 1200px) {
+  .page {
+    padding: 1rem;
+  }
+}
