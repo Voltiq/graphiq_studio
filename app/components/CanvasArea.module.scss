@@ -1,0 +1,306 @@
+.canvasArea {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--canvas-void);
+}
+
+/* -------------------------------- Tabs ------------------------------------ */
+.tabs {
+  display: flex;
+  align-items: stretch;
+  height: 36px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 var(--sp-2);
+  gap: 2px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 12px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  border-bottom: 2px solid transparent;
+  transition: color 0.12s ease, background 0.12s ease;
+  max-width: 200px;
+
+  &:hover {
+    color: var(--text-2);
+    background: var(--surface-2);
+
+    .tabClose {
+      opacity: 1;
+    }
+  }
+
+  &[data-active="true"] {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+
+    .tabDot {
+      background: var(--accent);
+    }
+  }
+}
+
+.tabDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+
+.tabName {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabRename {
+  width: 11ch;
+  min-width: 60px;
+  max-width: 200px;
+  padding: 1px 4px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  outline: none;
+}
+
+.tabClose {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.12s ease, background 0.12s ease, color 0.12s ease;
+
+  &:hover {
+    background: var(--surface-hover);
+    color: var(--danger);
+  }
+}
+
+.tabNew {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 4px;
+  align-self: center;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  transition: background 0.12s ease, color 0.12s ease;
+
+  &:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+}
+
+.tabSpacer {
+  flex: 1;
+}
+
+/* ------------------------------ Stage / rulers ---------------------------- */
+$ruler: 22px;
+
+.stageWrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: $ruler 1fr;
+  grid-template-rows: $ruler 1fr;
+}
+
+.rulerCorner {
+  grid-area: 1 / 1;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  z-index: 2;
+}
+
+.rulerH,
+.rulerV {
+  background: var(--surface);
+  color: var(--text-3);
+  overflow: hidden;
+  display: flex;
+}
+
+.rulerH {
+  grid-area: 1 / 2;
+  border-bottom: 1px solid var(--border);
+  flex-direction: row;
+}
+
+.rulerV {
+  grid-area: 2 / 1;
+  border-right: 1px solid var(--border);
+  flex-direction: column;
+}
+
+.tick {
+  position: relative;
+  flex-shrink: 0;
+
+  em {
+    position: absolute;
+    font-style: normal;
+    font-size: 9px;
+    font-family: var(--font-mono);
+    opacity: 0.65;
+  }
+}
+
+.rulerH .tick {
+  width: 20px;
+  border-left: 1px solid var(--border);
+  height: 5px;
+  align-self: flex-end;
+
+  &[data-major="true"] {
+    height: 9px;
+    border-left-color: var(--border-strong);
+  }
+  em {
+    bottom: 8px;
+    left: 3px;
+  }
+}
+
+.rulerV .tick {
+  height: 20px;
+  border-top: 1px solid var(--border);
+  width: 5px;
+  align-self: flex-end;
+
+  &[data-major="true"] {
+    width: 9px;
+    border-top-color: var(--border-strong);
+  }
+  em {
+    left: 2px;
+    top: 4px;
+    writing-mode: vertical-rl;
+  }
+}
+
+/* ------------------------------- Viewport --------------------------------- */
+.viewport {
+  grid-area: 2 / 2;
+  position: relative;
+  overflow: hidden;
+  background-image: radial-gradient(
+    circle at center,
+    color-mix(in srgb, var(--text) 4%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 22px 22px;
+}
+
+/* Free pan/zoom: positioned at the origin and moved/scaled via transform so it
+   can sit anywhere in the viewport and zoom toward the cursor. */
+.canvasShadow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+  border-radius: 2px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  will-change: transform;
+}
+
+/* Transparency checkerboard. Theme-aware greys; a fixed background-size keeps
+   the squares the same on-screen size at every zoom level (the canvas grows by
+   width/height, not by a scale transform). */
+.checker {
+  position: absolute;
+  inset: 0;
+  background-color: var(--checker-a);
+  background-image: repeating-conic-gradient(
+    var(--checker-b) 0% 25%,
+    var(--checker-a) 0% 50%
+  );
+  background-size: 16px 16px;
+}
+
+/* Composited layers render here, on top of the checker. */
+.view {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+/* Marching-ants selection overlay; screen-space, never intercepts pointers. */
+.overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* ------------------------------ Zoom control ------------------------------ */
+.zoomBar {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  box-shadow: var(--shadow);
+  z-index: 5;
+
+  button {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    color: var(--text-2);
+    transition: background 0.12s ease, color 0.12s ease;
+
+    &:hover {
+      background: var(--surface-hover);
+      color: var(--text);
+    }
+  }
+}
+
+.zoomValue {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  min-width: 44px;
+  text-align: center;
+}
+
+.zoomSep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 2px;
+}

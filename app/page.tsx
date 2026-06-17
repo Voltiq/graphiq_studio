@@ -1,12 +1,7 @@
-import PhotoEditor from "./editor/components/PhotoEditor";
-import styles from "./page.module.scss";
+import Editor from "./components/Editor";
+import { getServerTheme } from "./lib/theme.server";
 
-const Home = () => {
-  return (
-    <main className={styles.page}>
-      <PhotoEditor />
-    </main>
-  );
-};
-
-export default Home;
+export default async function Home() {
+  const theme = await getServerTheme();
+  return <Editor initialTheme={theme} />;
+}

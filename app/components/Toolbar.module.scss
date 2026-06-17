@@ -1,0 +1,148 @@
+.toolbar {
+  width: var(--toolbar-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--sp-2) 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  z-index: 30;
+}
+
+.tools {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  overflow-y: auto;
+  overflow-x: visible;
+  padding-bottom: var(--sp-2);
+
+  &::-webkit-scrollbar {
+    width: 0;
+  }
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-bottom: var(--sp-3);
+  position: relative;
+
+  &:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 8px;
+    right: 8px;
+    height: 1px;
+    background: var(--border);
+  }
+}
+
+.tool {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  margin: 0 auto;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  transition: background 0.12s ease, color 0.12s ease, transform 0.12s ease;
+
+  &:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+
+    .kbd {
+      opacity: 1;
+    }
+  }
+
+  &:active {
+    transform: scale(0.94);
+  }
+
+  &[data-active="true"] {
+    color: var(--accent-contrast);
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: 0 4px 12px rgba(var(--accent-rgb), 0.4);
+
+    .kbd {
+      opacity: 0.8;
+      color: var(--accent-contrast);
+    }
+  }
+}
+
+/* Tiny shortcut hint in the corner; native title shows the full name. */
+.kbd {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  line-height: 1;
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+
+/* ------------------------- Foreground / background ------------------------ */
+.colors {
+  margin-top: auto;
+  padding-top: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.swatchStack {
+  position: relative;
+  width: 38px;
+  height: 38px;
+}
+
+.swatchWrapFg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+}
+
+.swatchWrapBg {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  z-index: 1;
+}
+
+.swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--border-strong), var(--shadow-sm);
+  cursor: pointer;
+}
+
+.swap {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  transition: background 0.12s ease, color 0.12s ease;
+
+  &:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+}

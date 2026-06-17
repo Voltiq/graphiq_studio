@@ -1,0 +1,227 @@
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  width: 100%;
+  user-select: none;
+  touch-action: none;
+}
+
+/* --------------------------- Saturation / value --------------------------- */
+.sv {
+  position: relative;
+  width: 100%;
+  height: 140px;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  cursor: crosshair;
+}
+
+.svHue {
+  position: absolute;
+  inset: 0;
+}
+
+.svWhite {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to right, #fff, rgba(255, 255, 255, 0));
+}
+
+.svBlack {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, #000, rgba(0, 0, 0, 0));
+}
+
+.svHandle {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.4);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* ------------------------------- Hue / alpha ------------------------------ */
+.sliders {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.preview {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.strips {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hue,
+.alpha {
+  position: relative;
+  height: 12px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+}
+
+.hue {
+  background: linear-gradient(
+    to right,
+    #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%
+  );
+}
+
+.alpha {
+  background-color: #fff;
+  background-image: repeating-conic-gradient(#bdbdbd 0% 25%, #ffffff 0% 50%);
+  background-size: 10px 10px;
+}
+
+.alphaTrack {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.stripHandle {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0, 0, 0, 0.35);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* --------------------------------- Inputs --------------------------------- */
+.inputs {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.format {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+
+  select {
+    appearance: none;
+    height: 30px;
+    padding: 0 22px 0 9px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    cursor: pointer;
+    outline: none;
+
+    &:focus {
+      border-color: var(--accent);
+    }
+  }
+
+  svg {
+    position: absolute;
+    right: 7px;
+    color: var(--text-3);
+    pointer-events: none;
+  }
+}
+
+.cells {
+  flex: 1;
+  display: flex;
+  gap: 5px;
+  min-width: 0;
+}
+
+.cell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.cellInput {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  width: 100%;
+  height: 30px;
+  padding: 0 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+
+  &:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+  }
+
+  input {
+    width: 100%;
+    min-width: 0;
+    background: none;
+    border: none;
+    outline: none;
+    text-align: center;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    color: var(--text);
+  }
+}
+
+.affix {
+  font-size: 11px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.cellLabel {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+
+/* -------------------------------- Swatches -------------------------------- */
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 5px;
+}
+
+.swatch {
+  aspect-ratio: 1;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+
+  &:hover {
+    transform: scale(1.12);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18), 0 0 0 2px var(--accent);
+  }
+}
