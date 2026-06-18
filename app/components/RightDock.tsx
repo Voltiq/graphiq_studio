@@ -20,6 +20,7 @@ import NavigatorPanel from "./panels/NavigatorPanel";
 import type { NavigatorView } from "../lib/view";
 import type { LayersApi } from "../lib/layers";
 import type { HistorySummary } from "../lib/paint";
+import type { Adjustments } from "../lib/adjust";
 
 interface Props {
   foreground: string;
@@ -30,6 +31,13 @@ interface Props {
   history: HistorySummary;
   onHistoryJump: (index: number) => void;
   view: NavigatorView;
+  adjust: Adjustments;
+  onAdjust: (patch: Partial<Adjustments>) => void;
+  adjustFilter: string;
+  onAdjustFilter: (name: string) => void;
+  onAdjustApply: () => void;
+  onAdjustReset: () => void;
+  adjustActive: boolean;
 }
 
 const IconBtn = ({
@@ -55,6 +63,13 @@ export default function RightDock({
   history,
   onHistoryJump,
   view,
+  adjust,
+  onAdjust,
+  adjustFilter,
+  onAdjustFilter,
+  onAdjustApply,
+  onAdjustReset,
+  adjustActive,
 }: Props) {
   return (
     <aside className={styles.dock} aria-label="Panels">
@@ -76,7 +91,15 @@ export default function RightDock({
       </Panel>
 
       <Panel title="Adjustments" icon={SlidersHorizontal}>
-        <AdjustmentsPanel />
+        <AdjustmentsPanel
+          adjust={adjust}
+          onChange={onAdjust}
+          filter={adjustFilter}
+          onFilter={onAdjustFilter}
+          onApply={onAdjustApply}
+          onReset={onAdjustReset}
+          active={adjustActive}
+        />
       </Panel>
 
       <Panel
@@ -87,10 +110,7 @@ export default function RightDock({
             <IconBtn title="New layer" onClick={layers.add}>
               <Plus size={14} />
             </IconBtn>
-            <IconBtn
-              title="Delete layer"
-              onClick={() => layers.activeLayerId && layers.remove(layers.activeLayerId)}
-            >
+            <IconBtn title="Delete layer" onClick={() => layers.remove()}>
               <Trash2 size={14} />
             </IconBtn>
           </>

@@ -20,8 +20,48 @@ import {
 } from "../lib/tools";
 import type { Theme } from "../lib/theme";
 import type { Pan, Rect } from "../lib/view";
-import type { Layer, LayersApi } from "../lib/layers";
+import {
+  cloneSubtree,
+  collectLeafIds,
+  findNode,
+  flattenedIds,
+  insertInGroup,
+  insertRelative,
+  mergeDownInTree,
+  removeMany,
+  removeNode,
+  replaceNodeWith,
+  topLevelSelected,
+  ungroupNode,
+  updateNode,
+  type Layer,
+  type LayerGroup,
+  type LayerNode,
+  type LayersApi,
+} from "../lib/layers";
 import type { BrushSettings, EngineHandle, HistorySummary, PendingPaste } from "../lib/paint";
+import SaveAsDialog from "./SaveAsDialog";
+import RecentsDialog from "./RecentsDialog";
+import ExportDialog from "./ExportDialog";
+import ImportDialog, { type ImportItem, type ImportMode } from "./ImportDialog";
+import {
+  PROJECT_EXT,
+  downloadBlob,
+  saveProjectFile,
+  serializeProject,
+  type PendingLoad,
+  type ProjectFile,
+  type SerializedNode,
+} from "../lib/project";
+import {
+  IMPORT_ACCEPT,
+  decodeImageFile,
+  renderExport,
+  saveImageBlob,
+  type ExportOptions,
+} from "../lib/imageio";
+import { addRecent } from "../lib/recents";
+import { DEFAULT_ADJUST, filterToAdjust, isDefaultAdjust, type Adjustments } from "../lib/adjust";
 
 interface PasteSrc {
   source: ImageBitmap | HTMLCanvasElement;
@@ -34,10 +74,16 @@ interface Doc {
   name: string;
   width: number;
   height: number;
-  layers: Layer[];
+  layers: LayerNode[];
+  /** Primary layer (drives the blend/opacity panel; anchor for range-select). */
   activeLayerId: string | null;
+  /** Full multi-selection (always includes activeLayerId when non-null). */
+  selectedLayerIds: string[];
   selection: Rect[];
 }
+
+/** A layer selection: the primary (active) id plus the full selected set. */
+type Sel = { active: string | null; selected: string[] };
 
 const makeDoc = (seq: number): Doc => ({
   id: `doc-${seq}`,
@@ -46,6 +92,7 @@ const makeDoc = (seq: number): Doc => ({
   height: 1080,
   layers: [],
   activeLayerId: null,
+  selectedLayerIds: [],
   selection: [],
 });
 
@@ -74,6 +121,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     smoothing: 10,
   });
   const [history, setHistory] = useState<HistorySummary>({ items: [{ label: "New" }], index: 0 });
+  const [saveAsOpen, setSaveAsOpen] = useState(false);
+  const [recentsOpen, setRecentsOpen] = useState(false);
+  const [adjust, setAdjust] = useState<Adjustments>(DEFAULT_ADJUST);
+  const [adjustFilter, setAdjustFilter] = useState("Original");
   const [moveMode, setMoveMode] = useState<MoveMode>("pixels");
   const [resizeMode, setResizeMode] = useState<SelectResizeMode>("bounds");
   const [resizeSmooth, setResizeSmooth] = useState(true);
@@ -81,6 +132,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [sampleScopeLabel, setSampleScopeLabel] = useState("All layers");
   const [pasteSrc, setPasteSrc] = useState<PasteSrc | null>(null);
   const [pendingPaste, setPendingPaste] = useState<PendingPaste | null>(null);
+  const [pendingLoads, setPendingLoads] = useState<PendingLoad[]>([]);
+  const [exportComposite, setExportComposite] = useState<HTMLCanvasElement | null>(null);
+  const [importItems, setImportItems] = useState<ImportItem[] | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   // Internal clipboard fallback (used if the OS clipboard write/read fails).
   const clipboardRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -91,6 +147,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const bgRef = useRef(background);
   fgRef.current = foreground;
   bgRef.current = background;
+  const historyRef = useRef(history);
+  historyRef.current = history;
 
   // Open documents. Starts with a single, unnamed canvas.
   const [docs, setDocs] = useState<Doc[]>(() => [makeDoc(1)]);
@@ -99,6 +157,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const layerSeqRef = useRef(0);
 
   const active = docs.find((d) => d.id === activeId) ?? docs[0];
+
+  // The active layer when it's a pixel layer (adjustments target a single leaf).
+  const activeLeafNode = active.activeLayerId ? findNode(active.layers, active.activeLayerId) : null;
+  const activeLeafId = activeLeafNode && activeLeafNode.type === "layer" ? active.activeLayerId : null;
 
   // Latest active-doc bits reachable from the one-time keydown listener.
   const activeIdRef = useRef(activeId);
@@ -124,76 +186,290 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const patchActiveDoc = (fn: (d: Doc) => Doc) =>
     setDocs((ds) => ds.map((d) => (d.id === activeId ? fn(d) : d)));
 
+  const setDocSel = (docId: string, layers: LayerNode[], sel: Sel) =>
+    setDocs((ds) =>
+      ds.map((d) =>
+        d.id === docId
+          ? { ...d, layers, activeLayerId: sel.active, selectedLayerIds: sel.selected }
+          : d,
+      ),
+    );
+
+  const nextLeafId = () => `layer-${(layerSeqRef.current += 1)}`;
+  const single = (id: string | null): Sel => ({ active: id, selected: id ? [id] : [] });
+  // Current selection of the active doc (before snapshot for undo).
+  const selNow = (): Sel => ({ active: active.activeLayerId, selected: active.selectedLayerIds });
+  // The ids an action operates on: the multi-selection, or just the active layer.
+  const targetIds = (): string[] =>
+    active.selectedLayerIds.length
+      ? active.selectedLayerIds
+      : active.activeLayerId
+        ? [active.activeLayerId]
+        : [];
+
+  // Run an undoable structural layer change. `forward` does the engine pixel work
+  // (duplicate / rasterize). Created & deleted leaves (from the tree diff) drive
+  // canvas undo/redo; the tree + selection are restored through setDocSel.
+  const commitLayerChange = (
+    label: string,
+    treeBefore: LayerNode[],
+    selBefore: Sel,
+    treeAfter: LayerNode[],
+    selAfter: Sel,
+    forward: () => void = () => {},
+  ) => {
+    const docId = activeIdRef.current;
+    const eng = paintRef.current;
+    const beforeIds = new Set(collectLeafIds(treeBefore));
+    const afterIds = new Set(collectLeafIds(treeAfter));
+    const deletedIds = [...beforeIds].filter((id) => !afterIds.has(id));
+    const createdIds = [...afterIds].filter((id) => !beforeIds.has(id));
+    const beforeSnaps = eng ? eng.captureLeaves(deletedIds) : new Map<string, ImageData | null>();
+    forward();
+    if (eng) deletedIds.forEach((id) => eng.removeLayer(id));
+    const afterSnaps = eng ? eng.captureLeaves(createdIds) : new Map<string, ImageData | null>();
+    setDocSel(docId, treeAfter, selAfter);
+    if (!eng) return;
+    const undoSnaps = new Map<string, ImageData | null>();
+    deletedIds.forEach((id) => undoSnaps.set(id, beforeSnaps.get(id) ?? null));
+    createdIds.forEach((id) => undoSnaps.set(id, null));
+    const redoSnaps = new Map<string, ImageData | null>();
+    createdIds.forEach((id) => redoSnaps.set(id, afterSnaps.get(id) ?? null));
+    deletedIds.forEach((id) => redoSnaps.set(id, null));
+    eng.pushStructural(
+      label,
+      () => {
+        eng.restoreLeaves(undoSnaps);
+        setDocSel(docId, treeBefore, selBefore);
+      },
+      () => {
+        eng.restoreLeaves(redoSnaps);
+        setDocSel(docId, treeAfter, selAfter);
+      },
+    );
+  };
+
+  const addLayerOp = () => {
+    const before = active.layers;
+    const leaf: Layer = {
+      id: nextLeafId(),
+      type: "layer",
+      name: `Layer ${layerSeqRef.current}`,
+      visible: true,
+      opacity: 100,
+      blend: "Normal",
+    };
+    const node = active.activeLayerId ? findNode(before, active.activeLayerId) : null;
+    let after: LayerNode[];
+    if (node && node.type === "group") after = insertInGroup(before, leaf, node.id);
+    else if (node) after = insertRelative(before, leaf, node.id, true);
+    else after = [leaf, ...before];
+    commitLayerChange("New Layer", before, selNow(), after, single(leaf.id));
+  };
+
+  const removeSelected = () => {
+    const before = active.layers;
+    const ids = new Set(targetIds());
+    if (!ids.size) return;
+    const after = removeMany(before, ids);
+    const next = collectLeafIds(after)[0] ?? null;
+    commitLayerChange(
+      ids.size > 1 ? "Delete Layers" : "Delete Layer",
+      before,
+      selNow(),
+      after,
+      single(next),
+    );
+  };
+
+  const duplicateSelected = () => {
+    const before = active.layers;
+    const tops = topLevelSelected(before, new Set(targetIds()));
+    if (!tops.length) return;
+    let after = before;
+    const pairs: [string, string][] = [];
+    const newIds: string[] = [];
+    for (const top of tops) {
+      const { node: clone, leafPairs } = cloneSubtree(top, nextLeafId);
+      const named = { ...clone, name: `${top.name} copy` } as LayerNode;
+      after = insertRelative(after, named, top.id, true);
+      pairs.push(...leafPairs);
+      newIds.push(named.id);
+    }
+    commitLayerChange(
+      tops.length > 1 ? "Duplicate Layers" : "Duplicate Layer",
+      before,
+      selNow(),
+      after,
+      { active: newIds[0], selected: newIds },
+      () => pairs.forEach(([from, to]) => paintRef.current?.duplicateLayer(from, to)),
+    );
+  };
+
+  const groupSelected = () => {
+    const before = active.layers;
+    const tops = topLevelSelected(before, new Set(targetIds()));
+    if (!tops.length) return;
+    const gid = `grp-${(layerSeqRef.current += 1)}`;
+    const group: LayerGroup = {
+      id: gid,
+      type: "group",
+      name: "Group",
+      visible: true,
+      opacity: 100,
+      blend: "Normal",
+      expanded: true,
+      children: tops,
+    };
+    const rest = new Set(tops.slice(1).map((n) => n.id));
+    const after = replaceNodeWith(removeMany(before, rest), tops[0].id, group);
+    commitLayerChange("Group Layers", before, selNow(), after, single(gid));
+  };
+
+  const ungroupLayerOp = (id: string) => {
+    const before = active.layers;
+    const node = findNode(before, id);
+    if (!node || node.type !== "group") return;
+    const after = ungroupNode(before, id);
+    commitLayerChange("Ungroup", before, selNow(), after, single(node.children[0]?.id ?? null));
+  };
+
+  const mergeDownOp = (id: string) => {
+    const before = active.layers;
+    const tid = nextLeafId();
+    const res = mergeDownInTree(before, id, (_top, b) => ({
+      id: tid,
+      type: "layer",
+      name: b.name,
+      visible: true,
+      opacity: 100,
+      blend: "Normal",
+    }));
+    if (!res.top || !res.bottom) return; // nothing below it at this level
+    const top = res.top;
+    const bottom = res.bottom;
+    commitLayerChange("Merge Down", before, selNow(), res.tree, single(tid), () => {
+      paintRef.current?.rasterize(tid, [top, bottom], collectLeafIds([top, bottom]));
+    });
+  };
+
+  const mergeSelected = () => {
+    const before = active.layers;
+    const tops = topLevelSelected(before, new Set(targetIds()));
+    if (tops.length <= 1) {
+      if (tops.length === 1) mergeDownOp(tops[0].id); // single → merge down
+      return;
+    }
+    const tid = nextLeafId();
+    const bottommost = tops[tops.length - 1];
+    const others = new Set(tops.slice(0, -1).map((n) => n.id));
+    const merged: Layer = {
+      id: tid,
+      type: "layer",
+      name: bottommost.name,
+      visible: true,
+      opacity: 100,
+      blend: "Normal",
+    };
+    const after = replaceNodeWith(removeMany(before, others), bottommost.id, merged);
+    const leafIds = collectLeafIds(tops);
+    commitLayerChange("Merge Layers", before, selNow(), after, single(tid), () => {
+      paintRef.current?.rasterize(tid, tops, leafIds);
+    });
+  };
+
+  const flattenImage = () => {
+    const before = active.layers;
+    if (before.length === 0) return;
+    const tid = nextLeafId();
+    const flat: Layer = {
+      id: tid,
+      type: "layer",
+      name: "Flattened",
+      visible: true,
+      opacity: 100,
+      blend: "Normal",
+    };
+    const all = collectLeafIds(before);
+    commitLayerChange("Flatten Image", before, selNow(), [flat], single(tid), () => {
+      paintRef.current?.rasterize(tid, before, all);
+    });
+  };
+
+  const selectLayer = (id: string, mode: "replace" | "toggle" | "range" = "replace") => {
+    commitFloatIfAny();
+    patchActiveDoc((d) => {
+      if (mode === "toggle") {
+        const has = d.selectedLayerIds.includes(id);
+        const selected = has ? d.selectedLayerIds.filter((x) => x !== id) : [...d.selectedLayerIds, id];
+        const activeLayerId = has ? (selected[selected.length - 1] ?? null) : id;
+        return { ...d, selectedLayerIds: selected, activeLayerId };
+      }
+      if (mode === "range") {
+        const order = flattenedIds(d.layers);
+        const a = order.indexOf(d.activeLayerId ?? id);
+        const b = order.indexOf(id);
+        if (a === -1 || b === -1) return { ...d, selectedLayerIds: [id], activeLayerId: id };
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        return { ...d, selectedLayerIds: order.slice(lo, hi + 1), activeLayerId: id };
+      }
+      return { ...d, selectedLayerIds: [id], activeLayerId: id };
+    });
+  };
+
   const layersApi: LayersApi = {
     layers: active.layers,
     activeLayerId: active.activeLayerId,
-    add: () => {
-      const seq = (layerSeqRef.current += 1);
-      const layer: Layer = {
-        id: `layer-${seq}`,
-        name: `Layer ${seq}`,
-        visible: true,
-        opacity: 100,
-        blend: "Normal",
-      };
-      patchActiveDoc((d) => {
-        const idx = d.activeLayerId ? d.layers.findIndex((l) => l.id === d.activeLayerId) : -1;
-        const layers = d.layers.slice();
-        layers.splice(idx === -1 ? 0 : idx, 0, layer); // new layer sits above the active one
-        return { ...d, layers, activeLayerId: layer.id };
-      });
-    },
-    remove: (id) =>
-      patchActiveDoc((d) => {
-        const idx = d.layers.findIndex((l) => l.id === id);
-        if (idx === -1) return d;
-        const layers = d.layers.filter((l) => l.id !== id);
-        const activeLayerId =
-          id === d.activeLayerId
-            ? layers.length
-              ? layers[Math.min(idx, layers.length - 1)].id
-              : null
-            : d.activeLayerId;
-        return { ...d, layers, activeLayerId };
-      }),
-    select: (id) => {
-      commitFloatIfAny();
-      patchActiveDoc((d) => ({ ...d, activeLayerId: id }));
-    },
+    selectedLayerIds: active.selectedLayerIds,
+    add: addLayerOp,
+    select: selectLayer,
     update: (id, patch) =>
-      patchActiveDoc((d) => ({
-        ...d,
-        layers: d.layers.map((l) => (l.id === id ? { ...l, ...patch } : l)),
-      })),
+      patchActiveDoc((d) => ({ ...d, layers: updateNode(d.layers, id, patch) })),
     move: (fromId, targetId, before) =>
       patchActiveDoc((d) => {
-        const layers = d.layers.slice();
-        const from = layers.findIndex((l) => l.id === fromId);
-        if (from === -1) return d;
-        const [moved] = layers.splice(from, 1);
-        let to = layers.findIndex((l) => l.id === targetId);
-        if (to === -1) return d;
-        if (!before) to += 1;
-        layers.splice(to, 0, moved);
-        const unchanged =
-          layers.length === d.layers.length && layers.every((l, i) => l.id === d.layers[i].id);
-        return unchanged ? d : { ...d, layers };
+        if (fromId === targetId) return d;
+        if (!findNode(d.layers, fromId)) return d;
+        const { tree: without, removed } = removeNode(d.layers, fromId);
+        if (!removed) return d;
+        if (!findNode(without, targetId)) return d; // target was inside the moved group
+        return { ...d, layers: insertRelative(without, removed, targetId, before) };
       }),
+    remove: removeSelected,
+    duplicate: duplicateSelected,
+    group: groupSelected,
+    ungroup: ungroupLayerOp,
+    merge: mergeSelected,
+    flatten: flattenImage,
   };
 
-  // Return the active layer id, creating a layer first if none is selected.
-  // Uses refs so it is safe to call from the global keydown listener too.
+  // Return a paintable leaf id: the active layer if it's a pixel layer, otherwise
+  // create one (inside the active group if a group is selected). Uses refs so it
+  // is safe to call from the global keydown listener too.
   const ensureLayer = (): string => {
-    if (activeLayerRef.current) return activeLayerRef.current;
-    const seq = (layerSeqRef.current += 1);
-    const id = `layer-${seq}`;
-    const layer: Layer = { id, name: `Layer ${seq}`, visible: true, opacity: 100, blend: "Normal" };
+    const cur = activeLayerRef.current;
+    if (cur) {
+      const node = findNode(activeDocRef.current.layers, cur);
+      if (node && node.type === "layer") return cur;
+    }
+    const id = nextLeafId();
+    const layer: Layer = {
+      id,
+      type: "layer",
+      name: `Layer ${layerSeqRef.current}`,
+      visible: true,
+      opacity: 100,
+      blend: "Normal",
+    };
     setDocs((ds) =>
-      ds.map((d) =>
-        d.id === activeIdRef.current
-          ? { ...d, layers: [layer, ...d.layers], activeLayerId: id }
-          : d,
-      ),
+      ds.map((d) => {
+        if (d.id !== activeIdRef.current) return d;
+        const node = cur ? findNode(d.layers, cur) : null;
+        const layers =
+          node && node.type === "group"
+            ? insertInGroup(d.layers, layer, node.id)
+            : [layer, ...d.layers];
+        return { ...d, layers, activeLayerId: id, selectedLayerIds: [id] };
+      }),
     );
     return id;
   };
@@ -230,10 +506,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       const lseq = (layerSeqRef.current += 1);
       const docId = `doc-${seq}`;
       const layerId = `layer-${lseq}`;
-      const layer: Layer = { id: layerId, name: "Pasted Layer", visible: true, opacity: 100, blend: "Normal" };
+      const layer: Layer = { id: layerId, type: "layer", name: "Pasted Layer", visible: true, opacity: 100, blend: "Normal" };
       setDocs((ds) => [
         ...ds,
-        { id: docId, name: `Untitled-${seq}`, width: imgW, height: imgH, layers: [layer], activeLayerId: layerId, selection: [] },
+        { id: docId, name: `Untitled-${seq}`, width: imgW, height: imgH, layers: [layer], activeLayerId: layerId, selectedLayerIds: [layerId], selection: [] },
       ]);
       setActiveId(docId);
       setPendingPaste({ docId, layerId, source, x: 0, y: 0 });
@@ -254,6 +530,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       layerId = `layer-${lseq}`;
       added = {
         id: layerId,
+        type: "layer",
         name: dest === "new-layer" ? "Pasted Layer" : `Layer ${lseq}`,
         visible: true,
         opacity: 100,
@@ -271,6 +548,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
               height: finalH,
               layers: addedLayer ? [addedLayer, ...d.layers] : d.layers,
               activeLayerId: lid,
+              selectedLayerIds: lid ? [lid] : d.selectedLayerIds,
             }
           : d,
       ),
@@ -290,6 +568,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
                       layers: addedLayer ? d.layers.filter((l) => l.id !== addedLayer.id) : d.layers,
                       activeLayerId:
                         addedLayer && d.activeLayerId === addedLayer.id ? beforeActive : d.activeLayerId,
+                      selectedLayerIds:
+                        addedLayer && d.activeLayerId === addedLayer.id
+                          ? beforeActive
+                            ? [beforeActive]
+                            : []
+                          : d.selectedLayerIds,
                     }
                   : d,
               ),
@@ -306,6 +590,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
                         ? [addedLayer, ...d.layers.filter((l) => l.id !== addedLayer.id)]
                         : d.layers,
                       activeLayerId: lid,
+                      selectedLayerIds: lid ? [lid] : d.selectedLayerIds,
                     }
                   : d,
               ),
@@ -357,11 +642,305 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
   const doRedo = () => paintRef.current?.redo();
 
+  // ---- Project save (.aproj — layers, groups & full state) ----
+  // Reads from refs so it also works from the one-time keydown listener.
+  const buildProjectBlob = (): Blob => {
+    const d = activeDocRef.current;
+    const project = serializeProject(
+      {
+        name: d.name,
+        width: d.width,
+        height: d.height,
+        layers: d.layers,
+        activeLayerId: d.activeLayerId,
+        selectedLayerIds: d.selectedLayerIds,
+        selection: d.selection,
+      },
+      { foreground: fgRef.current, background: bgRef.current },
+      { labels: historyRef.current.items.map((i) => i.label), index: historyRef.current.index },
+      (id) => paintRef.current?.getLayerImage(id) ?? null,
+    );
+    return new Blob([JSON.stringify(project)], { type: "application/json" });
+  };
+
+  // Simple Save: download the project under the canvas's current name.
+  const saveProject = () => {
+    const filename = `${activeDocRef.current.name}.${PROJECT_EXT}`;
+    const blob = buildProjectBlob();
+    downloadBlob(blob, filename);
+    addRecent(filename, { blob }); // remember a re-openable cached copy
+  };
+
+  // Save As: pick a name (dialog) then choose folder/path via the native picker.
+  const saveProjectAs = async (filename: string) => {
+    const base = filename.replace(new RegExp(`\\.${PROJECT_EXT}$`, "i"), "").trim() || activeDocRef.current.name;
+    const docId = activeIdRef.current;
+    const blob = buildProjectBlob();
+    const fname = `${base}.${PROJECT_EXT}`;
+    const { ok, handle } = await saveProjectFile(blob, fname);
+    if (ok) {
+      renameDoc(docId, base); // reflect the saved name on the tab
+      addRecent(fname, handle ? { handle } : { blob });
+      setSaveAsOpen(false);
+    }
+  };
+
+  // ---- Project open / load ----
+  const openFileDialog = () => fileInputRef.current?.click();
+
+  // Open via the native picker (gives a re-openable handle) when available,
+  // otherwise fall back to a hidden <input type=file>.
+  const openProject = async () => {
+    const picker = (
+      window as unknown as {
+        showOpenFilePicker?: (opts: unknown) => Promise<Array<{ getFile: () => Promise<File>; name: string }>>;
+      }
+    ).showOpenFilePicker;
+    if (!picker) {
+      openFileDialog();
+      return;
+    }
+    try {
+      const [handle] = await picker({
+        multiple: false,
+        types: [{ description: "Aperture Project", accept: { "application/json": [`.${PROJECT_EXT}`] } }],
+      });
+      const file = await handle.getFile();
+      if (loadProjectText(await file.text())) addRecent(file.name, { handle });
+    } catch (e) {
+      if ((e as DOMException)?.name !== "AbortError") window.alert("Couldn't open the file.");
+    }
+  };
+
+  // Rebuild a document from a parsed .aproj file. Layer ids are remapped to fresh
+  // ones so a loaded project never collides with already-open documents.
+  const loadProject = (p: ProjectFile) => {
+    commitFloatIfAny(); // merge any floating paste on the current doc first
+    const idMap = new Map<string, string>();
+    const images: { id: string; data: string }[] = [];
+    const remap = (list: SerializedNode[]): LayerNode[] =>
+      list.map((n) => {
+        if (n.type === "group") {
+          const id = `grp-${(layerSeqRef.current += 1)}`;
+          idMap.set(n.id, id);
+          return {
+            id,
+            type: "group",
+            name: n.name,
+            visible: n.visible,
+            opacity: n.opacity,
+            blend: n.blend,
+            expanded: n.expanded,
+            children: remap(n.children),
+          };
+        }
+        const id = nextLeafId();
+        idMap.set(n.id, id);
+        if (n.data) images.push({ id, data: n.data });
+        return {
+          id,
+          type: "layer",
+          name: n.name,
+          visible: n.visible,
+          opacity: n.opacity,
+          blend: n.blend,
+        };
+      });
+
+    const layers = remap(p.layers);
+    const seq = (seqRef.current += 1);
+    const docId = `doc-${seq}`;
+    const activeLayerId = p.activeLayerId ? (idMap.get(p.activeLayerId) ?? null) : null;
+    const selectedLayerIds = (p.selectedLayerIds ?? [])
+      .map((i) => idMap.get(i))
+      .filter((x): x is string => !!x);
+    const doc: Doc = {
+      id: docId,
+      name: p.name || `Untitled-${seq}`,
+      width: p.width,
+      height: p.height,
+      layers,
+      activeLayerId,
+      selectedLayerIds,
+      selection: p.selection ?? [],
+    };
+    setDocs((ds) => [...ds, doc]);
+    setActiveId(docId);
+    if (p.foreground) setForeground(p.foreground);
+    if (p.background) setBackground(p.background);
+    setPendingLoads((ls) => [...ls, { docId, images }]);
+  };
+
+  // Parse + validate .aproj text and load it. Returns whether it succeeded.
+  const loadProjectText = (text: string): boolean => {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed?.format !== "aperture-project" || !Array.isArray(parsed.layers)) {
+        window.alert("This file isn't a valid Aperture project (.aproj).");
+        return false;
+      }
+      loadProject(parsed as ProjectFile);
+      return true;
+    } catch {
+      window.alert("Couldn't open the file — it may be corrupted.");
+      return false;
+    }
+  };
+
+  const onFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // let the same file be re-opened later
+    if (!file) return;
+    if (loadProjectText(await file.text())) addRecent(file.name, { blob: file });
+  };
+
+  // ---- Export (flatten → image file) ----
+  const openExport = () => {
+    const composite = paintRef.current?.exportComposite(activeDocRef.current.layers);
+    if (composite) setExportComposite(composite);
+  };
+  const doExport = async (opts: ExportOptions, filename: string) => {
+    if (!exportComposite) return;
+    const blob = await renderExport(exportComposite, opts);
+    if (blob) {
+      const base = filename.trim() || activeDocRef.current.name;
+      await saveImageBlob(blob, `${base}.${opts.format.ext}`, opts.format);
+    }
+    setExportComposite(null);
+  };
+
+  // ---- Import (one or more image files) ----
+  const stripExt = (n: string) => n.replace(/\.[^.]+$/, "") || "Image";
+  const openImport = () => importInputRef.current?.click();
+
+  const onImportPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!files.length) return;
+    const decoded = await Promise.all(
+      files.map(async (f) => ({ name: f.name, bitmap: await decodeImageFile(f) })),
+    );
+    const items = decoded.filter((d): d is ImportItem => d.bitmap !== null);
+    if (!items.length) {
+      window.alert("Couldn't read the selected image(s).");
+      return;
+    }
+    setImportItems(items);
+  };
+
+  // Import images onto new layers of the current canvas (one undoable step).
+  const importAsLayers = (items: ImportItem[]) => {
+    const before = active.layers;
+    const leaves: Layer[] = items.map((it) => ({
+      id: nextLeafId(),
+      type: "layer",
+      name: stripExt(it.name),
+      visible: true,
+      opacity: 100,
+      blend: "Normal",
+    }));
+    const after = [...leaves, ...before]; // first image on top
+    commitLayerChange(
+      items.length > 1 ? "Import Layers" : "Import Layer",
+      before,
+      selNow(),
+      after,
+      { active: leaves[0].id, selected: leaves.map((l) => l.id) },
+      () => leaves.forEach((leaf, i) => paintRef.current?.setLayerImage(leaf.id, items[i].bitmap)),
+    );
+  };
+
+  // Import each image as its own new canvas/tab.
+  const importAsCanvases = (items: ImportItem[]) => {
+    const entries: PendingLoad[] = [];
+    let firstId: string | null = null;
+    const docs: Doc[] = items.map((it) => {
+      const seq = (seqRef.current += 1);
+      const docId = `doc-${seq}`;
+      const lid = nextLeafId();
+      if (!firstId) firstId = docId;
+      entries.push({ docId, images: [{ id: lid, source: it.bitmap }] });
+      return {
+        id: docId,
+        name: stripExt(it.name),
+        width: it.bitmap.width,
+        height: it.bitmap.height,
+        layers: [{ id: lid, type: "layer", name: stripExt(it.name), visible: true, opacity: 100, blend: "Normal" }],
+        activeLayerId: lid,
+        selectedLayerIds: [lid],
+        selection: [],
+      };
+    });
+    setDocs((ds) => [...ds, ...docs]);
+    if (firstId) setActiveId(firstId);
+    setPendingLoads((ls) => [...ls, ...entries]);
+  };
+
+  const applyImport = (mode: ImportMode) => {
+    const items = importItems;
+    setImportItems(null);
+    if (!items?.length) return;
+    if (mode === "layers") importAsLayers(items);
+    else importAsCanvases(items);
+  };
+
+  // ---- Adjustments (live preview on the active leaf, baked on Apply) ----
+  const previewAdjust = (next: Adjustments) => {
+    if (activeLeafId) paintRef.current?.applyAdjust(activeLeafId, next);
+  };
+  const onAdjust = (patch: Partial<Adjustments>) => {
+    const next = { ...adjust, ...patch };
+    setAdjust(next);
+    setAdjustFilter(""); // tweaking a slider clears the active filter chip
+    previewAdjust(next);
+  };
+  const onAdjustFilter = (name: string) => {
+    const next = filterToAdjust(name);
+    setAdjust(next);
+    setAdjustFilter(name);
+    previewAdjust(next);
+  };
+  const onAdjustApply = () => {
+    if (activeLeafId) paintRef.current?.commitAdjust(activeLeafId, adjust);
+    setAdjust(DEFAULT_ADJUST);
+    setAdjustFilter("Original");
+  };
+  const onAdjustReset = () => {
+    paintRef.current?.cancelAdjust();
+    setAdjust(DEFAULT_ADJUST);
+    setAdjustFilter("Original");
+  };
+
+  // Discard an unapplied preview when switching layer or document.
+  useEffect(() => {
+    if (!isDefaultAdjust(adjust)) {
+      paintRef.current?.cancelAdjust();
+      setAdjust(DEFAULT_ADJUST);
+      setAdjustFilter("Original");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active.activeLayerId, activeId]);
+
   const handleMenuAction = (actionId: string) => {
+    const al = active.activeLayerId;
     if (actionId === "canvas-size") setSizeDialogOpen(true);
     else if (actionId === "new-doc") createDoc();
+    else if (actionId === "open") openProject();
+    else if (actionId === "open-recent") setRecentsOpen(true);
+    else if (actionId === "save") saveProject();
+    else if (actionId === "save-as") setSaveAsOpen(true);
+    else if (actionId === "import") openImport();
+    else if (actionId === "export-as") openExport();
     else if (actionId === "undo") doUndo();
     else if (actionId === "redo") doRedo();
+    else if (actionId === "layer-new") addLayerOp();
+    else if (actionId === "layer-duplicate") duplicateSelected();
+    else if (actionId === "layer-delete") removeSelected();
+    else if (actionId === "layer-group") groupSelected();
+    else if (actionId === "layer-ungroup") {
+      if (al) ungroupLayerOp(al);
+    } else if (actionId === "layer-merge-down") mergeSelected();
+    else if (actionId === "layer-flatten") flattenImage();
   };
 
   const swapColors = () => {
@@ -446,6 +1025,18 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         // plain Ctrl+N branch still works where it's allowed (e.g. PWA window).
         e.preventDefault();
         createDoc();
+      } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === "s") {
+        e.preventDefault();
+        setSaveAsOpen(true);
+      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === "s") {
+        e.preventDefault();
+        saveProject();
+      } else if (e.ctrlKey && !e.altKey && key === "o") {
+        e.preventDefault();
+        openProject();
+      } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === "e") {
+        e.preventDefault();
+        openExport();
       } else if (e.ctrlKey && key === "y") {
         e.preventDefault();
         doRedo();
@@ -575,6 +1166,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onPick={setForeground}
           pendingPaste={pendingPaste}
           onPasteDone={() => setPendingPaste(null)}
+          pendingLoads={pendingLoads}
+          onLoadDone={(docId) => setPendingLoads((ls) => ls.filter((p) => p.docId !== docId))}
           paintRef={paintRef}
           onHistory={setHistory}
         />
@@ -595,6 +1188,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             docW: active.width,
             docH: active.height,
           }}
+          adjust={adjust}
+          onAdjust={onAdjust}
+          adjustFilter={adjustFilter}
+          onAdjustFilter={onAdjustFilter}
+          onAdjustApply={onAdjustApply}
+          onAdjustReset={onAdjustReset}
+          adjustActive={!!activeLeafId}
         />
       </div>
       <StatusBar
@@ -625,6 +1225,47 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onClose={() => setPasteSrc(null)}
         />
       )}
+
+      {saveAsOpen && (
+        <SaveAsDialog
+          defaultName={active.name}
+          onSave={saveProjectAs}
+          onClose={() => setSaveAsOpen(false)}
+        />
+      )}
+
+      {recentsOpen && (
+        <RecentsDialog onOpenText={loadProjectText} onClose={() => setRecentsOpen(false)} />
+      )}
+
+      {exportComposite && (
+        <ExportDialog
+          composite={exportComposite}
+          defaultName={active.name}
+          onExport={doExport}
+          onClose={() => setExportComposite(null)}
+        />
+      )}
+
+      {importItems && (
+        <ImportDialog items={importItems} onImport={applyImport} onClose={() => setImportItems(null)} />
+      )}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={`.${PROJECT_EXT},application/json`}
+        onChange={onFilePicked}
+        hidden
+      />
+      <input
+        ref={importInputRef}
+        type="file"
+        accept={IMPORT_ACCEPT}
+        multiple
+        onChange={onImportPicked}
+        hidden
+      />
     </div>
   );
 }

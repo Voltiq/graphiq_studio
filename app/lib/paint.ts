@@ -1,5 +1,7 @@
 import { parseColor, toHex8 } from "./color";
 import type { Rect } from "./view";
+import type { LayerNode } from "./layers";
+import { applyAdjustments, isDefaultAdjust, type Adjustments } from "./adjust";
 
 export interface BrushSettings {
   size: number; // px (document space)
@@ -8,13 +10,6 @@ export interface BrushSettings {
   flow: number; // 0–100 (build-up within a stroke)
   blend: string;
   smoothing: number; // 0–100
-}
-
-export interface LayerMeta {
-  id: string;
-  visible: boolean;
-  opacity: number; // 0–100
-  blend: string;
 }
 
 export interface HistorySummary {
@@ -32,6 +27,18 @@ export interface EngineHandle {
   isFloating: () => boolean;
   commitFloat: () => void;
   discardFloat: () => void;
+  duplicateLayer: (srcId: string, dstId: string) => void;
+  rasterize: (targetId: string, nodes: LayerNode[], deleteIds: string[]) => void;
+  removeLayer: (id: string) => void;
+  getLayerImage: (id: string) => string | null;
+  setLayerImage: (id: string, source: CanvasImageSource) => void;
+  exportComposite: (tree: LayerNode[]) => HTMLCanvasElement;
+  applyAdjust: (layerId: string, adj: Adjustments) => void;
+  commitAdjust: (layerId: string, adj: Adjustments) => void;
+  cancelAdjust: () => void;
+  captureLeaves: (ids: string[]) => Map<string, ImageData | null>;
+  restoreLeaves: (snaps: Map<string, ImageData | null>) => void;
+  pushStructural: (label: string, undo: () => void, redo: () => void) => void;
 }
 
 export interface CopyResult {
@@ -99,12 +106,14 @@ export interface HistorySide {
 }
 
 interface Entry {
-  layerId: string;
-  rect: { x: number; y: number; w: number; h: number };
-  before: ImageData;
-  after: ImageData;
   label: string;
   side?: HistorySide;
+  // Pixel payload — absent for purely structural entries (layer add/group/etc.),
+  // whose effect lives entirely in `side`.
+  layerId?: string;
+  rect?: { x: number; y: number; w: number; h: number };
+  before?: ImageData;
+  after?: ImageData;
 }
 
 /**
@@ -154,6 +163,14 @@ export class PaintEngine {
   // When set, the float is drawn scaled into this rect (resize-content) instead
   // of translated by floatOff.
   private floatDst: Rect | null = null;
+
+  // Live adjustment preview: the target leaf, a snapshot of its original pixels,
+  // and the adjusted result shown in its place until committed.
+  private adjLayer: string | null = null;
+  private adjOrig: ImageData | null = null;
+  private adjCanvas: HTMLCanvasElement | null = null;
+  private adjPending: Adjustments | null = null;
+  private adjRaf = 0;
   // Whether scaled float content is interpolated (smooth) or nearest-neighbour.
   private floatSmooth = true;
   private last = { x: 0, y: 0 };
@@ -266,6 +283,14 @@ export class PaintEngine {
     this.emitHistory();
   }
 
+  /** Push a structural undo step (no pixel payload — `undo`/`redo` do the work). */
+  pushStructural(label: string, undo: () => void, redo: () => void) {
+    if (this.pos < this.entries.length) this.entries.length = this.pos;
+    this.entries.push({ label, side: { undo, redo } });
+    this.pos = this.entries.length;
+    this.emitHistory();
+  }
+
   /** Fill the selection on a layer with a colour (records history). */
   fillSelection(layerId: string, rects: Rect[], colorHex: string) {
     const bounds = this.boundsOf(rects);
@@ -302,74 +327,223 @@ export class PaintEngine {
     this.onChange();
   }
 
-  /** Composite all visible layers (bottom→top) onto the view canvas. */
-  composite(meta: LayerMeta[]) {
+  /** Copy a layer's pixels into another (new) layer id. */
+  duplicateLayer(srcId: string, dstId: string) {
+    const src = this.layers.get(srcId);
+    const dst = this.layer(dstId);
+    dst.ctx.globalAlpha = 1;
+    dst.ctx.globalCompositeOperation = "source-over";
+    dst.ctx.clearRect(0, 0, this.w, this.h);
+    if (src) dst.ctx.drawImage(src.c, 0, 0);
+    this.onChange();
+  }
+
+  /** Composite `nodes` (top→bottom) into one new layer, dropping `deleteIds`. */
+  rasterize(targetId: string, nodes: LayerNode[], deleteIds: string[]) {
+    const { c, ctx } = makeCanvas(this.w, this.h, true);
+    for (let i = nodes.length - 1; i >= 0; i--) this.drawNode(ctx, nodes[i]);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    for (const id of deleteIds) this.layers.delete(id);
+    this.layers.set(targetId, { c, ctx });
+    this.onChange();
+  }
+
+  /** Forget a layer's offscreen canvas (after it's removed from the document). */
+  removeLayer(id: string) {
+    this.layers.delete(id);
+  }
+
+  /** A leaf layer's pixels as a PNG data URL (null if it has no canvas yet). */
+  getLayerImage(id: string): string | null {
+    const l = this.layers.get(id);
+    return l ? l.c.toDataURL("image/png") : null;
+  }
+
+  // ---- Adjustments (live preview on a leaf, baked on commit) ----
+  /** Preview adjustments on a layer. Snapshots the original on first use; a
+      default (all-zero) adjustment cancels the preview. */
+  applyAdjust(layerId: string, adj: Adjustments) {
+    if (isDefaultAdjust(adj)) {
+      this.cancelAdjust();
+      return;
+    }
+    if (this.adjLayer !== layerId || !this.adjOrig) {
+      this.clearAdjust();
+      const l = this.layers.get(layerId);
+      if (!l) return; // empty layer — nothing to adjust
+      this.adjLayer = layerId;
+      this.adjOrig = l.ctx.getImageData(0, 0, this.w, this.h);
+      const made = makeCanvas(this.w, this.h);
+      made.ctx.putImageData(this.adjOrig, 0, 0); // show original until first compute
+      this.adjCanvas = made.c;
+    }
+    this.adjPending = adj;
+    if (this.adjRaf) return;
+    this.adjRaf = requestAnimationFrame(() => {
+      this.adjRaf = 0;
+      if (!this.adjPending || !this.adjOrig || !this.adjCanvas) return;
+      const res = applyAdjustments(this.adjOrig, this.adjPending);
+      this.adjCanvas.getContext("2d")!.putImageData(res, 0, 0);
+      this.onChange();
+    });
+  }
+
+  /** Bake the adjustment into the layer as one undoable step. */
+  commitAdjust(layerId: string, adj: Adjustments) {
+    if (this.adjLayer !== layerId || !this.adjOrig || isDefaultAdjust(adj)) {
+      this.cancelAdjust();
+      return;
+    }
+    const before = this.adjOrig;
+    const after = applyAdjustments(before, adj);
+    const l = this.layer(layerId);
+    l.ctx.globalAlpha = 1;
+    l.ctx.globalCompositeOperation = "source-over";
+    l.ctx.putImageData(after, 0, 0);
+    this.pushEntry(layerId, { x: 0, y: 0, w: this.w, h: this.h }, before, after, "Adjustments");
+    this.clearAdjust();
+    this.onChange();
+  }
+
+  cancelAdjust() {
+    if (!this.adjLayer) return;
+    this.clearAdjust();
+    this.onChange();
+  }
+
+  private clearAdjust() {
+    if (this.adjRaf) {
+      cancelAnimationFrame(this.adjRaf);
+      this.adjRaf = 0;
+    }
+    this.adjLayer = null;
+    this.adjOrig = null;
+    this.adjCanvas = null;
+    this.adjPending = null;
+  }
+
+  /** Replace a leaf layer's pixels with an image (used when loading a project). */
+  setLayerImage(id: string, source: CanvasImageSource) {
+    const l = this.layer(id);
+    l.ctx.globalAlpha = 1;
+    l.ctx.globalCompositeOperation = "source-over";
+    l.ctx.clearRect(0, 0, this.w, this.h);
+    l.ctx.drawImage(source, 0, 0);
+    this.onChange();
+  }
+
+  /** Snapshot the full pixels of the given leaf layers (null = no canvas). */
+  captureLeaves(ids: string[]): Map<string, ImageData | null> {
+    const m = new Map<string, ImageData | null>();
+    for (const id of ids) {
+      const l = this.layers.get(id);
+      m.set(id, l ? l.ctx.getImageData(0, 0, this.w, this.h) : null);
+    }
+    return m;
+  }
+
+  /** Restore leaf layers from snapshots (null = delete that layer's canvas). */
+  restoreLeaves(snaps: Map<string, ImageData | null>) {
+    for (const [id, snap] of snaps) {
+      if (snap) {
+        const l = this.layer(id);
+        l.ctx.globalAlpha = 1;
+        l.ctx.globalCompositeOperation = "source-over";
+        l.ctx.clearRect(0, 0, this.w, this.h);
+        l.ctx.putImageData(snap, 0, 0);
+      } else {
+        this.layers.delete(id);
+      }
+    }
+    this.onChange();
+  }
+
+  /** The pixels to draw for a leaf, with any live stroke/move/float merged in. */
+  private leafDisplay(id: string): HTMLCanvasElement | null {
+    if (this.adjLayer === id && this.adjCanvas) return this.adjCanvas;
+    const l = this.layers.get(id);
+    const s = this.scratch?.ctx;
+    if (this.painting && this.stroke && s && id === this.strokeLayer) {
+      s.globalAlpha = 1;
+      s.globalCompositeOperation = "source-over";
+      s.clearRect(0, 0, this.w, this.h);
+      if (l) s.drawImage(l.c, 0, 0);
+      this.drawStroke(s);
+      s.globalAlpha = 1;
+      s.globalCompositeOperation = "source-over";
+      return this.scratch!.c;
+    }
+    if (this.moving && this.moveFloat && s && id === this.moveLayer) {
+      s.globalAlpha = 1;
+      s.globalCompositeOperation = "source-over";
+      s.clearRect(0, 0, this.w, this.h);
+      if (l) s.drawImage(l.c, 0, 0);
+      s.drawImage(this.moveFloat.c, this.moveOff.x, this.moveOff.y);
+      return this.scratch!.c;
+    }
+    if (this.floatActive && this.floatSource && s && id === this.floatLayer) {
+      s.globalAlpha = 1;
+      s.globalCompositeOperation = "source-over";
+      s.clearRect(0, 0, this.w, this.h);
+      if (l) s.drawImage(l.c, 0, 0);
+      if (this.floatDst && this.floatSrcRect) {
+        const src = this.floatSrcRect;
+        const d = this.floatDst;
+        s.imageSmoothingEnabled = this.floatSmooth;
+        s.drawImage(this.floatSource, src.x, src.y, src.w, src.h, d.x, d.y, d.w, d.h);
+      } else {
+        s.drawImage(
+          this.floatSource,
+          this.floatBase.x + this.floatOff.x,
+          this.floatBase.y + this.floatOff.y,
+        );
+      }
+      return this.scratch!.c;
+    }
+    return l ? l.c : null;
+  }
+
+  /** Draw one layer node (recursing into groups via their own buffer). */
+  private drawNode(ctx: CanvasRenderingContext2D, node: LayerNode) {
+    if (!node.visible) return;
+    if (node.type === "group") {
+      if (!node.children.length) return;
+      const { c: bc, ctx: bctx } = makeCanvas(this.w, this.h);
+      for (let i = node.children.length - 1; i >= 0; i--) this.drawNode(bctx, node.children[i]);
+      ctx.globalAlpha = Math.max(0, Math.min(1, node.opacity / 100));
+      ctx.globalCompositeOperation = blendOp(node.blend);
+      ctx.drawImage(bc, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      return;
+    }
+    const disp = this.leafDisplay(node.id);
+    if (!disp) return;
+    ctx.globalAlpha = Math.max(0, Math.min(1, node.opacity / 100));
+    ctx.globalCompositeOperation = blendOp(node.blend);
+    ctx.drawImage(disp, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  /** Flatten the layer tree into a new doc-sized canvas (for image export). */
+  exportComposite(tree: LayerNode[]): HTMLCanvasElement {
+    const { c, ctx } = makeCanvas(this.w, this.h);
+    for (let i = tree.length - 1; i >= 0; i--) this.drawNode(ctx, tree[i]);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    return c;
+  }
+
+  /** Composite the layer tree (bottom→top, nested groups) onto the view canvas. */
+  composite(tree: LayerNode[]) {
     const ctx = this.vctx;
     if (!ctx) return;
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
     ctx.clearRect(0, 0, this.w, this.h);
-
-    for (let i = meta.length - 1; i >= 0; i--) {
-      const m = meta[i];
-      if (!m.visible) continue;
-      const l = this.layers.get(m.id);
-      if (!l) continue;
-
-      if (this.painting && this.stroke && this.scratch && m.id === this.strokeLayer) {
-        // Merge the live stroke into a copy of the layer, then composite as one.
-        const s = this.scratch.ctx;
-        s.globalAlpha = 1;
-        s.globalCompositeOperation = "source-over";
-        s.clearRect(0, 0, this.w, this.h);
-        s.drawImage(l.c, 0, 0);
-        this.drawStroke(s);
-        s.globalAlpha = 1;
-        s.globalCompositeOperation = "source-over";
-
-        ctx.globalAlpha = m.opacity / 100;
-        ctx.globalCompositeOperation = blendOp(m.blend);
-        ctx.drawImage(this.scratch.c, 0, 0);
-      } else if (this.moving && this.moveFloat && this.scratch && m.id === this.moveLayer) {
-        // Layer with its lifted content removed, plus the floating piece at the offset.
-        const s = this.scratch.ctx;
-        s.globalAlpha = 1;
-        s.globalCompositeOperation = "source-over";
-        s.clearRect(0, 0, this.w, this.h);
-        s.drawImage(l.c, 0, 0);
-        s.drawImage(this.moveFloat.c, this.moveOff.x, this.moveOff.y);
-        ctx.globalAlpha = m.opacity / 100;
-        ctx.globalCompositeOperation = blendOp(m.blend);
-        ctx.drawImage(this.scratch.c, 0, 0);
-      } else if (this.floatActive && this.floatSource && this.scratch && m.id === this.floatLayer) {
-        // Untouched layer + the floating paste on top, composited as one layer.
-        const s = this.scratch.ctx;
-        s.globalAlpha = 1;
-        s.globalCompositeOperation = "source-over";
-        s.clearRect(0, 0, this.w, this.h);
-        s.drawImage(l.c, 0, 0);
-        if (this.floatDst && this.floatSrcRect) {
-          // Resize-content: draw the lifted region scaled to its target rect.
-          const src = this.floatSrcRect;
-          const d = this.floatDst;
-          s.imageSmoothingEnabled = this.floatSmooth;
-          s.drawImage(this.floatSource, src.x, src.y, src.w, src.h, d.x, d.y, d.w, d.h);
-        } else {
-          s.drawImage(
-            this.floatSource,
-            this.floatBase.x + this.floatOff.x,
-            this.floatBase.y + this.floatOff.y,
-          );
-        }
-        ctx.globalAlpha = m.opacity / 100;
-        ctx.globalCompositeOperation = blendOp(m.blend);
-        ctx.drawImage(this.scratch.c, 0, 0);
-      } else {
-        ctx.globalAlpha = m.opacity / 100;
-        ctx.globalCompositeOperation = blendOp(m.blend);
-        ctx.drawImage(l.c, 0, 0);
-      }
-    }
+    for (let i = tree.length - 1; i >= 0; i--) this.drawNode(ctx, tree[i]);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
   }
@@ -674,6 +848,7 @@ export class PaintEngine {
     const bh = y1 - y0 + 1;
     if (bw <= 0 || bh <= 0) return null;
     const data = ctx.getImageData(x0, y0, bw, bh).data;
+    const count = data.length / 4;
     let sr = 0;
     let sg = 0;
     let sb = 0;
@@ -686,7 +861,9 @@ export class PaintEngine {
       sa += a;
     }
     if (sa === 0) return null;
-    return toHex8({ r: sr / sa, g: sg / sa, b: sb / sa, a: 1 });
+    // Colour is the alpha-weighted (un-premultiplied) average; alpha is the mean
+    // coverage over the sampled box, so the eyedropper also picks up opacity.
+    return toHex8({ r: sr / sa, g: sg / sa, b: sb / sa, a: sa / count });
   }
 
   moveTo(dx: number, dy: number) {
@@ -906,10 +1083,12 @@ export class PaintEngine {
 
   // ---- history ----
   private apply(e: Entry) {
-    this.layer(e.layerId).ctx.putImageData(e.after, e.rect.x, e.rect.y);
+    if (e.layerId && e.rect && e.after)
+      this.layer(e.layerId).ctx.putImageData(e.after, e.rect.x, e.rect.y);
   }
   private revert(e: Entry) {
-    this.layer(e.layerId).ctx.putImageData(e.before, e.rect.x, e.rect.y);
+    if (e.layerId && e.rect && e.before)
+      this.layer(e.layerId).ctx.putImageData(e.before, e.rect.x, e.rect.y);
   }
   jumpTo(target: number) {
     target = Math.max(0, Math.min(this.entries.length, target));

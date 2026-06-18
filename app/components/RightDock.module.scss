@@ -437,7 +437,11 @@
 
   &[data-selected="true"] {
     background: rgba(var(--accent-rgb), 0.16);
-    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.4);
+  }
+
+  // The primary (active) layer in a multi-selection gets the full ring.
+  &[data-active="true"] {
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.55);
   }
 
   &[data-hidden="true"] {
@@ -447,6 +451,86 @@
   &[data-dragging="true"] {
     opacity: 0.4;
     background: var(--surface-3);
+  }
+}
+
+.menuScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+}
+
+.layerMenu {
+  position: fixed;
+  z-index: 301;
+  min-width: 184px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow);
+  animation: menuPop 0.1s ease;
+
+  button {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: 7px 10px;
+    font-size: 12.5px;
+    color: var(--text);
+    border-radius: var(--r-sm);
+    text-align: left;
+
+    svg {
+      color: var(--text-3);
+      flex-shrink: 0;
+    }
+
+    &:hover {
+      background: var(--accent);
+      color: var(--accent-contrast);
+
+      svg {
+        color: var(--accent-contrast);
+      }
+    }
+  }
+
+  .menuDanger:hover {
+    background: var(--danger, #e5484d);
+  }
+
+  .menuSep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--border);
+  }
+}
+
+@keyframes menuPop {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.layerCaret {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 22px;
+  flex-shrink: 0;
+  color: var(--text-3);
+
+  &:hover {
+    color: var(--text);
   }
 }
 
@@ -463,6 +547,15 @@
     color: var(--text);
     background: var(--surface-hover);
   }
+}
+
+.layerGroupIcon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  color: var(--text-2);
 }
 
 .layerThumb {

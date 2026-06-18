@@ -11,9 +11,10 @@ import {
   type BrushSettings,
   type EngineHandle,
   type HistorySummary,
-  type LayerMeta,
   type PendingPaste,
 } from "../lib/paint";
+import { collectLeafIds, type LayerNode } from "../lib/layers";
+import type { PendingLoad } from "../lib/project";
 
 const ZOOM_STEPS = [
   12, 25, 33, 50, 67, 100, 150, 200, 300, 400, 600, 800, 1200, 1600, 2400, 3200,
@@ -22,6 +23,45 @@ const ZOOM_STEPS = [
 interface DocTab {
   id: string;
   name: string;
+}
+
+interface RulerTick {
+  pos: number; // screen px from the ruler's start
+  label?: string; // document coordinate (major ticks only)
+  major: boolean;
+}
+
+/** Smallest "nice" number (1/2/5 × 10ⁿ) ≥ raw, for ruler tick spacing. */
+function niceStep(raw: number): number {
+  const p = Math.pow(10, Math.floor(Math.log10(Math.max(1e-6, raw))));
+  const n = raw / p;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p;
+}
+
+/**
+ * Ticks for a ruler `length` px long, where document coord 0 sits at `offset`
+ * screen px and each doc px is `scale` screen px. Labels (document coordinates)
+ * sit on major ticks; four minor ticks fall between them.
+ */
+function rulerTicks(length: number, offset: number, scale: number): RulerTick[] {
+  const ticks: RulerTick[] = [];
+  if (length <= 0 || scale <= 0) return ticks;
+  const step = niceStep(70 / scale); // aim for ~70px between labels
+  const minor = step / 5;
+  const dStart = -offset / scale;
+  const dEnd = (length - offset) / scale;
+  const first = Math.floor(dStart / step) * step;
+  for (let d = first; d <= dEnd + step; d += step) {
+    for (let k = 1; k < 5; k++) {
+      const pos = offset + (d + minor * k) * scale;
+      if (pos >= 0 && pos <= length) ticks.push({ pos, major: false });
+    }
+    const pos = offset + d * scale;
+    if (pos >= 0 && pos <= length) {
+      ticks.push({ pos, label: String(Math.round(d)), major: true });
+    }
+  }
+  return ticks;
 }
 
 const MIN_ZOOM = 12;
@@ -150,6 +190,8 @@ export default function CanvasArea({
   onPick,
   pendingPaste,
   onPasteDone,
+  pendingLoads,
+  onLoadDone,
   paintRef,
   onHistory,
 }: {
@@ -169,7 +211,7 @@ export default function CanvasArea({
   tool: ToolId;
   brush: BrushSettings;
   color: string;
-  layers: LayerMeta[];
+  layers: LayerNode[];
   activeLayerId: string | null;
   ensureLayer: () => string;
   selection: Rect[];
@@ -182,6 +224,8 @@ export default function CanvasArea({
   onPick: (hex: string) => void;
   pendingPaste: PendingPaste | null;
   onPasteDone: () => void;
+  pendingLoads: PendingLoad[];
+  onLoadDone: (docId: string) => void;
   paintRef: RefObject<EngineHandle | null>;
   onHistory: (s: HistorySummary) => void;
 }) {
@@ -211,6 +255,8 @@ export default function CanvasArea({
     content: boolean;
   } | null>(null);
   const resizePreviewRef = useRef<Rect[] | null>(null);
+  // Viewport pixel size, tracked so the rulers can lay out their ticks.
+  const [vpSize, setVpSize] = useState({ w: 0, h: 0 });
   const pickingRef = useRef(false);
   const toolRef = useRef(tool);
   const sampleSizeRef = useRef(sampleSize);
@@ -512,9 +558,11 @@ export default function CanvasArea({
     if (!vp || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
       onViewportRef.current({ w: vp.clientWidth, h: vp.clientHeight });
+      setVpSize({ w: vp.clientWidth, h: vp.clientHeight });
       setPanRef.current((p) => clampHere(p.x, p.y, scaleRef.current, vp));
     });
     ro.observe(vp);
+    setVpSize({ w: vp.clientWidth, h: vp.clientHeight });
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -524,7 +572,7 @@ export default function CanvasArea({
     const v = viewRef.current;
     if (!v) return;
     engine.setView(v);
-    engine.setDoc(widthRef.current, heightRef.current, layersRef.current.map((l) => l.id));
+    engine.setDoc(widthRef.current, heightRef.current, collectLeafIds(layersRef.current));
     engine.onChange = scheduleComposite;
     engine.onHistory = (s) => onHistoryRef.current(s);
     paintRef.current = {
@@ -537,6 +585,18 @@ export default function CanvasArea({
       isFloating: () => engine.isFloating,
       commitFloat: () => engine.commitFloat(),
       discardFloat: () => engine.discardFloat(),
+      duplicateLayer: (s, d) => engine.duplicateLayer(s, d),
+      rasterize: (id, nodes, del) => engine.rasterize(id, nodes, del),
+      removeLayer: (id) => engine.removeLayer(id),
+      getLayerImage: (id) => engine.getLayerImage(id),
+      setLayerImage: (id, src) => engine.setLayerImage(id, src),
+      exportComposite: (tree) => engine.exportComposite(tree),
+      applyAdjust: (layerId, adj) => engine.applyAdjust(layerId, adj),
+      commitAdjust: (layerId, adj) => engine.commitAdjust(layerId, adj),
+      cancelAdjust: () => engine.cancelAdjust(),
+      captureLeaves: (ids) => engine.captureLeaves(ids),
+      restoreLeaves: (snaps) => engine.restoreLeaves(snaps),
+      pushStructural: (label, undo, redo) => engine.pushStructural(label, undo, redo),
     };
     engine.syncHistory();
     scheduleComposite();
@@ -548,14 +608,14 @@ export default function CanvasArea({
 
   // Resize the engine buffers when the document size changes; recomposite.
   useEffect(() => {
-    engine.setDoc(width, height, layers.map((l) => l.id));
+    engine.setDoc(width, height, collectLeafIds(layers));
     scheduleComposite();
   }, [width, height, layers, engine, scheduleComposite]);
 
   // Apply a queued paste once its target document is active and sized.
   useEffect(() => {
     if (!pendingPaste || pendingPaste.docId !== activeId) return;
-    engine.setDoc(width, height, layers.map((l) => l.id));
+    engine.setDoc(width, height, collectLeafIds(layers));
     if (pendingPaste.float) {
       engine.beginFloat(
         pendingPaste.layerId,
@@ -575,6 +635,41 @@ export default function CanvasArea({
     }
     onPasteDone();
   }, [pendingPaste, activeId, width, height, layers, engine, onPasteDone]);
+
+  // Draw queued layer pixels (loaded project / imported images) into the active
+  // doc once it's sized. Entries for other docs wait until they're activated.
+  useEffect(() => {
+    const entry = pendingLoads.find((p) => p.docId === activeId);
+    if (!entry) return;
+    engine.setDoc(width, height, collectLeafIds(layers));
+    let cancelled = false;
+    (async () => {
+      await Promise.all(
+        entry.images.map(async ({ id, data, source }) => {
+          if (source) {
+            if (!cancelled) engine.setLayerImage(id, source);
+            return;
+          }
+          if (!data) return;
+          const img = new Image();
+          img.src = data;
+          try {
+            await img.decode();
+          } catch {
+            return;
+          }
+          if (!cancelled) engine.setLayerImage(id, img);
+        }),
+      );
+      if (!cancelled) {
+        onLoadDone(entry.docId);
+        scheduleComposite();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingLoads, activeId, width, height, layers, engine, onLoadDone, scheduleComposite]);
 
   // Recomposite when layer metadata / active document changes.
   useEffect(() => {
@@ -843,9 +938,9 @@ export default function CanvasArea({
 
   const scale = zoom / 100;
 
-  // Tick marks for the rulers.
-  const hTicks = Array.from({ length: 40 }, (_, i) => i);
-  const vTicks = Array.from({ length: 28 }, (_, i) => i);
+  // Tick marks for the rulers — aligned to the canvas, dynamic on pan/zoom.
+  const hTicks = rulerTicks(vpSize.w, pan.x, zoom / 100);
+  const vTicks = rulerTicks(vpSize.h, pan.y, zoom / 100);
 
   // Accept the in-progress rename (Enter / blur), or drop it (Escape sets the flag).
   const commitTabRename = () => {
@@ -937,16 +1032,26 @@ export default function CanvasArea({
       <div className={styles.stageWrap}>
         <div className={styles.rulerCorner} />
         <div className={styles.rulerH}>
-          {hTicks.map((i) => (
-            <span key={i} className={styles.tick} data-major={i % 5 === 0}>
-              {i % 5 === 0 && <em>{i * 100}</em>}
+          {hTicks.map((t, i) => (
+            <span
+              key={i}
+              className={styles.tick}
+              data-major={t.major}
+              style={{ left: t.pos }}
+            >
+              {t.label !== undefined && t.pos < vpSize.w - 24 && <em>{t.label}</em>}
             </span>
           ))}
         </div>
         <div className={styles.rulerV}>
-          {vTicks.map((i) => (
-            <span key={i} className={styles.tick} data-major={i % 5 === 0}>
-              {i % 5 === 0 && <em>{i * 100}</em>}
+          {vTicks.map((t, i) => (
+            <span
+              key={i}
+              className={styles.tick}
+              data-major={t.major}
+              style={{ top: t.pos }}
+            >
+              {t.label !== undefined && t.pos < vpSize.h - 24 && <em>{t.label}</em>}
             </span>
           ))}
         </div>
