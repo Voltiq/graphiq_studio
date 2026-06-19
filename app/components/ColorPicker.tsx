@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ChevronDown } from "lucide-react";
 import styles from "./ColorPicker.module.scss";
 import {
@@ -137,32 +137,34 @@ export default function ColorPicker({
   const [hsva, setHsva] = useState<Hsva>(() => rgbaToHsva(parseColor(value)));
   const [fmt, setFmt] = useState<Format>("HEX");
   const [draft, setDraft] = useState<Draft>(() => buildDraft(rgbaToHsva(parseColor(value)), "HEX"));
-  const lastEmit = useRef(toHex8(hsvaToRgba(hsva)));
   const editing = useRef(false);
 
-  // Sync when the colour is changed from outside (e.g. switching primary/secondary).
-  useEffect(() => {
-    if (value.toLowerCase() !== lastEmit.current.toLowerCase()) {
-      const c = parseColor(value);
-      setHsva(rgbaToHsva(c));
-      lastEmit.current = toHex8(c);
+  // Adopt external value / format changes DURING RENDER (the React-recommended
+  // "adjust state when a prop changes" pattern). No effects → no effect loops;
+  // React re-renders before paint and the `prev*` guards make it settle.
+  const [prevValue, setPrevValue] = useState(value);
+  if (value !== prevValue) {
+    setPrevValue(value);
+    // Skip when the incoming value is just our own last-emitted colour, so an
+    // in-progress (fractional) edit isn't clobbered mid-drag.
+    if (value.toLowerCase() !== toHex8(hsvaToRgba(hsva)).toLowerCase()) {
+      const next = rgbaToHsva(parseColor(value));
+      setHsva(next);
+      setDraft(buildDraft(next, fmt));
     }
-  }, [value]);
-
-  // Refresh the input text from the model, unless the user is mid-edit.
-  useEffect(() => {
-    if (editing.current) {
-      editing.current = false;
-      return;
-    }
+  }
+  const [prevFmt, setPrevFmt] = useState(fmt);
+  if (fmt !== prevFmt) {
+    setPrevFmt(fmt);
     setDraft(buildDraft(hsva, fmt));
-  }, [hsva, fmt]);
+  }
 
   const commit = (next: Hsva) => {
     setHsva(next);
-    const hex8 = toHex8(hsvaToRgba(next));
-    lastEmit.current = hex8;
-    onChange(hex8);
+    // Keep the input text in sync, unless the user is mid-edit in a field.
+    if (editing.current) editing.current = false;
+    else setDraft(buildDraft(next, fmt));
+    onChange(toHex8(hsvaToRgba(next)));
   };
 
   // Commit from r/g/b while preserving hue in greyscale regions (avoids jumps).

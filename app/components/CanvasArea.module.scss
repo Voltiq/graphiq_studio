@@ -123,6 +123,11 @@ $ruler: 22px;
   display: grid;
   grid-template-columns: $ruler 1fr;
   grid-template-rows: $ruler 1fr;
+
+  &[data-rulers="false"] {
+    grid-template-columns: 0 1fr;
+    grid-template-rows: 0 1fr;
+  }
 }
 
 .rulerCorner {

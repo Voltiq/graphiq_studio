@@ -126,6 +126,26 @@
   }
 }
 
+.menuLabel {
+  display: inline-flex;
+  align-items: center;
+}
+
+.menuCheck {
+  display: inline-flex;
+  width: 16px;
+  margin-left: -2px;
+  color: var(--accent);
+
+  &[data-on="false"] {
+    visibility: hidden;
+  }
+}
+
+.menuItem:hover:not(:disabled) .menuCheck {
+  color: var(--accent-contrast);
+}
+
 .shortcut {
   font-size: 11px;
   color: var(--text-3);

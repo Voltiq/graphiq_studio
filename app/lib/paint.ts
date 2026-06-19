@@ -12,6 +12,116 @@ export interface BrushSettings {
   smoothing: number; // 0–100
 }
 
+/** A doc-space line segment (marching-ants outline edge). */
+export interface Seg {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/** Magic-wand result: rects drive the selection pipeline; segs draw the ants. */
+export interface WandSelection {
+  rects: Rect[];
+  segments: Seg[];
+}
+
+/** Tight, half-open bounding box of a mask region: [x0,x1) × [y0,y1). */
+interface Bounds {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/**
+ * Decompose a boolean mask into rectangles: per-row runs greedily extended
+ * downward while the run directly below is identical (cuts the rect count for
+ * solid regions). Non-overlapping; covers exactly the masked pixels. Scans only
+ * the region's bounding box.
+ */
+function maskToRects(mask: Uint8Array, w: number, b: Bounds): Rect[] {
+  const rects: Rect[] = [];
+  let open: Rect[] = [];
+  for (let y = b.y0; y < b.y1; y++) {
+    const next: Rect[] = [];
+    const used = new Uint8Array(open.length);
+    let x = b.x0;
+    const row = y * w;
+    while (x < b.x1) {
+      if (!mask[row + x]) {
+        x++;
+        continue;
+      }
+      const start = x;
+      while (x < b.x1 && mask[row + x]) x++;
+      const rw = x - start;
+      // Continue an open rect with the same x/width directly above.
+      let matched = -1;
+      for (let k = 0; k < open.length; k++) {
+        if (!used[k] && open[k].x === start && open[k].w === rw) {
+          matched = k;
+          break;
+        }
+      }
+      if (matched >= 0) {
+        open[matched].h++;
+        used[matched] = 1;
+        next.push(open[matched]);
+      } else {
+        next.push({ x: start, y, w: rw, h: 1 });
+      }
+    }
+    for (let k = 0; k < open.length; k++) if (!used[k]) rects.push(open[k]);
+    open = next;
+  }
+  for (const o of open) rects.push(o);
+  return rects;
+}
+
+/**
+ * Trace the boundary of a boolean mask into merged collinear ants segments.
+ * Scans only the region's bounding box, with the mask indexed inline (no
+ * per-pixel closure) — this is the hot path during live tolerance updates.
+ */
+function maskToSegments(mask: Uint8Array, w: number, h: number, b: Bounds): Seg[] {
+  const segs: Seg[] = [];
+  // Horizontal edges: grid line y in [y0,y1], columns [x0,x1).
+  for (let y = b.y0; y <= b.y1; y++) {
+    const above = y > 0 ? (y - 1) * w : -1;
+    const cur = y < h ? y * w : -1;
+    let run = -1;
+    for (let x = b.x0; x <= b.x1; x++) {
+      const a = above >= 0 && x < b.x1 && mask[above + x] === 1;
+      const c = cur >= 0 && x < b.x1 && mask[cur + x] === 1;
+      const edge = x < b.x1 && a !== c;
+      if (edge && run < 0) run = x;
+      else if (!edge && run >= 0) {
+        segs.push({ x1: run, y1: y, x2: x, y2: y });
+        run = -1;
+      }
+    }
+  }
+  // Vertical edges: grid line x in [x0,x1], rows [y0,y1).
+  for (let x = b.x0; x <= b.x1; x++) {
+    const left = x > 0 ? x - 1 : -1;
+    const cur = x < w ? x : -1;
+    let run = -1;
+    for (let y = b.y0; y <= b.y1; y++) {
+      const row = y < b.y1 ? y * w : -1;
+      const a = row >= 0 && left >= 0 && mask[row + left] === 1;
+      const c = row >= 0 && cur >= 0 && mask[row + cur] === 1;
+      const edge = y < b.y1 && a !== c;
+      if (edge && run < 0) run = y;
+      else if (!edge && run >= 0) {
+        segs.push({ x1: x, y1: run, x2: x, y2: y });
+        run = -1;
+      }
+    }
+  }
+  return segs;
+}
+
 export interface HistorySummary {
   items: { label: string }[];
   index: number;
@@ -21,9 +131,24 @@ export interface EngineHandle {
   undo: () => void;
   redo: () => void;
   jumpTo: (index: number) => void;
-  fillSelection: (layerId: string, rects: Rect[], colorHex: string) => void;
-  eraseSelection: (layerId: string, rects: Rect[]) => void;
-  copyRegion: (rects: Rect[] | null) => CopyResult | null;
+  fillSelection: (
+    layerId: string,
+    rects: Rect[],
+    colorHex: string,
+    angle?: number,
+    pivot?: { x: number; y: number } | null,
+  ) => void;
+  eraseSelection: (
+    layerId: string,
+    rects: Rect[],
+    angle?: number,
+    pivot?: { x: number; y: number } | null,
+  ) => void;
+  copyRegion: (
+    rects: Rect[] | null,
+    angle?: number,
+    pivot?: { x: number; y: number } | null,
+  ) => CopyResult | null;
   isFloating: () => boolean;
   commitFloat: () => void;
   discardFloat: () => void;
@@ -33,9 +158,23 @@ export interface EngineHandle {
   getLayerImage: (id: string) => string | null;
   setLayerImage: (id: string, source: CanvasImageSource) => void;
   exportComposite: (tree: LayerNode[]) => HTMLCanvasElement;
-  applyAdjust: (layerId: string, adj: Adjustments) => void;
-  commitAdjust: (layerId: string, adj: Adjustments) => void;
+  resizeImage: (w: number, h: number, ids?: string[], smooth?: boolean) => void;
+  applyAdjust: (
+    layerId: string,
+    adj: Adjustments,
+    sel?: Rect[] | null,
+    angle?: number,
+    pivot?: { x: number; y: number } | null,
+  ) => void;
+  commitAdjust: (
+    layerId: string,
+    adj: Adjustments,
+    sel?: Rect[] | null,
+    angle?: number,
+    pivot?: { x: number; y: number } | null,
+  ) => void;
   cancelAdjust: () => void;
+  setColorSpace: (cs: PredefinedColorSpace) => void;
   captureLeaves: (ids: string[]) => Map<string, ImageData | null>;
   restoreLeaves: (snaps: Map<string, ImageData | null>) => void;
   pushStructural: (label: string, undo: () => void, redo: () => void) => void;
@@ -83,11 +222,16 @@ const BLEND_MAP: Record<string, GlobalCompositeOperation> = {
 };
 const blendOp = (b: string): GlobalCompositeOperation => BLEND_MAP[b] ?? "source-over";
 
-const makeCanvas = (w: number, h: number, readFreq = false) => {
+const makeCanvas = (
+  w: number,
+  h: number,
+  readFreq = false,
+  colorSpace: PredefinedColorSpace = "srgb",
+) => {
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
-  const ctx = c.getContext("2d", readFreq ? { willReadFrequently: true } : undefined)!;
+  const ctx = c.getContext("2d", { willReadFrequently: readFreq, colorSpace })!;
   return { c, ctx };
 };
 
@@ -131,15 +275,29 @@ export class PaintEngine {
   private layers = new Map<string, Layer>();
   private stroke: Layer | null = null;
   private scratch: Layer | null = null;
+  // Working colour space. Layer/scratch/float/export buffers use it (wide-gamut
+  // preserved); the stroke buffer + brush tip stay sRGB so brush colours, which
+  // are authored from sRGB hex, convert correctly when composited onto layers.
+  private cs: PredefinedColorSpace = "srgb";
+
+  /** Make a canvas in the working colour space (for layer-content buffers). */
+  private mk(w: number, h: number, readFreq = false) {
+    return makeCanvas(w, h, readFreq, this.cs);
+  }
 
   private painting = false;
   private strokeLayer: string | null = null;
   private brush: BrushSettings | null = null;
   private mode: StrokeMode = "paint";
   private clip: Rect[] | null = null;
+  private clipAngle = 0;
+  private clipPivot: { x: number; y: number } | null = null;
   private col = { r: 0, g: 0, b: 0, a: 1 };
-  // Aliased hard-brush tip (used for 100% hardness / 1px), stamped crisply.
+  // Pre-baked brush tip for the current stroke (rebuilt per beginStroke). Hard
+  // tips are stamped crisp on the integer grid; soft tips at sub-pixel with
+  // smoothing. Baking once avoids re-dithering a gradient on every stamp.
   private tip: HTMLCanvasElement | null = null;
+  private tipHard = false;
 
   // Move session
   private moving = false;
@@ -163,6 +321,16 @@ export class PaintEngine {
   // When set, the float is drawn scaled into this rect (resize-content) instead
   // of translated by floatOff.
   private floatDst: Rect | null = null;
+  // When non-zero, the float is drawn rotated by this many radians about
+  // floatPivot (or the lifted region's centre). Takes precedence over floatDst.
+  private floatAngle = 0;
+  private floatPivot: { x: number; y: number } | null = null;
+  // Resize-content of an ALREADY-ROTATED selection: scale the lifted (world)
+  // pixels within the rotated frame — local src→dst, then rotate by frameAngle
+  // about framePivot. Takes precedence over the plain floatDst scale.
+  private floatScaleSrc: Rect | null = null;
+  private floatFrameAngle = 0;
+  private floatFramePivot: { x: number; y: number } | null = null;
 
   // Live adjustment preview: the target leaf, a snapshot of its original pixels,
   // and the adjusted result shown in its place until committed.
@@ -171,6 +339,19 @@ export class PaintEngine {
   private adjCanvas: HTMLCanvasElement | null = null;
   private adjPending: Adjustments | null = null;
   private adjRaf = 0;
+  // Cached magic-wand source pixels, reused across live (tolerance) re-runs and
+  // dropped on any layer mutation (see invalidateWandSrc).
+  private wandSrc: {
+    data: Uint8ClampedArray;
+    w: number;
+    h: number;
+    layerId: string;
+    sampleAll: boolean;
+  } | null = null;
+  // When set, adjustments only affect this (possibly rotated) selection region.
+  private adjSel: Rect[] | null = null;
+  private adjSelAngle = 0;
+  private adjSelPivot: { x: number; y: number } | null = null;
   // Whether scaled float content is interpolated (smooth) or nearest-neighbour.
   private floatSmooth = true;
   private last = { x: 0, y: 0 };
@@ -192,30 +373,82 @@ export class PaintEngine {
 
   setView(v: HTMLCanvasElement | null) {
     this.view = v;
-    this.vctx = v ? v.getContext("2d") : null;
+    this.vctx = v ? v.getContext("2d", { colorSpace: this.cs }) : null;
+  }
+
+  /** Switch the working colour space, converting existing layers into it. */
+  setColorSpace(cs: PredefinedColorSpace) {
+    if (cs === this.cs) return;
+    this.wandSrc = null;
+    this.cs = cs;
+    if (this.scratch) this.scratch = this.mk(this.w, this.h);
+    // drawImage converts each layer's pixels from the old space into the new one.
+    for (const [id, l] of this.layers) {
+      const next = this.mk(this.w, this.h, true);
+      next.ctx.drawImage(l.c, 0, 0);
+      this.layers.set(id, next);
+    }
+    this.cancelAdjust();
+    this.onChange();
+  }
+
+  get colorSpace() {
+    return this.cs;
   }
 
   setDoc(w: number, h: number, ownLayerIds?: string[]) {
     if (this.w === w && this.h === h && this.stroke) return;
+    this.wandSrc = null;
     this.w = w;
     this.h = h;
-    this.stroke = makeCanvas(w, h);
-    this.scratch = makeCanvas(w, h);
+    this.stroke = makeCanvas(w, h); // sRGB (brush colours authored from sRGB hex)
+    this.scratch = this.mk(w, h);
     for (const [id, l] of this.layers) {
       // Only resize the active document's layers; leave other docs' layers alone.
       if (ownLayerIds && !ownLayerIds.includes(id)) continue;
       if (l.c.width !== w || l.c.height !== h) {
-        const next = makeCanvas(w, h, true);
+        const next = this.mk(w, h, true);
         next.ctx.drawImage(l.c, 0, 0);
         this.layers.set(id, next);
       }
     }
   }
 
+  /**
+   * Image resize (resample): scale every owned layer from the current size to
+   * w×h. Unlike setDoc (canvas resize), content is stretched to the new bounds.
+   * Call this BEFORE updating the doc's width/height so the follow-up setDoc is
+   * a no-op.
+   */
+  resizeImage(w: number, h: number, ownLayerIds?: string[], smooth = true) {
+    if ((this.w === w && this.h === h) || w < 1 || h < 1) return;
+    this.cancelAdjust();
+    if (this.floatActive) this.discardFloat();
+    const ow = this.w;
+    const oh = this.h;
+    this.w = w;
+    this.h = h;
+    this.stroke = makeCanvas(w, h);
+    this.scratch = this.mk(w, h);
+    for (const [id, l] of this.layers) {
+      if (ownLayerIds && !ownLayerIds.includes(id)) continue;
+      const next = this.mk(w, h, true);
+      next.ctx.imageSmoothingEnabled = smooth;
+      next.ctx.imageSmoothingQuality = "high";
+      next.ctx.drawImage(l.c, 0, 0, l.c.width || ow, l.c.height || oh, 0, 0, w, h);
+      this.layers.set(id, next);
+    }
+    // Resampling rewrites all pixels; a prior history would restore wrong sizes.
+    this.entries.length = 0;
+    this.pos = 0;
+    this.emitHistory();
+    this.onChange();
+  }
+
   private layer(id: string): Layer {
     let l = this.layers.get(id);
     if (!l) {
-      l = makeCanvas(this.w, this.h, true);
+      l = this.mk(this.w, this.h, true);
       this.layers.set(id, l);
     }
     return l;
@@ -231,24 +464,8 @@ export class PaintEngine {
     return this.mode === "erase" ? "destination-out" : blendOp(this.brush!.blend);
   }
 
-  private clipTo(ctx: CanvasRenderingContext2D, rects: Rect[] | null) {
-    if (!rects || !rects.length) return;
-    ctx.beginPath();
-    for (const r of rects) ctx.rect(r.x, r.y, r.w, r.h);
-    ctx.clip();
-  }
-
-  /** Draw the current stroke buffer onto a context, clipped to the selection. */
-  private drawStroke(ctx: CanvasRenderingContext2D) {
-    ctx.save();
-    this.clipTo(ctx, this.clip);
-    ctx.globalAlpha = this.strokeAlpha();
-    ctx.globalCompositeOperation = this.strokeComposite();
-    ctx.drawImage(this.stroke!.c, 0, 0);
-    ctx.restore();
-  }
-
-  private boundsOf(rects: Rect[]): Rect | null {
+  /** Geometric centre of the rects' bounding box (un-clamped). */
+  private centerOf(rects: Rect[]): { x: number; y: number } {
     let x0 = Infinity;
     let y0 = Infinity;
     let x1 = -Infinity;
@@ -258,6 +475,83 @@ export class PaintEngine {
       y0 = Math.min(y0, r.y);
       x1 = Math.max(x1, r.x + r.w);
       y1 = Math.max(y1, r.y + r.h);
+    }
+    return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+  }
+
+  /** Clip to the selection — a rotated quad path about `pivot` when `angle` ≠ 0. */
+  private clipTo(
+    ctx: CanvasRenderingContext2D,
+    rects: Rect[] | null,
+    angle = 0,
+    pivot: { x: number; y: number } | null = null,
+  ) {
+    if (!rects || !rects.length) return;
+    ctx.beginPath();
+    if (!angle) {
+      for (const r of rects) ctx.rect(r.x, r.y, r.w, r.h);
+    } else {
+      const c = pivot ?? this.centerOf(rects);
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const rx = (x: number, y: number) => c.x + (x - c.x) * cos - (y - c.y) * sin;
+      const ry = (x: number, y: number) => c.y + (x - c.x) * sin + (y - c.y) * cos;
+      for (const r of rects) {
+        ctx.moveTo(rx(r.x, r.y), ry(r.x, r.y));
+        ctx.lineTo(rx(r.x + r.w, r.y), ry(r.x + r.w, r.y));
+        ctx.lineTo(rx(r.x + r.w, r.y + r.h), ry(r.x + r.w, r.y + r.h));
+        ctx.lineTo(rx(r.x, r.y + r.h), ry(r.x, r.y + r.h));
+        ctx.closePath();
+      }
+    }
+    ctx.clip();
+  }
+
+  /** Draw the current stroke buffer onto a context, clipped to the selection. */
+  private drawStroke(ctx: CanvasRenderingContext2D) {
+    ctx.save();
+    this.clipTo(ctx, this.clip, this.clipAngle, this.clipPivot);
+    ctx.globalAlpha = this.strokeAlpha();
+    ctx.globalCompositeOperation = this.strokeComposite();
+    ctx.drawImage(this.stroke!.c, 0, 0);
+    ctx.restore();
+  }
+
+  private boundsOf(
+    rects: Rect[],
+    angle = 0,
+    pivot: { x: number; y: number } | null = null,
+  ): Rect | null {
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    if (!angle) {
+      for (const r of rects) {
+        x0 = Math.min(x0, r.x);
+        y0 = Math.min(y0, r.y);
+        x1 = Math.max(x1, r.x + r.w);
+        y1 = Math.max(y1, r.y + r.h);
+      }
+    } else {
+      const c = pivot ?? this.centerOf(rects);
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      for (const r of rects) {
+        for (const [x, y] of [
+          [r.x, r.y],
+          [r.x + r.w, r.y],
+          [r.x + r.w, r.y + r.h],
+          [r.x, r.y + r.h],
+        ]) {
+          const px = c.x + (x - c.x) * cos - (y - c.y) * sin;
+          const py = c.y + (x - c.x) * sin + (y - c.y) * cos;
+          x0 = Math.min(x0, px);
+          y0 = Math.min(y0, py);
+          x1 = Math.max(x1, px);
+          y1 = Math.max(y1, py);
+        }
+      }
     }
     x0 = Math.max(0, Math.floor(x0));
     y0 = Math.max(0, Math.floor(y0));
@@ -292,13 +586,19 @@ export class PaintEngine {
   }
 
   /** Fill the selection on a layer with a colour (records history). */
-  fillSelection(layerId: string, rects: Rect[], colorHex: string) {
-    const bounds = this.boundsOf(rects);
+  fillSelection(
+    layerId: string,
+    rects: Rect[],
+    colorHex: string,
+    angle = 0,
+    pivot: { x: number; y: number } | null = null,
+  ) {
+    const bounds = this.boundsOf(rects, angle, pivot);
     if (!bounds) return;
     const l = this.layer(layerId);
     const before = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
     l.ctx.save();
-    this.clipTo(l.ctx, rects);
+    this.clipTo(l.ctx, rects, angle, pivot);
     l.ctx.globalAlpha = 1;
     l.ctx.globalCompositeOperation = "source-over";
     l.ctx.fillStyle = colorHex;
@@ -310,13 +610,18 @@ export class PaintEngine {
   }
 
   /** Clear (erase to transparent) the selection on a layer (records history). */
-  eraseSelection(layerId: string, rects: Rect[]) {
-    const bounds = this.boundsOf(rects);
+  eraseSelection(
+    layerId: string,
+    rects: Rect[],
+    angle = 0,
+    pivot: { x: number; y: number } | null = null,
+  ) {
+    const bounds = this.boundsOf(rects, angle, pivot);
     if (!bounds) return;
     const l = this.layer(layerId);
     const before = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
     l.ctx.save();
-    this.clipTo(l.ctx, rects);
+    this.clipTo(l.ctx, rects, angle, pivot);
     l.ctx.globalAlpha = 1;
     l.ctx.globalCompositeOperation = "destination-out";
     l.ctx.fillStyle = "#000";
@@ -340,7 +645,7 @@ export class PaintEngine {
 
   /** Composite `nodes` (top→bottom) into one new layer, dropping `deleteIds`. */
   rasterize(targetId: string, nodes: LayerNode[], deleteIds: string[]) {
-    const { c, ctx } = makeCanvas(this.w, this.h, true);
+    const { c, ctx } = this.mk(this.w, this.h, true);
     for (let i = nodes.length - 1; i >= 0; i--) this.drawNode(ctx, nodes[i]);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
@@ -363,7 +668,32 @@ export class PaintEngine {
   // ---- Adjustments (live preview on a leaf, baked on commit) ----
   /** Preview adjustments on a layer. Snapshots the original on first use; a
       default (all-zero) adjustment cancels the preview. */
-  applyAdjust(layerId: string, adj: Adjustments) {
+  /**
+   * Adjust `before` everywhere, then (if a selection is active) keep the result
+   * only inside the selection region and the original pixels outside it.
+   */
+  private maskedAdjust(before: ImageData, adj: Adjustments): ImageData {
+    const res = applyAdjustments(before, adj, this.cs);
+    if (!this.adjSel || !this.adjSel.length) return res; // whole layer
+    const out = this.mk(this.w, this.h);
+    out.ctx.putImageData(before, 0, 0); // original everywhere
+    const tmp = this.mk(this.w, this.h);
+    tmp.ctx.putImageData(res, 0, 0);
+    out.ctx.save();
+    this.clipTo(out.ctx, this.adjSel, this.adjSelAngle, this.adjSelPivot);
+    out.ctx.clearRect(0, 0, this.w, this.h); // clear the selection region only
+    out.ctx.drawImage(tmp.c, 0, 0); // draw the adjusted pixels into it
+    out.ctx.restore();
+    return out.ctx.getImageData(0, 0, this.w, this.h);
+  }
+
+  applyAdjust(
+    layerId: string,
+    adj: Adjustments,
+    sel: Rect[] | null = null,
+    angle = 0,
+    pivot: { x: number; y: number } | null = null,
+  ) {
     if (isDefaultAdjust(adj)) {
       this.cancelAdjust();
       return;
@@ -374,29 +704,41 @@ export class PaintEngine {
       if (!l) return; // empty layer — nothing to adjust
       this.adjLayer = layerId;
       this.adjOrig = l.ctx.getImageData(0, 0, this.w, this.h);
-      const made = makeCanvas(this.w, this.h);
+      const made = this.mk(this.w, this.h);
       made.ctx.putImageData(this.adjOrig, 0, 0); // show original until first compute
       this.adjCanvas = made.c;
     }
+    this.adjSel = sel && sel.length ? sel : null;
+    this.adjSelAngle = angle;
+    this.adjSelPivot = pivot;
     this.adjPending = adj;
     if (this.adjRaf) return;
     this.adjRaf = requestAnimationFrame(() => {
       this.adjRaf = 0;
       if (!this.adjPending || !this.adjOrig || !this.adjCanvas) return;
-      const res = applyAdjustments(this.adjOrig, this.adjPending);
+      const res = this.maskedAdjust(this.adjOrig, this.adjPending);
       this.adjCanvas.getContext("2d")!.putImageData(res, 0, 0);
       this.onChange();
     });
   }
 
   /** Bake the adjustment into the layer as one undoable step. */
-  commitAdjust(layerId: string, adj: Adjustments) {
+  commitAdjust(
+    layerId: string,
+    adj: Adjustments,
+    sel: Rect[] | null = null,
+    angle = 0,
+    pivot: { x: number; y: number } | null = null,
+  ) {
     if (this.adjLayer !== layerId || !this.adjOrig || isDefaultAdjust(adj)) {
       this.cancelAdjust();
       return;
     }
+    this.adjSel = sel && sel.length ? sel : null;
+    this.adjSelAngle = angle;
+    this.adjSelPivot = pivot;
     const before = this.adjOrig;
-    const after = applyAdjustments(before, adj);
+    const after = this.maskedAdjust(before, adj);
     const l = this.layer(layerId);
     l.ctx.globalAlpha = 1;
     l.ctx.globalCompositeOperation = "source-over";
@@ -421,10 +763,14 @@ export class PaintEngine {
     this.adjOrig = null;
     this.adjCanvas = null;
     this.adjPending = null;
+    this.adjSel = null;
+    this.adjSelAngle = 0;
+    this.adjSelPivot = null;
   }
 
   /** Replace a leaf layer's pixels with an image (used when loading a project). */
   setLayerImage(id: string, source: CanvasImageSource) {
+    this.wandSrc = null;
     const l = this.layer(id);
     l.ctx.globalAlpha = 1;
     l.ctx.globalCompositeOperation = "source-over";
@@ -487,7 +833,31 @@ export class PaintEngine {
       s.globalCompositeOperation = "source-over";
       s.clearRect(0, 0, this.w, this.h);
       if (l) s.drawImage(l.c, 0, 0);
-      if (this.floatDst && this.floatSrcRect) {
+      if (this.floatAngle && this.floatSrcRect) {
+        // Rotate-content preview: draw the lifted region rotated about the pivot.
+        const src = this.floatSrcRect;
+        const cx = this.floatPivot ? this.floatPivot.x : src.x + src.w / 2;
+        const cy = this.floatPivot ? this.floatPivot.y : src.y + src.h / 2;
+        s.save();
+        s.imageSmoothingEnabled = true;
+        s.translate(cx, cy);
+        s.rotate(this.floatAngle);
+        s.translate(-cx, -cy);
+        s.drawImage(this.floatSource, 0, 0);
+        s.restore();
+      } else if (this.floatFrameAngle && this.floatScaleSrc && this.floatDst) {
+        // Resize-content of a rotated selection: scale in the rotated frame.
+        const P =
+          this.floatFramePivot ?? {
+            x: this.floatScaleSrc.x + this.floatScaleSrc.w / 2,
+            y: this.floatScaleSrc.y + this.floatScaleSrc.h / 2,
+          };
+        s.save();
+        s.imageSmoothingEnabled = this.floatSmooth;
+        this.applyFrameScale(s, this.floatScaleSrc, this.floatDst, this.floatFrameAngle, P);
+        s.drawImage(this.floatSource, 0, 0);
+        s.restore();
+      } else if (this.floatDst && this.floatSrcRect) {
         const src = this.floatSrcRect;
         const d = this.floatDst;
         s.imageSmoothingEnabled = this.floatSmooth;
@@ -509,7 +879,7 @@ export class PaintEngine {
     if (!node.visible) return;
     if (node.type === "group") {
       if (!node.children.length) return;
-      const { c: bc, ctx: bctx } = makeCanvas(this.w, this.h);
+      const { c: bc, ctx: bctx } = this.mk(this.w, this.h);
       for (let i = node.children.length - 1; i >= 0; i--) this.drawNode(bctx, node.children[i]);
       ctx.globalAlpha = Math.max(0, Math.min(1, node.opacity / 100));
       ctx.globalCompositeOperation = blendOp(node.blend);
@@ -529,7 +899,7 @@ export class PaintEngine {
 
   /** Flatten the layer tree into a new doc-sized canvas (for image export). */
   exportComposite(tree: LayerNode[]): HTMLCanvasElement {
-    const { c, ctx } = makeCanvas(this.w, this.h);
+    const { c, ctx } = this.mk(this.w, this.h);
     for (let i = tree.length - 1; i >= 0; i--) this.drawNode(ctx, tree[i]);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
@@ -555,9 +925,9 @@ export class PaintEngine {
     this.moveLayer = layerId;
     this.moveOff = { x: 0, y: 0 };
     const l = this.layer(layerId);
-    this.moveOrig = makeCanvas(this.w, this.h, true);
+    this.moveOrig = this.mk(this.w, this.h, true);
     this.moveOrig.ctx.drawImage(l.c, 0, 0);
-    this.moveFloat = makeCanvas(this.w, this.h);
+    this.moveFloat = this.mk(this.w, this.h);
     if (rects && rects.length) {
       this.moveSrc = this.boundsOf(rects);
       this.moveFloat.ctx.save();
@@ -611,6 +981,11 @@ export class PaintEngine {
     this.floatOrig = null;
     this.floatSrcRect = null;
     this.floatDst = null;
+    this.floatScaleSrc = null;
+    this.floatFrameAngle = 0;
+    this.floatFramePivot = null;
+    this.floatAngle = 0;
+    this.floatPivot = null;
     this.onChange();
   }
 
@@ -618,24 +993,29 @@ export class PaintEngine {
    * Lift a selection's pixels off a layer into a movable float (leaving a hole).
    * The float can be repositioned repeatedly and only merges on commit.
    */
-  beginFloatFromSelection(layerId: string, rects: Rect[]): boolean {
+  beginFloatFromSelection(
+    layerId: string,
+    rects: Rect[],
+    angle = 0,
+    pivot: { x: number; y: number } | null = null,
+  ): boolean {
     if (this.floatActive) this.commitFloat();
-    const src = this.boundsOf(rects);
+    const src = this.boundsOf(rects, angle, pivot);
     if (!src) return false;
     const l = this.layer(layerId);
     // Pristine copy of the layer for history & discard.
-    this.floatOrig = makeCanvas(this.w, this.h, true);
+    this.floatOrig = this.mk(this.w, this.h, true);
     this.floatOrig.ctx.drawImage(l.c, 0, 0);
     // Lifted content: the layer clipped to the selection (full doc size).
-    const lifted = makeCanvas(this.w, this.h);
+    const lifted = this.mk(this.w, this.h);
     lifted.ctx.save();
-    this.clipTo(lifted.ctx, rects);
+    this.clipTo(lifted.ctx, rects, angle, pivot);
     lifted.ctx.drawImage(l.c, 0, 0);
     lifted.ctx.restore();
     this.floatSource = lifted.c;
     // Remove the lifted pixels from the layer (the hole).
     l.ctx.save();
-    this.clipTo(l.ctx, rects);
+    this.clipTo(l.ctx, rects, angle, pivot);
     l.ctx.globalCompositeOperation = "destination-out";
     l.ctx.fillStyle = "#000";
     l.ctx.fillRect(src.x, src.y, src.w, src.h);
@@ -647,6 +1027,11 @@ export class PaintEngine {
     this.floatOff = { x: 0, y: 0 };
     this.floatSrcRect = src;
     this.floatDst = null;
+    this.floatScaleSrc = null;
+    this.floatFrameAngle = 0;
+    this.floatFramePivot = null;
+    this.floatAngle = 0;
+    this.floatPivot = null;
     this.floatSide = undefined;
     this.onChange();
     return true;
@@ -676,6 +1061,67 @@ export class PaintEngine {
     this.onChange();
   }
 
+  /** Rotate the float about `pivot` (or the lifted region's centre), in radians. */
+  setFloatRotation(angle: number, pivot: { x: number; y: number } | null = null) {
+    if (!this.floatActive) return;
+    this.floatAngle = angle;
+    this.floatPivot = pivot;
+    this.onChange();
+  }
+
+  /**
+   * Resize the content of a ROTATED selection: scale the lifted pixels in the
+   * selection's own (un-rotated) frame from `src`→`dst` (both local rects), then
+   * rotate by `angle` about `pivot`. Falls back to a plain scale when angle≈0.
+   */
+  setFloatFrameScale(
+    src: Rect,
+    dst: Rect,
+    angle: number,
+    pivot: { x: number; y: number } | null,
+    smooth = true,
+  ) {
+    if (!this.floatActive) return;
+    this.floatSmooth = smooth;
+    if (!angle) {
+      // Upright: a plain axis-aligned scale of the lifted region is correct.
+      this.floatScaleSrc = null;
+      this.floatFrameAngle = 0;
+      this.floatFramePivot = null;
+      this.setFloatDst(dst);
+      return;
+    }
+    this.floatScaleSrc = { ...src };
+    this.floatDst = {
+      x: Math.round(dst.x),
+      y: Math.round(dst.y),
+      w: Math.max(1, Math.round(dst.w)),
+      h: Math.max(1, Math.round(dst.h)),
+    };
+    this.floatFrameAngle = angle;
+    this.floatFramePivot = pivot;
+    this.onChange();
+  }
+
+  /** Apply T = R(angle,pivot) ∘ scale(src→dst) ∘ R(-angle,pivot) to a context. */
+  private applyFrameScale(
+    ctx: CanvasRenderingContext2D,
+    src: Rect,
+    dst: Rect,
+    angle: number,
+    pivot: { x: number; y: number },
+  ) {
+    ctx.translate(pivot.x, pivot.y);
+    ctx.rotate(angle);
+    ctx.translate(-pivot.x, -pivot.y);
+    ctx.translate(dst.x, dst.y);
+    ctx.scale(dst.w / src.w, dst.h / src.h);
+    ctx.translate(-src.x, -src.y);
+    ctx.translate(pivot.x, pivot.y);
+    ctx.rotate(-angle);
+    ctx.translate(-pivot.x, -pivot.y);
+  }
+
   private clearFloat() {
     this.floatActive = false;
     this.floatLayer = null;
@@ -685,6 +1131,11 @@ export class PaintEngine {
     this.floatOrig = null;
     this.floatSrcRect = null;
     this.floatDst = null;
+    this.floatScaleSrc = null;
+    this.floatFrameAngle = 0;
+    this.floatFramePivot = null;
+    this.floatAngle = 0;
+    this.floatPivot = null;
     this.floatSmooth = true;
   }
 
@@ -699,7 +1150,112 @@ export class PaintEngine {
     const px = this.floatBase.x + this.floatOff.x;
     const py = this.floatBase.y + this.floatOff.y;
 
-    if (this.floatOrig && this.floatSrcRect && this.floatDst) {
+    if (this.floatOrig && this.floatSrcRect && this.floatAngle) {
+      // Rotated content: bake the lifted region rotated about the pivot.
+      const src = this.floatSrcRect;
+      const cx = this.floatPivot ? this.floatPivot.x : src.x + src.w / 2;
+      const cy = this.floatPivot ? this.floatPivot.y : src.y + src.h / 2;
+      const cos = Math.cos(this.floatAngle);
+      const sin = Math.sin(this.floatAngle);
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const [x, y] of [
+        [src.x, src.y],
+        [src.x + src.w, src.y],
+        [src.x + src.w, src.y + src.h],
+        [src.x, src.y + src.h],
+      ]) {
+        const rx = cx + (x - cx) * cos - (y - cy) * sin;
+        const ry = cy + (x - cx) * sin + (y - cy) * cos;
+        minX = Math.min(minX, rx);
+        minY = Math.min(minY, ry);
+        maxX = Math.max(maxX, rx);
+        maxY = Math.max(maxY, ry);
+      }
+      // Affected region = rotated bounds ∪ the source hole, clamped to the canvas.
+      const x0 = Math.max(0, Math.floor(Math.min(minX, src.x)));
+      const y0 = Math.max(0, Math.floor(Math.min(minY, src.y)));
+      const x1 = Math.min(this.w, Math.ceil(Math.max(maxX, src.x + src.w)));
+      const y1 = Math.min(this.h, Math.ceil(Math.max(maxY, src.y + src.h)));
+      const rw = x1 - x0;
+      const rh = y1 - y0;
+      l.ctx.globalAlpha = 1;
+      l.ctx.globalCompositeOperation = "source-over";
+      l.ctx.imageSmoothingEnabled = true;
+      const draw = () => {
+        l.ctx.save();
+        l.ctx.translate(cx, cy);
+        l.ctx.rotate(this.floatAngle);
+        l.ctx.translate(-cx, -cy);
+        l.ctx.drawImage(this.floatSource!, 0, 0);
+        l.ctx.restore();
+      };
+      if (rw > 0 && rh > 0) {
+        const before = this.floatOrig.ctx.getImageData(x0, y0, rw, rh);
+        draw();
+        const after = l.ctx.getImageData(x0, y0, rw, rh);
+        this.pushEntry(layerId, { x: x0, y: y0, w: rw, h: rh }, before, after, "Rotate");
+      } else {
+        draw();
+      }
+    } else if (
+      this.floatOrig &&
+      this.floatScaleSrc &&
+      this.floatDst &&
+      this.floatFrameAngle &&
+      this.floatSrcRect
+    ) {
+      // Resize-content of a rotated selection: bake scaled-in-rotated-frame.
+      const src = this.floatScaleSrc;
+      const dst = this.floatDst;
+      const hole = this.floatSrcRect;
+      const P = this.floatFramePivot ?? { x: src.x + src.w / 2, y: src.y + src.h / 2 };
+      const cos = Math.cos(this.floatFrameAngle);
+      const sin = Math.sin(this.floatFrameAngle);
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const [x, y] of [
+        [dst.x, dst.y],
+        [dst.x + dst.w, dst.y],
+        [dst.x + dst.w, dst.y + dst.h],
+        [dst.x, dst.y + dst.h],
+      ]) {
+        const rx = P.x + (x - P.x) * cos - (y - P.y) * sin;
+        const ry = P.y + (x - P.x) * sin + (y - P.y) * cos;
+        minX = Math.min(minX, rx);
+        minY = Math.min(minY, ry);
+        maxX = Math.max(maxX, rx);
+        maxY = Math.max(maxY, ry);
+      }
+      // Affected region = rotated destination ∪ the source hole, clamped.
+      const x0 = Math.max(0, Math.floor(Math.min(minX, hole.x)));
+      const y0 = Math.max(0, Math.floor(Math.min(minY, hole.y)));
+      const x1 = Math.min(this.w, Math.ceil(Math.max(maxX, hole.x + hole.w)));
+      const y1 = Math.min(this.h, Math.ceil(Math.max(maxY, hole.y + hole.h)));
+      const rw = x1 - x0;
+      const rh = y1 - y0;
+      l.ctx.globalAlpha = 1;
+      l.ctx.globalCompositeOperation = "source-over";
+      l.ctx.imageSmoothingEnabled = this.floatSmooth;
+      const draw = () => {
+        l.ctx.save();
+        this.applyFrameScale(l.ctx, src, dst, this.floatFrameAngle, P);
+        l.ctx.drawImage(this.floatSource!, 0, 0);
+        l.ctx.restore();
+      };
+      if (rw > 0 && rh > 0) {
+        const before = this.floatOrig.ctx.getImageData(x0, y0, rw, rh);
+        draw();
+        const after = l.ctx.getImageData(x0, y0, rw, rh);
+        this.pushEntry(layerId, { x: x0, y: y0, w: rw, h: rh }, before, after, "Scale");
+      } else {
+        draw();
+      }
+    } else if (this.floatOrig && this.floatSrcRect && this.floatDst) {
       // Resized content: bake the lifted region scaled into its target rect.
       const src = this.floatSrcRect;
       const dst = this.floatDst;
@@ -805,10 +1361,14 @@ export class PaintEngine {
   }
 
   /** Copy the composite within the selection (or the whole canvas) to a new canvas. */
-  copyRegion(rects: Rect[] | null): CopyResult | null {
+  copyRegion(
+    rects: Rect[] | null,
+    angle = 0,
+    pivot: { x: number; y: number } | null = null,
+  ): CopyResult | null {
     if (!this.view) return null;
     const bounds =
-      rects && rects.length ? this.boundsOf(rects) : { x: 0, y: 0, w: this.w, h: this.h };
+      rects && rects.length ? this.boundsOf(rects, angle, pivot) : { x: 0, y: 0, w: this.w, h: this.h };
     if (!bounds || bounds.w <= 0 || bounds.h <= 0) return null;
     const out = document.createElement("canvas");
     out.width = bounds.w;
@@ -817,11 +1377,10 @@ export class PaintEngine {
     if (!octx) return null;
     if (rects && rects.length) {
       octx.save();
-      octx.beginPath();
-      for (const r of rects) octx.rect(r.x - bounds.x, r.y - bounds.y, r.w, r.h);
-      octx.clip();
+      octx.translate(-bounds.x, -bounds.y); // clip + draw in document coordinates
+      this.clipTo(octx, rects, angle, pivot);
     }
-    octx.drawImage(this.view, bounds.x, bounds.y, bounds.w, bounds.h, 0, 0, bounds.w, bounds.h);
+    octx.drawImage(this.view, 0, 0);
     if (rects && rects.length) octx.restore();
     return { canvas: out, x: bounds.x, y: bounds.y };
   }
@@ -847,7 +1406,8 @@ export class PaintEngine {
     const bw = x1 - x0 + 1;
     const bh = y1 - y0 + 1;
     if (bw <= 0 || bh <= 0) return null;
-    const data = ctx.getImageData(x0, y0, bw, bh).data;
+    // Read in sRGB so the picked hex matches the (sRGB) colour UI.
+    const data = ctx.getImageData(x0, y0, bw, bh, { colorSpace: "srgb" }).data;
     const count = data.length / 4;
     let sr = 0;
     let sg = 0;
@@ -864,6 +1424,102 @@ export class PaintEngine {
     // Colour is the alpha-weighted (un-premultiplied) average; alpha is the mean
     // coverage over the sampled box, so the eyedropper also picks up opacity.
     return toHex8({ r: sr / sa, g: sg / sa, b: sb / sa, a: sa / count });
+  }
+
+  /**
+   * Magic-wand select: pick the region of similar colour around (x,y). Returns a
+   * run-length rect decomposition (reused by the whole selection pipeline) plus
+   * the traced mask boundary as marching-ants segments (cheap to draw). Source
+   * is the active layer or, with `sampleAll`, the composite.
+   */
+  magicWand(
+    layerId: string,
+    x: number,
+    y: number,
+    opts: { tolerance: number; contiguous: boolean; sampleAll: boolean },
+    reuseSource = false,
+  ): WandSelection | null {
+    const w = this.w;
+    const h = this.h;
+    const px = Math.floor(x);
+    const py = Math.floor(y);
+    if (px < 0 || py < 0 || px >= w || py >= h) return null;
+    // Source pixels: cached between live re-runs (dragging Tolerance doesn't
+    // change the layer), so we skip the costly getImageData each time.
+    const cache = this.wandSrc;
+    let data: Uint8ClampedArray;
+    if (
+      reuseSource &&
+      cache &&
+      cache.w === w &&
+      cache.h === h &&
+      cache.layerId === layerId &&
+      cache.sampleAll === opts.sampleAll
+    ) {
+      data = cache.data;
+    } else {
+      const ctx = opts.sampleAll ? this.vctx : this.layers.get(layerId)?.ctx;
+      if (!ctx) return null;
+      data = ctx.getImageData(0, 0, w, h, { colorSpace: "srgb" }).data;
+      this.wandSrc = { data, w, h, layerId, sampleAll: opts.sampleAll };
+    }
+    const t = Math.max(0, opts.tolerance);
+    const si = (py * w + px) * 4;
+    const sr = data[si];
+    const sg = data[si + 1];
+    const sb = data[si + 2];
+    const sa = data[si + 3];
+    const match = (p: number) => {
+      const i = p * 4;
+      return (
+        Math.abs(data[i] - sr) <= t &&
+        Math.abs(data[i + 1] - sg) <= t &&
+        Math.abs(data[i + 2] - sb) <= t &&
+        Math.abs(data[i + 3] - sa) <= t
+      );
+    };
+
+    const mask = new Uint8Array(w * h);
+    let minX = w;
+    let minY = h;
+    let maxX = -1;
+    let maxY = -1;
+    const mark = (p: number, cx: number, cy: number) => {
+      mask[p] = 1;
+      if (cx < minX) minX = cx;
+      if (cx > maxX) maxX = cx;
+      if (cy < minY) minY = cy;
+      if (cy > maxY) maxY = cy;
+    };
+    if (opts.contiguous) {
+      const stack = new Int32Array(w * h);
+      const seen = new Uint8Array(w * h);
+      let sp = 0;
+      const seed = py * w + px;
+      stack[sp++] = seed;
+      seen[seed] = 1;
+      while (sp > 0) {
+        const p = stack[--sp];
+        if (!match(p)) continue;
+        const cx = p % w;
+        const cy = (p - cx) / w;
+        mark(p, cx, cy);
+        if (cx > 0 && !seen[p - 1]) (seen[p - 1] = 1), (stack[sp++] = p - 1);
+        if (cx < w - 1 && !seen[p + 1]) (seen[p + 1] = 1), (stack[sp++] = p + 1);
+        if (cy > 0 && !seen[p - w]) (seen[p - w] = 1), (stack[sp++] = p - w);
+        if (cy < h - 1 && !seen[p + w]) (seen[p + w] = 1), (stack[sp++] = p + w);
+      }
+    } else {
+      for (let p = 0, cy = 0; cy < h; cy++) {
+        for (let cx = 0; cx < w; cx++, p++) if (match(p)) mark(p, cx, cy);
+      }
+    }
+
+    if (maxX < 0) return null; // nothing matched
+    const b: Bounds = { x0: minX, y0: minY, x1: maxX + 1, y1: maxY + 1 };
+    const rects = maskToRects(mask, w, b);
+    if (!rects.length) return null;
+    return { rects, segments: maskToSegments(mask, w, h, b) };
   }
 
   moveTo(dx: number, dy: number) {
@@ -918,6 +1574,8 @@ export class PaintEngine {
     y: number,
     mode: StrokeMode = "paint",
     clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
   ) {
     if (!this.stroke) return;
     this.layer(layerId); // ensure the target layer has a canvas so the live stroke composites
@@ -926,15 +1584,21 @@ export class PaintEngine {
     this.brush = brush;
     this.mode = mode;
     this.clip = clip && clip.length ? clip : null;
+    this.clipAngle = clipAngle;
+    this.clipPivot = clipPivot;
     const c = parseColor(colorHex);
     this.col = { r: c.r, g: c.g, b: c.b, a: c.a };
-    // A fully hard brush (or a 1px brush) paints crisp aliased pixels — no
-    // gradient feather and no anti-aliased rim.
     const r = Math.max(0.5, brush.size / 2);
-    this.tip =
-      brush.hardness >= 100 || brush.size <= 1
-        ? this.buildHardTip(r, c.r, c.g, c.b, Math.max(0, Math.min(1, brush.flow / 100)))
-        : null;
+    const flow = Math.max(0, Math.min(1, brush.flow / 100));
+    // The tip is BAKED once per stroke and reused for every stamp. A fully hard
+    // (or 1px) brush is a crisp aliased disc; softer brushes get an analytic
+    // radial falloff. Baking avoids re-dithering a canvas gradient on each stamp
+    // — that per-stamp dither, accumulated over the overlapping stamps in the
+    // stroke buffer, is what made solid strokes look grainy inside.
+    this.tipHard = brush.hardness >= 100 || brush.size <= 1;
+    this.tip = this.tipHard
+      ? this.buildHardTip(r, c.r, c.g, c.b, flow)
+      : this.buildSoftTip(r, c.r, c.g, c.b, flow, brush.hardness);
     this.stroke.ctx.clearRect(0, 0, this.w, this.h);
     this.step = Math.max(1, brush.size * 0.1);
     this.last = { x, y };
@@ -1028,35 +1692,69 @@ export class PaintEngine {
     return c;
   }
 
+  /**
+   * A soft disc tip with an analytic radial falloff (solid core out to the
+   * hardness radius, then a linear fade to the edge). Computed per-pixel so it
+   * carries NO gradient dithering — overlapping stamps then accumulate smoothly
+   * instead of compounding dither noise into grain.
+   */
+  private buildSoftTip(
+    r: number,
+    cr: number,
+    cg: number,
+    cb: number,
+    flow: number,
+    hardness: number,
+  ): HTMLCanvasElement {
+    const size = Math.max(2, Math.ceil(r * 2) + 2); // +1px each side for the rim
+    const { c, ctx } = makeCanvas(size, size);
+    const img = ctx.createImageData(size, size);
+    const data = img.data;
+    const center = size / 2;
+    const inner = Math.max(0, Math.min(0.999, hardness / 100)) * r; // solid core radius
+    const span = Math.max(0.0001, r - inner);
+    for (let py = 0; py < size; py++) {
+      for (let px = 0; px < size; px++) {
+        const dx = px + 0.5 - center;
+        const dy = py + 0.5 - center;
+        const dist = Math.hypot(dx, dy);
+        let a: number;
+        if (dist <= inner) a = flow;
+        else if (dist >= r) a = 0;
+        else a = flow * (1 - (dist - inner) / span);
+        if (a <= 0) continue;
+        const i = (py * size + px) * 4;
+        data[i] = cr;
+        data[i + 1] = cg;
+        data[i + 2] = cb;
+        data[i + 3] = Math.round(a * 255);
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+
   private stamp(x: number, y: number) {
-    const b = this.brush!;
-    const r = Math.max(0.5, b.size / 2);
+    const tip = this.tip;
+    if (!tip) return;
     const ctx = this.stroke!.ctx;
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
-
-    if (this.tip) {
+    if (this.tipHard) {
       // Crisp hard brush: stamp the aliased tip on the integer pixel grid.
       ctx.imageSmoothingEnabled = false;
-      const ix = Math.round(x - this.tip.width / 2);
-      const iy = Math.round(y - this.tip.height / 2);
-      ctx.drawImage(this.tip, ix, iy);
-      this.expandDirty(ix, iy, ix + this.tip.width, iy + this.tip.height);
-      return;
+      const ix = Math.round(x - tip.width / 2);
+      const iy = Math.round(y - tip.height / 2);
+      ctx.drawImage(tip, ix, iy);
+      this.expandDirty(ix, iy, ix + tip.width, iy + tip.height);
+    } else {
+      // Soft brush: stamp the baked tip at sub-pixel position (smoothed).
+      ctx.imageSmoothingEnabled = true;
+      const dx = x - tip.width / 2;
+      const dy = y - tip.height / 2;
+      ctx.drawImage(tip, dx, dy);
+      this.expandDirty(Math.floor(dx), Math.floor(dy), Math.ceil(dx + tip.width), Math.ceil(dy + tip.height));
     }
-
-    const inner = Math.min(0.999, Math.max(0, b.hardness / 100));
-    const flow = Math.max(0, Math.min(1, b.flow / 100));
-    const { r: cr, g: cg, b: cb } = this.col;
-    const solid = `rgba(${cr},${cg},${cb},${flow})`;
-    const clear = `rgba(${cr},${cg},${cb},0)`;
-    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
-    grad.addColorStop(0, solid);
-    grad.addColorStop(inner, solid);
-    grad.addColorStop(1, clear);
-    ctx.fillStyle = grad;
-    ctx.fillRect(x - r, y - r, r * 2, r * 2);
-    this.expandDirty(x - r, y - r, x + r, y + r);
   }
 
   private expandDirty(x0: number, y0: number, x1: number, y1: number) {
@@ -1117,6 +1815,8 @@ export class PaintEngine {
     this.emitHistory();
   }
   private emitHistory() {
+    // Any history change means layer pixels changed → wand source is stale.
+    this.wandSrc = null;
     this.onHistory({
       items: [{ label: "New" }, ...this.entries.map((e) => ({ label: e.label }))],
       index: this.pos,

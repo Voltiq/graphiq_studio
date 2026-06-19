@@ -84,8 +84,13 @@ function blur3(d: Uint8ClampedArray, w: number, h: number): Uint8ClampedArray {
   return o;
 }
 
-/** Apply tonal / colour / detail adjustments, returning a new ImageData. */
-export function applyAdjustments(src: ImageData, a: Adjustments): ImageData {
+/** Apply tonal / colour / detail adjustments, returning a new ImageData in the
+    given colour space (must match the target canvas to avoid a conversion). */
+export function applyAdjustments(
+  src: ImageData,
+  a: Adjustments,
+  colorSpace: PredefinedColorSpace = "srgb",
+): ImageData {
   const w = src.width;
   const h = src.height;
   const s = src.data;
@@ -181,5 +186,5 @@ export function applyAdjustments(src: ImageData, a: Adjustments): ImageData {
     }
   }
 
-  return new ImageData(out, w, h);
+  return new ImageData(out, w, h, { colorSpace });
 }

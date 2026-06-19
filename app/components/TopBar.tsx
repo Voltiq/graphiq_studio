@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Aperture, Redo2, Search, Share2, Undo2 } from "lucide-react";
+import { Aperture, Check, Redo2, Search, Share2, Undo2 } from "lucide-react";
 import styles from "./TopBar.module.scss";
 import { MENUS } from "../lib/menus";
 import ThemeToggle from "./ThemeToggle";
@@ -14,6 +14,7 @@ export default function TopBar({
   onRedo,
   canUndo = false,
   canRedo = false,
+  checks,
 }: {
   initialTheme: Theme;
   onMenuAction?: (action: string) => void;
@@ -21,6 +22,8 @@ export default function TopBar({
   onRedo?: () => void;
   canUndo?: boolean;
   canRedo?: boolean;
+  /** Action ids that are checkable toggles → current on/off state. */
+  checks?: Record<string, boolean>;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -66,26 +69,39 @@ export default function TopBar({
             </button>
             {open === menu.label && (
               <div className={styles.dropdown} role="menu">
-                {menu.items.map((item, i) => (
-                  <div key={`${item.label}-${i}`}>
-                    <button
-                      type="button"
-                      className={styles.menuItem}
-                      role="menuitem"
-                      disabled={item.disabled}
-                      onClick={() => {
-                        setOpen(null);
-                        if (item.action) onMenuAction?.(item.action);
-                      }}
-                    >
-                      <span>{item.label}</span>
-                      {item.shortcut && (
-                        <span className={styles.shortcut}>{item.shortcut}</span>
-                      )}
-                    </button>
-                    {item.separatorAfter && <div className={styles.menuSep} />}
-                  </div>
-                ))}
+                {menu.items.map((item, i) => {
+                  const checkable = item.action != null && checks != null && item.action in checks;
+                  const checked = checkable && !!checks?.[item.action!];
+                  return (
+                    <div key={`${item.label}-${i}`}>
+                      <button
+                        type="button"
+                        className={styles.menuItem}
+                        role={checkable ? "menuitemcheckbox" : "menuitem"}
+                        aria-checked={checkable ? checked : undefined}
+                        disabled={item.disabled}
+                        onClick={() => {
+                          if (item.action) onMenuAction?.(item.action);
+                          // Keep the menu open when flipping a toggle; close otherwise.
+                          if (!checkable) setOpen(null);
+                        }}
+                      >
+                        <span className={styles.menuLabel}>
+                          {checkable && (
+                            <span className={styles.menuCheck} data-on={checked}>
+                              <Check size={12} strokeWidth={3} />
+                            </span>
+                          )}
+                          {item.label}
+                        </span>
+                        {item.shortcut && (
+                          <span className={styles.shortcut}>{item.shortcut}</span>
+                        )}
+                      </button>
+                      {item.separatorAfter && <div className={styles.menuSep} />}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

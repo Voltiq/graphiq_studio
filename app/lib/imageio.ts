@@ -1,5 +1,16 @@
 import { downloadBlob } from "./project";
 
+/** Whether this browser can use a wide-gamut Display-P3 canvas working space. */
+export function p3Supported(): boolean {
+  try {
+    const c = document.createElement("canvas");
+    const ctx = c.getContext("2d", { colorSpace: "display-p3" });
+    return ctx?.getContextAttributes().colorSpace === "display-p3";
+  } catch {
+    return false;
+  }
+}
+
 export interface ExportFormat {
   id: string;
   label: string;
@@ -44,10 +55,13 @@ export interface ExportOptions {
 export function renderExport(base: HTMLCanvasElement, o: ExportOptions): Promise<Blob | null> {
   const w = Math.max(1, Math.round(base.width * o.scale));
   const h = Math.max(1, Math.round(base.height * o.scale));
+  // Match the composite's colour space so wide-gamut exports aren't clamped.
+  const cs =
+    (base.getContext("2d")?.getContextAttributes().colorSpace as PredefinedColorSpace) ?? "srgb";
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
-  const ctx = c.getContext("2d");
+  const ctx = c.getContext("2d", { colorSpace: cs });
   if (!ctx) return Promise.resolve(null);
   const transparent = o.transparent && o.format.alpha;
   if (!transparent) {

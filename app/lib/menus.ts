@@ -42,10 +42,10 @@ export const MENUS: Menu[] = [
   {
     label: "Image",
     items: [
-      { label: "Image Size…", shortcut: "Ctrl+Alt+I" },
+      { label: "Image Size…", shortcut: "Ctrl+Alt+I", action: "image-size" },
       {
         label: "Canvas Size…",
-        shortcut: "Ctrl+Alt+Z",
+        shortcut: "Ctrl+Alt+C",
         action: "canvas-size",
         separatorAfter: true,
       },
@@ -95,30 +95,32 @@ export const MENUS: Menu[] = [
   {
     label: "View",
     items: [
-      { label: "Zoom In", shortcut: "Ctrl++" },
-      { label: "Zoom Out", shortcut: "Ctrl+-" },
-      { label: "Fit on Screen", shortcut: "Ctrl+0" },
-      { label: "100%", shortcut: "Ctrl+1", separatorAfter: true },
-      { label: "Show Rulers", shortcut: "Ctrl+R" },
-      { label: "Show Grid", shortcut: "Ctrl+'" },
-      { label: "Snap" },
+      { label: "Zoom In", shortcut: "Ctrl++", action: "view-zoom-in" },
+      { label: "Zoom Out", shortcut: "Ctrl+-", action: "view-zoom-out" },
+      { label: "Fit on Screen", shortcut: "Ctrl+0", action: "view-fit" },
+      { label: "100%", shortcut: "Ctrl+1", separatorAfter: true, action: "view-100" },
+      { label: "Show Rulers", action: "view-rulers" },
+      { label: "Pixel Grid", shortcut: "Ctrl+'", action: "view-grid" },
+      { label: "Snap", separatorAfter: true, action: "view-snap" },
+      { label: "Compare Color Profiles…", action: "color-compare" },
     ],
   },
   {
     label: "Window",
     items: [
-      { label: "Color" },
-      { label: "Adjustments" },
-      { label: "Layers" },
-      { label: "History" },
-      { label: "Navigator", separatorAfter: true },
-      { label: "Reset Workspace" },
+      { label: "Color", action: "window-color" },
+      { label: "Adjustments", action: "window-adjustments" },
+      { label: "Layers", action: "window-layers" },
+      { label: "History", action: "window-history" },
+      { label: "Navigator", separatorAfter: true, action: "window-navigator" },
+      { label: "Reset Workspace", action: "window-reset" },
     ],
   },
   {
     label: "Settings",
     items: [
       { label: "Preferences…", shortcut: "Ctrl+K" },
+      { label: "Color Management…", action: "color-manage", separatorAfter: true },
       { label: "Keyboard Shortcuts…", separatorAfter: true },
       { label: "Performance" },
       { label: "Scratch Disks" },

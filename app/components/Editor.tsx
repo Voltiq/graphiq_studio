@@ -5,8 +5,8 @@ import styles from "./Editor.module.scss";
 import TopBar from "./TopBar";
 import Toolbar from "./Toolbar";
 import OptionsBar from "./OptionsBar";
-import CanvasArea from "./CanvasArea";
-import RightDock from "./RightDock";
+import CanvasArea, { type ViewApi } from "./CanvasArea";
+import RightDock, { type PanelVisibility } from "./RightDock";
 import StatusBar from "./StatusBar";
 import CanvasSizeDialog, { type CanvasSize } from "./CanvasSizeDialog";
 import PasteDialog, { type PasteDest } from "./PasteDialog";
@@ -44,6 +44,8 @@ import SaveAsDialog from "./SaveAsDialog";
 import RecentsDialog from "./RecentsDialog";
 import ExportDialog from "./ExportDialog";
 import ImportDialog, { type ImportItem, type ImportMode } from "./ImportDialog";
+import ColorDialog from "./ColorDialog";
+import ProfileCompareDialog from "./ProfileCompareDialog";
 import {
   PROJECT_EXT,
   downloadBlob,
@@ -56,6 +58,7 @@ import {
 import {
   IMPORT_ACCEPT,
   decodeImageFile,
+  p3Supported,
   renderExport,
   saveImageBlob,
   type ExportOptions,
@@ -80,10 +83,29 @@ interface Doc {
   /** Full multi-selection (always includes activeLayerId when non-null). */
   selectedLayerIds: string[];
   selection: Rect[];
+  /** Selection rotation (radians) about `selectionPivot` (or the bbox centre). */
+  selectionAngle: number;
+  selectionPivot: { x: number; y: number } | null;
 }
 
 /** A layer selection: the primary (active) id plus the full selected set. */
 type Sel = { active: string | null; selected: string[] };
+
+const ALL_PANELS: PanelVisibility = {
+  color: true,
+  adjustments: true,
+  layers: true,
+  history: true,
+  navigator: true,
+};
+/** Window-menu action id → panel key. */
+const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
+  "window-color": "color",
+  "window-adjustments": "adjustments",
+  "window-layers": "layers",
+  "window-history": "history",
+  "window-navigator": "navigator",
+};
 
 const makeDoc = (seq: number): Doc => ({
   id: `doc-${seq}`,
@@ -94,6 +116,8 @@ const makeDoc = (seq: number): Doc => ({
   activeLayerId: null,
   selectedLayerIds: [],
   selection: [],
+  selectionAngle: 0,
+  selectionPivot: null,
 });
 
 export default function Editor({ initialTheme }: { initialTheme: Theme }) {
@@ -101,7 +125,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [zoom, setZoom] = useState(67);
   const [foreground, setForeground] = useState("#6366f1ff");
   const [background, setBackground] = useState("#ffffffff");
+  // Which swatch tools paint with: "primary" = foreground, "secondary" = background.
+  const [activeSlot, setActiveSlot] = useState<"primary" | "secondary">("primary");
   const [sizeDialogOpen, setSizeDialogOpen] = useState(false);
+  const [sizeDialogMode, setSizeDialogMode] = useState<"canvas" | "image">("canvas");
   const [pan, setPan] = useState<Pan>({ x: 0, y: 0 });
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   const [brush, setBrush] = useState<BrushSettings>({
@@ -120,9 +147,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     blend: "Normal",
     smoothing: 10,
   });
+  const [wand, setWand] = useState({ tolerance: 32, contiguous: true, sampleAll: false });
   const [history, setHistory] = useState<HistorySummary>({ items: [{ label: "New" }], index: 0 });
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const [recentsOpen, setRecentsOpen] = useState(false);
+  const [panels, setPanelsState] = useState<PanelVisibility>(ALL_PANELS);
+  const [showRulers, setShowRulers] = useState(true);
+  const [showGrid, setShowGrid] = useState(false);
+  const [snap, setSnap] = useState(true);
+  const viewApiRef = useRef<ViewApi | null>(null);
+  // Current view toggles, reachable from the one-time keydown listener.
+  const viewSettingsRef = useRef({ rulers: true, grid: false, snap: true });
+  viewSettingsRef.current = { rulers: showRulers, grid: showGrid, snap };
+  const [colorSpace, setColorSpaceState] = useState<PredefinedColorSpace>("srgb");
+  const [colorDialogOpen, setColorDialogOpen] = useState(false);
+  const [compareComposite, setCompareComposite] = useState<HTMLCanvasElement | null | undefined>(undefined);
   const [adjust, setAdjust] = useState<Adjustments>(DEFAULT_ADJUST);
   const [adjustFilter, setAdjustFilter] = useState("Original");
   const [moveMode, setMoveMode] = useState<MoveMode>("pixels");
@@ -147,6 +186,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const bgRef = useRef(background);
   fgRef.current = foreground;
   bgRef.current = background;
+  const activeSlotRef = useRef(activeSlot);
+  activeSlotRef.current = activeSlot;
+  // The colour tools actually paint with = the active swatch.
+  const paintColor = activeSlot === "primary" ? foreground : background;
+  const setPaintColor = activeSlot === "primary" ? setForeground : setBackground;
   const historyRef = useRef(history);
   historyRef.current = history;
 
@@ -179,8 +223,41 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const setActiveSize = (s: CanvasSize) =>
     setDocs((ds) => ds.map((d) => (d.id === activeId ? { ...d, ...s } : d)));
 
+  const openSizeDialog = (mode: "canvas" | "image") => {
+    setSizeDialogMode(mode);
+    setSizeDialogOpen(true);
+  };
+
+  // Image resize (resample): scale every layer, then adopt the new dimensions.
+  // resizeImage runs first so the follow-up size change is a no-op for the engine.
+  const applyImageSize = (s: CanvasSize) => {
+    const d = activeDocRef.current;
+    paintRef.current?.resizeImage(s.width, s.height, collectLeafIds(d.layers), true);
+    setDocs((ds) =>
+      ds.map((x) =>
+        x.id === activeIdRef.current
+          ? { ...x, width: s.width, height: s.height, selection: [], selectionAngle: 0, selectionPivot: null }
+          : x,
+      ),
+    );
+  };
+
+  // Setting a (new) selection resets its rotation transform.
   const setSelection = (rects: Rect[]) =>
+    setDocs((ds) =>
+      ds.map((d) =>
+        d.id === activeIdRef.current
+          ? { ...d, selection: rects, selectionAngle: 0, selectionPivot: null }
+          : d,
+      ),
+    );
+  // Update only the selection rects, preserving the rotation transform.
+  const setSelectionRects = (rects: Rect[]) =>
     setDocs((ds) => ds.map((d) => (d.id === activeIdRef.current ? { ...d, selection: rects } : d)));
+  const setSelectionAngle = (angle: number) =>
+    setDocs((ds) => ds.map((d) => (d.id === activeIdRef.current ? { ...d, selectionAngle: angle } : d)));
+  const setSelectionPivot = (pivot: { x: number; y: number } | null) =>
+    setDocs((ds) => ds.map((d) => (d.id === activeIdRef.current ? { ...d, selectionPivot: pivot } : d)));
 
   // ---- Layer operations (act on the active document) ----
   const patchActiveDoc = (fn: (d: Doc) => Doc) =>
@@ -476,7 +553,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   // Copy the composite within the selection (or whole canvas) to the clipboard.
   const copySelection = () => {
-    const res = paintRef.current?.copyRegion(selRef.current.length ? selRef.current : null);
+    const d = activeDocRef.current;
+    const res = paintRef.current?.copyRegion(
+      selRef.current.length ? selRef.current : null,
+      d.selectionAngle,
+      d.selectionPivot,
+    );
     if (!res) return;
     clipboardRef.current = res.canvas;
     copyOriginRef.current = { x: res.x, y: res.y };
@@ -509,7 +591,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       const layer: Layer = { id: layerId, type: "layer", name: "Pasted Layer", visible: true, opacity: 100, blend: "Normal" };
       setDocs((ds) => [
         ...ds,
-        { id: docId, name: `Untitled-${seq}`, width: imgW, height: imgH, layers: [layer], activeLayerId: layerId, selectedLayerIds: [layerId], selection: [] },
+        { id: docId, name: `Untitled-${seq}`, width: imgW, height: imgH, layers: [layer], activeLayerId: layerId, selectedLayerIds: [layerId], selection: [], selectionAngle: 0, selectionPivot: null },
       ]);
       setActiveId(docId);
       setPendingPaste({ docId, layerId, source, x: 0, y: 0 });
@@ -763,6 +845,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       activeLayerId,
       selectedLayerIds,
       selection: p.selection ?? [],
+      selectionAngle: 0,
+      selectionPivot: null,
     };
     setDocs((ds) => [...ds, doc]);
     setActiveId(docId);
@@ -869,6 +953,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         activeLayerId: lid,
         selectedLayerIds: [lid],
         selection: [],
+        selectionAngle: 0,
+        selectionPivot: null,
       };
     });
     setDocs((ds) => [...ds, ...docs]);
@@ -885,8 +971,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   // ---- Adjustments (live preview on the active leaf, baked on Apply) ----
+  // When an area is selected, adjustments only affect that (possibly rotated)
+  // region; otherwise they apply to the whole layer.
   const previewAdjust = (next: Adjustments) => {
-    if (activeLeafId) paintRef.current?.applyAdjust(activeLeafId, next);
+    if (!activeLeafId) return;
+    const d = activeDocRef.current;
+    paintRef.current?.applyAdjust(activeLeafId, next, d.selection, d.selectionAngle, d.selectionPivot);
   };
   const onAdjust = (patch: Partial<Adjustments>) => {
     const next = { ...adjust, ...patch };
@@ -901,7 +991,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     previewAdjust(next);
   };
   const onAdjustApply = () => {
-    if (activeLeafId) paintRef.current?.commitAdjust(activeLeafId, adjust);
+    if (activeLeafId) {
+      const d = activeDocRef.current;
+      paintRef.current?.commitAdjust(activeLeafId, adjust, d.selection, d.selectionAngle, d.selectionPivot);
+    }
     setAdjust(DEFAULT_ADJUST);
     setAdjustFilter("Original");
   };
@@ -921,9 +1014,85 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active.activeLayerId, activeId]);
 
+  // ---- Working colour space (sRGB / Display P3), persisted ----
+  useEffect(() => {
+    const saved = localStorage.getItem("pe-colorspace");
+    if (saved === "display-p3" && p3Supported()) setColorSpaceState("display-p3");
+  }, []);
+  const setWorkingSpace = (cs: PredefinedColorSpace) => {
+    setColorSpaceState(cs);
+    try {
+      localStorage.setItem("pe-colorspace", cs);
+    } catch {
+      /* ignore */
+    }
+  };
+  const openColorDialog = () => setColorDialogOpen(true);
+  const openCompare = () => setCompareComposite(paintRef.current?.exportComposite(active.layers) ?? null);
+
+  // ---- Window menu: panel visibility (persisted) ----
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("pe-panels");
+      if (saved) setPanelsState({ ...ALL_PANELS, ...JSON.parse(saved) });
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const persistPanels = (p: PanelVisibility) => {
+    setPanelsState(p);
+    try {
+      localStorage.setItem("pe-panels", JSON.stringify(p));
+    } catch {
+      /* ignore */
+    }
+  };
+  const handleWindowAction = (actionId: string) => {
+    if (actionId === "window-reset") {
+      persistPanels({ ...ALL_PANELS });
+      return;
+    }
+    const id = PANEL_BY_ACTION[actionId];
+    if (id) persistPanels({ ...panels, [id]: !panels[id] });
+  };
+
+  // ---- View menu: rulers / grid / snap (persisted), zoom commands ----
+  useEffect(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem("pe-view") || "{}");
+      if (typeof v.rulers === "boolean") setShowRulers(v.rulers);
+      if (typeof v.grid === "boolean") setShowGrid(v.grid);
+      if (typeof v.snap === "boolean") setSnap(v.snap);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const persistView = (patch: { rulers?: boolean; grid?: boolean; snap?: boolean }) => {
+    const next = { ...viewSettingsRef.current, ...patch };
+    setShowRulers(next.rulers);
+    setShowGrid(next.grid);
+    setSnap(next.snap);
+    try {
+      localStorage.setItem("pe-view", JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  };
+  const handleViewAction = (actionId: string) => {
+    const v = viewSettingsRef.current;
+    if (actionId === "view-zoom-in") viewApiRef.current?.zoomIn();
+    else if (actionId === "view-zoom-out") viewApiRef.current?.zoomOut();
+    else if (actionId === "view-fit") viewApiRef.current?.fit();
+    else if (actionId === "view-100") viewApiRef.current?.zoom100();
+    else if (actionId === "view-rulers") persistView({ rulers: !v.rulers });
+    else if (actionId === "view-grid") persistView({ grid: !v.grid });
+    else if (actionId === "view-snap") persistView({ snap: !v.snap });
+  };
+
   const handleMenuAction = (actionId: string) => {
     const al = active.activeLayerId;
-    if (actionId === "canvas-size") setSizeDialogOpen(true);
+    if (actionId === "canvas-size") openSizeDialog("canvas");
+    else if (actionId === "image-size") openSizeDialog("image");
     else if (actionId === "new-doc") createDoc();
     else if (actionId === "open") openProject();
     else if (actionId === "open-recent") setRecentsOpen(true);
@@ -931,6 +1100,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "save-as") setSaveAsOpen(true);
     else if (actionId === "import") openImport();
     else if (actionId === "export-as") openExport();
+    else if (actionId === "color-manage") openColorDialog();
+    else if (actionId === "color-compare") openCompare();
+    else if (actionId.startsWith("window-")) handleWindowAction(actionId);
+    else if (actionId.startsWith("view-")) handleViewAction(actionId);
     else if (actionId === "undo") doUndo();
     else if (actionId === "redo") doRedo();
     else if (actionId === "layer-new") addLayerOp();
@@ -1016,9 +1189,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       // so letter shortcuts are correct on QWERTZ/AZERTY etc. (Z/Y aren't swapped).
       const key = e.key.toLowerCase();
 
-      if (e.ctrlKey && e.altKey && key === "z") {
+      if (e.ctrlKey && e.altKey && key === "c") {
         e.preventDefault();
-        setSizeDialogOpen(true);
+        openSizeDialog("canvas");
+      } else if (e.ctrlKey && e.altKey && key === "i") {
+        e.preventDefault();
+        openSizeDialog("image");
       } else if (e.ctrlKey && !e.shiftKey && key === "n") {
         // Browsers reserve Ctrl+N (new window) and won't let a normal tab
         // preventDefault it, so Ctrl+Alt+N is the reliable "new canvas". The
@@ -1034,6 +1210,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       } else if (e.ctrlKey && !e.altKey && key === "o") {
         e.preventDefault();
         openProject();
+      } else if (e.ctrlKey && !e.altKey && (key === "=" || key === "+")) {
+        e.preventDefault();
+        viewApiRef.current?.zoomIn();
+      } else if (e.ctrlKey && !e.altKey && key === "-") {
+        e.preventDefault();
+        viewApiRef.current?.zoomOut();
+      } else if (e.ctrlKey && !e.altKey && key === "0") {
+        e.preventDefault();
+        viewApiRef.current?.fit();
+      } else if (e.ctrlKey && !e.altKey && key === "1") {
+        e.preventDefault();
+        viewApiRef.current?.zoom100();
+      } else if (e.ctrlKey && !e.altKey && key === "'") {
+        e.preventDefault();
+        persistView({ grid: !viewSettingsRef.current.grid });
       } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === "e") {
         e.preventDefault();
         openExport();
@@ -1049,6 +1240,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       } else if (e.ctrlKey && !e.altKey && key === "c" && selRef.current.length) {
         e.preventDefault();
         copySelection();
+      } else if (e.ctrlKey && !e.altKey && key === "a") {
+        // Select the whole canvas (not the browser's "select all text").
+        e.preventDefault();
+        commitFloatIfAny();
+        const d = activeDocRef.current;
+        setSelection([{ x: 0, y: 0, w: d.width, h: d.height }]);
       } else if (!e.ctrlKey && !e.altKey && !e.metaKey && key === "x") {
         e.preventDefault();
         swapColors();
@@ -1066,13 +1263,27 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         if (selRef.current.length && activeLayerRef.current) {
           e.preventDefault();
           commitFloatIfAny();
-          paintRef.current?.eraseSelection(activeLayerRef.current, selRef.current);
+          const d = activeDocRef.current;
+          paintRef.current?.eraseSelection(
+            activeLayerRef.current,
+            selRef.current,
+            d.selectionAngle,
+            d.selectionPivot,
+          );
         }
       } else if (e.code === "Backspace") {
         if (selRef.current.length) {
           e.preventDefault();
           commitFloatIfAny();
-          paintRef.current?.fillSelection(ensureLayer(), selRef.current, fgRef.current);
+          const d = activeDocRef.current;
+          const fill = activeSlotRef.current === "primary" ? fgRef.current : bgRef.current;
+          paintRef.current?.fillSelection(
+            ensureLayer(),
+            selRef.current,
+            fill,
+            d.selectionAngle,
+            d.selectionPivot,
+          );
         }
       } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
         // Single-key tool shortcuts (V move, M marquee, B brush, …).
@@ -1101,11 +1312,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onRedo={doRedo}
         canUndo={history.index > 0}
         canRedo={history.index < history.items.length - 1}
+        checks={{
+          "window-color": panels.color,
+          "window-adjustments": panels.adjustments,
+          "window-layers": panels.layers,
+          "window-history": panels.history,
+          "window-navigator": panels.navigator,
+          "view-rulers": showRulers,
+          "view-grid": showGrid,
+          "view-snap": snap,
+        }}
       />
       <OptionsBar
         tool={tool}
-        foreground={foreground}
-        onForeground={setForeground}
+        foreground={paintColor}
+        onForeground={setPaintColor}
         brush={activeBrush}
         onBrush={setActiveBrush}
         moveMode={moveMode}
@@ -1114,6 +1335,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onResizeMode={setResizeMode}
         resizeSmooth={resizeSmooth}
         onResizeSmooth={setResizeSmooth}
+        wand={wand}
+        onWand={(patch) => setWand((wd) => ({ ...wd, ...patch }))}
         eyedropper={{ size: sampleSizeLabel, scope: sampleScopeLabel }}
         onEyedropper={(patch) => {
           if (patch.size !== undefined) setSampleSizeLabel(patch.size);
@@ -1152,22 +1375,33 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onViewport={setViewport}
           tool={tool}
           brush={activeBrush}
-          color={foreground}
+          color={paintColor}
           layers={active.layers}
           activeLayerId={active.activeLayerId}
           ensureLayer={ensureLayer}
           selection={active.selection}
           onSelectionChange={setSelection}
+          onSelectionRects={setSelectionRects}
+          selectionAngle={active.selectionAngle}
+          selectionPivot={active.selectionPivot}
+          onSelectionAngle={setSelectionAngle}
+          onSelectionPivot={setSelectionPivot}
           moveMode={moveMode}
           resizeMode={resizeMode}
           resizeSmooth={resizeSmooth}
+          wand={wand}
           sampleSize={SAMPLE_SIZE_PX[sampleSizeLabel] ?? 1}
           sampleAllLayers={sampleScopeLabel === "All layers"}
-          onPick={setForeground}
+          onPick={setPaintColor}
           pendingPaste={pendingPaste}
           onPasteDone={() => setPendingPaste(null)}
           pendingLoads={pendingLoads}
           onLoadDone={(docId) => setPendingLoads((ls) => ls.filter((p) => p.docId !== docId))}
+          colorSpace={colorSpace}
+          showRulers={showRulers}
+          showGrid={showGrid}
+          snap={snap}
+          viewApiRef={viewApiRef}
           paintRef={paintRef}
           onHistory={setHistory}
         />
@@ -1176,6 +1410,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           background={background}
           onForeground={setForeground}
           onBackground={setBackground}
+          activeSlot={activeSlot}
+          onActiveSlot={setActiveSlot}
           layers={layersApi}
           history={history}
           onHistoryJump={(i) => paintRef.current?.jumpTo(i)}
@@ -1195,13 +1431,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onAdjustApply={onAdjustApply}
           onAdjustReset={onAdjustReset}
           adjustActive={!!activeLeafId}
+          panels={panels}
         />
       </div>
       <StatusBar
         tool={tool}
         zoom={zoom}
         onZoomChange={setZoom}
-        foreground={foreground}
+        foreground={paintColor}
         width={active.width}
         height={active.height}
       />
@@ -1209,7 +1446,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       {sizeDialogOpen && (
         <CanvasSizeDialog
           size={{ width: active.width, height: active.height }}
-          onApply={setActiveSize}
+          mode={sizeDialogMode}
+          onApply={sizeDialogMode === "image" ? applyImageSize : setActiveSize}
           onClose={() => setSizeDialogOpen(false)}
         />
       )}
@@ -1236,6 +1474,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
       {recentsOpen && (
         <RecentsDialog onOpenText={loadProjectText} onClose={() => setRecentsOpen(false)} />
+      )}
+
+      {colorDialogOpen && (
+        <ColorDialog
+          colorSpace={colorSpace}
+          onColorSpace={setWorkingSpace}
+          onClose={() => setColorDialogOpen(false)}
+        />
+      )}
+
+      {compareComposite !== undefined && (
+        <ProfileCompareDialog
+          composite={compareComposite}
+          onClose={() => setCompareComposite(undefined)}
+        />
       )}
 
       {exportComposite && (

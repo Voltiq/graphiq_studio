@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
 import styles from "./ColorPopover.module.scss";
 import ColorPicker from "./ColorPicker";
 
@@ -28,12 +36,64 @@ export default function ColorPopover({
   align?: Align;
 }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+
+  // Position the (portalled) popover next to the trigger, clamped to the
+  // viewport. The portal escapes any overflow-clipping ancestor (the options
+  // bar). setPos is GUARDED to bail when the position is unchanged, so it can
+  // never feed a render→effect→setState loop.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const pop = popRef.current;
+      const btn = btnRef.current;
+      if (!btn) return;
+      const r = btn.getBoundingClientRect();
+      const pw = pop?.offsetWidth || 248;
+      const ph = pop?.offsetHeight || 320;
+      const gap = 8;
+      const margin = 8;
+      let top: number;
+      let left: number;
+      switch (align) {
+        case "bottom-end":
+          top = r.bottom + gap;
+          left = r.right - pw;
+          break;
+        case "right-start":
+          left = r.right + gap;
+          top = r.top;
+          break;
+        case "right-end":
+          left = r.right + gap;
+          top = r.bottom - ph;
+          break;
+        default: // bottom-start
+          top = r.bottom + gap;
+          left = r.left;
+      }
+      left = Math.round(Math.min(Math.max(margin, left), window.innerWidth - pw - margin));
+      top = Math.round(Math.min(Math.max(margin, top), window.innerHeight - ph - margin));
+      setPos((prev) => (prev && prev.top === top && prev.left === left ? prev : { top, left }));
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, align]);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (wrapRef.current?.contains(t) || popRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     document.addEventListener("mousedown", onDown);
@@ -47,6 +107,7 @@ export default function ColorPopover({
   return (
     <div className={`${styles.wrap} ${wrapClassName ?? ""}`} ref={wrapRef}>
       <button
+        ref={btnRef}
         type="button"
         className={className}
         style={style}
@@ -58,11 +119,25 @@ export default function ColorPopover({
       >
         {children}
       </button>
-      {open && (
-        <div className={`${styles.popover} ${styles[align]}`} role="dialog" aria-label="Color picker">
-          <ColorPicker value={color} onChange={onChange} />
-        </div>
-      )}
+      {open &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={popRef}
+            className={styles.popover}
+            role="dialog"
+            aria-label="Color picker"
+            style={{
+              position: "fixed",
+              top: pos?.top ?? 0,
+              left: pos?.left ?? 0,
+              visibility: pos ? "visible" : "hidden",
+            }}
+          >
+            <ColorPicker value={color} onChange={onChange} />
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

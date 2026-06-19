@@ -50,6 +50,8 @@ export default function OptionsBar({
   onResizeMode,
   resizeSmooth,
   onResizeSmooth,
+  wand,
+  onWand,
   eyedropper,
   onEyedropper,
 }: {
@@ -64,6 +66,8 @@ export default function OptionsBar({
   onResizeMode: (m: SelectResizeMode) => void;
   resizeSmooth: boolean;
   onResizeSmooth: (v: boolean) => void;
+  wand: { tolerance: number; contiguous: boolean; sampleAll: boolean };
+  onWand: (patch: Partial<{ tolerance: number; contiguous: boolean; sampleAll: boolean }>) => void;
   eyedropper: { size: string; scope: string };
   onEyedropper: (patch: { size?: string; scope?: string }) => void;
 }) {
@@ -90,6 +94,8 @@ export default function OptionsBar({
           onResizeMode,
           resizeSmooth,
           onResizeSmooth,
+          wand,
+          onWand,
           eyedropper,
           onEyedropper,
         )}
@@ -110,6 +116,8 @@ function renderOptions(
   onResizeMode: (m: SelectResizeMode) => void,
   resizeSmooth: boolean,
   onResizeSmooth: (v: boolean) => void,
+  wand: { tolerance: number; contiguous: boolean; sampleAll: boolean },
+  onWand: (patch: Partial<{ tolerance: number; contiguous: boolean; sampleAll: boolean }>) => void,
   eyedropper: { size: string; scope: string },
   onEyedropper: (patch: { size?: string; scope?: string }) => void,
 ) {
@@ -267,11 +275,34 @@ function renderOptions(
               )}
             </>
           )}
-          <Divider />
-          <Slider label="Feather" min={0} max={250} defaultValue={0} unit="px" />
-          {tool === "wand" && <Slider label="Tolerance" min={0} max={255} defaultValue={32} />}
-          <Toggle label="Anti-alias" defaultChecked />
-          {tool === "wand" && <Toggle label="Contiguous" defaultChecked />}
+          {tool === "wand" ? (
+            <>
+              <Divider />
+              <Slider
+                label="Tolerance"
+                min={0}
+                max={255}
+                value={wand.tolerance}
+                onChange={(n) => onWand({ tolerance: n })}
+              />
+              <Toggle
+                label="Contiguous"
+                checked={wand.contiguous}
+                onChange={(v) => onWand({ contiguous: v })}
+              />
+              <Toggle
+                label="Sample all layers"
+                checked={wand.sampleAll}
+                onChange={(v) => onWand({ sampleAll: v })}
+              />
+            </>
+          ) : (
+            <>
+              <Divider />
+              <Slider label="Feather" min={0} max={250} defaultValue={0} unit="px" />
+              <Toggle label="Anti-alias" defaultChecked />
+            </>
+          )}
         </>
       );
 

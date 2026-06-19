@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { ArrowLeftRight } from "lucide-react";
 import styles from "../RightDock.module.scss";
 import ColorPicker from "../ColorPicker";
@@ -11,15 +10,19 @@ export default function ColorPanel({
   background,
   onForeground,
   onBackground,
+  active,
+  onActive,
 }: {
   foreground: string;
   background: string;
   onForeground: (c: string) => void;
   onBackground: (c: string) => void;
+  /** Which swatch is active — this is the colour tools paint with. */
+  active: "primary" | "secondary";
+  onActive: (slot: "primary" | "secondary") => void;
 }) {
-  const [active, setActive] = useState<"fg" | "bg">("fg");
-  const color = active === "fg" ? foreground : background;
-  const setColor = active === "fg" ? onForeground : onBackground;
+  const color = active === "primary" ? foreground : background;
+  const setColor = active === "primary" ? onForeground : onBackground;
 
   return (
     <div className={styles.colorPanel}>
@@ -27,8 +30,8 @@ export default function ColorPanel({
         <button
           type="button"
           className={styles.target}
-          data-active={active === "fg"}
-          onClick={() => setActive("fg")}
+          data-active={active === "primary"}
+          onClick={() => onActive("primary")}
         >
           <span className={styles.targetSwatch} style={swatchBg(foreground)} />
           <span className={styles.targetLabel}>Primary</span>
@@ -36,8 +39,8 @@ export default function ColorPanel({
         <button
           type="button"
           className={styles.target}
-          data-active={active === "bg"}
-          onClick={() => setActive("bg")}
+          data-active={active === "secondary"}
+          onClick={() => onActive("secondary")}
         >
           <span className={styles.targetSwatch} style={swatchBg(background)} />
           <span className={styles.targetLabel}>Secondary</span>
@@ -57,7 +60,9 @@ export default function ColorPanel({
         </button>
       </div>
 
-      <ColorPicker value={color} onChange={setColor} />
+      {/* Key on the active target so switching Primary↔Secondary re-initialises
+          the picker from that swatch (immune to stale internal edit state). */}
+      <ColorPicker key={active} value={color} onChange={setColor} />
     </div>
   );
 }

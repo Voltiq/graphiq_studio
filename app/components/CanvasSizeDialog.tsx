@@ -26,11 +26,15 @@ export default function CanvasSizeDialog({
   size,
   onApply,
   onClose,
+  mode = "canvas",
 }: {
   size: CanvasSize;
   onApply: (s: CanvasSize) => void;
   onClose: () => void;
+  /** "canvas" = change bounds (content stays); "image" = resample (scale content). */
+  mode?: "canvas" | "image";
 }) {
+  const title = mode === "image" ? "Image Size" : "Canvas Size";
   // Mounted only while open, so state initialises from the current size.
   const [w, setW] = useState(String(size.width));
   const [h, setH] = useState(String(size.height));
@@ -94,12 +98,12 @@ export default function CanvasSizeDialog({
         className={styles.dialog}
         role="dialog"
         aria-modal="true"
-        aria-label="Canvas Size"
+        aria-label={title}
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
       >
         <header className={styles.head}>
-          <h2>Canvas Size</h2>
+          <h2>{title}</h2>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>
@@ -173,20 +177,24 @@ export default function CanvasSizeDialog({
             </button>
           </div>
 
-          <div className={styles.anchorWrap}>
-            <span className={styles.rowLabel}>Anchor</span>
-            <div className={styles.anchor} role="group" aria-label="Anchor">
-              {Array.from({ length: 9 }, (_, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  data-active={anchor === i}
-                  onClick={() => setAnchor(i)}
-                  aria-label={`Anchor ${i + 1}`}
-                />
-              ))}
+          {mode === "canvas" ? (
+            <div className={styles.anchorWrap}>
+              <span className={styles.rowLabel}>Anchor</span>
+              <div className={styles.anchor} role="group" aria-label="Anchor">
+                {Array.from({ length: 9 }, (_, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    data-active={anchor === i}
+                    onClick={() => setAnchor(i)}
+                    aria-label={`Anchor ${i + 1}`}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
+          ) : (
+            <p className={styles.hint}>All layers are scaled to the new dimensions.</p>
+          )}
         </div>
 
         <footer className={styles.foot}>
