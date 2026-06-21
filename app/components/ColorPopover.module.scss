@@ -9,9 +9,9 @@
   width: 248px;
   padding: var(--sp-3);
   background: var(--surface-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow), var(--glow);
   animation: pop 0.12s ease;
 }
 

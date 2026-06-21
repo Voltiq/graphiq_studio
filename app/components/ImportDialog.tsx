@@ -3,12 +3,15 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import styles from "./PasteDialog.module.scss";
+import type { ImageMetadata } from "../lib/metadata";
 
 export type ImportMode = "layers" | "canvas";
 
 export interface ImportItem {
   name: string;
   bitmap: ImageBitmap;
+  /** File/EXIF metadata captured at decode time (for the Metadata panel). */
+  meta?: ImageMetadata;
 }
 
 function Thumb({ bitmap }: { bitmap: ImageBitmap }) {

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link2, Link2Off, X } from "lucide-react";
 import styles from "./CanvasSizeDialog.module.scss";
+import { Select } from "./Select";
 
 export interface CanvasSize {
   width: number;
@@ -117,21 +118,17 @@ export default function CanvasSizeDialog({
             </strong>
           </p>
 
-          <label className={styles.row}>
+          <div className={styles.row}>
             <span className={styles.rowLabel}>Preset</span>
-            <select
-              className={styles.preset}
-              value={currentPreset}
-              onChange={(e) => selectPreset(e.target.value)}
-            >
-              <option value="">Custom</option>
-              {PRESETS.map((p) => (
-                <option key={p.label} value={p.label}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </label>
+            <div className={styles.presetField}>
+              <Select
+                block
+                options={["Custom", ...PRESETS.map((p) => p.label)]}
+                value={currentPreset || "Custom"}
+                onChange={(label) => label !== "Custom" && selectPreset(label)}
+              />
+            </div>
+          </div>
 
           <div className={styles.dims}>
             <div className={styles.dimFields}>

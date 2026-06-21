@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Aperture, Check, Redo2, Search, Share2, Undo2 } from "lucide-react";
+import { Check, Redo2, Search, Share2, Undo2 } from "lucide-react";
 import styles from "./TopBar.module.scss";
+import logo from "../icon.png";
 import { MENUS } from "../lib/menus";
 import ThemeToggle from "./ThemeToggle";
 import type { Theme } from "../lib/theme";
@@ -49,7 +50,8 @@ export default function TopBar({
     <header className={styles.topbar}>
       <div className={styles.brand}>
         <span className={styles.logo}>
-          <Aperture size={18} />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={logo.src} alt="Aperture" />
         </span>
         <span className={styles.brandName}>Aperture</span>
         <span className={styles.brandTag}>Studio</span>

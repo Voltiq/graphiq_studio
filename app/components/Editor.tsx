@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import styles from "./Editor.module.scss";
 import TopBar from "./TopBar";
 import Toolbar from "./Toolbar";
@@ -16,10 +16,11 @@ import {
   TOOL_BY_KEY,
   type MoveMode,
   type SelectResizeMode,
+  type ShapeSettings,
   type ToolId,
 } from "../lib/tools";
 import type { Theme } from "../lib/theme";
-import type { Pan, Rect } from "../lib/view";
+import { invertRects, type Pan, type Rect } from "../lib/view";
 import {
   cloneSubtree,
   collectLeafIds,
@@ -39,7 +40,13 @@ import {
   type LayerNode,
   type LayersApi,
 } from "../lib/layers";
-import type { BrushSettings, EngineHandle, HistorySummary, PendingPaste } from "../lib/paint";
+import type {
+  BrushSettings,
+  EngineHandle,
+  HistorySummary,
+  ImageTransform,
+  PendingPaste,
+} from "../lib/paint";
 import SaveAsDialog from "./SaveAsDialog";
 import RecentsDialog from "./RecentsDialog";
 import ExportDialog from "./ExportDialog";
@@ -65,6 +72,7 @@ import {
 } from "../lib/imageio";
 import { addRecent } from "../lib/recents";
 import { DEFAULT_ADJUST, filterToAdjust, isDefaultAdjust, type Adjustments } from "../lib/adjust";
+import { extractMetadata, type ImageMetadata } from "../lib/metadata";
 
 interface PasteSrc {
   source: ImageBitmap | HTMLCanvasElement;
@@ -86,6 +94,8 @@ interface Doc {
   /** Selection rotation (radians) about `selectionPivot` (or the bbox centre). */
   selectionAngle: number;
   selectionPivot: { x: number; y: number } | null;
+  /** Source-image file/EXIF metadata (set when a doc originates from an image). */
+  metadata?: ImageMetadata | null;
 }
 
 /** A layer selection: the primary (active) id plus the full selected set. */
@@ -97,6 +107,8 @@ const ALL_PANELS: PanelVisibility = {
   layers: true,
   history: true,
   navigator: true,
+  channels: true,
+  metadata: true,
 };
 /** Window-menu action id → panel key. */
 const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
@@ -105,13 +117,15 @@ const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
   "window-layers": "layers",
   "window-history": "history",
   "window-navigator": "navigator",
+  "window-channels": "channels",
+  "window-metadata": "metadata",
 };
 
-const makeDoc = (seq: number): Doc => ({
+const makeDoc = (seq: number, size?: { w: number; h: number }): Doc => ({
   id: `doc-${seq}`,
   name: `Untitled-${seq}`,
-  width: 1920,
-  height: 1080,
+  width: size?.w ?? 1920,
+  height: size?.h ?? 1080,
   layers: [],
   activeLayerId: null,
   selectedLayerIds: [],
@@ -147,7 +161,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     blend: "Normal",
     smoothing: 10,
   });
+  // Pencil: a hard-edged, pixel-perfect tool — always full hardness, no smoothing.
+  const [pencil, setPencil] = useState<BrushSettings>({
+    size: 4,
+    hardness: 100,
+    opacity: 100,
+    flow: 100,
+    blend: "Normal",
+    smoothing: 0,
+  });
   const [wand, setWand] = useState({ tolerance: 32, contiguous: true, sampleAll: false });
+  const [shape, setShape] = useState<ShapeSettings>({ kind: "rect", strokeWidth: 2, radius: 12 });
   const [history, setHistory] = useState<HistorySummary>({ items: [{ label: "New" }], index: 0 });
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const [recentsOpen, setRecentsOpen] = useState(false);
@@ -181,6 +205,20 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   // Imperative handle into the paint engine (set by CanvasArea).
   const paintRef = useRef<EngineHandle | null>(null);
+
+  // Cursor-position channel: updated imperatively by CanvasArea and consumed only
+  // by the StatusBar, so pointer moves don't re-render the whole editor tree.
+  type CursorPt = { x: number; y: number } | null;
+  const cursorSubsRef = useRef(new Set<(p: CursorPt) => void>());
+  const emitCursor = useCallback((p: CursorPt) => {
+    cursorSubsRef.current.forEach((fn) => fn(p));
+  }, []);
+  const subscribeCursor = useCallback((fn: (p: CursorPt) => void) => {
+    cursorSubsRef.current.add(fn);
+    return () => {
+      cursorSubsRef.current.delete(fn);
+    };
+  }, []);
   // Latest colours, reachable from the one-time keydown listener.
   const fgRef = useRef(foreground);
   const bgRef = useRef(background);
@@ -242,6 +280,58 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     );
   };
 
+  // Whole-image rotate / flip (Image menu). The engine transforms every layer
+  // (90° rotations swap the dimensions), then the doc adopts the new size so the
+  // follow-up setDoc is a no-op. Folded into one undoable history step whose undo
+  // applies the inverse transform (pixel-exact for 90° rotations & flips).
+  const TRANSFORM_LABEL: Record<ImageTransform, string> = {
+    "rotate-cw": "Rotate 90° CW",
+    "rotate-ccw": "Rotate 90° CCW",
+    "flip-h": "Flip Horizontal",
+    "flip-v": "Flip Vertical",
+  };
+  const INVERSE_TRANSFORM: Record<ImageTransform, ImageTransform> = {
+    "rotate-cw": "rotate-ccw",
+    "rotate-ccw": "rotate-cw",
+    "flip-h": "flip-h",
+    "flip-v": "flip-v",
+  };
+  const applyImageTransform = (kind: ImageTransform) => {
+    const d = activeDocRef.current;
+    if (!d.layers.length) return;
+    const eng = paintRef.current;
+    if (!eng) return;
+    const docId = activeIdRef.current;
+    const leafIds = collectLeafIds(d.layers);
+    const rot = kind === "rotate-cw" || kind === "rotate-ccw";
+    // Swap (rotations) or keep (flips) the doc dimensions; clear the selection.
+    const setDims = () =>
+      setDocs((ds) =>
+        ds.map((x) =>
+          x.id === docId
+            ? {
+                ...x,
+                width: rot ? x.height : x.width,
+                height: rot ? x.width : x.height,
+                selection: [],
+                selectionAngle: 0,
+                selectionPivot: null,
+              }
+            : x,
+        ),
+      );
+    const forward = () => {
+      eng.transformImage(kind, leafIds);
+      setDims();
+    };
+    const backward = () => {
+      eng.transformImage(INVERSE_TRANSFORM[kind], leafIds);
+      setDims(); // swapping w/h twice (or keeping it) returns the original size
+    };
+    forward();
+    eng.pushStructural(TRANSFORM_LABEL[kind], backward, forward);
+  };
+
   // Setting a (new) selection resets its rotation transform.
   const setSelection = (rects: Rect[]) =>
     setDocs((ds) =>
@@ -258,6 +348,66 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setDocs((ds) => ds.map((d) => (d.id === activeIdRef.current ? { ...d, selectionAngle: angle } : d)));
   const setSelectionPivot = (pivot: { x: number; y: number } | null) =>
     setDocs((ds) => ds.map((d) => (d.id === activeIdRef.current ? { ...d, selectionPivot: pivot } : d)));
+
+  // ---- Select menu (All / Deselect / Reselect / Inverse) ----
+  // Selection changes from the menu are undoable: each pushes a structural
+  // history entry whose undo/redo restores the selection rects + rotation.
+  type SelState = { rects: Rect[]; angle: number; pivot: { x: number; y: number } | null };
+  const selStateOf = (d: Doc): SelState => ({
+    rects: d.selection,
+    angle: d.selectionAngle,
+    pivot: d.selectionPivot,
+  });
+  const setSelState = (docId: string, s: SelState) =>
+    setDocs((ds) =>
+      ds.map((d) =>
+        d.id === docId
+          ? { ...d, selection: s.rects, selectionAngle: s.angle, selectionPivot: s.pivot }
+          : d,
+      ),
+    );
+  const sameSelState = (a: SelState, b: SelState) =>
+    a.angle === b.angle &&
+    (a.pivot?.x ?? null) === (b.pivot?.x ?? null) &&
+    (a.pivot?.y ?? null) === (b.pivot?.y ?? null) &&
+    a.rects.length === b.rects.length &&
+    a.rects.every(
+      (r, i) => r.x === b.rects[i].x && r.y === b.rects[i].y && r.w === b.rects[i].w && r.h === b.rects[i].h,
+    );
+
+  // The most recent non-empty selection, so Reselect can bring it back.
+  const lastSelectionRef = useRef<SelState | null>(null);
+
+  const commitSelection = (label: string, rects: Rect[], angle = 0, pivot: { x: number; y: number } | null = null) => {
+    const docId = activeIdRef.current;
+    const before = selStateOf(activeDocRef.current);
+    const after: SelState = { rects, angle, pivot };
+    if (sameSelState(before, after)) return; // no-op → don't journal it
+    setSelState(docId, after);
+    paintRef.current?.pushStructural(label, () => setSelState(docId, before), () => setSelState(docId, after));
+  };
+
+  const selectAll = () => {
+    commitFloatIfAny();
+    const d = activeDocRef.current;
+    commitSelection("Select All", [{ x: 0, y: 0, w: d.width, h: d.height }]);
+  };
+  const deselect = () => {
+    if (!activeDocRef.current.selection.length) return;
+    commitFloatIfAny(); // merge a floating paste before clearing
+    commitSelection("Deselect", []);
+  };
+  const reselect = () => {
+    const last = lastSelectionRef.current;
+    if (!last?.rects.length || activeDocRef.current.selection.length) return; // only when nothing is selected
+    commitSelection("Reselect", last.rects, last.angle, last.pivot);
+  };
+  const invertSelection = () => {
+    const d = activeDocRef.current;
+    if (!d.selection.length) return; // nothing selected → inverse is undefined here
+    commitFloatIfAny();
+    commitSelection("Invert Selection", invertRects(d.selection, d.width, d.height));
+  };
 
   // ---- Layer operations (act on the active document) ----
   const patchActiveDoc = (fn: (d: Doc) => Doc) =>
@@ -571,6 +721,22 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     }
   };
 
+  // Cut: copy the selection to the clipboard, then erase it from the active layer
+  // (recorded as an undoable "Cut" history step). Needs a selection + a layer.
+  const cutSelection = () => {
+    if (!selRef.current.length || !activeLayerRef.current) return;
+    commitFloatIfAny(); // merge any floating paste before cutting
+    copySelection();
+    const d = activeDocRef.current;
+    paintRef.current?.eraseSelection(
+      activeLayerRef.current,
+      selRef.current,
+      d.selectionAngle,
+      d.selectionPivot,
+      "Cut",
+    );
+  };
+
   // Place a pasted image. Reads active-doc refs so it works from the paste
   // listener too. `posX/posY` override the default (centred) placement.
   const doPaste = (
@@ -694,9 +860,33 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setPasteSrc(null);
   };
 
-  const createDoc = () => {
+  // Dimensions of the image currently in the clipboard, if any — the OS
+  // clipboard first (most current), falling back to the last in-app copy/cut.
+  const clipboardImageSize = async (): Promise<{ w: number; h: number } | null> => {
+    try {
+      if (navigator.clipboard?.read) {
+        for (const item of await navigator.clipboard.read()) {
+          const type = item.types.find((t) => t.startsWith("image/"));
+          if (type) {
+            const bmp = await createImageBitmap(await item.getType(type));
+            const size = { w: bmp.width, h: bmp.height };
+            bmp.close();
+            return size;
+          }
+        }
+      }
+    } catch {
+      /* clipboard unreadable (permission / focus) — fall back to the internal one */
+    }
+    const c = clipboardRef.current;
+    return c ? { w: c.width, h: c.height } : null;
+  };
+
+  // New canvas — sized to the clipboard image when there is one, else the default.
+  const createDoc = async () => {
+    const size = await clipboardImageSize();
     const seq = (seqRef.current += 1);
-    const d = makeDoc(seq);
+    const d = makeDoc(seq, size ?? undefined);
     setDocs((ds) => [...ds, d]);
     setActiveId(d.id);
   };
@@ -718,9 +908,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       // A floating paste/move isn't committed yet — undo cancels it.
       paintRef.current.discardFloat();
       setSelection([]);
-    } else {
-      paintRef.current?.undo();
+      return;
     }
+    // A live adjustment session is finalized inside the engine's jumpTo, so
+    // undo steps over it as one "Adjustments" entry.
+    paintRef.current?.undo();
   };
   const doRedo = () => paintRef.current?.redo();
 
@@ -902,9 +1094,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     e.target.value = "";
     if (!files.length) return;
     const decoded = await Promise.all(
-      files.map(async (f) => ({ name: f.name, bitmap: await decodeImageFile(f) })),
+      files.map(async (f) => ({
+        name: f.name,
+        bitmap: await decodeImageFile(f),
+        meta: await extractMetadata(f),
+      })),
     );
-    const items = decoded.filter((d): d is ImportItem => d.bitmap !== null);
+    const items: ImportItem[] = decoded
+      .filter((d) => d.bitmap !== null)
+      .map((d) => ({ name: d.name, bitmap: d.bitmap as ImageBitmap, meta: d.meta }));
     if (!items.length) {
       window.alert("Couldn't read the selected image(s).");
       return;
@@ -932,6 +1130,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       { active: leaves[0].id, selected: leaves.map((l) => l.id) },
       () => leaves.forEach((leaf, i) => paintRef.current?.setLayerImage(leaf.id, items[i].bitmap)),
     );
+    // Surface the (first) imported image's metadata for the Metadata panel.
+    if (items[0]?.meta) patchActiveDoc((d) => ({ ...d, metadata: items[0].meta }));
   };
 
   // Import each image as its own new canvas/tab.
@@ -955,6 +1155,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         selection: [],
         selectionAngle: 0,
         selectionPivot: null,
+        metadata: it.meta ?? null,
       };
     });
     setDocs((ds) => [...ds, ...docs]);
@@ -970,10 +1171,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else importAsCanvases(items);
   };
 
-  // ---- Adjustments (live preview on the active leaf, baked on Apply) ----
-  // When an area is selected, adjustments only affect that (possibly rotated)
-  // region; otherwise they apply to the whole layer.
-  const previewAdjust = (next: Adjustments) => {
+  // ---- Adjustments (applied live to the active leaf; no separate Apply) ----
+  // The whole continuous adjustment session coalesces into one undoable
+  // "Adjustments" history entry (see engine.applyAdjust/endAdjust). When an area
+  // is selected, adjustments affect only that (possibly rotated) region.
+  const applyLiveAdjust = (next: Adjustments) => {
     if (!activeLeafId) return;
     const d = activeDocRef.current;
     paintRef.current?.applyAdjust(activeLeafId, next, d.selection, d.selectionAngle, d.selectionPivot);
@@ -982,37 +1184,48 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const next = { ...adjust, ...patch };
     setAdjust(next);
     setAdjustFilter(""); // tweaking a slider clears the active filter chip
-    previewAdjust(next);
+    applyLiveAdjust(next);
   };
   const onAdjustFilter = (name: string) => {
     const next = filterToAdjust(name);
     setAdjust(next);
     setAdjustFilter(name);
-    previewAdjust(next);
+    applyLiveAdjust(next);
   };
-  const onAdjustApply = () => {
-    if (activeLeafId) {
-      const d = activeDocRef.current;
-      paintRef.current?.commitAdjust(activeLeafId, adjust, d.selection, d.selectionAngle, d.selectionPivot);
-    }
+  // Apply a full set of adjustment values under a label (custom saved presets).
+  const onApplyPreset = (next: Adjustments, name: string) => {
+    setAdjust(next);
+    setAdjustFilter(name);
+    applyLiveAdjust(next);
+  };
+  const onAdjustReset = () => {
+    paintRef.current?.revertAdjust();
     setAdjust(DEFAULT_ADJUST);
     setAdjustFilter("Original");
   };
-  const onAdjustReset = () => {
-    paintRef.current?.cancelAdjust();
+  // The engine fires onAdjustEnd when a session ends (another op / undo / switch).
+  const onAdjustEnd = () => {
     setAdjust(DEFAULT_ADJUST);
     setAdjustFilter("Original");
   };
 
-  // Discard an unapplied preview when switching layer or document.
+  // Finalize a live adjustment when switching layer or document.
   useEffect(() => {
-    if (!isDefaultAdjust(adjust)) {
-      paintRef.current?.cancelAdjust();
-      setAdjust(DEFAULT_ADJUST);
-      setAdjustFilter("Original");
-    }
+    paintRef.current?.endAdjust();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active.activeLayerId, activeId]);
+
+  // Remember the most recent non-empty selection so Reselect can restore it
+  // (works after any deselect — menu, Escape, or a tool clearing it).
+  useEffect(() => {
+    if (active.selection.length) {
+      lastSelectionRef.current = {
+        rects: active.selection,
+        angle: active.selectionAngle,
+        pivot: active.selectionPivot,
+      };
+    }
+  }, [active.selection, active.selectionAngle, active.selectionPivot]);
 
   // ---- Working colour space (sRGB / Display P3), persisted ----
   useEffect(() => {
@@ -1093,6 +1306,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const al = active.activeLayerId;
     if (actionId === "canvas-size") openSizeDialog("canvas");
     else if (actionId === "image-size") openSizeDialog("image");
+    else if (actionId === "image-rotate-cw") applyImageTransform("rotate-cw");
+    else if (actionId === "image-rotate-ccw") applyImageTransform("rotate-ccw");
+    else if (actionId === "image-flip-h") applyImageTransform("flip-h");
+    else if (actionId === "image-flip-v") applyImageTransform("flip-v");
+    else if (actionId === "edit-cut") cutSelection();
+    else if (actionId === "edit-copy") copySelection();
+    else if (actionId === "edit-paste") pasteFromClipboard();
+    else if (actionId === "select-all") selectAll();
+    else if (actionId === "select-deselect") deselect();
+    else if (actionId === "select-reselect") reselect();
+    else if (actionId === "select-inverse") invertSelection();
     else if (actionId === "new-doc") createDoc();
     else if (actionId === "open") openProject();
     else if (actionId === "open-recent") setRecentsOpen(true);
@@ -1126,6 +1350,43 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (paintRef.current?.isFloating()) paintRef.current.commitFloat();
   };
 
+  // Place clipboard content: an in-app copy from the current canvas pastes
+  // straight onto the current layer (in place); anything else opens the paste
+  // options dialog.
+  const placePaste = (source: ImageBitmap | HTMLCanvasElement, w: number, h: number) => {
+    const cb = clipboardRef.current;
+    const sameCanvas = cb !== null && copyDocIdRef.current === activeIdRef.current;
+    const matchesInternal = source === cb || (!!cb && w === cb.width && h === cb.height);
+    if (sameCanvas && matchesInternal) {
+      const origin = copyOriginRef.current;
+      doPaste(source, w, h, "current-layer", false, origin.x, origin.y);
+    } else {
+      setPasteSrc({ source, w, h });
+    }
+  };
+
+  // Paste from the Edit menu: read the OS clipboard (a menu click is a user
+  // gesture, so navigator.clipboard.read is allowed), falling back to the last
+  // in-app copy/cut when the OS clipboard is empty or unreadable.
+  const pasteFromClipboard = async () => {
+    try {
+      if (navigator.clipboard?.read) {
+        for (const item of await navigator.clipboard.read()) {
+          const type = item.types.find((t) => t.startsWith("image/"));
+          if (type) {
+            const bmp = await createImageBitmap(await item.getType(type));
+            placePaste(bmp, bmp.width, bmp.height);
+            return;
+          }
+        }
+      }
+    } catch {
+      /* clipboard unreadable (permission / focus) — fall back to the internal one */
+    }
+    const c = clipboardRef.current;
+    if (c) placePaste(c, c.width, c.height);
+  };
+
   // Paste images from the clipboard (Ctrl+V fires a native paste event).
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -1141,35 +1402,20 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           }
         }
       }
-      // An in-app copy from the current canvas pastes straight onto the current
-      // layer (in place) without the options dialog.
-      const sameCanvas = clipboardRef.current !== null && copyDocIdRef.current === activeIdRef.current;
-      const origin = copyOriginRef.current;
       if (blob) {
         e.preventDefault();
         createImageBitmap(blob)
-          .then((bmp) => {
-            const cb = clipboardRef.current;
-            const matchesInternal = !!cb && bmp.width === cb.width && bmp.height === cb.height;
-            if (sameCanvas && matchesInternal) {
-              doPaste(bmp, bmp.width, bmp.height, "current-layer", false, origin.x, origin.y);
-            } else {
-              setPasteSrc({ source: bmp, w: bmp.width, h: bmp.height });
-            }
-          })
+          .then((bmp) => placePaste(bmp, bmp.width, bmp.height))
           .catch(() => {});
       } else if (clipboardRef.current) {
         e.preventDefault();
         const c = clipboardRef.current;
-        if (sameCanvas) {
-          doPaste(c, c.width, c.height, "current-layer", false, origin.x, origin.y);
-        } else {
-          setPasteSrc({ source: c, w: c.width, h: c.height });
-        }
+        placePaste(c, c.width, c.height);
       }
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Global shortcuts.
@@ -1240,12 +1486,22 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       } else if (e.ctrlKey && !e.altKey && key === "c" && selRef.current.length) {
         e.preventDefault();
         copySelection();
+      } else if (e.ctrlKey && !e.altKey && key === "x" && selRef.current.length) {
+        e.preventDefault();
+        cutSelection();
       } else if (e.ctrlKey && !e.altKey && key === "a") {
         // Select the whole canvas (not the browser's "select all text").
         e.preventDefault();
-        commitFloatIfAny();
-        const d = activeDocRef.current;
-        setSelection([{ x: 0, y: 0, w: d.width, h: d.height }]);
+        selectAll();
+      } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === "d") {
+        e.preventDefault();
+        reselect();
+      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === "d") {
+        e.preventDefault();
+        deselect();
+      } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === "i") {
+        e.preventDefault();
+        invertSelection();
       } else if (!e.ctrlKey && !e.altKey && !e.metaKey && key === "x") {
         e.preventDefault();
         swapColors();
@@ -1299,9 +1555,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The active tool's brush dynamics (brush vs eraser have independent settings).
-  const activeBrush = tool === "eraser" ? eraser : brush;
-  const setActiveBrush = tool === "eraser" ? setEraser : setBrush;
+  // The active tool's brush dynamics (brush / pencil / eraser are independent).
+  const activeBrush = tool === "eraser" ? eraser : tool === "pencil" ? pencil : brush;
+  const setActiveBrush = tool === "eraser" ? setEraser : tool === "pencil" ? setPencil : setBrush;
 
   return (
     <div className={styles.app}>
@@ -1318,6 +1574,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           "window-layers": panels.layers,
           "window-history": panels.history,
           "window-navigator": panels.navigator,
+          "window-channels": panels.channels,
+          "window-metadata": panels.metadata,
           "view-rulers": showRulers,
           "view-grid": showGrid,
           "view-snap": snap,
@@ -1342,6 +1600,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           if (patch.size !== undefined) setSampleSizeLabel(patch.size);
           if (patch.scope !== undefined) setSampleScopeLabel(patch.scope);
         }}
+        shape={shape}
+        onShape={(patch) => setShape((s) => ({ ...s, ...patch }))}
+        fill={foreground}
+        onFill={setForeground}
+        stroke={background}
+        onStroke={setBackground}
       />
       <div className={styles.body}>
         <Toolbar
@@ -1376,6 +1640,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           tool={tool}
           brush={activeBrush}
           color={paintColor}
+          shape={{
+            kind: shape.kind,
+            strokeWidth: shape.strokeWidth,
+            radius: shape.radius,
+            fill: foreground,
+            stroke: background,
+          }}
           layers={active.layers}
           activeLayerId={active.activeLayerId}
           ensureLayer={ensureLayer}
@@ -1404,6 +1675,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           viewApiRef={viewApiRef}
           paintRef={paintRef}
           onHistory={setHistory}
+          onAdjustEnd={onAdjustEnd}
+          onCursor={emitCursor}
         />
         <RightDock
           foreground={foreground}
@@ -1428,10 +1701,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onAdjust={onAdjust}
           adjustFilter={adjustFilter}
           onAdjustFilter={onAdjustFilter}
-          onAdjustApply={onAdjustApply}
+          onApplyPreset={onApplyPreset}
           onAdjustReset={onAdjustReset}
           adjustActive={!!activeLeafId}
           panels={panels}
+          engineRef={paintRef}
+          docName={active.name}
+          colorSpace={colorSpace}
+          imageMeta={active.metadata ?? null}
         />
       </div>
       <StatusBar
@@ -1441,6 +1718,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         foreground={paintColor}
         width={active.width}
         height={active.height}
+        selection={active.selection}
+        subscribeCursor={subscribeCursor}
       />
 
       {sizeDialogOpen && (

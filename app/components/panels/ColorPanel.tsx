@@ -27,24 +27,26 @@ export default function ColorPanel({
   return (
     <div className={styles.colorPanel}>
       <div className={styles.targets}>
-        <button
-          type="button"
-          className={styles.target}
-          data-active={active === "primary"}
-          onClick={() => onActive("primary")}
-        >
-          <span className={styles.targetSwatch} style={swatchBg(foreground)} />
-          <span className={styles.targetLabel}>Primary</span>
-        </button>
-        <button
-          type="button"
-          className={styles.target}
-          data-active={active === "secondary"}
-          onClick={() => onActive("secondary")}
-        >
-          <span className={styles.targetSwatch} style={swatchBg(background)} />
-          <span className={styles.targetLabel}>Secondary</span>
-        </button>
+        <div className={styles.segment}>
+          <button
+            type="button"
+            className={styles.target}
+            data-active={active === "primary"}
+            onClick={() => onActive("primary")}
+          >
+            <span className={styles.targetSwatch} style={swatchBg(foreground)} />
+            <span className={styles.targetLabel}>Primary</span>
+          </button>
+          <button
+            type="button"
+            className={styles.target}
+            data-active={active === "secondary"}
+            onClick={() => onActive("secondary")}
+          >
+            <span className={styles.targetSwatch} style={swatchBg(background)} />
+            <span className={styles.targetLabel}>Secondary</span>
+          </button>
+        </div>
         <button
           type="button"
           className={styles.swap}

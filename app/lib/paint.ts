@@ -2,6 +2,8 @@ import { parseColor, toHex8 } from "./color";
 import type { Rect } from "./view";
 import type { LayerNode } from "./layers";
 import { applyAdjustments, isDefaultAdjust, type Adjustments } from "./adjust";
+import { renderShape } from "./shapes";
+import type { ShapeKind } from "./tools";
 
 export interface BrushSettings {
   size: number; // px (document space)
@@ -127,6 +129,13 @@ export interface HistorySummary {
   index: number;
 }
 
+/** Per-channel tonal distribution of the composite (256 bins per channel). */
+export interface ChannelHistogram {
+  r: number[];
+  g: number[];
+  b: number[];
+}
+
 export interface EngineHandle {
   undo: () => void;
   redo: () => void;
@@ -143,6 +152,7 @@ export interface EngineHandle {
     rects: Rect[],
     angle?: number,
     pivot?: { x: number; y: number } | null,
+    label?: string,
   ) => void;
   copyRegion: (
     rects: Rect[] | null,
@@ -158,7 +168,13 @@ export interface EngineHandle {
   getLayerImage: (id: string) => string | null;
   setLayerImage: (id: string, source: CanvasImageSource) => void;
   exportComposite: (tree: LayerNode[]) => HTMLCanvasElement;
+  /** Per-channel tonal distribution of the composited canvas. */
+  histogram: (tree: LayerNode[]) => ChannelHistogram;
+  /** Subscribe to content changes (returns an unsubscribe fn). */
+  subscribe: (cb: () => void) => () => void;
   resizeImage: (w: number, h: number, ids?: string[], smooth?: boolean) => void;
+  /** Rotate/flip the whole image (90° rotations swap the dimensions). */
+  transformImage: (kind: ImageTransform, ids?: string[]) => void;
   applyAdjust: (
     layerId: string,
     adj: Adjustments,
@@ -166,14 +182,10 @@ export interface EngineHandle {
     angle?: number,
     pivot?: { x: number; y: number } | null,
   ) => void;
-  commitAdjust: (
-    layerId: string,
-    adj: Adjustments,
-    sel?: Rect[] | null,
-    angle?: number,
-    pivot?: { x: number; y: number } | null,
-  ) => void;
-  cancelAdjust: () => void;
+  /** Finalize the live adjustment session, keeping its history entry. */
+  endAdjust: () => void;
+  /** Discard the live adjustment session (restore original, drop its entry). */
+  revertAdjust: () => void;
   setColorSpace: (cs: PredefinedColorSpace) => void;
   captureLeaves: (ids: string[]) => Map<string, ImageData | null>;
   restoreLeaves: (snaps: Map<string, ImageData | null>) => void;
@@ -242,6 +254,9 @@ interface Layer {
 
 export type StrokeMode = "paint" | "erase";
 
+/** Whole-image transforms (Image menu). 90° rotations swap the dimensions. */
+export type ImageTransform = "rotate-cw" | "rotate-ccw" | "flip-h" | "flip-v";
+
 /** Optional document-structure changes tied to a history step (e.g. a paste
     that also added a layer / resized the canvas). */
 export interface HistorySide {
@@ -289,6 +304,7 @@ export class PaintEngine {
   private strokeLayer: string | null = null;
   private brush: BrushSettings | null = null;
   private mode: StrokeMode = "paint";
+  private strokeLabel = "Brush"; // history label for the current stroke
   private clip: Rect[] | null = null;
   private clipAngle = 0;
   private clipPivot: { x: number; y: number } | null = null;
@@ -336,9 +352,14 @@ export class PaintEngine {
   // and the adjusted result shown in its place until committed.
   private adjLayer: string | null = null;
   private adjOrig: ImageData | null = null;
-  private adjCanvas: HTMLCanvasElement | null = null;
+  private adjEntry: Entry | null = null;
   private adjPending: Adjustments | null = null;
   private adjRaf = 0;
+  // Live shape session (re-renderable until finalized by endShape).
+  private shapeLayer: string | null = null;
+  private shapeOrig: ImageData | null = null;
+  private shapeBounds: Rect | null = null;
+  private shapeEntry: Entry | null = null;
   // Cached magic-wand source pixels, reused across live (tolerance) re-runs and
   // dropped on any layer mutation (see invalidateWandSrc).
   private wandSrc: {
@@ -348,6 +369,8 @@ export class PaintEngine {
     layerId: string;
     sampleAll: boolean;
   } | null = null;
+  // Reused magic-wand scratch buffers (mask / flood-fill stack / visited).
+  private wandBuf: { mask: Uint8Array; stack: Int32Array; seen: Uint8Array; n: number } | null = null;
   // When set, adjustments only affect this (possibly rotated) selection region.
   private adjSel: Rect[] | null = null;
   private adjSelAngle = 0;
@@ -366,9 +389,29 @@ export class PaintEngine {
 
   onChange: () => void = () => {};
   onHistory: (s: HistorySummary) => void = () => {};
+  /** Fired when a live adjustment session ends (so the UI can reset its sliders). */
+  onAdjustEnd: () => void = () => {};
+  /** Fired when a live shape session ends (so the UI can drop its handle). */
+  onShapeEnd: () => void = () => {};
+  /** Extra content-change listeners (e.g. the live histogram panel). */
+  private changeListeners = new Set<() => void>();
 
   get isPainting() {
     return this.painting;
+  }
+
+  /** Subscribe to content changes; returns an unsubscribe function. */
+  addChangeListener(cb: () => void) {
+    this.changeListeners.add(cb);
+    return () => {
+      this.changeListeners.delete(cb);
+    };
+  }
+
+  /** Notify the canvas renderer plus any extra listeners that content changed. */
+  private emitChange() {
+    this.onChange();
+    this.changeListeners.forEach((cb) => cb());
   }
 
   setView(v: HTMLCanvasElement | null) {
@@ -388,8 +431,8 @@ export class PaintEngine {
       next.ctx.drawImage(l.c, 0, 0);
       this.layers.set(id, next);
     }
-    this.cancelAdjust();
-    this.onChange();
+    this.endAdjust();
+    this.emitChange();
   }
 
   get colorSpace() {
@@ -422,7 +465,7 @@ export class PaintEngine {
    */
   resizeImage(w: number, h: number, ownLayerIds?: string[], smooth = true) {
     if ((this.w === w && this.h === h) || w < 1 || h < 1) return;
-    this.cancelAdjust();
+    this.endAdjust();
     if (this.floatActive) this.discardFloat();
     const ow = this.w;
     const oh = this.h;
@@ -442,7 +485,53 @@ export class PaintEngine {
     this.entries.length = 0;
     this.pos = 0;
     this.emitHistory();
-    this.onChange();
+    this.emitChange();
+  }
+
+  /**
+   * Rotate or flip the whole image (every owned layer), swapping the document
+   * dimensions for 90° rotations. This is the raw pixel/size work only — it does
+   * NOT touch history, so the caller folds it into one undoable structural step
+   * (and undoes it by applying the inverse transform, which is pixel-exact since
+   * 90° rotations and flips are lossless permutations). Call BEFORE updating the
+   * doc's width/height (the follow-up setDoc is then a no-op).
+   */
+  transformImage(kind: ImageTransform, ownLayerIds?: string[]) {
+    if (this.w < 1 || this.h < 1) return;
+    this.endAdjust();
+    if (this.floatActive) this.discardFloat();
+    this.wandSrc = null;
+    const rot = kind === "rotate-cw" || kind === "rotate-ccw";
+    const nw = rot ? this.h : this.w;
+    const nh = rot ? this.w : this.h;
+    for (const [id, l] of this.layers) {
+      if (ownLayerIds && !ownLayerIds.includes(id)) continue;
+      const next = this.mk(nw, nh, true);
+      const ctx = next.ctx;
+      ctx.imageSmoothingEnabled = false; // axis-aligned: keep pixels exact
+      ctx.save();
+      if (kind === "rotate-cw") {
+        ctx.translate(nw, 0);
+        ctx.rotate(Math.PI / 2);
+      } else if (kind === "rotate-ccw") {
+        ctx.translate(0, nh);
+        ctx.rotate(-Math.PI / 2);
+      } else if (kind === "flip-h") {
+        ctx.translate(nw, 0);
+        ctx.scale(-1, 1);
+      } else {
+        ctx.translate(0, nh);
+        ctx.scale(1, -1);
+      }
+      ctx.drawImage(l.c, 0, 0);
+      ctx.restore();
+      this.layers.set(id, next);
+    }
+    this.w = nw;
+    this.h = nh;
+    this.stroke = makeCanvas(nw, nh);
+    this.scratch = this.mk(nw, nh);
+    this.emitChange();
   }
 
   private layer(id: string): Layer {
@@ -571,6 +660,8 @@ export class PaintEngine {
     label: string,
     side?: HistorySide,
   ) {
+    this.endAdjust(); // any other pixel op finalizes a live adjustment / shape
+    this.endShape();
     if (this.pos < this.entries.length) this.entries.length = this.pos;
     this.entries.push({ layerId, rect, before, after, label, side });
     this.pos = this.entries.length;
@@ -579,6 +670,8 @@ export class PaintEngine {
 
   /** Push a structural undo step (no pixel payload — `undo`/`redo` do the work). */
   pushStructural(label: string, undo: () => void, redo: () => void) {
+    this.endAdjust();
+    this.endShape();
     if (this.pos < this.entries.length) this.entries.length = this.pos;
     this.entries.push({ label, side: { undo, redo } });
     this.pos = this.entries.length;
@@ -606,15 +699,107 @@ export class PaintEngine {
     l.ctx.restore();
     const after = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
     this.pushEntry(layerId, bounds, before, after, "Fill");
-    this.onChange();
+    this.emitChange();
   }
 
-  /** Clear (erase to transparent) the selection on a layer (records history). */
+  /** Paint a shape (filled + stroked) into ctx, rotated about its box centre.
+      The path is inset by half the stroke so the whole shape stays in `box`. */
+  private paintShape(
+    ctx: CanvasRenderingContext2D,
+    box: Rect,
+    angle: number,
+    kind: ShapeKind,
+    fill: string,
+    stroke: string,
+    strokeWidth: number,
+    radius: number,
+  ) {
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    if (angle) {
+      const cx = box.x + box.w / 2;
+      const cy = box.y + box.h / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate(angle);
+      ctx.translate(-cx, -cy);
+    }
+    renderShape(ctx, kind, box, fill, stroke, strokeWidth, radius);
+    ctx.restore();
+  }
+
+  /**
+   * Draw / redraw a "live" shape: it stays editable (re-rendered from its box +
+   * settings) until the session is finalized by `endShape`. Mirrors the live
+   * adjustment session — one coalescing "Shape" history entry; rapid setting
+   * tweaks just refresh it. Call repeatedly with the same box to restyle.
+   */
+  liveShape(
+    layerId: string,
+    box: Rect,
+    angle: number,
+    kind: ShapeKind,
+    fill: string,
+    stroke: string,
+    strokeWidth: number,
+    radius: number,
+  ) {
+    if (box.w < 1 || box.h < 1) return;
+    this.endAdjust(); // a shape and an adjustment can't be live at once
+    if (this.shapeLayer && this.shapeLayer !== layerId) this.endShape();
+    const l = this.layer(layerId);
+    const fresh = this.shapeLayer !== layerId || !this.shapeOrig || !this.shapeBounds;
+    let b: Rect;
+    if (fresh) {
+      // The shape sits inside its box (stroke is inset); pad a little for AA.
+      const x0 = Math.max(0, Math.floor(box.x - 2));
+      const y0 = Math.max(0, Math.floor(box.y - 2));
+      const x1 = Math.min(this.w, Math.ceil(box.x + box.w + 2));
+      const y1 = Math.min(this.h, Math.ceil(box.y + box.h + 2));
+      if (x1 <= x0 || y1 <= y0) return;
+      b = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+      this.shapeLayer = layerId;
+      this.shapeBounds = b;
+      this.shapeOrig = l.ctx.getImageData(b.x, b.y, b.w, b.h);
+      this.shapeEntry = null;
+    } else {
+      b = this.shapeBounds!;
+      l.ctx.globalAlpha = 1;
+      l.ctx.globalCompositeOperation = "source-over";
+      l.ctx.putImageData(this.shapeOrig!, b.x, b.y); // restore pre-shape pixels
+    }
+    this.paintShape(l.ctx, box, angle, kind, fill, stroke, strokeWidth, radius);
+    const after = l.ctx.getImageData(b.x, b.y, b.w, b.h);
+    if (!this.shapeEntry) {
+      if (this.pos < this.entries.length) this.entries.length = this.pos;
+      this.shapeEntry = { layerId, rect: b, before: this.shapeOrig!, after, label: "Shape" };
+      this.entries.push(this.shapeEntry);
+      this.pos = this.entries.length;
+      this.emitHistory();
+    } else {
+      this.shapeEntry.after = after; // same entry, restyled pixels
+    }
+    this.emitChange();
+  }
+
+  /** Finalize the live shape session, keeping its history entry. */
+  endShape() {
+    if (!this.shapeLayer) return;
+    this.shapeLayer = null;
+    this.shapeOrig = null;
+    this.shapeBounds = null;
+    this.shapeEntry = null;
+    this.onShapeEnd();
+  }
+
+  /** Clear (erase to transparent) the selection on a layer (records history).
+      `label` lets callers journal it as e.g. "Cut" instead of "Delete". */
   eraseSelection(
     layerId: string,
     rects: Rect[],
     angle = 0,
     pivot: { x: number; y: number } | null = null,
+    label = "Delete",
   ) {
     const bounds = this.boundsOf(rects, angle, pivot);
     if (!bounds) return;
@@ -628,8 +813,8 @@ export class PaintEngine {
     l.ctx.fillRect(bounds.x, bounds.y, bounds.w, bounds.h);
     l.ctx.restore();
     const after = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
-    this.pushEntry(layerId, bounds, before, after, "Delete");
-    this.onChange();
+    this.pushEntry(layerId, bounds, before, after, label);
+    this.emitChange();
   }
 
   /** Copy a layer's pixels into another (new) layer id. */
@@ -640,7 +825,7 @@ export class PaintEngine {
     dst.ctx.globalCompositeOperation = "source-over";
     dst.ctx.clearRect(0, 0, this.w, this.h);
     if (src) dst.ctx.drawImage(src.c, 0, 0);
-    this.onChange();
+    this.emitChange();
   }
 
   /** Composite `nodes` (top→bottom) into one new layer, dropping `deleteIds`. */
@@ -651,7 +836,7 @@ export class PaintEngine {
     ctx.globalCompositeOperation = "source-over";
     for (const id of deleteIds) this.layers.delete(id);
     this.layers.set(targetId, { c, ctx });
-    this.onChange();
+    this.emitChange();
   }
 
   /** Forget a layer's offscreen canvas (after it's removed from the document). */
@@ -687,6 +872,12 @@ export class PaintEngine {
     return out.ctx.getImageData(0, 0, this.w, this.h);
   }
 
+  /**
+   * Apply adjustments to a layer immediately (no separate "Apply" step). The
+   * whole continuous session coalesces into ONE undoable "Adjustments" entry:
+   * the first change bakes + pushes it, later tweaks refresh that same entry.
+   * The session is finalized by `endAdjust` (any other op / undo / layer switch).
+   */
   applyAdjust(
     layerId: string,
     adj: Adjustments,
@@ -694,78 +885,105 @@ export class PaintEngine {
     angle = 0,
     pivot: { x: number; y: number } | null = null,
   ) {
+    // Switching layers mid-session finalizes the previous one.
+    if (this.adjLayer && this.adjLayer !== layerId) this.endAdjust();
+    // All-neutral → discard the session (and its entry) entirely.
     if (isDefaultAdjust(adj)) {
-      this.cancelAdjust();
+      this.revertAdjust();
       return;
     }
-    if (this.adjLayer !== layerId || !this.adjOrig) {
-      this.clearAdjust();
+    const fresh = this.adjLayer !== layerId || !this.adjOrig;
+    if (fresh) {
       const l = this.layers.get(layerId);
       if (!l) return; // empty layer — nothing to adjust
       this.adjLayer = layerId;
       this.adjOrig = l.ctx.getImageData(0, 0, this.w, this.h);
-      const made = this.mk(this.w, this.h);
-      made.ctx.putImageData(this.adjOrig, 0, 0); // show original until first compute
-      this.adjCanvas = made.c;
+      this.adjEntry = null;
     }
     this.adjSel = sel && sel.length ? sel : null;
     this.adjSelAngle = angle;
     this.adjSelPivot = pivot;
     this.adjPending = adj;
-    if (this.adjRaf) return;
-    this.adjRaf = requestAnimationFrame(() => {
-      this.adjRaf = 0;
-      if (!this.adjPending || !this.adjOrig || !this.adjCanvas) return;
-      const res = this.maskedAdjust(this.adjOrig, this.adjPending);
-      this.adjCanvas.getContext("2d")!.putImageData(res, 0, 0);
-      this.onChange();
-    });
+    // First change bakes + pushes synchronously (so the entry always exists);
+    // rapid follow-ups are rAF-throttled and only refresh that entry.
+    if (fresh) this.flushAdjust();
+    else if (!this.adjRaf) this.adjRaf = requestAnimationFrame(() => this.flushAdjust());
   }
 
-  /** Bake the adjustment into the layer as one undoable step. */
-  commitAdjust(
-    layerId: string,
-    adj: Adjustments,
-    sel: Rect[] | null = null,
-    angle = 0,
-    pivot: { x: number; y: number } | null = null,
-  ) {
-    if (this.adjLayer !== layerId || !this.adjOrig || isDefaultAdjust(adj)) {
-      this.cancelAdjust();
-      return;
-    }
-    this.adjSel = sel && sel.length ? sel : null;
-    this.adjSelAngle = angle;
-    this.adjSelPivot = pivot;
-    const before = this.adjOrig;
-    const after = this.maskedAdjust(before, adj);
-    const l = this.layer(layerId);
+  /** Bake the pending adjustment into the layer; push or refresh its entry. */
+  private flushAdjust() {
+    this.adjRaf = 0;
+    if (!this.adjPending || !this.adjOrig || !this.adjLayer) return;
+    const after = this.maskedAdjust(this.adjOrig, this.adjPending);
+    const l = this.layer(this.adjLayer);
     l.ctx.globalAlpha = 1;
     l.ctx.globalCompositeOperation = "source-over";
     l.ctx.putImageData(after, 0, 0);
-    this.pushEntry(layerId, { x: 0, y: 0, w: this.w, h: this.h }, before, after, "Adjustments");
-    this.clearAdjust();
-    this.onChange();
+    if (!this.adjEntry) {
+      if (this.pos < this.entries.length) this.entries.length = this.pos;
+      this.adjEntry = {
+        layerId: this.adjLayer,
+        rect: { x: 0, y: 0, w: this.w, h: this.h },
+        before: this.adjOrig,
+        after,
+        label: "Adjustments",
+      };
+      this.entries.push(this.adjEntry);
+      this.pos = this.entries.length;
+      this.emitHistory();
+    } else {
+      this.adjEntry.after = after; // same entry, newer pixels (list unchanged)
+    }
+    this.emitChange();
   }
 
-  cancelAdjust() {
+  /** Finalize the live adjustment session, keeping its history entry. */
+  endAdjust() {
     if (!this.adjLayer) return;
-    this.clearAdjust();
-    this.onChange();
-  }
-
-  private clearAdjust() {
     if (this.adjRaf) {
       cancelAnimationFrame(this.adjRaf);
       this.adjRaf = 0;
     }
+    if (this.adjPending && !this.adjEntry) this.flushAdjust(); // safety: never-flushed
     this.adjLayer = null;
     this.adjOrig = null;
-    this.adjCanvas = null;
+    this.adjEntry = null;
     this.adjPending = null;
     this.adjSel = null;
     this.adjSelAngle = 0;
     this.adjSelPivot = null;
+    this.onAdjustEnd();
+  }
+
+  /** Discard the live adjustment session: restore the original, drop its entry. */
+  revertAdjust() {
+    if (!this.adjLayer) return;
+    if (this.adjRaf) {
+      cancelAnimationFrame(this.adjRaf);
+      this.adjRaf = 0;
+    }
+    if (this.adjOrig) {
+      const l = this.layer(this.adjLayer);
+      l.ctx.globalAlpha = 1;
+      l.ctx.globalCompositeOperation = "source-over";
+      l.ctx.putImageData(this.adjOrig, 0, 0);
+    }
+    if (this.adjEntry) {
+      const idx = this.entries.indexOf(this.adjEntry);
+      if (idx >= 0) {
+        this.entries.splice(idx, 1);
+        if (this.pos > idx) this.pos -= 1;
+      }
+    }
+    this.adjLayer = null;
+    this.adjOrig = null;
+    this.adjEntry = null;
+    this.adjPending = null;
+    this.adjSel = null;
+    this.adjSelAngle = 0;
+    this.adjSelPivot = null;
+    this.emitHistory();
+    this.emitChange();
   }
 
   /** Replace a leaf layer's pixels with an image (used when loading a project). */
@@ -776,7 +994,7 @@ export class PaintEngine {
     l.ctx.globalCompositeOperation = "source-over";
     l.ctx.clearRect(0, 0, this.w, this.h);
     l.ctx.drawImage(source, 0, 0);
-    this.onChange();
+    this.emitChange();
   }
 
   /** Snapshot the full pixels of the given leaf layers (null = no canvas). */
@@ -802,12 +1020,11 @@ export class PaintEngine {
         this.layers.delete(id);
       }
     }
-    this.onChange();
+    this.emitChange();
   }
 
   /** The pixels to draw for a leaf, with any live stroke/move/float merged in. */
   private leafDisplay(id: string): HTMLCanvasElement | null {
-    if (this.adjLayer === id && this.adjCanvas) return this.adjCanvas;
     const l = this.layers.get(id);
     const s = this.scratch?.ctx;
     if (this.painting && this.stroke && s && id === this.strokeLayer) {
@@ -906,6 +1123,45 @@ export class PaintEngine {
     return c;
   }
 
+  /**
+   * Per-channel tonal distribution of the composited canvas (256 bins each).
+   * Fully transparent pixels are skipped. The composite is read back at a
+   * capped resolution so the scan stays fast on large documents — the shape of
+   * the distribution is what the panel displays, so downsampling is harmless.
+   */
+  histogram(tree: LayerNode[]): ChannelHistogram {
+    const r = new Array<number>(256).fill(0);
+    const g = new Array<number>(256).fill(0);
+    const b = new Array<number>(256).fill(0);
+    if (this.w < 1 || this.h < 1) return { r, g, b };
+    const full = this.mk(this.w, this.h, true);
+    for (let i = tree.length - 1; i >= 0; i--) this.drawNode(full.ctx, tree[i]);
+    full.ctx.globalAlpha = 1;
+    full.ctx.globalCompositeOperation = "source-over";
+
+    const cap = 480;
+    const scale = Math.min(1, cap / Math.max(this.w, this.h));
+    let data: Uint8ClampedArray;
+    if (scale < 1) {
+      const sw = Math.max(1, Math.round(this.w * scale));
+      const sh = Math.max(1, Math.round(this.h * scale));
+      const small = this.mk(sw, sh, true);
+      small.ctx.imageSmoothingEnabled = true;
+      small.ctx.imageSmoothingQuality = "low";
+      small.ctx.drawImage(full.c, 0, 0, sw, sh);
+      data = small.ctx.getImageData(0, 0, sw, sh).data;
+    } else {
+      data = full.ctx.getImageData(0, 0, this.w, this.h).data;
+    }
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue; // ignore fully transparent pixels
+      r[data[i]]++;
+      g[data[i + 1]]++;
+      b[data[i + 2]]++;
+    }
+    return { r, g, b };
+  }
+
   /** Composite the layer tree (bottom→top, nested groups) onto the view canvas. */
   composite(tree: LayerNode[]) {
     const ctx = this.vctx;
@@ -948,7 +1204,7 @@ export class PaintEngine {
       this.moveFloat.ctx.drawImage(l.c, 0, 0);
       l.ctx.clearRect(0, 0, this.w, this.h);
     }
-    this.onChange();
+    this.emitChange();
   }
 
   // ---- floating paste ----
@@ -986,7 +1242,7 @@ export class PaintEngine {
     this.floatFramePivot = null;
     this.floatAngle = 0;
     this.floatPivot = null;
-    this.onChange();
+    this.emitChange();
   }
 
   /**
@@ -999,6 +1255,7 @@ export class PaintEngine {
     angle = 0,
     pivot: { x: number; y: number } | null = null,
   ): boolean {
+    this.endShape(); // finalize a live shape before lifting its pixels to transform
     if (this.floatActive) this.commitFloat();
     const src = this.boundsOf(rects, angle, pivot);
     if (!src) return false;
@@ -1033,14 +1290,14 @@ export class PaintEngine {
     this.floatAngle = 0;
     this.floatPivot = null;
     this.floatSide = undefined;
-    this.onChange();
+    this.emitChange();
     return true;
   }
 
   setFloatOffset(x: number, y: number) {
     if (!this.floatActive) return;
     this.floatOff = { x: Math.round(x), y: Math.round(y) };
-    this.onChange();
+    this.emitChange();
   }
 
   /** The original bounds of the lifted selection (for resize-content math). */
@@ -1058,7 +1315,7 @@ export class PaintEngine {
       w: Math.max(1, Math.round(dst.w)),
       h: Math.max(1, Math.round(dst.h)),
     };
-    this.onChange();
+    this.emitChange();
   }
 
   /** Rotate the float about `pivot` (or the lifted region's centre), in radians. */
@@ -1066,7 +1323,7 @@ export class PaintEngine {
     if (!this.floatActive) return;
     this.floatAngle = angle;
     this.floatPivot = pivot;
-    this.onChange();
+    this.emitChange();
   }
 
   /**
@@ -1100,7 +1357,7 @@ export class PaintEngine {
     };
     this.floatFrameAngle = angle;
     this.floatFramePivot = pivot;
-    this.onChange();
+    this.emitChange();
   }
 
   /** Apply T = R(angle,pivot) ∘ scale(src→dst) ∘ R(-angle,pivot) to a context. */
@@ -1140,7 +1397,7 @@ export class PaintEngine {
   }
 
   /** Merge the float into its layer, recording one history step. */
-  commitFloat() {
+  commitFloat(side?: HistorySide) {
     if (!this.floatActive || !this.floatLayer || !this.floatSource) {
       this.clearFloat();
       return;
@@ -1196,7 +1453,7 @@ export class PaintEngine {
         const before = this.floatOrig.ctx.getImageData(x0, y0, rw, rh);
         draw();
         const after = l.ctx.getImageData(x0, y0, rw, rh);
-        this.pushEntry(layerId, { x: x0, y: y0, w: rw, h: rh }, before, after, "Rotate");
+        this.pushEntry(layerId, { x: x0, y: y0, w: rw, h: rh }, before, after, "Rotate", side);
       } else {
         draw();
       }
@@ -1251,7 +1508,7 @@ export class PaintEngine {
         const before = this.floatOrig.ctx.getImageData(x0, y0, rw, rh);
         draw();
         const after = l.ctx.getImageData(x0, y0, rw, rh);
-        this.pushEntry(layerId, { x: x0, y: y0, w: rw, h: rh }, before, after, "Scale");
+        this.pushEntry(layerId, { x: x0, y: y0, w: rw, h: rh }, before, after, "Scale", side);
       } else {
         draw();
       }
@@ -1272,7 +1529,7 @@ export class PaintEngine {
         const before = this.floatOrig.ctx.getImageData(x0, y0, rw, rh);
         l.ctx.drawImage(this.floatSource, src.x, src.y, src.w, src.h, dst.x, dst.y, dst.w, dst.h);
         const after = l.ctx.getImageData(x0, y0, rw, rh);
-        this.pushEntry(layerId, { x: x0, y: y0, w: rw, h: rh }, before, after, "Scale");
+        this.pushEntry(layerId, { x: x0, y: y0, w: rw, h: rh }, before, after, "Scale", side);
       } else {
         l.ctx.drawImage(this.floatSource, src.x, src.y, src.w, src.h, dst.x, dst.y, dst.w, dst.h);
       }
@@ -1315,7 +1572,7 @@ export class PaintEngine {
       }
     }
     this.clearFloat();
-    this.onChange();
+    this.emitChange();
   }
 
   /** Drop the float without merging. */
@@ -1332,7 +1589,7 @@ export class PaintEngine {
       this.floatSide?.undo();
     }
     this.clearFloat();
-    this.onChange();
+    this.emitChange();
   }
 
   /** Draw an image onto a layer at (x, y), recording one history step. */
@@ -1357,7 +1614,7 @@ export class PaintEngine {
     l.ctx.drawImage(source, x, y);
     const after = l.ctx.getImageData(rx, ry, rw, rh);
     this.pushEntry(layerId, { x: rx, y: ry, w: rw, h: rh }, before, after, "Paste", side);
-    this.onChange();
+    this.emitChange();
   }
 
   /** Copy the composite within the selection (or the whole canvas) to a new canvas. */
@@ -1438,6 +1695,7 @@ export class PaintEngine {
     y: number,
     opts: { tolerance: number; contiguous: boolean; sampleAll: boolean },
     reuseSource = false,
+    add: Rect[] | null = null, // existing selection to union with (Ctrl-add)
   ): WandSelection | null {
     const w = this.w;
     const h = this.h;
@@ -1469,49 +1727,89 @@ export class PaintEngine {
     const sg = data[si + 1];
     const sb = data[si + 2];
     const sa = data[si + 3];
-    const match = (p: number) => {
-      const i = p * 4;
-      return (
-        Math.abs(data[i] - sr) <= t &&
-        Math.abs(data[i + 1] - sg) <= t &&
-        Math.abs(data[i + 2] - sb) <= t &&
-        Math.abs(data[i + 3] - sa) <= t
-      );
-    };
 
-    const mask = new Uint8Array(w * h);
+    // Reuse big scratch buffers across (live) re-runs — allocating ~12MB of
+    // typed arrays per slider tick was a major source of GC-driven jank.
+    const n = w * h;
+    let buf = this.wandBuf;
+    if (!buf || buf.n !== n) {
+      buf = { mask: new Uint8Array(n), stack: new Int32Array(n), seen: new Uint8Array(n), n };
+      this.wandBuf = buf;
+    }
+    const mask = buf.mask;
+    mask.fill(0);
     let minX = w;
     let minY = h;
     let maxX = -1;
     let maxY = -1;
-    const mark = (p: number, cx: number, cy: number) => {
-      mask[p] = 1;
-      if (cx < minX) minX = cx;
-      if (cx > maxX) maxX = cx;
-      if (cy < minY) minY = cy;
-      if (cy > maxY) maxY = cy;
-    };
+    // Ctrl-add: rasterise the existing selection into the mask first, so the
+    // result is the union (its rects + boundary segments cover both regions).
+    if (add) {
+      for (const r of add) {
+        const x0 = Math.max(0, r.x);
+        const y0 = Math.max(0, r.y);
+        const x1 = Math.min(w, r.x + r.w);
+        const y1 = Math.min(h, r.y + r.h);
+        for (let yy = y0; yy < y1; yy++) {
+          const row = yy * w;
+          for (let xx = x0; xx < x1; xx++) mask[row + xx] = 1;
+        }
+        if (x0 < x1 && y0 < y1) {
+          if (x0 < minX) minX = x0;
+          if (x1 - 1 > maxX) maxX = x1 - 1;
+          if (y0 < minY) minY = y0;
+          if (y1 - 1 > maxY) maxY = y1 - 1;
+        }
+      }
+    }
     if (opts.contiguous) {
-      const stack = new Int32Array(w * h);
-      const seen = new Uint8Array(w * h);
+      const stack = buf.stack;
+      const seen = buf.seen;
+      seen.fill(0);
       let sp = 0;
       const seed = py * w + px;
       stack[sp++] = seed;
       seen[seed] = 1;
       while (sp > 0) {
         const p = stack[--sp];
-        if (!match(p)) continue;
+        const i = p * 4; // match test inlined (hot loop, no closure)
+        if (
+          Math.abs(data[i] - sr) > t ||
+          Math.abs(data[i + 1] - sg) > t ||
+          Math.abs(data[i + 2] - sb) > t ||
+          Math.abs(data[i + 3] - sa) > t
+        )
+          continue;
+        mask[p] = 1;
         const cx = p % w;
         const cy = (p - cx) / w;
-        mark(p, cx, cy);
+        if (cx < minX) minX = cx;
+        if (cx > maxX) maxX = cx;
+        if (cy < minY) minY = cy;
+        if (cy > maxY) maxY = cy;
         if (cx > 0 && !seen[p - 1]) (seen[p - 1] = 1), (stack[sp++] = p - 1);
         if (cx < w - 1 && !seen[p + 1]) (seen[p + 1] = 1), (stack[sp++] = p + 1);
         if (cy > 0 && !seen[p - w]) (seen[p - w] = 1), (stack[sp++] = p - w);
         if (cy < h - 1 && !seen[p + w]) (seen[p + w] = 1), (stack[sp++] = p + w);
       }
     } else {
-      for (let p = 0, cy = 0; cy < h; cy++) {
-        for (let cx = 0; cx < w; cx++, p++) if (match(p)) mark(p, cx, cy);
+      let p = 0;
+      for (let cy = 0; cy < h; cy++) {
+        for (let cx = 0; cx < w; cx++, p++) {
+          const i = p * 4;
+          if (
+            Math.abs(data[i] - sr) <= t &&
+            Math.abs(data[i + 1] - sg) <= t &&
+            Math.abs(data[i + 2] - sb) <= t &&
+            Math.abs(data[i + 3] - sa) <= t
+          ) {
+            mask[p] = 1;
+            if (cx < minX) minX = cx;
+            if (cx > maxX) maxX = cx;
+            if (cy < minY) minY = cy;
+            if (cy > maxY) maxY = cy;
+          }
+        }
       }
     }
 
@@ -1522,10 +1820,118 @@ export class PaintEngine {
     return { rects, segments: maskToSegments(mask, w, h, b) };
   }
 
+  /**
+   * Freeform lasso selection: rasterizes the (auto-closed) polygon into a pixel
+   * mask, then reuses the wand's mask→rects + mask→ants decomposition. The
+   * polygon is closed start↔end with a straight edge by the canvas fill.
+   */
+  lassoSelect(points: { x: number; y: number }[]): WandSelection | null {
+    const w = this.w;
+    const h = this.h;
+    if (points.length < 3 || w < 1 || h < 1) return null;
+    // Bounding box of the path, clamped to the canvas (the mask region to scan).
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of points) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const x0 = Math.max(0, Math.floor(minX));
+    const y0 = Math.max(0, Math.floor(minY));
+    const x1 = Math.min(w, Math.ceil(maxX));
+    const y1 = Math.min(h, Math.ceil(maxY));
+    if (x1 <= x0 || y1 <= y0) return null;
+    // Fill the polygon into a bbox-sized scratch canvas (vertices outside the
+    // box are simply clipped by the canvas), then threshold its alpha to a mask.
+    const bw = x1 - x0;
+    const bh = y1 - y0;
+    const { ctx } = this.mk(bw, bh, true);
+    ctx.translate(-x0, -y0);
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+    ctx.closePath();
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+    const data = ctx.getImageData(0, 0, bw, bh).data;
+    const mask = new Uint8Array(w * h);
+    for (let yy = 0; yy < bh; yy++) {
+      for (let xx = 0; xx < bw; xx++) {
+        if (data[(yy * bw + xx) * 4 + 3] >= 128) mask[(y0 + yy) * w + (x0 + xx)] = 1;
+      }
+    }
+    const b: Bounds = { x0, y0, x1, y1 };
+    const rects = maskToRects(mask, w, b);
+    if (!rects.length) return null;
+    return { rects, segments: maskToSegments(mask, w, h, b) };
+  }
+
+  /**
+   * Combine an existing selection with a new region (both as rects) via a pixel
+   * mask: "add" = union, "subtract" = base minus region. Returns the merged
+   * selection (rects + ants); an empty `rects` means the result is now empty
+   * (e.g. the subtraction removed everything).
+   */
+  combineSelection(base: Rect[], region: Rect[], mode: "add" | "subtract"): WandSelection | null {
+    const w = this.w;
+    const h = this.h;
+    if (w < 1 || h < 1) return null;
+    const clamp4 = (r: Rect) => ({
+      x0: Math.max(0, Math.floor(r.x)),
+      y0: Math.max(0, Math.floor(r.y)),
+      x1: Math.min(w, Math.ceil(r.x + r.w)),
+      y1: Math.min(h, Math.ceil(r.y + r.h)),
+    });
+    const fill = (rects: Rect[], mask: Uint8Array) => {
+      for (const r of rects) {
+        const c = clamp4(r);
+        for (let yy = c.y0; yy < c.y1; yy++) {
+          const row = yy * w;
+          for (let xx = c.x0; xx < c.x1; xx++) mask[row + xx] = 1;
+        }
+      }
+    };
+    const boundsOf = (rects: Rect[]): Bounds | null => {
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const r of rects) {
+        const c = clamp4(r);
+        if (c.x0 >= c.x1 || c.y0 >= c.y1) continue;
+        if (c.x0 < x0) x0 = c.x0;
+        if (c.y0 < y0) y0 = c.y0;
+        if (c.x1 > x1) x1 = c.x1;
+        if (c.y1 > y1) y1 = c.y1;
+      }
+      return x1 > x0 && y1 > y0 ? { x0, y0, x1, y1 } : null;
+    };
+
+    const out = new Uint8Array(w * h);
+    fill(base, out);
+    let b: Bounds | null;
+    if (mode === "add") {
+      fill(region, out);
+      b = boundsOf([...base, ...region]);
+    } else {
+      const reg = new Uint8Array(w * h);
+      fill(region, reg);
+      for (let i = 0; i < out.length; i++) if (reg[i]) out[i] = 0;
+      b = boundsOf(base); // the result is a subset of the base
+    }
+    if (!b) return { rects: [], segments: [] };
+    const rects = maskToRects(out, w, b);
+    return { rects, segments: rects.length ? maskToSegments(out, w, h, b) : [] };
+  }
+
   moveTo(dx: number, dy: number) {
     if (!this.moving) return;
     this.moveOff = { x: Math.round(dx), y: Math.round(dy) };
-    this.onChange();
+    this.emitChange();
   }
 
   endMove() {
@@ -1563,7 +1969,7 @@ export class PaintEngine {
     this.moveOrig = null;
     this.moveSrc = null;
     this.moveOff = { x: 0, y: 0 };
-    this.onChange();
+    this.emitChange();
   }
 
   beginStroke(
@@ -1576,6 +1982,7 @@ export class PaintEngine {
     clip: Rect[] | null = null,
     clipAngle = 0,
     clipPivot: { x: number; y: number } | null = null,
+    label: string = mode === "erase" ? "Erase" : "Brush",
   ) {
     if (!this.stroke) return;
     this.layer(layerId); // ensure the target layer has a canvas so the live stroke composites
@@ -1583,6 +1990,7 @@ export class PaintEngine {
     this.strokeLayer = layerId;
     this.brush = brush;
     this.mode = mode;
+    this.strokeLabel = label;
     this.clip = clip && clip.length ? clip : null;
     this.clipAngle = clipAngle;
     this.clipPivot = clipPivot;
@@ -1608,7 +2016,7 @@ export class PaintEngine {
     this.dirty = null;
     this.stamp(x, y);
     this.residual = this.step;
-    this.onChange();
+    this.emitChange();
   }
 
   moveStroke(rawX: number, rawY: number) {
@@ -1618,7 +2026,7 @@ export class PaintEngine {
     this.smooth.x += (rawX - this.smooth.x) * alpha;
     this.smooth.y += (rawY - this.smooth.y) * alpha;
     this.lineTo(this.smooth.x, this.smooth.y);
-    this.onChange();
+    this.emitChange();
   }
 
   private lineTo(x: number, y: number) {
@@ -1647,7 +2055,7 @@ export class PaintEngine {
       const before = l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
       this.drawStroke(l.ctx);
       const after = l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
-      this.pushEntry(layerId, rect, before, after, this.mode === "erase" ? "Erase" : "Brush");
+      this.pushEntry(layerId, rect, before, after, this.strokeLabel);
     }
 
     this.stroke.ctx.clearRect(0, 0, this.w, this.h);
@@ -1657,7 +2065,7 @@ export class PaintEngine {
     this.clip = null;
     this.tip = null;
     this.dirty = null;
-    this.onChange();
+    this.emitChange();
   }
 
   /** A crisp, aliased disc tip (no anti-aliasing, no feather). */
@@ -1789,6 +2197,8 @@ export class PaintEngine {
       this.layer(e.layerId).ctx.putImageData(e.before, e.rect.x, e.rect.y);
   }
   jumpTo(target: number) {
+    this.endAdjust(); // finalize a live adjustment / shape before navigating history
+    this.endShape();
     target = Math.max(0, Math.min(this.entries.length, target));
     while (this.pos > target) {
       this.pos--;
@@ -1803,7 +2213,7 @@ export class PaintEngine {
       this.pos++;
     }
     this.emitHistory();
-    this.onChange();
+    this.emitChange();
   }
   undo() {
     if (this.pos > 0) this.jumpTo(this.pos - 1);

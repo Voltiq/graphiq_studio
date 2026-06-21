@@ -1,8 +1,8 @@
 "use client";
 
 import { useRef, useState, type ReactNode } from "react";
-import { ChevronDown } from "lucide-react";
 import styles from "./ColorPicker.module.scss";
+import { Select } from "./Select";
 import {
   clamp,
   hslToHsv,
@@ -19,9 +19,9 @@ import {
 } from "../lib/color";
 
 const SWATCHES = [
-  "#000000", "#5b5b66", "#9aa0b4", "#ffffff", "#f43f5e", "#f97316",
-  "#f59e0b", "#eab308", "#84cc16", "#10b981", "#14b8a6", "#06b6d4",
-  "#3b82f6", "#6366f1", "#8b5cf6", "#d946ef", "#ec4899", "#78350f",
+  "#000000", "#3f3f46", "#a1a1aa", "#ffffff", "#ef4444", "#f97316",
+  "#eab308", "#84cc16", "#22c55e", "#14b8a6", "#06b6d4", "#3b82f6",
+  "#6366f1", "#8b5cf6", "#d946ef", "#ec4899",
 ];
 
 type Format = "HEX" | "HEXA" | "RGBA" | "HSLA" | "HSVA";
@@ -296,53 +296,55 @@ export default function ColorPicker({
       </div>
 
       <div className={styles.inputs}>
-        <span className={styles.format}>
-          <select value={fmt} onChange={(e) => setFmt(e.target.value as Format)} aria-label="Color format">
-            {FORMATS.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
-          <ChevronDown size={12} />
-        </span>
+        <Select
+          options={FORMATS}
+          value={fmt}
+          onChange={(f) => setFmt(f as Format)}
+          width={78}
+        />
 
         <div className={styles.cells}>
           {/* cells' callbacks only touch refs in event handlers, never during render */}
           {/* eslint-disable-next-line react-hooks/refs */}
           {cells.map((c) => (
-            <label key={c.key} className={styles.cell} style={c.flex ? { flex: c.flex } : undefined}>
-              <span className={styles.cellInput}>
-                {c.prefix && <span className={styles.affix}>{c.prefix}</span>}
-                <input
-                  value={draft[c.key] ?? ""}
-                  spellCheck={false}
-                  inputMode={c.sanitize === numSan ? "numeric" : "text"}
-                  onChange={(e) => onCell(c.key, c.sanitize(e.target.value), c.commit)}
-                  onBlur={() => setDraft(buildDraft(hsva, fmt))}
-                />
-                {c.suffix && <span className={styles.affix}>{c.suffix}</span>}
-              </span>
-              <span className={styles.cellLabel}>{c.label}</span>
-            </label>
+            <span
+              key={c.key}
+              className={styles.cellInput}
+              style={c.flex ? { flex: c.flex } : undefined}
+            >
+              {c.prefix && <span className={styles.affix}>{c.prefix}</span>}
+              <input
+                value={draft[c.key] ?? ""}
+                spellCheck={false}
+                aria-label={c.label}
+                inputMode={c.sanitize === numSan ? "numeric" : "text"}
+                onChange={(e) => onCell(c.key, c.sanitize(e.target.value), c.commit)}
+                onBlur={() => setDraft(buildDraft(hsva, fmt))}
+              />
+              {c.suffix && <span className={styles.affix}>{c.suffix}</span>}
+            </span>
           ))}
         </div>
       </div>
 
-      <div className={styles.swatches}>
-        {SWATCHES.map((c) => (
-          <button
-            key={c}
-            type="button"
-            className={styles.swatch}
-            style={{ background: c }}
-            title={c.toUpperCase()}
-            onClick={() => {
-              const pc = parseColor(c);
-              commitRgb(pc.r, pc.g, pc.b, hsva.a);
-            }}
-          />
-        ))}
+      <div className={styles.swatchBlock}>
+        <span className={styles.swatchLabel}>Swatches</span>
+        <div className={styles.swatches}>
+          {SWATCHES.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className={styles.swatch}
+              data-selected={c.toLowerCase() === toHex6(rgba).toLowerCase()}
+              style={{ background: c }}
+              title={c.toUpperCase()}
+              onClick={() => {
+                const pc = parseColor(c);
+                commitRgb(pc.r, pc.g, pc.b, hsva.a);
+              }}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );

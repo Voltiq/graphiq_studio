@@ -19,6 +19,7 @@ import {
   Trash2,
 } from "lucide-react";
 import styles from "../RightDock.module.scss";
+import { Select } from "../Controls";
 import { BLEND_MODES, findNode, type LayerNode, type LayersApi } from "../../lib/layers";
 
 /** Flatten the tree into display rows, hiding the children of collapsed groups. */
@@ -90,16 +91,12 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
     <div className={styles.layers}>
       {active && (
         <div className={styles.layerControls}>
-          <label className={styles.blend}>
-            <select value={active.blend} onChange={(e) => api.update(active.id, { blend: e.target.value })}>
-              {BLEND_MODES.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={13} />
-          </label>
+          <Select
+            block
+            options={BLEND_MODES}
+            value={active.blend}
+            onChange={(s) => api.update(active.id, { blend: s })}
+          />
           <div className={styles.opacity}>
             <span className={styles.opacityLabel}>Opacity</span>
             <input
@@ -174,36 +171,40 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                 </button>
                 {isGroup ? (
                   <span className={styles.layerGroupIcon}>
-                    {l.expanded ? <FolderOpen size={14} /> : <Folder size={14} />}
+                    {l.expanded ? <FolderOpen size={16} /> : <Folder size={16} />}
                   </span>
                 ) : (
                   <span className={styles.layerThumb} />
                 )}
-                {editingId === l.id ? (
-                  <input
-                    className={styles.layerRename}
-                    autoFocus
-                    value={draftName}
-                    onChange={(e) => setDraftName(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    onBlur={commitRename}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commitRename();
-                      if (e.key === "Escape") setEditingId(null);
-                    }}
-                  />
-                ) : (
-                  <span
-                    className={styles.layerName}
-                    onDoubleClick={(e) => {
-                      e.stopPropagation();
-                      startRename(l);
-                    }}
-                  >
-                    {l.name}
+                <div className={styles.layerMeta}>
+                  {editingId === l.id ? (
+                    <input
+                      className={styles.layerRename}
+                      autoFocus
+                      value={draftName}
+                      onChange={(e) => setDraftName(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onBlur={commitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitRename();
+                        if (e.key === "Escape") setEditingId(null);
+                      }}
+                    />
+                  ) : (
+                    <span
+                      className={styles.layerName}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        startRename(l);
+                      }}
+                    >
+                      {l.name}
+                    </span>
+                  )}
+                  <span className={styles.layerSub}>
+                    {isGroup ? "Group" : "Layer"} · {l.opacity}%
                   </span>
-                )}
-                {l.opacity < 100 && <span className={styles.layerOpacityTag}>{l.opacity}%</span>}
+                </div>
               </li>
             );
           })}

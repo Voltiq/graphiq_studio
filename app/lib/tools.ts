@@ -7,7 +7,7 @@ import {
   Wand2,
   Crop,
   Pipette,
-  Paintbrush,
+  Brush,
   Pencil,
   Eraser,
   Stamp,
@@ -61,7 +61,7 @@ export const TOOL_GROUPS: Tool[][] = [
     { id: "eyedropper", name: "Eyedropper", icon: Pipette, shortcut: "I" },
   ],
   [
-    { id: "brush", name: "Brush", icon: Paintbrush, shortcut: "B" },
+    { id: "brush", name: "Brush", icon: Brush, shortcut: "B" },
     { id: "pencil", name: "Pencil", icon: Pencil, shortcut: "N" },
     { id: "eraser", name: "Eraser", icon: Eraser, shortcut: "E" },
     { id: "clone", name: "Clone Stamp", icon: Stamp, shortcut: "S" },
@@ -89,6 +89,16 @@ export const DEFAULT_TOOL: ToolId = "brush";
 
 /** Move tool sub-mode: move the marquee outline only, or the actual pixels. */
 export type MoveMode = "pixels" | "selection";
+
+/** Shape tool: the geometry being drawn. */
+export type ShapeKind = "rect" | "ellipse" | "tri";
+
+/** Shape tool settings (fill = primary colour, stroke = secondary colour). */
+export interface ShapeSettings {
+  kind: ShapeKind;
+  strokeWidth: number;
+  radius: number;
+}
 
 /** Marquee resize sub-mode: resize the outline only, or scale the pixels inside. */
 export type SelectResizeMode = "bounds" | "content";

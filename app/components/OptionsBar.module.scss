@@ -5,7 +5,7 @@
   align-items: center;
   gap: var(--sp-3);
   padding: 0 var(--sp-3);
-  background: var(--surface-2);
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
   border-bottom: 1px solid var(--border);
   overflow: hidden;
   z-index: 40;
@@ -16,12 +16,15 @@
   align-items: center;
   gap: var(--sp-2);
   flex-shrink: 0;
-  padding: 6px 12px;
-  border-radius: var(--r-md);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  height: 28px;
+  padding: 0 10px;
+  line-height: 1;
+  border-radius: var(--r-xl);
+  background: rgba(var(--accent-rgb), 0.15);
+  /* reference uses ring-1 (an outset ring), not an inset border */
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.25);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text);
 
   svg {
@@ -32,7 +35,7 @@
 .controls {
   display: flex;
   align-items: center;
-  gap: var(--sp-4);
+  gap: var(--sp-3);
   overflow-x: auto;
   overflow-y: hidden;
   padding: var(--sp-2) 2px;
@@ -47,20 +50,20 @@
 .preset {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 28px;
+  gap: 6px;
+  height: 32px;
   padding: 0 12px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-2);
-  background: var(--surface);
+  background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-lg);
   white-space: nowrap;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 
   &:hover {
     color: var(--text);
-    background: var(--surface-hover);
+    background: rgba(255, 255, 255, 0.07);
     border-color: var(--border-strong);
   }
 }

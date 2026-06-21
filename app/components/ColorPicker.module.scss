@@ -11,8 +11,9 @@
 .sv {
   position: relative;
   width: 100%;
-  height: 140px;
-  border-radius: var(--r-md);
+  height: 160px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
   overflow: hidden;
   cursor: crosshair;
 }
@@ -48,20 +49,17 @@
 /* ------------------------------- Hue / alpha ------------------------------ */
 .sliders {
   display: flex;
-  align-items: center;
-  gap: var(--sp-3);
+  flex-direction: column;
+  gap: var(--sp-2);
 }
 
+/* The reference stacks full-width hue + alpha with no preview chip. */
 .preview {
-  width: 34px;
-  height: 34px;
-  flex-shrink: 0;
-  border-radius: var(--r-sm);
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  display: none;
 }
 
 .strips {
-  flex: 1;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -70,7 +68,7 @@
 .hue,
 .alpha {
   position: relative;
-  height: 12px;
+  height: 8px;
   border-radius: var(--r-pill);
   cursor: pointer;
 }
@@ -83,9 +81,12 @@
 }
 
 .alpha {
-  background-color: #fff;
-  background-image: repeating-conic-gradient(#bdbdbd 0% 25%, #ffffff 0% 50%);
-  background-size: 10px 10px;
+  background-color: var(--checker-a);
+  background-image: repeating-conic-gradient(
+    var(--checker-b) 0% 25%,
+    var(--checker-a) 0% 50%
+  );
+  background-size: 8px 8px;
 }
 
 .alphaTrack {
@@ -100,9 +101,9 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #fff;
-  border: 2px solid #fff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0, 0, 0, 0.35);
+  background: var(--bg);
+  border: 2px solid var(--text);
+  box-shadow: var(--shadow-sm);
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
@@ -110,7 +111,7 @@
 /* --------------------------------- Inputs --------------------------------- */
 .inputs {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--sp-2);
 }
 
@@ -122,14 +123,14 @@
 
   select {
     appearance: none;
-    height: 30px;
-    padding: 0 22px 0 9px;
-    font-size: 11px;
-    font-weight: 600;
+    height: 32px;
+    padding: 0 22px 0 10px;
+    font-size: 12px;
+    font-weight: 500;
     letter-spacing: 0.02em;
     background: var(--surface-2);
     border: 1px solid var(--border);
-    border-radius: var(--r-sm);
+    border-radius: var(--r-lg);
     color: var(--text);
     cursor: pointer;
     outline: none;
@@ -150,34 +151,25 @@
 .cells {
   flex: 1;
   display: flex;
-  gap: 5px;
+  gap: var(--sp-2);
   min-width: 0;
-}
-
-.cell {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
 }
 
 .cellInput {
+  flex: 1;
+  min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 1px;
-  width: 100%;
-  height: 30px;
-  padding: 0 6px;
+  gap: 2px;
+  height: 32px;
+  padding: 0 8px;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  border-radius: var(--r-lg);
+  transition: border-color 0.12s ease;
 
   &:focus-within {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+    border-color: var(--border-strong);
   }
 
   input {
@@ -188,40 +180,51 @@
     outline: none;
     text-align: center;
     font-size: 12px;
+    letter-spacing: 0.02em;
     font-family: var(--font-mono);
     color: var(--text);
   }
 }
 
 .affix {
-  font-size: 11px;
-  color: var(--text-3);
+  font-size: 12px;
+  color: var(--text-2);
   font-family: var(--font-mono);
   flex-shrink: 0;
 }
 
-.cellLabel {
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--text-3);
+/* -------------------------------- Swatches -------------------------------- */
+.swatchBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-/* -------------------------------- Swatches -------------------------------- */
+.swatchLabel {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
 .swatches {
   display: grid;
-  grid-template-columns: repeat(9, 1fr);
-  gap: 5px;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 6px;
 }
 
 .swatch {
   aspect-ratio: 1;
-  border-radius: 5px;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
-  transition: transform 0.1s ease, box-shadow 0.1s ease;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  transition: transform 0.1s ease;
 
   &:hover {
-    transform: scale(1.12);
-    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18), 0 0 0 2px var(--accent);
+    transform: scale(1.1);
+  }
+
+  &[data-selected="true"] {
+    box-shadow: 0 0 0 1px var(--surface), 0 0 0 3px var(--accent);
   }
 }

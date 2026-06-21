@@ -3,11 +3,11 @@
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: var(--sp-4);
+  gap: var(--sp-3);
   padding: 0 var(--sp-3);
-  background: var(--surface);
+  background: var(--sidebar);
   border-top: 1px solid var(--border);
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--text-2);
   z-index: 50;
 }
@@ -34,7 +34,6 @@
 
 .mono {
   font-family: var(--font-mono);
-  color: var(--text);
 }
 
 .muted {
@@ -42,20 +41,32 @@
 }
 
 .hint {
-  color: var(--text-3);
+  color: var(--text-2);
 }
 
+/* Selection readout: dims, count, bounds. */
+.selInfo {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+
+  svg {
+    color: var(--text-3);
+  }
+}
+
+/* Faint pipe separator, like the reference's text-border "|". */
 .sep {
-  width: 1px;
-  height: 13px;
-  background: var(--border);
+  color: var(--border-strong);
+  user-select: none;
 }
 
 .swatchPip {
   width: 12px;
   height: 12px;
-  border-radius: 3px;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
 }
 
 .saved {

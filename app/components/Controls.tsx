@@ -1,10 +1,12 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
-import { Check, ChevronDown } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Check } from "lucide-react";
 import styles from "./Controls.module.scss";
 import ColorPopover from "./ColorPopover";
 import { parseColor, swatchBg, toHex6 } from "../lib/color";
+
+export { Select } from "./Select";
 
 /* --------------------------------------------------------------------------
    Small presentational form controls reused across the options bar & panels.
@@ -20,6 +22,8 @@ export function Slider({
   defaultValue,
   unit = "",
   compact = false,
+  inline = false,
+  bipolar = false,
   value,
   onChange,
 }: {
@@ -30,21 +34,31 @@ export function Slider({
   defaultValue?: number;
   unit?: string;
   compact?: boolean;
+  inline?: boolean;
+  bipolar?: boolean;
   value?: number;
   onChange?: (n: number) => void;
 }) {
   const [internal, setInternal] = useState(defaultValue ?? value ?? min);
   const v = value !== undefined ? value : internal;
   const pct = ((v - min) / (max - min)) * 100;
+  // Bipolar tracks fill outward from the centre (50%) toward the value.
+  const lo = bipolar ? Math.min(50, pct) : 0;
+  const hi = bipolar ? Math.max(50, pct) : pct;
   const set = (n: number) => {
     if (value === undefined) setInternal(n);
     onChange?.(n);
   };
   return (
-    <div className={`${styles.slider} ${compact ? styles.compact : ""}`}>
+    <div
+      className={`${styles.slider} ${compact ? styles.compact : ""} ${
+        inline ? styles.inline : ""
+      } ${bipolar ? styles.bipolar : ""}`}
+    >
       <div className={styles.sliderHead}>
         <span className={styles.label}>{label}</span>
         <span className={styles.value}>
+          {bipolar && v > 0 ? "+" : ""}
           {v}
           {unit}
         </span>
@@ -56,7 +70,13 @@ export function Slider({
         step={step}
         value={v}
         onChange={(e) => set(Number(e.target.value))}
-        style={{ "--pct": `${pct}%` } as React.CSSProperties}
+        style={
+          {
+            "--pct": `${pct}%`,
+            "--lo": `${lo}%`,
+            "--hi": `${hi}%`,
+          } as React.CSSProperties
+        }
         aria-label={label}
       />
     </div>
@@ -81,45 +101,6 @@ export function NumberField({
       <span className={styles.numBox} style={{ width }}>
         <input value={value} onChange={(e) => setValue(e.target.value)} />
         {unit && <span className={styles.unit}>{unit}</span>}
-      </span>
-    </label>
-  );
-}
-
-export function Select({
-  label,
-  options,
-  defaultValue,
-  width,
-  value,
-  onChange,
-}: {
-  label?: string;
-  options: string[];
-  defaultValue?: string;
-  width?: number;
-  value?: string;
-  onChange?: (s: string) => void;
-}) {
-  const [internal, setInternal] = useState(defaultValue ?? options[0]);
-  const v = value !== undefined ? value : internal;
-  const id = useId();
-  const set = (s: string) => {
-    if (value === undefined) setInternal(s);
-    onChange?.(s);
-  };
-  return (
-    <label className={styles.select} htmlFor={id}>
-      {label && <span className={styles.label}>{label}</span>}
-      <span className={styles.selectBox} style={width ? { width } : undefined}>
-        <select id={id} value={v} onChange={(e) => set(e.target.value)}>
-          {options.map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-        </select>
-        <ChevronDown size={13} />
       </span>
     </label>
   );

@@ -1,34 +1,68 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { type DragEventHandler, type ReactNode } from "react";
 import { ChevronDown, type LucideIcon } from "lucide-react";
 import styles from "./RightDock.module.scss";
 
 export default function Panel({
   title,
   icon: Icon,
-  defaultOpen = true,
+  open,
+  onToggle,
   actions,
   children,
+  draggable,
+  dragging,
+  onDragStart,
+  onDragOver,
+  onDragEnd,
+  onDrop,
 }: {
   title: string;
   icon: LucideIcon;
-  defaultOpen?: boolean;
+  /** Collapsed/expanded state (owned & persisted by the parent dock). */
+  open: boolean;
+  onToggle: () => void;
   actions?: ReactNode;
   children: ReactNode;
+  /** Drag-to-reorder wiring (applied to the section; the header is the handle). */
+  draggable?: boolean;
+  dragging?: boolean;
+  onDragStart?: DragEventHandler<HTMLElement>;
+  onDragOver?: DragEventHandler<HTMLElement>;
+  onDragEnd?: DragEventHandler<HTMLElement>;
+  onDrop?: DragEventHandler<HTMLElement>;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-
   return (
-    <section className={styles.panel} data-open={open}>
-      <header className={styles.panelHead}>
+    <section
+      className={styles.panel}
+      data-open={open}
+      data-dragging={dragging || undefined}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    >
+      {/* Only the header is draggable, so sliders/inputs in the body are safe. */}
+      <header
+        className={styles.panelHead}
+        draggable={draggable}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+      >
+        <button
+          type="button"
+          className={styles.panelCaret}
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-label={open ? `Collapse ${title}` : `Expand ${title}`}
+        >
+          <ChevronDown className={styles.chevron} size={16} />
+        </button>
         <button
           type="button"
           className={styles.panelTitle}
-          onClick={() => setOpen((v) => !v)}
+          onClick={onToggle}
           aria-expanded={open}
         >
-          <ChevronDown className={styles.chevron} size={14} />
           <Icon size={14} />
           <span>{title}</span>
         </button>

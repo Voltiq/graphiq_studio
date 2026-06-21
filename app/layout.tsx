@@ -1,16 +1,42 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import { getServerTheme } from "./lib/theme.server";
 import "./globals.scss";
 
-const geistSans = Geist({
+// Self-hosted Geist (variable TTFs in app/fonts) — avoids the Google Fonts
+// fetch that was failing and falling back to a system font.
+const geistSans = localFont({
   variable: "--font-geist-sans",
-  subsets: ["latin"],
+  display: "swap",
+  src: [
+    {
+      path: "./fonts/Geist-VariableFont_wght.ttf",
+      weight: "100 900",
+      style: "normal",
+    },
+    {
+      path: "./fonts/Geist-Italic-VariableFont_wght.ttf",
+      weight: "100 900",
+      style: "italic",
+    },
+  ],
 });
 
-const geistMono = Geist_Mono({
+const geistMono = localFont({
   variable: "--font-geist-mono",
-  subsets: ["latin"],
+  display: "swap",
+  src: [
+    {
+      path: "./fonts/GeistMono-VariableFont_wght.ttf",
+      weight: "100 900",
+      style: "normal",
+    },
+    {
+      path: "./fonts/GeistMono-Italic-VariableFont_wght.ttf",
+      weight: "100 900",
+      style: "italic",
+    },
+  ],
 });
 
 export const metadata: Metadata = {
@@ -32,10 +58,14 @@ export default async function RootLayout({
   const theme = await getServerTheme();
 
   return (
-    <html lang="en" data-theme={theme} suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
-        {children}
-      </body>
+    <html
+      lang="en"
+      data-theme={theme}
+      className={`${geistSans.variable} ${geistMono.variable}`}
+      suppressHydrationWarning
+    >
+      {/* geistSans.className applies the font directly (immune to var() chains). */}
+      <body className={geistSans.className}>{children}</body>
     </html>
   );
 }

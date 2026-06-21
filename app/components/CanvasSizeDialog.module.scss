@@ -22,9 +22,9 @@
   width: 380px;
   max-width: calc(100vw - 32px);
   background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2xl);
+  box-shadow: var(--shadow), var(--glow);
   animation: pop 0.16s cubic-bezier(0.3, 1.3, 0.5, 1);
   overflow: hidden;
 }
@@ -56,10 +56,10 @@
 .close {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--r-sm);
-  color: var(--text-3);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-lg);
+  color: var(--text-2);
 
   &:hover {
     background: var(--surface-hover);
@@ -99,8 +99,10 @@
 }
 
 .preset,
-.numBox {
+.numBox,
+.presetField {
   flex: 1;
+  min-width: 0;
 }
 
 .preset {
@@ -109,7 +111,7 @@
   font-size: 13px;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-lg);
   color: var(--text);
   outline: none;
   cursor: pointer;
@@ -139,7 +141,7 @@
   padding: 0 10px;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-lg);
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
 
   &:focus-within {
@@ -180,7 +182,7 @@
   place-items: center;
   width: 34px;
   height: 80px;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-lg);
   color: var(--text-3);
 
   &::before {
@@ -258,7 +260,7 @@
   padding: 0 16px;
   font-size: 13px;
   font-weight: 550;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-lg);
   color: var(--text);
   background: var(--surface-3);
   border: 1px solid var(--border);
@@ -272,12 +274,10 @@
 
 .primary {
   color: var(--accent-contrast);
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  background: var(--accent);
   border-color: transparent;
-  box-shadow: 0 3px 12px rgba(var(--accent-rgb), 0.4);
 
   &:hover {
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    filter: brightness(1.06);
+    background: color-mix(in srgb, var(--accent) 88%, #fff);
   }
 }

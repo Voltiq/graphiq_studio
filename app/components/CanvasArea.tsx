@@ -5,19 +5,22 @@ import { Maximize2, Minus, Plus, X } from "lucide-react";
 import styles from "./CanvasArea.module.scss";
 import { clamp } from "../lib/color";
 import { clampPan, normalizeRect, type Pan, type Rect } from "../lib/view";
-import type { MoveMode, SelectResizeMode, ToolId } from "../lib/tools";
+import type { MoveMode, SelectResizeMode, ShapeKind, ToolId } from "../lib/tools";
+import { renderShape } from "../lib/shapes";
 import {
   PaintEngine,
   type BrushSettings,
   type EngineHandle,
   type HistorySummary,
   type PendingPaste,
+  type WandSelection,
 } from "../lib/paint";
 import { collectLeafIds, type LayerNode } from "../lib/layers";
 import type { PendingLoad } from "../lib/project";
 
 const ZOOM_STEPS = [
   12, 25, 33, 50, 67, 100, 150, 200, 300, 400, 600, 800, 1200, 1600, 2400, 3200,
+  4800, 6400, 10000,
 ];
 
 interface DocTab {
@@ -73,7 +76,7 @@ function rulerTicks(length: number, offset: number, scale: number): RulerTick[] 
 }
 
 const MIN_ZOOM = 12;
-const MAX_ZOOM = 3200;
+const MAX_ZOOM = 10000;
 /** Screen-px width of the invisible rotation ring just outside the selection. */
 const RING_OUTER = 44;
 
@@ -136,6 +139,14 @@ type SelZone =
   | { kind: "resize"; edges: HandleEdges }
   | { kind: "ring" }
   | { kind: "none" };
+
+/** A full selection snapshot for undoable transforms (incl. wand ants cache). */
+type SelState = {
+  rects: Rect[];
+  angle: number;
+  pivot: { x: number; y: number } | null;
+  segs: Seg[] | null;
+};
 
 /** Classify where a doc-space point falls relative to the (possibly rotated)
  *  selection: its anchor, a resize handle, the rotation ring, or nothing. */
@@ -209,6 +220,66 @@ function unionSegments(rects: Rect[]): Seg[] {
   return segs;
 }
 
+interface Pt {
+  x: number;
+  y: number;
+}
+
+/** Selection combine mode chosen by modifier keys: new / Ctrl-add / Alt-subtract. */
+type SelOp = "new" | "add" | "subtract";
+
+/**
+ * Order boundary segments into connected polyline loops so the marching ants can
+ * be stroked as continuous paths. The dash then flows around each loop (each edge
+ * marching in its own connecting direction, e.g. clockwise) instead of every
+ * horizontal edge going right and every vertical edge going down. Segments share
+ * exact endpoints, so a simple walk of the endpoint graph recovers the loops.
+ */
+function tracePerimeter(segs: Seg[]): Pt[][] {
+  const key = (x: number, y: number) => `${x},${y}`;
+  const adj = new Map<string, number[]>();
+  const add = (k: string, i: number) => {
+    const a = adj.get(k);
+    if (a) a.push(i);
+    else adj.set(k, [i]);
+  };
+  for (let i = 0; i < segs.length; i++) {
+    add(key(segs[i].x1, segs[i].y1), i);
+    add(key(segs[i].x2, segs[i].y2), i);
+  }
+  const used = new Array<boolean>(segs.length).fill(false);
+  const nextFrom = (px: number, py: number): number => {
+    const list = adj.get(key(px, py));
+    if (list) for (const i of list) if (!used[i]) return i;
+    return -1;
+  };
+  const loops: Pt[][] = [];
+  for (let start = 0; start < segs.length; start++) {
+    if (used[start]) continue;
+    used[start] = true;
+    const s = segs[start];
+    const pts: Pt[] = [
+      { x: s.x1, y: s.y1 },
+      { x: s.x2, y: s.y2 },
+    ];
+    // Grow the chain forward from the tail, then backward from the head.
+    for (let dir = 0; dir < 2; dir++) {
+      for (;;) {
+        const end = dir === 0 ? pts[pts.length - 1] : pts[0];
+        const i = nextFrom(end.x, end.y);
+        if (i < 0) break;
+        used[i] = true;
+        const e = segs[i];
+        const far = e.x1 === end.x && e.y1 === end.y ? { x: e.x2, y: e.y2 } : { x: e.x1, y: e.y1 };
+        if (dir === 0) pts.push(far);
+        else pts.unshift(far);
+      }
+    }
+    loops.push(pts);
+  }
+  return loops;
+}
+
 interface HandleEdges {
   left?: boolean;
   right?: boolean;
@@ -259,6 +330,22 @@ function bboxOf(rects: Rect[]): Rect {
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
+// Custom eyedropper cursor: the dropper's tip points down-left toward the sample
+// point, with the body offset up-right and a gap so the sampled pixel stays
+// visible (uncovered). The hotspot sits in that gap, on the sampled pixel.
+const EYEDROPPER_PATHS =
+  '<path d="m2 22 1-1h3l9-9"/>' +
+  '<path d="M3 21v-3l9-9"/>' +
+  '<path d="m15 6 3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z"/>';
+const EYEDROPPER_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">' +
+  '<g transform="translate(7,3)" fill="none" stroke-linecap="round" stroke-linejoin="round">' +
+  `<g stroke="#000" stroke-opacity="0.5" stroke-width="3.4">${EYEDROPPER_PATHS}</g>` +
+  `<g stroke="#fff" stroke-width="1.6">${EYEDROPPER_PATHS}</g>` +
+  "</g></svg>";
+// Hotspot (4, 30): down-left of the drawn tip (~9, 25), so the tip aims at it.
+const EYEDROPPER_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(EYEDROPPER_SVG)}") 4 30, crosshair`;
+
 export default function CanvasArea({
   docs,
   activeId,
@@ -276,6 +363,7 @@ export default function CanvasArea({
   tool,
   brush,
   color,
+  shape,
   layers,
   activeLayerId,
   ensureLayer,
@@ -304,6 +392,8 @@ export default function CanvasArea({
   viewApiRef,
   paintRef,
   onHistory,
+  onAdjustEnd,
+  onCursor,
 }: {
   docs: DocTab[];
   activeId: string;
@@ -321,6 +411,8 @@ export default function CanvasArea({
   tool: ToolId;
   brush: BrushSettings;
   color: string;
+  /** Shape-tool settings + colours (fill = primary, stroke = secondary). */
+  shape: { kind: ShapeKind; strokeWidth: number; radius: number; fill: string; stroke: string };
   layers: LayerNode[];
   activeLayerId: string | null;
   ensureLayer: () => string;
@@ -350,6 +442,10 @@ export default function CanvasArea({
   viewApiRef: RefObject<ViewApi | null>;
   paintRef: RefObject<EngineHandle | null>;
   onHistory: (s: HistorySummary) => void;
+  /** Called when a live adjustment session ends (so the panel resets its sliders). */
+  onAdjustEnd: () => void;
+  /** Reports the doc-space cursor position (null when off the canvas). */
+  onCursor: (p: { x: number; y: number } | null) => void;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLCanvasElement>(null);
@@ -365,14 +461,36 @@ export default function CanvasArea({
   // keyed by the exact rects array that was set (so drawAnts skips the slow
   // unionSegments for arbitrary-shaped, many-rect selections).
   const wandSegsRef = useRef<{ key: Rect[]; segs: Seg[] } | null>(null);
-  // The seed of the last wand click, so the selection can re-compute live when
-  // the tolerance (or contiguous / sample-all) options change.
-  const wandSeedRef = useRef<{ x: number; y: number; layerId: string | null } | null>(null);
-  const wandRafRef = useRef(0); // coalesces rapid live re-computes to one per frame
+  // The seed of the last wand click (+ the selection it was added to, if Ctrl-
+  // added), so the selection can re-compute live when the options change.
+  const wandSeedRef = useRef<{
+    x: number;
+    y: number;
+    layerId: string | null;
+    base: Rect[];
+    mode: SelOp;
+  } | null>(null);
+  // Throttle live re-computes so they can't monopolise the main thread while
+  // the slider is being dragged (leading + trailing edge).
+  const wandThrottleRef = useRef({ last: 0, timer: 0 });
   const wandOptsRef = useRef(wand);
   wandOptsRef.current = wand;
   const dragRectRef = useRef<Rect | null>(null);
-  const marqueeRef = useRef<{ x: number; y: number; additive: boolean } | null>(null);
+  const marqueeRef = useRef<{ x: number; y: number; mode: SelOp } | null>(null);
+  // In-progress freeform lasso path (doc-space points); closed on pointer up.
+  const lassoRef = useRef<{ x: number; y: number }[] | null>(null);
+  // How the current lasso combines with the existing selection (set at start).
+  const lassoModeRef = useRef<SelOp>("new");
+  // Hand-tool pan drag: starting pointer position + pan at the start of the drag.
+  const handRef = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null);
+  // Shape-tool drag: start point + the current (preview) doc-space box.
+  const shapeRef = useRef<{ x: number; y: number } | null>(null);
+  const shapeRectRef = useRef<Rect | null>(null);
+  const shapeOptsRef = useRef(shape);
+  shapeOptsRef.current = shape;
+  // The committed-but-still-live shape (re-renderable until deselected). `box`
+  // is the same object as its selection rect, so a selection change ends it.
+  const liveShapeRef = useRef<{ layerId: string; box: Rect } | null>(null);
   const moveRef = useRef<{
     sx: number;
     sy: number;
@@ -388,6 +506,7 @@ export default function CanvasArea({
     content: boolean;
     angle: number;
     pivot: { x: number; y: number };
+    before: SelState;
   } | null>(null);
   const resizePreviewRef = useRef<Rect[] | null>(null);
   // Rotate drag (grab the ring): pivot (doc), pointer's start angle, the angle at
@@ -400,6 +519,7 @@ export default function CanvasArea({
     base: number;
     bbox: Rect;
     content: boolean;
+    before: SelState;
   } | null>(null);
   const rotatePreviewRef = useRef<number | null>(null);
   // Dragging the rotation anchor (pivot) around.
@@ -440,6 +560,8 @@ export default function CanvasArea({
   layersRef.current = layers;
   const onHistoryRef = useRef(onHistory);
   onHistoryRef.current = onHistory;
+  const onAdjustEndRef = useRef(onAdjustEnd);
+  onAdjustEndRef.current = onAdjustEnd;
 
   const rafRef = useRef(0);
   const scheduleComposite = useCallback(() => {
@@ -477,16 +599,20 @@ export default function CanvasArea({
     if (rz) {
       // Live preview while dragging a resize handle.
       rects = rz;
-    } else if (m && !m.additive) {
-      // While replacing (non-additive drag), show only the new marquee.
+    } else if (m && m.mode === "new") {
+      // While replacing (plain drag), show only the new marquee.
       rects = dragRectRef.current ? [dragRectRef.current] : [];
     } else if (mv) {
       // While moving, offset the selection outline by the drag delta.
       const d = moveDeltaRef.current;
       rects = selectionRef.current.map((r) => ({ ...r, x: r.x + d.x, y: r.y + d.y }));
+    } else if (m && m.mode === "subtract") {
+      // Subtracting: the current selection is unchanged here; the drag region is
+      // previewed separately in red below.
+      rects = selectionRef.current.slice();
     } else {
       rects = selectionRef.current.slice();
-      if (dragRectRef.current) rects.push(dragRectRef.current);
+      if (dragRectRef.current) rects.push(dragRectRef.current); // additive drag
     }
     // Selection rotation (persisted, or live while dragging the ring): spin the
     // outline + handles about the pivot (anchor), in screen space.
@@ -514,50 +640,135 @@ export default function CanvasArea({
         : [scx + (x - scx) * cosA - (y - scy) * sinA, scy + (x - scx) * sinA + (y - scy) * cosA];
 
     // For a magic-wand selection use the pre-traced boundary segments (cheap),
-    // offsetting them while moving; unionSegments is O(rects³) — too slow here.
+    // transformed for move/resize; unionSegments is O(rects³) — too slow here.
     const cache = wandSegsRef.current;
-    const wandCached = !!cache && cache.key === selectionRef.current && !rz && !m;
+    const isWand = !!cache && cache.key === selectionRef.current;
     let segs: Seg[];
-    if (wandCached && mv) {
+    if (isWand && rz && resizeRef.current) {
+      // Resizing: scale the cached boundary from the grab bbox to the preview.
+      const o = resizeRef.current.bbox;
+      const nb = bboxOf(rz);
+      const fx = o.w ? nb.w / o.w : 1;
+      const fy = o.h ? nb.h / o.h : 1;
+      segs = cache!.segs.map((g) => ({
+        x1: nb.x + (g.x1 - o.x) * fx,
+        y1: nb.y + (g.y1 - o.y) * fy,
+        x2: nb.x + (g.x2 - o.x) * fx,
+        y2: nb.y + (g.y2 - o.y) * fy,
+      }));
+    } else if (isWand && mv) {
       const d = moveDeltaRef.current;
       segs = cache!.segs.map((g) => ({ x1: g.x1 + d.x, y1: g.y1 + d.y, x2: g.x2 + d.x, y2: g.y2 + d.y }));
-    } else if (wandCached && !dragRectRef.current) {
+    } else if (isWand && !rz && (m?.mode === "subtract" || (!m && !dragRectRef.current))) {
+      // Static selection, or a subtract drag (the selection itself is unchanged).
       segs = cache!.segs;
     } else {
-      segs = rects.length ? unionSegments(rects) : [];
+      // unionSegments is O(rects³); never run it on a wand-sized rect set without
+      // a cache match (e.g. a transient frame during undo/redo) — it would freeze.
+      segs = rects.length && rects.length <= 80 ? unionSegments(rects) : [];
     }
     if (segs.length) {
+      // Stitch the segments into connected loops and stroke each as one polyline,
+      // so the dash runs continuously around the perimeter — every edge marches in
+      // its own direction (circulating the loop), and corners flow into each other.
+      const loops = tracePerimeter(segs);
+      const tx = (x: number, y: number): [number, number] =>
+        ang === 0
+          ? [Math.round(p.x + x * s) + 0.5, Math.round(p.y + y * s) + 0.5]
+          : rot(p.x + x * s, p.y + y * s);
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
-      // Two passes (black + white, offset by half the dash) make the classic ants.
+      // Two passes (black, then white offset by half a dash) make the classic ants.
       for (let pass = 0; pass < 2; pass++) {
         ctx.strokeStyle = pass === 0 ? "rgba(0,0,0,0.75)" : "#fff";
-        const phase = pass === 0 ? 0 : 4;
-        for (const seg of segs) {
-          let sx1: number;
-          let sy1: number;
-          let sx2: number;
-          let sy2: number;
-          if (ang === 0) {
-            sx1 = Math.round(p.x + seg.x1 * s) + 0.5;
-            sy1 = Math.round(p.y + seg.y1 * s) + 0.5;
-            sx2 = Math.round(p.x + seg.x2 * s) + 0.5;
-            sy2 = Math.round(p.y + seg.y2 * s) + 0.5;
-          } else {
-            [sx1, sy1] = rot(p.x + seg.x1 * s, p.y + seg.y1 * s);
-            [sx2, sy2] = rot(p.x + seg.x2 * s, p.y + seg.y2 * s);
+        ctx.lineDashOffset = -antsOffset.current + (pass === 0 ? 0 : 4);
+        ctx.beginPath();
+        for (const loop of loops) {
+          for (let i = 0; i < loop.length; i++) {
+            const [sx, sy] = tx(loop[i].x, loop[i].y);
+            if (i === 0) ctx.moveTo(sx, sy);
+            else ctx.lineTo(sx, sy);
           }
-          // Anchor the dash to absolute screen position so segments meeting at a
-          // corner stay in phase (one continuous outline, no doubled dashes).
-          const anchor = sy1 === sy2 ? sx1 : sy1;
-          ctx.lineDashOffset = anchor - antsOffset.current + phase;
-          ctx.beginPath();
-          ctx.moveTo(sx1, sy1);
-          ctx.lineTo(sx2, sy2);
-          ctx.stroke();
         }
+        ctx.stroke();
       }
       ctx.setLineDash([]);
+    }
+
+    // --- lasso in progress: the freeform path, auto-closed start↔end ---
+    // (a subtracting lasso is drawn in red by the subtract-preview block below)
+    const lasso = lassoRef.current;
+    if (lasso && lasso.length && lassoModeRef.current !== "subtract") {
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      for (let pass = 0; pass < 2; pass++) {
+        ctx.strokeStyle = pass === 0 ? "rgba(0,0,0,0.75)" : "#fff";
+        ctx.lineDashOffset = -antsOffset.current + (pass === 0 ? 0 : 4);
+        ctx.beginPath();
+        ctx.moveTo(p.x + lasso[0].x * s, p.y + lasso[0].y * s);
+        for (let i = 1; i < lasso.length; i++) ctx.lineTo(p.x + lasso[i].x * s, p.y + lasso[i].y * s);
+        ctx.closePath(); // straight shortest-distance edge back to the start
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+
+    // --- subtract preview (Alt): the region being removed, in red. A faint red
+    //     fill marks the part that overlaps the current selection (what's cut),
+    //     and a red marching-ants outline traces the whole dragged region. ---
+    const subRect = m && m.mode === "subtract" ? dragRectRef.current : null;
+    const subLasso = lasso && lasso.length && lassoModeRef.current === "subtract" ? lasso : null;
+    if (subRect || subLasso) {
+      const traceRegion = () => {
+        if (subRect) {
+          ctx.rect(p.x + subRect.x * s, p.y + subRect.y * s, subRect.w * s, subRect.h * s);
+        } else if (subLasso) {
+          ctx.moveTo(p.x + subLasso[0].x * s, p.y + subLasso[0].y * s);
+          for (let i = 1; i < subLasso.length; i++) {
+            ctx.lineTo(p.x + subLasso[i].x * s, p.y + subLasso[i].y * s);
+          }
+          ctx.closePath();
+        }
+      };
+      // Red fill of the overlap with the current selection = exactly what's cut.
+      const sel = selectionRef.current;
+      if (sel.length) {
+        ctx.save();
+        ctx.beginPath();
+        for (const r of sel) ctx.rect(p.x + r.x * s, p.y + r.y * s, r.w * s, r.h * s);
+        ctx.clip();
+        ctx.beginPath();
+        traceRegion();
+        ctx.fillStyle = "rgba(255, 64, 64, 0.22)";
+        ctx.fill();
+        ctx.restore();
+      }
+      // Red marching-ants outline of the whole region being dragged.
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      for (let pass = 0; pass < 2; pass++) {
+        ctx.strokeStyle = pass === 0 ? "rgba(255, 255, 255, 0.9)" : "#ff3b3b";
+        ctx.lineDashOffset = -antsOffset.current + (pass === 0 ? 0 : 4);
+        ctx.beginPath();
+        traceRegion();
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+
+    // --- shape tool: live preview of the shape being drawn (filled + stroked) ---
+    const shapeBox = shapeRef.current ? shapeRectRef.current : null;
+    if (shapeBox && (shapeBox.w > 0 || shapeBox.h > 0)) {
+      const o = shapeOptsRef.current;
+      const screenBox = {
+        x: p.x + shapeBox.x * s,
+        y: p.y + shapeBox.y * s,
+        w: shapeBox.w * s,
+        h: shapeBox.h * s,
+      };
+      ctx.save();
+      renderShape(ctx, o.kind, screenBox, o.fill, o.stroke, o.strokeWidth * s, o.radius * s);
+      ctx.restore();
     }
 
     // --- eyedropper: solid outline around the pixels being sampled ---
@@ -578,8 +789,12 @@ export default function CanvasArea({
       ctx.strokeRect(x, y, w, h);
     }
 
-    // --- resize handles + rotation anchor ---
-    if (toolRef.current === "select") {
+    // --- resize handles + rotation anchor (Marquee + Wand tools) ---
+    if (
+      toolRef.current === "select" ||
+      toolRef.current === "wand" ||
+      toolRef.current === "shape"
+    ) {
       const handleRects =
         rz ?? (selectionRef.current.length >= 1 && !m && !mv ? selectionRef.current : null);
       if (handleRects && handleRects.length) {
@@ -594,14 +809,11 @@ export default function CanvasArea({
           ctx.strokeStyle = "rgba(0,0,0,0.85)";
           ctx.stroke();
         };
-        // Resize handles, rotated to follow the (possibly diagonal) box — hidden
-        // for wand selections (scaling their many rects isn't supported).
-        const wandSel = wandSegsRef.current?.key === selectionRef.current;
-        if (!wandSel) {
-          for (const h of rectHandles(bb)) {
-            const [hx, hy] = rot(p.x + h.x * s, p.y + h.y * s);
-            dot(hx, hy, 4);
-          }
+        // Resize handles, rotated to follow the (possibly diagonal) box. Wand
+        // selections resize too (the cached boundary segments scale with them).
+        for (const h of rectHandles(bb)) {
+          const [hx, hy] = rot(p.x + h.x * s, p.y + h.y * s);
+          dot(hx, hy, 4);
         }
         // Rotation anchor (the pivot): a crisp crosshair + a white centre dot
         // with a thin black outline. Half-pixel centre keeps 1px lines sharp.
@@ -634,11 +846,13 @@ export default function CanvasArea({
   }, []);
 
   const tickAnts = useCallback(() => {
-    antsOffset.current = (antsOffset.current + 0.25) % 8;
+    antsOffset.current = (antsOffset.current + 0.18) % 8;
     drawAnts();
     if (
       selectionRef.current.length > 0 ||
       dragRectRef.current ||
+      lassoRef.current ||
+      shapeRef.current ||
       (toolRef.current === "eyedropper" && hoverRef.current)
     ) {
       antsRaf.current = requestAnimationFrame(tickAnts);
@@ -653,8 +867,39 @@ export default function CanvasArea({
     if (!antsRaf.current) antsRaf.current = requestAnimationFrame(tickAnts);
   }, [tickAnts]);
 
+  // ---- Undoable selection transforms (resize / rotate) ----
+  // Snapshot the live selection (rects + rotation + wand ants cache) and restore
+  // it; `selSide` wraps a before/after pair as a history side so the transform
+  // rides on the engine's undo stack (alone for Bounds, on the pixel entry for
+  // Content). Restoring also re-seats the wand cache so the ants stay cheap.
+  const snapshotSel = (): SelState => ({
+    rects: selectionRef.current,
+    angle: selAngleRef.current,
+    pivot: selPivotRef.current,
+    segs: wandSegsRef.current?.key === selectionRef.current ? wandSegsRef.current.segs : null,
+  });
+  const applySel = (st: SelState) => {
+    wandSegsRef.current = st.segs ? { key: st.rects, segs: st.segs } : null;
+    wandSeedRef.current = null;
+    onSelectionRects(st.rects);
+    onSelectionAngle(st.angle);
+    onSelectionPivot(st.pivot);
+    ensureAnts();
+  };
+  const selSide = (before: SelState, after: SelState) => ({
+    undo: () => applySel(before),
+    redo: () => applySel(after),
+  });
+
   useEffect(() => {
     if (selection.length) {
+      // Multi-rect selections set from outside the canvas (e.g. Select › Inverse)
+      // arrive without a traced outline. Pre-trace their boundary once and cache
+      // it (keyed by the rects array) so the ants render via the cheap cached
+      // path instead of the per-frame unionSegments call, which is rect-capped.
+      if (selection.length > 1 && wandSegsRef.current?.key !== selection) {
+        wandSegsRef.current = { key: selection, segs: unionSegments(selection) };
+      }
       ensureAnts();
     } else {
       // Selection cleared (e.g. Esc): wipe the leftover outline from the overlay.
@@ -670,40 +915,82 @@ export default function CanvasArea({
     };
   }, [selection, ensureAnts]);
 
+  // Re-render the live shape whenever its settings change (colour / stroke /
+  // radius / kind) — it stays editable while its selection is up.
+  useEffect(() => {
+    const live = liveShapeRef.current;
+    if (!live) return;
+    engine.liveShape(
+      live.layerId,
+      live.box,
+      selAngleRef.current,
+      shape.kind,
+      shape.fill,
+      shape.stroke,
+      shape.strokeWidth,
+      shape.radius,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shape.kind, shape.fill, shape.stroke, shape.strokeWidth, shape.radius]);
+
+  // Finalize the live shape when its selection goes away (deselect / reselect).
+  useEffect(() => {
+    const live = liveShapeRef.current;
+    if (live && selection[0] !== live.box) engine.endShape();
+  }, [selection, engine]);
+
   // Live-update a magic-wand selection when its options change (e.g. dragging
-  // the Tolerance slider) — re-run the wand from the same seed. Coalesced to one
-  // recompute per frame (rapid slider events collapse), reuses the cached source
-  // pixels, and only runs while the current selection IS the live wand result.
+  // the Tolerance slider) — re-run the wand from the same seed, reusing the
+  // cached source pixels. THROTTLED (leading + trailing) so the heavy recompute
+  // can't saturate the main thread and stall the slider; the trailing run keeps
+  // the final value correct. Only runs while the selection IS the live wand.
   useEffect(() => {
     if (!wandSeedRef.current) return;
     if (!wandSegsRef.current || wandSegsRef.current.key !== selectionRef.current) return;
-    if (wandRafRef.current) return; // a recompute is already scheduled for this frame
-    wandRafRef.current = requestAnimationFrame(() => {
-      wandRafRef.current = 0;
+    const run = () => {
       const seed = wandSeedRef.current;
       const cache = wandSegsRef.current;
       if (!seed || !cache || cache.key !== selectionRef.current) return;
       const o = wandOptsRef.current;
       if (!o.sampleAll && !seed.layerId) return;
-      const result = engine.magicWand(
+      const raw = engine.magicWand(
         seed.layerId ?? "",
         seed.x,
         seed.y,
         { tolerance: o.tolerance, contiguous: o.contiguous, sampleAll: o.sampleAll },
         true, // reuse cached source pixels
+        seed.mode === "add" && seed.base.length ? seed.base : null, // keep the added-to selection
       );
-      if (result && result.rects.length) {
-        wandSegsRef.current = { key: result.rects, segs: result.segments };
-        onSelectionChange(result.rects);
+      if (seed.mode === "subtract") {
+        if (raw) {
+          applyCombined(engine.combineSelection(seed.base, raw.rects, "subtract"));
+          ensureAnts();
+        }
+      } else if (raw && raw.rects.length) {
+        wandSegsRef.current = { key: raw.rects, segs: raw.segments };
+        onSelectionChange(raw.rects);
         ensureAnts();
       }
-    });
+    };
+    const WAND_THROTTLE = 60; // ms between live recomputes
+    const tr = wandThrottleRef.current;
+    const now = performance.now();
+    const wait = WAND_THROTTLE - (now - tr.last);
+    clearTimeout(tr.timer);
+    if (wait <= 0) {
+      tr.last = now;
+      run();
+    } else {
+      tr.timer = window.setTimeout(() => {
+        wandThrottleRef.current.last = performance.now();
+        run();
+      }, wait);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wand.tolerance, wand.contiguous, wand.sampleAll]);
 
-  // Cancel any pending wand recompute on unmount only (a per-change cleanup
-  // would cancel the coalesced frame before it runs).
-  useEffect(() => () => cancelAnimationFrame(wandRafRef.current), []);
+  // Cancel a pending trailing recompute on unmount.
+  useEffect(() => () => clearTimeout(wandThrottleRef.current.timer), []);
 
   // Drop the eyedropper outline when switching to another tool.
   useEffect(() => {
@@ -858,14 +1145,18 @@ export default function CanvasArea({
     engine.setDoc(widthRef.current, heightRef.current, collectLeafIds(layersRef.current));
     engine.onChange = scheduleComposite;
     engine.onHistory = (s) => onHistoryRef.current(s);
+    engine.onAdjustEnd = () => onAdjustEndRef.current();
+    engine.onShapeEnd = () => {
+      liveShapeRef.current = null;
+    };
     paintRef.current = {
       undo: () => engine.undo(),
       redo: () => engine.redo(),
       jumpTo: (i) => engine.jumpTo(i),
       fillSelection: (layerId, rects, col, angle, pivot) =>
         engine.fillSelection(layerId, rects, col, angle, pivot),
-      eraseSelection: (layerId, rects, angle, pivot) =>
-        engine.eraseSelection(layerId, rects, angle, pivot),
+      eraseSelection: (layerId, rects, angle, pivot, label) =>
+        engine.eraseSelection(layerId, rects, angle, pivot, label),
       copyRegion: (rects, angle, pivot) => engine.copyRegion(rects, angle, pivot),
       isFloating: () => engine.isFloating,
       commitFloat: () => engine.commitFloat(),
@@ -876,12 +1167,14 @@ export default function CanvasArea({
       getLayerImage: (id) => engine.getLayerImage(id),
       setLayerImage: (id, src) => engine.setLayerImage(id, src),
       exportComposite: (tree) => engine.exportComposite(tree),
+      histogram: (tree) => engine.histogram(tree),
+      subscribe: (cb) => engine.addChangeListener(cb),
       resizeImage: (w, h, ids, smooth) => engine.resizeImage(w, h, ids, smooth),
+      transformImage: (kind, ids) => engine.transformImage(kind, ids),
       applyAdjust: (layerId, adj, sel, angle, pivot) =>
         engine.applyAdjust(layerId, adj, sel, angle, pivot),
-      commitAdjust: (layerId, adj, sel, angle, pivot) =>
-        engine.commitAdjust(layerId, adj, sel, angle, pivot),
-      cancelAdjust: () => engine.cancelAdjust(),
+      endAdjust: () => engine.endAdjust(),
+      revertAdjust: () => engine.revertAdjust(),
       setColorSpace: (cs) => engine.setColorSpace(cs),
       captureLeaves: (ids) => engine.captureLeaves(ids),
       restoreLeaves: (snaps) => engine.restoreLeaves(snaps),
@@ -1025,7 +1318,116 @@ export default function CanvasArea({
     if (hex) onPick(hex);
   };
 
+  // Start a selection transform (rotate-anchor / resize / rotate-ring) if the
+  // press landed on a handle / ring / anchor. Shared by the Marquee and Wand
+  // tools so wand selections can be transformed without switching tools.
+  const tryStartTransform = (
+    e: React.PointerEvent,
+    p: { x: number; y: number },
+    sc: number,
+  ): boolean => {
+    if (selection.length < 1) return false;
+    const bbox = bboxOf(selection);
+    const pivot = selectionPivot ?? { x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h / 2 };
+    const zone = selectZone(p.x, p.y, selection, selectionAngle, pivot, sc);
+    if (zone.kind === "anchor") {
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      anchorRef.current = true;
+      setHoverCursor("grabbing");
+      ensureAnts();
+      return true;
+    }
+    if (zone.kind === "resize") {
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      let content = false;
+      if ((tool === "shape" || resizeMode === "content") && activeLayerId) {
+        content = engine.beginFloatFromSelection(activeLayerId, selection, selectionAngle, selectionPivot);
+      }
+      resizeRef.current = {
+        rects: selection,
+        bbox,
+        edges: zone.edges,
+        content,
+        angle: selectionAngle,
+        pivot,
+        before: snapshotSel(),
+      };
+      // Lock a rotated selection's pivot so it can't drift to the new centre.
+      if (selectionAngle !== 0 && !selectionPivot) onSelectionPivot(pivot);
+      resizePreviewRef.current = selection;
+      ensureAnts();
+      return true;
+    }
+    if (zone.kind === "ring") {
+      let content = false;
+      if ((tool === "shape" || resizeMode === "content") && activeLayerId) {
+        content = engine.beginFloatFromSelection(activeLayerId, selection, selectionAngle, selectionPivot);
+      }
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      rotateRef.current = {
+        cx: pivot.x,
+        cy: pivot.y,
+        start: Math.atan2(p.y - pivot.y, p.x - pivot.x),
+        base: selectionAngle,
+        bbox,
+        content,
+        before: snapshotSel(),
+      };
+      rotatePreviewRef.current = selectionAngle;
+      setHoverCursor(rotateCursorToward(p.x, p.y, pivot));
+      ensureAnts();
+      return true;
+    }
+    return false;
+  };
+
+  // Modifier → selection combine mode: Ctrl/Cmd adds, Alt subtracts, else new.
+  const selectOp = (e: React.PointerEvent): SelOp =>
+    e.ctrlKey || e.metaKey ? "add" : e.altKey ? "subtract" : "new";
+
+  // Apply a combined selection result (caches its ants; clears when empty).
+  const applyCombined = (result: WandSelection | null) => {
+    if (!result) return;
+    if (result.rects.length) {
+      wandSegsRef.current = { key: result.rects, segs: result.segments };
+      onSelectionChange(result.rects);
+    } else {
+      wandSegsRef.current = null;
+      onSelectionChange([]); // subtracted everything → deselect
+    }
+  };
+
+  // Zoom tool: step in (dir 1) / out (dir -1), pivoting on the clicked point.
+  const zoomToPoint = (dir: 1 | -1, clientX: number, clientY: number) => {
+    const z = zoomRef.current;
+    const opts = ZOOM_STEPS.filter((v) => (dir === 1 ? v > z : v < z));
+    if (!opts.length) return;
+    const vp = viewportRef.current;
+    if (vp) {
+      const r = vp.getBoundingClientRect();
+      focalRef.current = { ax: clientX - r.left, ay: clientY - r.top };
+    }
+    onZoomChangeRef.current(dir === 1 ? opts[0] : opts[opts.length - 1]);
+  };
+
   const onCanvasPointerDown = (e: React.PointerEvent) => {
+    if (tool === "zoom") {
+      // Left click zooms in, right click (or Alt) zooms out — toward the cursor.
+      e.preventDefault();
+      zoomToPoint(e.button === 2 || e.altKey ? -1 : 1, e.clientX, e.clientY);
+      return;
+    }
+    if (tool === "hand") {
+      // Drag to pan the canvas around the viewport.
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      handRef.current = { sx: e.clientX, sy: e.clientY, px: panR.current.x, py: panR.current.y };
+      setHoverCursor("grabbing");
+      return;
+    }
     if (tool === "eyedropper") {
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
@@ -1071,18 +1473,29 @@ export default function CanvasArea({
     }
     if (tool === "wand") {
       if (engine.isFloating) engine.commitFloat();
+      const p = toDoc(e);
+      const op = selectOp(e);
+      // With no modifier, a grab on a handle/ring/anchor transforms the existing
+      // selection; Ctrl-add / Alt-subtract always start a fresh wand region.
+      if (op === "new" && tryStartTransform(e, p, zoom / 100)) return;
       if (!wand.sampleAll && !activeLayerId) return; // need a layer to sample
       e.preventDefault();
-      const p = toDoc(e);
-      wandSeedRef.current = { x: p.x, y: p.y, layerId: activeLayerId };
-      const result = engine.magicWand(activeLayerId ?? "", p.x, p.y, {
-        tolerance: wand.tolerance,
-        contiguous: wand.contiguous,
-        sampleAll: wand.sampleAll,
-      });
-      if (result && result.rects.length) {
-        wandSegsRef.current = { key: result.rects, segs: result.segments };
-        onSelectionChange(result.rects);
+      // Ctrl/Cmd adds (union); Alt subtracts; plain click replaces.
+      const base = op !== "new" && selection.length ? selection : [];
+      wandSeedRef.current = { x: p.x, y: p.y, layerId: activeLayerId, base, mode: op };
+      const raw = engine.magicWand(
+        activeLayerId ?? "",
+        p.x,
+        p.y,
+        { tolerance: wand.tolerance, contiguous: wand.contiguous, sampleAll: wand.sampleAll },
+        false,
+        op === "add" && base.length ? base : null, // union folded in for add
+      );
+      if (op === "subtract") {
+        if (raw) applyCombined(engine.combineSelection(base, raw.rects, "subtract"));
+      } else if (raw && raw.rects.length) {
+        wandSegsRef.current = { key: raw.rects, segs: raw.segments };
+        onSelectionChange(raw.rects);
       }
       ensureAnts();
       return;
@@ -1090,94 +1503,48 @@ export default function CanvasArea({
     if (tool === "select") {
       if (engine.isFloating) engine.commitFloat(); // merge before reselecting
       const p = toDoc(e);
-      const sc = zoom / 100;
-      if (selection.length >= 1) {
-        const bbox = bboxOf(selection);
-        const pivot = selectionPivot ?? { x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h / 2 };
-        const wandSel = wandSegsRef.current?.key === selectionRef.current;
-        const zone = selectZone(p.x, p.y, selection, selectionAngle, pivot, sc, !wandSel);
-        // 1) Grab the rotation anchor (the pivot) to move it.
-        if (zone.kind === "anchor") {
-          e.preventDefault();
-          viewRef.current?.setPointerCapture(e.pointerId);
-          anchorRef.current = true;
-          setHoverCursor("grabbing");
-          ensureAnts();
-          return;
-        }
-        // 2) Resize handle — works on rotated selections (cursor → local frame).
-        if (zone.kind === "resize") {
-          e.preventDefault();
-          viewRef.current?.setPointerCapture(e.pointerId);
-          // "content" mode scales the lifted pixels (works on rotated selections
-          // too — the scale is applied in the selection's own frame).
-          let content = false;
-          if (resizeMode === "content" && activeLayerId) {
-            content = engine.beginFloatFromSelection(
-              activeLayerId,
-              selection,
-              selectionAngle,
-              selectionPivot,
-            );
-          }
-          resizeRef.current = {
-            rects: selection,
-            bbox,
-            edges: zone.edges,
-            content,
-            angle: selectionAngle,
-            pivot,
-          };
-          // Lock a rotated selection's pivot so it can't drift to the new centre.
-          if (selectionAngle !== 0 && !selectionPivot) onSelectionPivot(pivot);
-          resizePreviewRef.current = selection;
-          ensureAnts();
-          return;
-        }
-        // 3) Rotation ring — a band just outside the box.
-        if (zone.kind === "ring") {
-          // Content mode rotates the pixels — lift the (possibly already-rotated)
-          // selection region so it works even after a Bounds rotation.
-          let content = false;
-          if (resizeMode === "content" && activeLayerId) {
-            content = engine.beginFloatFromSelection(
-              activeLayerId,
-              selection,
-              selectionAngle,
-              selectionPivot,
-            );
-          }
-          e.preventDefault();
-          viewRef.current?.setPointerCapture(e.pointerId);
-          rotateRef.current = {
-            cx: pivot.x,
-            cy: pivot.y,
-            start: Math.atan2(p.y - pivot.y, p.x - pivot.x),
-            base: selectionAngle,
-            bbox,
-            content,
-          };
-          rotatePreviewRef.current = selectionAngle;
-          setHoverCursor(rotateCursorToward(p.x, p.y, pivot));
-          ensureAnts();
-          return;
-        }
-      }
+      const op = selectOp(e);
+      // Plain drag may grab a transform handle; Ctrl-add / Alt-subtract always
+      // start a new marquee.
+      if (op === "new" && tryStartTransform(e, p, zoom / 100)) return;
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
-      marqueeRef.current = { x: p.x, y: p.y, additive: e.ctrlKey || e.metaKey };
+      marqueeRef.current = { x: p.x, y: p.y, mode: op };
       dragRectRef.current = { x: p.x, y: p.y, w: 0, h: 0 };
       ensureAnts();
       return;
     }
-    if (tool === "brush" || tool === "eraser") {
+    if (tool === "lasso") {
+      if (engine.isFloating) engine.commitFloat(); // merge before reselecting
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      const p = toDoc(e);
+      lassoRef.current = [{ x: p.x, y: p.y }];
+      lassoModeRef.current = selectOp(e); // Ctrl adds, Alt subtracts, else new
+      ensureAnts();
+      return;
+    }
+    if (tool === "shape") {
+      if (engine.isFloating) engine.commitFloat();
+      const p = toDoc(e);
+      // Grab a handle on the just-drawn shape's selection to transform it.
+      if (tryStartTransform(e, p, zoom / 100)) return;
+      engine.endShape(); // commit any previous live shape before drawing a new one
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      shapeRef.current = { x: p.x, y: p.y };
+      shapeRectRef.current = { x: p.x, y: p.y, w: 0, h: 0 };
+      ensureAnts();
+      return;
+    }
+    if (tool === "brush" || tool === "pencil" || tool === "eraser") {
       if (engine.isFloating) engine.commitFloat(); // merge before painting on it
       let layerId: string;
       if (tool === "eraser") {
         if (!activeLayerId) return; // nothing to erase
         layerId = activeLayerId;
       } else {
-        layerId = ensureLayer(); // brush auto-creates a layer if none is selected
+        layerId = ensureLayer(); // brush / pencil auto-creates a layer if none is selected
       }
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
@@ -1193,13 +1560,36 @@ export default function CanvasArea({
         selection.length ? selection : null,
         selectionAngle,
         selectionPivot,
+        tool === "eraser" ? "Erase" : tool === "pencil" ? "Pencil" : "Brush",
       );
     }
   };
   const onCanvasPointerMove = (e: React.PointerEvent) => {
-    // Hover feedback for the select tool: rotate / resize / anchor cursor.
+    // Report the doc-space cursor position to the status bar (null off-canvas).
+    const cur = toDoc(e);
+    onCursor(
+      cur.x >= 0 && cur.y >= 0 && cur.x < width && cur.y < height
+        ? { x: Math.floor(cur.x), y: Math.floor(cur.y) }
+        : null,
+    );
+
+    if (handRef.current) {
+      // Pan: offset the canvas by the drag delta from the press point.
+      const h = handRef.current;
+      const vp = viewportRef.current;
+      if (vp) {
+        setPanRef.current(
+          clampHere(h.px + (e.clientX - h.sx), h.py + (e.clientY - h.sy), scaleRef.current, vp),
+        );
+      }
+      return;
+    }
+
+    // Hover feedback (Marquee / Wand / Shape): rotate / resize / anchor cursor.
     if (
-      toolRef.current === "select" &&
+      (toolRef.current === "select" ||
+        toolRef.current === "wand" ||
+        toolRef.current === "shape") &&
       !rotateRef.current &&
       !anchorRef.current &&
       !resizeRef.current &&
@@ -1211,8 +1601,7 @@ export default function CanvasArea({
         const p = toDoc(e);
         const bb = bboxOf(sel);
         const pivot = selPivotRef.current ?? { x: bb.x + bb.w / 2, y: bb.y + bb.h / 2 };
-        const wandSel = wandSegsRef.current?.key === sel;
-        const zone = selectZone(p.x, p.y, sel, selAngleRef.current, pivot, zoom / 100, !wandSel);
+        const zone = selectZone(p.x, p.y, sel, selAngleRef.current, pivot, zoom / 100);
         if (zone.kind === "anchor") next = "grab";
         else if (zone.kind === "resize") next = resizeCursor(zone.edges, selAngleRef.current);
         else if (zone.kind === "ring") next = rotateCursorToward(p.x, p.y, pivot);
@@ -1228,12 +1617,16 @@ export default function CanvasArea({
     if (rotateRef.current) {
       const p = toDoc(e);
       const r = rotateRef.current;
-      const delta = Math.atan2(p.y - r.cy, p.x - r.cx) - r.start;
-      const a = r.base + delta;
+      let a = r.base + (Math.atan2(p.y - r.cy, p.x - r.cx) - r.start);
+      // Shift snaps the absolute angle to 15° steps.
+      if (e.shiftKey) {
+        const step = Math.PI / 12;
+        a = Math.round(a / step) * step;
+      }
       rotatePreviewRef.current = a; // outline angle (absolute) for the marching ants
       // The lifted float already sits at the base-rotated position, so spin it by
-      // the drag delta only — about the same pivot.
-      if (r.content) engine.setFloatRotation(delta, { x: r.cx, y: r.cy });
+      // the angle delta only — about the same pivot.
+      if (r.content) engine.setFloatRotation(a - r.base, { x: r.cx, y: r.cy });
       // Keep the cursor arrow aimed at the selection as the pointer orbits.
       const cur = rotateCursorToward(p.x, p.y, { x: r.cx, y: r.cy });
       setHoverCursor((c) => (c === cur ? c : cur));
@@ -1262,15 +1655,22 @@ export default function CanvasArea({
         y0 = clamp(y0, 0, height);
         y1 = clamp(y1, 0, height);
       }
+      // Snap the box to whole pixels live, so the outline (and the scaled pixels)
+      // land on the grid during the drag — matching the result on release.
+      x0 = Math.round(x0);
+      y0 = Math.round(y0);
+      x1 = Math.round(x1);
+      y1 = Math.round(y1);
       const nb = { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
-      // Scale every selection rect proportionally within the new bounding box.
+      // Scale every selection rect proportionally within the new bounding box,
+      // rounding to whole pixels (so multi-rect selections snap too).
       const sx = nb.w / o.w;
       const sy = nb.h / o.h;
       resizePreviewRef.current = orig.map((r) => ({
-        x: nb.x + (r.x - o.x) * sx,
-        y: nb.y + (r.y - o.y) * sy,
-        w: r.w * sx,
-        h: r.h * sy,
+        x: Math.round(nb.x + (r.x - o.x) * sx),
+        y: Math.round(nb.y + (r.y - o.y) * sy),
+        w: Math.max(1, Math.round(r.w * sx)),
+        h: Math.max(1, Math.round(r.h * sy)),
       }));
       // In content mode, scale the lifted pixels to match the new bounds. For a
       // rotated selection the scale is applied in its own (un-rotated) frame.
@@ -1303,6 +1703,31 @@ export default function CanvasArea({
       }
       return;
     }
+    if (lassoRef.current) {
+      const p = toDoc(e);
+      const pts = lassoRef.current;
+      const last = pts[pts.length - 1];
+      // Add a point only after moving ~2 screen px, to keep the path light.
+      const minD = 2 / (zoomRef.current / 100);
+      if (Math.hypot(p.x - last.x, p.y - last.y) >= minD) pts.push({ x: p.x, y: p.y });
+      ensureAnts();
+      return;
+    }
+    if (shapeRef.current) {
+      const start = shapeRef.current;
+      const p = toDoc(e);
+      let ex = p.x;
+      let ey = p.y;
+      if (e.shiftKey) {
+        // Constrain to 1:1 (square / circle / equilateral), keeping drag direction.
+        const sz = Math.max(Math.abs(p.x - start.x), Math.abs(p.y - start.y));
+        ex = start.x + (p.x < start.x ? -sz : sz);
+        ey = start.y + (p.y < start.y ? -sz : sz);
+      }
+      shapeRectRef.current = normalizeRect(start.x, start.y, ex, ey, width, height);
+      ensureAnts();
+      return;
+    }
     if (marqueeRef.current) {
       const m = marqueeRef.current;
       const p = toDoc(e);
@@ -1318,6 +1743,13 @@ export default function CanvasArea({
     engine.moveStroke(p.x, p.y);
   };
   const onCanvasPointerUp = (e: React.PointerEvent) => {
+    if (handRef.current) {
+      handRef.current = null;
+      setHoverCursor(null);
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      return;
+    }
     if (anchorRef.current) {
       anchorRef.current = false;
       const v = viewRef.current;
@@ -1327,25 +1759,41 @@ export default function CanvasArea({
     if (rotateRef.current) {
       const r = rotateRef.current;
       const a = rotatePreviewRef.current ?? r.base;
+      const before = r.before;
       rotateRef.current = null;
       rotatePreviewRef.current = null;
+      wandSeedRef.current = null; // rotating finalises a wand selection
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       if (!r.content) {
+        if (a === before.angle) return; // grabbed but didn't rotate
         // Bounds mode: persist the outline rotation; pixels untouched.
+        const after: SelState = { rects: before.rects, angle: a, pivot: before.pivot, segs: before.segs };
         onSelectionAngle(a);
+        engine.pushStructural("Rotate", () => applySel(before), () => applySel(after));
         return;
       }
-      engine.commitFloat(); // bake the rotated pixels
-      // Keep the selection rotated to match the baked content: the rects are
-      // unchanged, so persisting the pivot + total angle leaves the marquee
-      // exactly bounding the rotated pixels (same as the Bounds-mode outcome).
+      if (a === before.angle) {
+        engine.discardFloat(); // no rotation → put the lifted pixels back
+        return;
+      }
+      // Keep the selection rotated to match the baked content; the pixel "Rotate"
+      // entry carries the selection restore so one undo reverts both.
+      const after: SelState = {
+        rects: before.rects,
+        angle: a,
+        pivot: { x: r.cx, y: r.cy },
+        segs: before.segs,
+      };
+      engine.commitFloat(selSide(before, after)); // bake the rotated pixels
       onSelectionPivot({ x: r.cx, y: r.cy });
       onSelectionAngle(a);
       return;
     }
     if (resizeRef.current) {
-      const { content, bbox: o, angle } = resizeRef.current;
+      const { content, bbox: o, angle, before } = resizeRef.current;
+      const wandCache = wandSegsRef.current;
+      const wasWand = !!wandCache && wandCache.key === selectionRef.current;
       const preview = resizePreviewRef.current;
       resizeRef.current = null;
       resizePreviewRef.current = null;
@@ -1362,21 +1810,50 @@ export default function CanvasArea({
         : [];
       const nb = committed.length ? bboxOf(committed) : null;
       const changed = !!nb && (nb.x !== o.x || nb.y !== o.y || nb.w !== o.w || nb.h !== o.h);
+      // For a wand selection, scale its cached boundary segments to match the
+      // committed rects so the ants stay cheap (no unionSegments on many rects).
+      const recacheWand = (rects: Rect[]) => {
+        // A transformed wand selection is no longer "live" — stop tolerance from
+        // re-selecting the original region.
+        wandSeedRef.current = null;
+        if (!wasWand || !nb) return;
+        const fx = o.w ? nb.w / o.w : 1;
+        const fy = o.h ? nb.h / o.h : 1;
+        wandSegsRef.current = {
+          key: rects,
+          segs: wandCache!.segs.map((g) => ({
+            x1: nb.x + (g.x1 - o.x) * fx,
+            y1: nb.y + (g.y1 - o.y) * fy,
+            x2: nb.x + (g.x2 - o.x) * fx,
+            y2: nb.y + (g.y2 - o.y) * fy,
+          })),
+        };
+      };
+      const mkAfter = (rects: Rect[]): SelState => ({
+        rects,
+        angle,
+        pivot: selPivotRef.current,
+        segs: wasWand ? wandSegsRef.current?.segs ?? null : null,
+      });
       if (content) {
         // Bake the scaled pixels (or restore them untouched if nothing changed).
         if (changed) {
-          engine.commitFloat();
-          // Keep the rotation when the selection was rotated.
+          recacheWand(committed);
+          const after = mkAfter(committed);
+          // The pixel "Scale" entry carries the selection restore (one undo).
+          engine.commitFloat(selSide(before, after));
           if (angle) onSelectionRects(committed);
           else onSelectionChange(committed);
         } else {
           engine.discardFloat();
         }
-      } else if (committed.length) {
-        // Keep the rotation when resizing a rotated selection; a new (upright)
-        // marquee otherwise resets it.
+      } else if (committed.length && changed) {
+        recacheWand(committed);
+        const after = mkAfter(committed);
+        // Bounds mode: no pixels — push the outline change as its own undo step.
         if (angle) onSelectionRects(committed);
         else onSelectionChange(committed);
+        engine.pushStructural("Resize", () => applySel(before), () => applySel(after));
       }
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
@@ -1404,14 +1881,63 @@ export default function CanvasArea({
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       return;
     }
+    if (lassoRef.current) {
+      const pts = lassoRef.current;
+      const mode = lassoModeRef.current;
+      lassoRef.current = null;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      // Close the polygon (straight start↔end edge) and rasterize it to a region,
+      // then combine with the current selection (Ctrl-add / Alt-subtract).
+      const region = pts.length >= 3 ? engine.lassoSelect(pts) : null;
+      if (region && region.rects.length) {
+        if (mode === "new") {
+          wandSegsRef.current = { key: region.rects, segs: region.segments };
+          onSelectionChange(region.rects);
+        } else {
+          applyCombined(engine.combineSelection(selection, region.rects, mode));
+        }
+      } else if (mode === "new") {
+        onSelectionChange([]); // a click / empty lasso clears (plain only)
+      }
+      ensureAnts();
+      return;
+    }
+    if (shapeRef.current) {
+      const rect = shapeRectRef.current;
+      shapeRef.current = null;
+      shapeRectRef.current = null;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      if (rect && rect.w >= 1 && rect.h >= 1) {
+        const o = shapeOptsRef.current;
+        const box: Rect = {
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          w: Math.round(rect.w),
+          h: Math.round(rect.h),
+        };
+        const layerId = ensureLayer();
+        // Draw it as a "live" shape: still editable (colour/stroke/radius) while
+        // its selection is up, and resizable / rotatable via the handles.
+        engine.liveShape(layerId, box, 0, o.kind, o.fill, o.stroke, o.strokeWidth, o.radius);
+        liveShapeRef.current = { layerId, box };
+        onSelectionChange([box]); // `box` is the same object → selection identifies the shape
+      }
+      ensureAnts();
+      return;
+    }
     if (marqueeRef.current) {
-      const additive = marqueeRef.current.additive;
+      const mode = marqueeRef.current.mode;
       const rect = dragRectRef.current;
       marqueeRef.current = null;
       dragRectRef.current = null;
       if (rect && rect.w >= 1 && rect.h >= 1) {
-        onSelectionChange(additive ? [...selection, rect] : [rect]);
-      } else if (!additive) {
+        if (mode === "add") onSelectionChange([...selection, rect]);
+        else if (mode === "subtract")
+          applyCombined(engine.combineSelection(selection, [rect], "subtract"));
+        else onSelectionChange([rect]);
+      } else if (mode === "new") {
         onSelectionChange([]); // a plain click clears the selection
       }
       const v = viewRef.current;
@@ -1561,7 +2087,22 @@ export default function CanvasArea({
           </>
         )}
 
-        <div className={styles.viewport} ref={viewportRef}>
+        <div
+          className={styles.viewport}
+          ref={viewportRef}
+          style={tool === "hand" ? { cursor: hoverCursor ?? "grab" } : undefined}
+          onPointerDown={(e) => {
+            // Hand tool: also start a pan when the press lands in the padding
+            // around the canvas (target is the viewport itself, not the artwork
+            // or an overlay). Capture on the artwork canvas so the existing
+            // move/up handlers drive the pan.
+            if (tool !== "hand" || e.target !== e.currentTarget) return;
+            e.preventDefault();
+            viewRef.current?.setPointerCapture(e.pointerId);
+            handRef.current = { sx: e.clientX, sy: e.clientY, px: panR.current.x, py: panR.current.y };
+            setHoverCursor("grabbing");
+          }}
+        >
           <div
             className={styles.canvasShadow}
             style={{
@@ -1584,13 +2125,21 @@ export default function CanvasArea({
                   hoverCursor ??
                   (tool === "move"
                     ? "move"
-                    : tool === "brush" ||
-                        tool === "eraser" ||
-                        tool === "select" ||
-                        tool === "wand" ||
-                        tool === "eyedropper"
-                      ? "crosshair"
-                      : "default"),
+                    : tool === "hand"
+                      ? "grab"
+                      : tool === "zoom"
+                        ? "zoom-in"
+                        : tool === "eyedropper"
+                          ? EYEDROPPER_CURSOR
+                          : tool === "brush" ||
+                              tool === "pencil" ||
+                              tool === "eraser" ||
+                              tool === "select" ||
+                              tool === "lasso" ||
+                              tool === "wand" ||
+                              tool === "shape"
+                            ? "crosshair"
+                            : "default"),
                 // Crisp, individually-visible pixels when zoomed in; smooth when zoomed out.
                 imageRendering: zoom >= 100 ? "pixelated" : "auto",
               }}
@@ -1598,8 +2147,14 @@ export default function CanvasArea({
               onPointerMove={onCanvasPointerMove}
               onPointerUp={onCanvasPointerUp}
               onPointerCancel={onCanvasPointerUp}
+              onContextMenu={(e) => {
+                // Let the zoom tool use right-click for zoom-out (no browser menu).
+                if (tool === "zoom") e.preventDefault();
+              }}
               onPointerLeave={() => {
+                if (handRef.current) return; // keep the grab cursor while panning
                 setHoverCursor(null);
+                onCursor(null);
                 if (!pickingRef.current) {
                   hoverRef.current = null;
                   ensureAnts();

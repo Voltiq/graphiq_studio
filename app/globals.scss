@@ -5,10 +5,12 @@
    =========================================================================== */
 
 :root {
-  /* Radii */
+  /* Radii (reference --radius: 0.625rem scale) */
   --r-sm: 6px;
-  --r-md: 9px;
-  --r-lg: 14px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --r-2xl: 18px;
   --r-pill: 999px;
 
   /* Spacing scale */
@@ -19,84 +21,100 @@
   --sp-5: 24px;
 
   /* Typography */
-  --font-sans: var(--font-geist-sans), system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: var(--font-geist-mono), "SFMono-Regular", ui-monospace, monospace;
+  /* Fallback inside var() (e.g. "geistSans", the generated @font-face name) so an
+     unresolved --font-geist-* can never poison the value into the serif default. */
+  --font-sans: var(--font-geist-sans, "geistSans"), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono, "geistMono"), "SFMono-Regular", ui-monospace, monospace;
 
-  /* Sizing of chrome */
-  --topbar-h: 44px;
+  /* Sizing of chrome (reference: h-12 bars, w-12 rail, w-80 dock) */
+  --topbar-h: 48px;
   --optionsbar-h: 48px;
   --statusbar-h: 28px;
-  --toolbar-w: 56px;
-  --dock-w: 300px;
+  --toolbar-w: 48px;
+  --dock-w: 320px;
 
-  /* Brand accent (shared across themes) */
-  --accent: #6366f1;
-  --accent-2: #8b5cf6;
-  --accent-rgb: 99, 102, 241;
-  --accent-contrast: #ffffff;
-
-  /* Status colors */
-  --danger: #f43f5e;
-  --success: #10b981;
-  --warning: #f59e0b;
+  /* Status colors (shared) */
+  --danger: #ff6467;
+  --success: #a1a1a1;
+  --warning: #fbbf24;
 
   color-scheme: dark;
 }
 
 /* ---------------------------- Dark theme ---------------------------------- */
+/* shadcn `.dark` — pure neutral greys (chroma 0) + near-white primary.
+   There is NO colour accent: "accent" is monochrome (#e5e5e5 on dark text). */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #0b0c10;
-  --bg-grad: radial-gradient(1200px 800px at 80% -10%, #16182400 0%, transparent 60%),
-    #0b0c10;
-  --surface: #121420;
-  --surface-2: #171a28;
-  --surface-3: #1e2233;
-  --surface-hover: #232841;
-  --canvas-void: #07080c;
-  /* Transparency checkerboard (dark greys in dark mode) */
-  --checker-a: #34343b;
-  --checker-b: #26262c;
+  --bg: #0a0a0a;           /* background */
+  --bg-grad: #0a0a0a;
+  --surface: #171717;      /* card / popover / sidebar */
+  --surface-2: #1e1e1e;    /* raised inputs / dropdowns */
+  --surface-3: #262626;    /* secondary / muted / elevated */
+  --surface-hover: #262626;/* muted hover */
+  --sidebar: #171717;      /* chrome (= card) */
+  --canvas-void: #050505;
+  /* Transparency checkerboard */
+  --checker-a: #242424;
+  --checker-b: #161616;
 
-  --border: #242838;
-  --border-strong: #343a52;
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --input: rgba(255, 255, 255, 0.15);
 
-  --text: #eef1ff;
-  --text-2: #aab0d0;
-  --text-3: #6c7393;
+  --text: #fafafa;         /* foreground */
+  --text-2: #a1a1a1;       /* muted-foreground */
+  --text-3: #737373;       /* ring / tertiary */
 
-  --shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-  --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.35);
-  --inset: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  /* Primary action colour — near-white with dark text (shadcn dark). */
+  --accent: #e5e5e5;
+  --accent-2: #6e6e6e;
+  --accent-rgb: 229, 229, 229;
+  --accent-contrast: #171717;
+
+  /* Elevation + glow */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 6px 16px -4px rgba(0, 0, 0, 0.5);
+  --shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.6);
+  --glow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+  --inset: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 /* ---------------------------- Light theme --------------------------------- */
+/* shadcn light — neutral, with a near-black primary. */
 [data-theme="light"] {
   color-scheme: light;
 
-  --bg: #eef0f6;
-  --bg-grad: radial-gradient(1200px 800px at 80% -10%, #ffffff 0%, transparent 60%),
-    #eef0f6;
+  --bg: #ffffff;
+  --bg-grad: #ffffff;
   --surface: #ffffff;
-  --surface-2: #f6f7fb;
-  --surface-3: #eceef6;
-  --surface-hover: #e6e9f5;
-  --canvas-void: #d8dbe6;
-  /* Transparency checkerboard (light greys in light mode) */
-  --checker-a: #f3f4f7;
-  --checker-b: #d7d9e0;
+  --surface-2: #f5f5f5;
+  --surface-3: #ededed;
+  --surface-hover: #f0f0f0;
+  --sidebar: #fafafa;
+  --canvas-void: #cccccc;
+  --checker-a: #f0f0f0;
+  --checker-b: #d8d8d8;
 
-  --border: #e2e5ef;
-  --border-strong: #cdd2e2;
+  --border: rgba(0, 0, 0, 0.1);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --input: rgba(0, 0, 0, 0.12);
 
-  --text: #1a1d29;
-  --text-2: #545a72;
-  --text-3: #8a90a8;
+  --text: #171717;
+  --text-2: #737373;
+  --text-3: #8e8e8e;
 
-  --shadow: 0 10px 40px rgba(31, 41, 91, 0.12);
-  --shadow-sm: 0 2px 10px rgba(31, 41, 91, 0.08);
-  --inset: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --accent: #171717;
+  --accent-2: #525252;
+  --accent-rgb: 23, 23, 23;
+  --accent-contrast: #fafafa;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 6px 16px -4px rgba(0, 0, 0, 0.12);
+  --shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.18);
+  --glow: inset 0 1px 0 0 rgba(255, 255, 255, 0.8);
+  --inset: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 * {

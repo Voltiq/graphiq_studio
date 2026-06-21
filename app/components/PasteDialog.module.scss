@@ -22,9 +22,9 @@
   width: 360px;
   max-width: calc(100vw - 32px);
   background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2xl);
+  box-shadow: var(--shadow), var(--glow);
   animation: pop 0.16s cubic-bezier(0.3, 1.3, 0.5, 1);
   overflow: hidden;
 }
@@ -56,10 +56,10 @@
 .close {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--r-sm);
-  color: var(--text-3);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-lg);
+  color: var(--text-2);
 
   &:hover {
     background: var(--surface-hover);
@@ -84,7 +84,7 @@
   width: 132px;
   height: 96px;
   flex-shrink: 0;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-lg);
   border: 1px solid var(--border);
   background-color: var(--checker-a);
   background-image: repeating-conic-gradient(
@@ -113,11 +113,11 @@
 }
 
 .groupLabel {
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.07em;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--text-3);
+  color: var(--text-2);
   margin-top: 2px;
 }
 
@@ -131,9 +131,9 @@
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: 9px 11px;
+  padding: 10px 11px;
   text-align: left;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-lg);
   border: 1px solid var(--border);
   background: var(--surface-2);
   transition: border-color 0.12s ease, background 0.12s ease;
@@ -187,6 +187,83 @@
   }
 }
 
+/* Filter-export checklist */
+.checkAll {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--text-2);
+
+  &:hover {
+    color: var(--text);
+  }
+}
+
+.checkList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 0 calc(-1 * var(--sp-1));
+}
+
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 7px var(--sp-2);
+  border-radius: var(--r-lg);
+  text-align: left;
+  transition: background 0.1s ease;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+
+  &[data-on="true"] {
+    background: rgba(var(--accent-rgb), 0.1);
+  }
+}
+
+.check {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  color: var(--accent-contrast);
+  transition: background 0.12s ease, border-color 0.12s ease;
+
+  &[data-on="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+}
+
+.checkSwatch {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, #ff9a6c, #845ec2);
+}
+
+.checkName {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .foot {
   display: flex;
   justify-content: flex-end;
@@ -200,10 +277,10 @@
   height: 34px;
   padding: 0 16px;
   font-size: 13px;
-  font-weight: 550;
-  border-radius: var(--r-sm);
+  font-weight: 500;
+  border-radius: var(--r-lg);
   color: var(--text);
-  background: var(--surface-3);
+  background: transparent;
   border: 1px solid var(--border);
   transition: background 0.12s ease, border-color 0.12s ease;
 
@@ -215,12 +292,10 @@
 
 .primary {
   color: var(--accent-contrast);
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  background: var(--accent);
   border-color: transparent;
-  box-shadow: 0 3px 12px rgba(var(--accent-rgb), 0.4);
 
   &:hover {
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    filter: brightness(1.06);
+    background: color-mix(in srgb, var(--accent) 88%, #fff);
   }
 }

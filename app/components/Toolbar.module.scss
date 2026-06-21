@@ -5,7 +5,7 @@
   flex-direction: column;
   align-items: center;
   padding: var(--sp-2) 0;
-  background: var(--surface);
+  background: var(--sidebar);
   border-right: 1px solid var(--border);
   z-index: 30;
 }
@@ -45,12 +45,12 @@
 
 .tool {
   position: relative;
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   margin: 0 auto;
   display: grid;
   place-items: center;
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   color: var(--text-2);
   transition: background 0.12s ease, color 0.12s ease, transform 0.12s ease;
 
@@ -69,8 +69,8 @@
 
   &[data-active="true"] {
     color: var(--accent-contrast);
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    box-shadow: 0 4px 12px rgba(var(--accent-rgb), 0.4);
+    background: var(--accent);
+    box-shadow: var(--shadow-sm);
 
     .kbd {
       opacity: 0.8;
@@ -96,53 +96,68 @@
 /* ------------------------- Foreground / background ------------------------ */
 .colors {
   margin-top: auto;
-  padding-top: var(--sp-3);
+  padding-top: var(--sp-2);
+  padding-bottom: var(--sp-1);
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--sp-1);
+  justify-content: center;
 }
 
+/* Reference: two size-6 swatches overlapping diagonally in a size-9 box,
+   with a tiny round swap in the top-right corner. The wrap rules are nested so
+   they outrank ColorPopover's own `.wrap { position: relative }`. */
 .swatchStack {
   position: relative;
-  width: 38px;
-  height: 38px;
-}
+  width: 36px;
+  height: 36px;
 
-.swatchWrapFg {
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 2;
-}
+  .swatchWrapFg,
+  .swatchWrapBg {
+    position: absolute;
+    display: block;
+  }
 
-.swatchWrapBg {
-  position: absolute;
-  bottom: 0;
-  right: 0;
-  z-index: 1;
+  .swatchWrapFg {
+    top: 0;
+    left: 0;
+    z-index: 2;
+
+    /* primary sits on top → stronger (shadow-md) lift, like the reference */
+    .swatch {
+      box-shadow: var(--shadow-md);
+    }
+  }
+
+  .swatchWrapBg {
+    right: 0;
+    bottom: 0;
+    z-index: 1;
+  }
 }
 
 .swatch {
   width: 24px;
   height: 24px;
-  border-radius: 7px;
-  border: 2px solid var(--surface);
-  box-shadow: 0 0 0 1px var(--border-strong), var(--shadow-sm);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   cursor: pointer;
 }
 
 .swap {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  z-index: 3;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--r-sm);
-  color: var(--text-3);
-  transition: background 0.12s ease, color 0.12s ease;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--text-2);
+  transition: color 0.12s ease;
 
   &:hover {
-    background: var(--surface-hover);
     color: var(--text);
   }
 }

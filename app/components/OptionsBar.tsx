@@ -25,6 +25,8 @@ import {
   SAMPLE_SIZE_OPTIONS,
   type MoveMode,
   type SelectResizeMode,
+  type ShapeKind,
+  type ShapeSettings,
   type ToolId,
 } from "../lib/tools";
 import type { BrushSettings } from "../lib/paint";
@@ -34,9 +36,23 @@ import {
   NumberField,
   Segmented,
   Select,
-  Slider,
+  Slider as BaseSlider,
   Toggle,
 } from "./Controls";
+
+/** In the options bar every slider is the compact inline (label-beside) variant. */
+function Slider(props: React.ComponentProps<typeof BaseSlider>) {
+  return <BaseSlider inline {...props} />;
+}
+
+interface ShapeProps {
+  shape: ShapeSettings;
+  onShape: (patch: Partial<ShapeSettings>) => void;
+  fill: string;
+  onFill: (c: string) => void;
+  stroke: string;
+  onStroke: (c: string) => void;
+}
 
 export default function OptionsBar({
   tool,
@@ -54,6 +70,12 @@ export default function OptionsBar({
   onWand,
   eyedropper,
   onEyedropper,
+  shape,
+  onShape,
+  fill,
+  onFill,
+  stroke,
+  onStroke,
 }: {
   tool: ToolId;
   foreground: string;
@@ -70,7 +92,7 @@ export default function OptionsBar({
   onWand: (patch: Partial<{ tolerance: number; contiguous: boolean; sampleAll: boolean }>) => void;
   eyedropper: { size: string; scope: string };
   onEyedropper: (patch: { size?: string; scope?: string }) => void;
-}) {
+} & ShapeProps) {
   const meta = getTool(tool);
   const Icon = meta.icon;
 
@@ -98,6 +120,7 @@ export default function OptionsBar({
           onWand,
           eyedropper,
           onEyedropper,
+          { shape, onShape, fill, onFill, stroke, onStroke },
         )}
       </div>
     </div>
@@ -120,11 +143,30 @@ function renderOptions(
   onWand: (patch: Partial<{ tolerance: number; contiguous: boolean; sampleAll: boolean }>) => void,
   eyedropper: { size: string; scope: string },
   onEyedropper: (patch: { size?: string; scope?: string }) => void,
+  shapeProps: ShapeProps,
 ) {
   const set = (patch: Partial<BrushSettings>) => onBrush({ ...brush, ...patch });
   switch (tool) {
-    case "brush":
     case "pencil":
+      // Pencil: hard-edged & pixel-perfect, so no hardness / flow / smoothing.
+      return (
+        <>
+          <Slider label="Size" min={1} max={500} unit="px" value={brush.size} onChange={(n) => set({ size: n })} />
+          <Slider label="Opacity" unit="%" value={brush.opacity} onChange={(n) => set({ opacity: n })} />
+          <Divider />
+          <Select
+            label="Blend"
+            options={["Normal", "Multiply", "Screen", "Overlay", "Soft Light", "Color"]}
+            width={120}
+            value={brush.blend}
+            onChange={(s) => set({ blend: s })}
+          />
+          <Divider />
+          <ColorChip color={foreground} onChange={onForeground} label="Pencil color" />
+        </>
+      );
+
+    case "brush":
     case "eraser":
       return (
         <>
@@ -196,24 +238,48 @@ function renderOptions(
         </>
       );
 
-    case "shape":
+    case "shape": {
+      const { shape, onShape, fill, onFill, stroke, onStroke } = shapeProps;
       return (
         <>
           <Segmented
+            value={shape.kind}
+            onChange={(v) => onShape({ kind: v as ShapeKind })}
             options={[
               { value: "rect", icon: <Square size={14} />, title: "Rectangle" },
               { value: "ellipse", icon: <Circle size={14} />, title: "Ellipse" },
-              { value: "tri", icon: <Triangle size={14} />, title: "Polygon" },
+              { value: "tri", icon: <Triangle size={14} />, title: "Triangle" },
             ]}
           />
           <Divider />
-          <ColorChip color={foreground} onChange={onForeground} label="Fill" />
-          <ColorChip color="#1a1d29ff" label="Stroke" />
-          <Slider label="Stroke W" min={0} max={60} defaultValue={2} unit="px" compact />
-          <Divider />
-          <NumberField label="Radius" defaultValue={12} unit="px" width={62} />
+          <ColorChip color={fill} onChange={onFill} label="Fill" />
+          <ColorChip color={stroke} onChange={onStroke} label="Stroke" />
+          <Slider
+            label="Stroke W"
+            min={0}
+            max={60}
+            unit="px"
+            compact
+            value={shape.strokeWidth}
+            onChange={(n) => onShape({ strokeWidth: n })}
+          />
+          {shape.kind !== "ellipse" && (
+            <>
+              <Divider />
+              <Slider
+                label="Radius"
+                min={0}
+                max={200}
+                unit="px"
+                compact
+                value={shape.radius}
+                onChange={(n) => onShape({ radius: n })}
+              />
+            </>
+          )}
         </>
       );
+    }
 
     case "crop":
       return (
@@ -244,7 +310,7 @@ function renderOptions(
               { value: "sub", icon: <Minus size={13} />, title: "Subtract" },
             ]}
           />
-          {tool === "select" && (
+          {(tool === "select" || tool === "wand") && (
             <>
               <Divider />
               <Segmented

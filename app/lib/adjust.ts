@@ -35,6 +35,13 @@ export const DEFAULT_ADJUST: Adjustments = {
 
 export const FILTERS = ["Original", "Vivid", "Mono", "Noir", "Warm", "Cool", "Vintage", "Fade"];
 
+/** A user-saved adjustment preset (name + full slider values). */
+export interface AdjustPreset {
+  id: string;
+  name: string;
+  adjust: Adjustments;
+}
+
 /** Each filter is a preset of adjustment values applied on top of the neutral base. */
 export const FILTER_PRESETS: Record<string, Partial<Adjustments>> = {
   Original: {},
@@ -53,6 +60,96 @@ export function isDefaultAdjust(a: Adjustments): boolean {
 
 export function filterToAdjust(name: string): Adjustments {
   return { ...DEFAULT_ADJUST, ...(FILTER_PRESETS[name] ?? {}) };
+}
+
+// ---- Filter preset files (.aifp = one preset, .aifpack = a bundle) ----
+export const FILTER_EXT = "aifp";
+export const FILTER_PACK_EXT = "aifpack";
+const ADJUST_KEYS = Object.keys(DEFAULT_ADJUST) as (keyof Adjustments)[];
+
+/** Clamp arbitrary parsed data into a valid Adjustments (unknown keys dropped). */
+export function coerceAdjust(raw: unknown): Adjustments {
+  const src = (raw ?? {}) as Record<string, unknown>;
+  const out = { ...DEFAULT_ADJUST };
+  for (const k of ADJUST_KEYS) {
+    const v = typeof src[k] === "number" ? (src[k] as number) : Number(src[k]);
+    if (Number.isFinite(v)) out[k] = Math.max(-100, Math.min(100, Math.round(v)));
+  }
+  return out;
+}
+
+/** Serialize one preset to an .aifp file body. */
+export function presetToFileJSON(p: AdjustPreset): string {
+  return JSON.stringify({ format: "aperture-filter", version: 1, name: p.name, adjust: p.adjust }, null, 2);
+}
+
+/** Serialize several presets to an .aifpack bundle body. */
+export function packToFileJSON(presets: AdjustPreset[]): string {
+  return JSON.stringify(
+    { format: "aperture-filter-pack", version: 1, presets: presets.map((p) => ({ name: p.name, adjust: p.adjust })) },
+    null,
+    2,
+  );
+}
+
+export interface ParsedPreset {
+  name: string;
+  adjust: Adjustments;
+}
+
+/**
+ * Parse a filter file's text into presets. Tolerant of single presets, bundles,
+ * bare arrays, and bare adjust objects — anything with at least one known
+ * adjustment key is accepted; everything else is ignored.
+ */
+export function parsePresetFileText(text: string): ParsedPreset[] {
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const out: ParsedPreset[] = [];
+  const one = (obj: unknown) => {
+    if (!obj || typeof obj !== "object") return;
+    const o = obj as Record<string, unknown>;
+    const adjustSrc = (o.adjust && typeof o.adjust === "object" ? o.adjust : o) as Record<string, unknown>;
+    if (!ADJUST_KEYS.some((k) => k in adjustSrc)) return; // not a recognizable filter
+    const name = typeof o.name === "string" && o.name.trim() ? o.name.trim() : "Imported Filter";
+    out.push({ name, adjust: coerceAdjust(adjustSrc) });
+  };
+  const d = data as Record<string, unknown> | unknown[];
+  if (Array.isArray(d)) d.forEach(one);
+  else if (Array.isArray((d as Record<string, unknown>)?.presets)) {
+    ((d as Record<string, unknown>).presets as unknown[]).forEach(one);
+  } else one(data);
+  return out;
+}
+
+/**
+ * Translate adjustment values into a CSS `filter` string for a preset thumbnail,
+ * so a saved preset's swatch previews its look: warmer presets read warmer, less
+ * saturated ones look faded, brighter/contrastier ones show it, etc. Applied over
+ * the shared gradient swatch (so it mirrors the built-in filter chips).
+ */
+export function adjustToThumbFilter(a: Adjustments): string {
+  const clampN = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
+  const sat = clampN(1 + (a.saturation + a.vibrance * 0.6) / 100, 0, 3);
+  const bright = clampN(1 + (a.exposure * 0.5 + a.whites * 0.25 + a.shadows * 0.15) / 100, 0.4, 1.8);
+  const con = clampN(1 + (a.contrast + a.clarity * 0.5) / 100, 0.4, 2);
+  const parts = [
+    `saturate(${sat.toFixed(3)})`,
+    `brightness(${bright.toFixed(3)})`,
+    `contrast(${con.toFixed(3)})`,
+  ];
+  // Temperature: warm (+) → sepia toward orange; cool (−) → hue-rotate toward blue.
+  if (a.temperature > 0) parts.push(`sepia(${clampN((a.temperature / 100) * 0.6, 0, 0.8).toFixed(3)})`);
+  else if (a.temperature < 0) parts.push(`hue-rotate(${clampN(-a.temperature * 0.5, 0, 60).toFixed(1)}deg)`);
+  // Tint: green/magenta nudge.
+  if (a.tint) parts.push(`hue-rotate(${clampN(a.tint * 0.2, -30, 30).toFixed(1)}deg)`);
+  // Noise reduction softens.
+  if (a.noise > 0) parts.push(`blur(${clampN((a.noise / 100) * 0.6, 0, 0.6).toFixed(2)}px)`);
+  return parts.join(" ");
 }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);

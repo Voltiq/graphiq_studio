@@ -75,16 +75,16 @@ export default function Toolbar({
             ariaLabel="Foreground color"
             align="right-end"
           />
+          <button
+            type="button"
+            className={styles.swap}
+            onClick={onSwap}
+            title="Swap colors (X)"
+            aria-label="Swap foreground and background colors"
+          >
+            <ArrowLeftRight size={9} />
+          </button>
         </div>
-        <button
-          type="button"
-          className={styles.swap}
-          onClick={onSwap}
-          title="Swap colors (X)"
-          aria-label="Swap foreground and background colors"
-        >
-          <ArrowLeftRight size={13} />
-        </button>
       </div>
     </aside>
   );
