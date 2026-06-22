@@ -1847,6 +1847,11 @@ export default function CanvasArea({
       }
       setHoverCursor((c) => (c === next ? c : next));
     }
+    // Hover feedback (Gradient): grab over a handle / midpoint, grabbing while dragging.
+    if (toolRef.current === "gradient") {
+      const next = gradDragRef.current ? "grabbing" : gradientHandleAt(toDoc(e)) ? "grab" : null;
+      setHoverCursor((c) => (c === next ? c : next));
+    }
     if (anchorRef.current) {
       const p = toDoc(e);
       onSelectionPivot({ x: Math.round(p.x), y: Math.round(p.y) });
@@ -2201,6 +2206,8 @@ export default function CanvasArea({
       gradDragRef.current = null;
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      // Pointer is still over the handle it just released → show "grab", not "grabbing".
+      setHoverCursor(gradientHandleAt(toDoc(e)) ? "grab" : null);
       ensureAnts();
       return;
     }
