@@ -3,7 +3,8 @@ import type { Rect } from "./view";
 import type { LayerNode } from "./layers";
 import { applyAdjustments, isDefaultAdjust, type Adjustments } from "./adjust";
 import { renderShape } from "./shapes";
-import type { ShapeKind } from "./tools";
+import { buildCanvasGradient } from "./gradient";
+import type { GradientStop, GradientType, ShapeKind } from "./tools";
 
 export interface BrushSettings {
   size: number; // px (document space)
@@ -360,6 +361,11 @@ export class PaintEngine {
   private shapeOrig: ImageData | null = null;
   private shapeBounds: Rect | null = null;
   private shapeEntry: Entry | null = null;
+  // Live gradient session (re-renderable until finalized by endGradient).
+  private gradLayer: string | null = null;
+  private gradOrig: ImageData | null = null;
+  private gradBounds: Rect | null = null;
+  private gradEntry: Entry | null = null;
   // Cached magic-wand source pixels, reused across live (tolerance) re-runs and
   // dropped on any layer mutation (see invalidateWandSrc).
   private wandSrc: {
@@ -393,6 +399,8 @@ export class PaintEngine {
   onAdjustEnd: () => void = () => {};
   /** Fired when a live shape session ends (so the UI can drop its handle). */
   onShapeEnd: () => void = () => {};
+  /** Fired when a live gradient session ends (so the UI can drop its handles). */
+  onGradientEnd: () => void = () => {};
   /** Extra content-change listeners (e.g. the live histogram panel). */
   private changeListeners = new Set<() => void>();
 
@@ -660,8 +668,9 @@ export class PaintEngine {
     label: string,
     side?: HistorySide,
   ) {
-    this.endAdjust(); // any other pixel op finalizes a live adjustment / shape
+    this.endAdjust(); // any other pixel op finalizes a live adjustment / shape / gradient
     this.endShape();
+    this.endGradient();
     if (this.pos < this.entries.length) this.entries.length = this.pos;
     this.entries.push({ layerId, rect, before, after, label, side });
     this.pos = this.entries.length;
@@ -672,6 +681,7 @@ export class PaintEngine {
   pushStructural(label: string, undo: () => void, redo: () => void) {
     this.endAdjust();
     this.endShape();
+    this.endGradient();
     if (this.pos < this.entries.length) this.entries.length = this.pos;
     this.entries.push({ label, side: { undo, redo } });
     this.pos = this.entries.length;
@@ -745,7 +755,8 @@ export class PaintEngine {
     radius: number,
   ) {
     if (box.w < 1 || box.h < 1) return;
-    this.endAdjust(); // a shape and an adjustment can't be live at once
+    this.endAdjust(); // a shape and an adjustment / gradient can't be live at once
+    this.endGradient();
     if (this.shapeLayer && this.shapeLayer !== layerId) this.endShape();
     const l = this.layer(layerId);
     const fresh = this.shapeLayer !== layerId || !this.shapeOrig || !this.shapeBounds;
@@ -790,6 +801,79 @@ export class PaintEngine {
     this.shapeBounds = null;
     this.shapeEntry = null;
     this.onShapeEnd();
+  }
+
+  /**
+   * Draw / redraw a "live" gradient onto a layer, clipped to the selection (or
+   * the whole layer). Re-renderable from its endpoints / midpoint / stops until
+   * finalized by endGradient — one coalescing "Gradient" history entry.
+   */
+  liveGradient(
+    layerId: string,
+    type: GradientType,
+    start: { x: number; y: number },
+    end: { x: number; y: number },
+    midpoint: number,
+    stops: GradientStop[],
+    sel: Rect[] | null = null,
+    selAngle = 0,
+    selPivot: { x: number; y: number } | null = null,
+    smooth = false,
+  ) {
+    this.endAdjust();
+    this.endShape();
+    if (this.gradLayer && this.gradLayer !== layerId) this.endGradient();
+    const l = this.layer(layerId);
+    const fresh = this.gradLayer !== layerId || !this.gradOrig || !this.gradBounds;
+    let b: Rect;
+    if (fresh) {
+      // Affected region: the selection bounds, else the whole layer.
+      const sb = sel && sel.length ? this.boundsOf(sel, selAngle, selPivot) : null;
+      b = sb ?? { x: 0, y: 0, w: this.w, h: this.h };
+      if (b.w < 1 || b.h < 1) return;
+      this.gradLayer = layerId;
+      this.gradBounds = b;
+      this.gradOrig = l.ctx.getImageData(b.x, b.y, b.w, b.h);
+      this.gradEntry = null;
+    } else {
+      b = this.gradBounds!;
+      l.ctx.globalAlpha = 1;
+      l.ctx.globalCompositeOperation = "source-over";
+      l.ctx.putImageData(this.gradOrig!, b.x, b.y); // restore pre-gradient pixels
+    }
+    l.ctx.save();
+    l.ctx.globalAlpha = 1;
+    l.ctx.globalCompositeOperation = "source-over";
+    if (sel && sel.length) this.clipTo(l.ctx, sel, selAngle, selPivot);
+    else {
+      l.ctx.beginPath();
+      l.ctx.rect(b.x, b.y, b.w, b.h);
+      l.ctx.clip();
+    }
+    l.ctx.fillStyle = buildCanvasGradient(l.ctx, type, start, end, midpoint, stops, smooth);
+    l.ctx.fillRect(b.x, b.y, b.w, b.h);
+    l.ctx.restore();
+    const after = l.ctx.getImageData(b.x, b.y, b.w, b.h);
+    if (!this.gradEntry) {
+      if (this.pos < this.entries.length) this.entries.length = this.pos;
+      this.gradEntry = { layerId, rect: b, before: this.gradOrig!, after, label: "Gradient" };
+      this.entries.push(this.gradEntry);
+      this.pos = this.entries.length;
+      this.emitHistory();
+    } else {
+      this.gradEntry.after = after;
+    }
+    this.emitChange();
+  }
+
+  /** Finalize the live gradient session, keeping its history entry. */
+  endGradient() {
+    if (!this.gradLayer) return;
+    this.gradLayer = null;
+    this.gradOrig = null;
+    this.gradBounds = null;
+    this.gradEntry = null;
+    this.onGradientEnd();
   }
 
   /** Clear (erase to transparent) the selection on a layer (records history).
@@ -1255,7 +1339,8 @@ export class PaintEngine {
     angle = 0,
     pivot: { x: number; y: number } | null = null,
   ): boolean {
-    this.endShape(); // finalize a live shape before lifting its pixels to transform
+    this.endShape(); // finalize a live shape / gradient before lifting pixels to transform
+    this.endGradient();
     if (this.floatActive) this.commitFloat();
     const src = this.boundsOf(rects, angle, pivot);
     if (!src) return false;
@@ -2197,8 +2282,9 @@ export class PaintEngine {
       this.layer(e.layerId).ctx.putImageData(e.before, e.rect.x, e.rect.y);
   }
   jumpTo(target: number) {
-    this.endAdjust(); // finalize a live adjustment / shape before navigating history
+    this.endAdjust(); // finalize a live adjustment / shape / gradient before navigating history
     this.endShape();
+    this.endGradient();
     target = Math.max(0, Math.min(this.entries.length, target));
     while (this.pos > target) {
       this.pos--;

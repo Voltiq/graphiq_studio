@@ -23,12 +23,15 @@ import {
   getTool,
   SAMPLE_SCOPE_OPTIONS,
   SAMPLE_SIZE_OPTIONS,
+  type GradientSettings,
+  type GradientType,
   type MoveMode,
   type SelectResizeMode,
   type ShapeKind,
   type ShapeSettings,
   type ToolId,
 } from "../lib/tools";
+import GradientControl from "./GradientControl";
 import type { BrushSettings } from "../lib/paint";
 import {
   ColorChip,
@@ -68,6 +71,10 @@ export default function OptionsBar({
   onResizeSmooth,
   wand,
   onWand,
+  bucket,
+  onBucket,
+  gradient,
+  onGradient,
   eyedropper,
   onEyedropper,
   shape,
@@ -90,6 +97,10 @@ export default function OptionsBar({
   onResizeSmooth: (v: boolean) => void;
   wand: { tolerance: number; contiguous: boolean; sampleAll: boolean };
   onWand: (patch: Partial<{ tolerance: number; contiguous: boolean; sampleAll: boolean }>) => void;
+  bucket: { tolerance: number; opacity: number; contiguous: boolean };
+  onBucket: (patch: Partial<{ tolerance: number; opacity: number; contiguous: boolean }>) => void;
+  gradient: GradientSettings;
+  onGradient: (patch: Partial<GradientSettings>) => void;
   eyedropper: { size: string; scope: string };
   onEyedropper: (patch: { size?: string; scope?: string }) => void;
 } & ShapeProps) {
@@ -118,6 +129,10 @@ export default function OptionsBar({
           onResizeSmooth,
           wand,
           onWand,
+          bucket,
+          onBucket,
+          gradient,
+          onGradient,
           eyedropper,
           onEyedropper,
           { shape, onShape, fill, onFill, stroke, onStroke },
@@ -141,6 +156,10 @@ function renderOptions(
   onResizeSmooth: (v: boolean) => void,
   wand: { tolerance: number; contiguous: boolean; sampleAll: boolean },
   onWand: (patch: Partial<{ tolerance: number; contiguous: boolean; sampleAll: boolean }>) => void,
+  bucket: { tolerance: number; opacity: number; contiguous: boolean },
+  onBucket: (patch: Partial<{ tolerance: number; opacity: number; contiguous: boolean }>) => void,
+  gradient: GradientSettings,
+  onGradient: (patch: Partial<GradientSettings>) => void,
   eyedropper: { size: string; scope: string },
   onEyedropper: (patch: { size?: string; scope?: string }) => void,
   shapeProps: ShapeProps,
@@ -376,18 +395,35 @@ function renderOptions(
       return (
         <>
           <Segmented
-            defaultValue="linear"
+            value={gradient.type}
+            onChange={(v) => onGradient({ type: v as GradientType })}
             options={[
               { value: "linear", text: "Linear" },
               { value: "radial", text: "Radial" },
               { value: "angle", text: "Angle" },
-              { value: "diamond", text: "Diamond" },
+              { value: "reflected", text: "Reflected" },
             ]}
           />
           <Divider />
-          <Slider label="Opacity" defaultValue={100} unit="%" />
-          <Toggle label="Reverse" />
-          <Toggle label="Dither" defaultChecked />
+          <GradientControl
+            gradient={gradient}
+            onGradient={onGradient}
+            fg={shapeProps.fill}
+            bg={shapeProps.stroke}
+          />
+          <Divider />
+          <Toggle
+            label="Reverse"
+            checked={gradient.reverse}
+            onChange={(v) => onGradient({ reverse: v })}
+          />
+          {gradient.type === "angle" && (
+            <Toggle
+              label="Smooth"
+              checked={gradient.smooth}
+              onChange={(v) => onGradient({ smooth: v })}
+            />
+          )}
         </>
       );
 
@@ -396,10 +432,24 @@ function renderOptions(
         <>
           <ColorChip color={foreground} onChange={onForeground} label="Fill color" />
           <Divider />
-          <Slider label="Tolerance" min={0} max={255} defaultValue={32} />
-          <Slider label="Opacity" defaultValue={100} unit="%" />
-          <Toggle label="Contiguous" defaultChecked />
-          <Toggle label="Anti-alias" defaultChecked />
+          <Slider
+            label="Tolerance"
+            min={0}
+            max={255}
+            value={bucket.tolerance}
+            onChange={(n) => onBucket({ tolerance: n })}
+          />
+          <Slider
+            label="Opacity"
+            unit="%"
+            value={bucket.opacity}
+            onChange={(n) => onBucket({ opacity: n })}
+          />
+          <Toggle
+            label="Contiguous"
+            checked={bucket.contiguous}
+            onChange={(v) => onBucket({ contiguous: v })}
+          />
         </>
       );
 

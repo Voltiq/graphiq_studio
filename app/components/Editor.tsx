@@ -14,6 +14,7 @@ import {
   DEFAULT_TOOL,
   SAMPLE_SIZE_PX,
   TOOL_BY_KEY,
+  type GradientSettings,
   type MoveMode,
   type SelectResizeMode,
   type ShapeSettings,
@@ -171,7 +172,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     smoothing: 0,
   });
   const [wand, setWand] = useState({ tolerance: 32, contiguous: true, sampleAll: false });
+  const [bucket, setBucket] = useState({ tolerance: 32, opacity: 100, contiguous: true });
   const [shape, setShape] = useState<ShapeSettings>({ kind: "rect", strokeWidth: 2, radius: 12 });
+  const [gradient, setGradient] = useState<GradientSettings>({
+    type: "linear",
+    reverse: false,
+    smooth: false,
+    stops: null,
+  });
   const [history, setHistory] = useState<HistorySummary>({ items: [{ label: "New" }], index: 0 });
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const [recentsOpen, setRecentsOpen] = useState(false);
@@ -1595,6 +1603,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onResizeSmooth={setResizeSmooth}
         wand={wand}
         onWand={(patch) => setWand((wd) => ({ ...wd, ...patch }))}
+        bucket={bucket}
+        onBucket={(patch) => setBucket((b) => ({ ...b, ...patch }))}
+        gradient={gradient}
+        onGradient={(patch) => setGradient((g) => ({ ...g, ...patch }))}
         eyedropper={{ size: sampleSizeLabel, scope: sampleScopeLabel }}
         onEyedropper={(patch) => {
           if (patch.size !== undefined) setSampleSizeLabel(patch.size);
@@ -1640,6 +1652,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           tool={tool}
           brush={activeBrush}
           color={paintColor}
+          bucket={bucket}
+          gradient={{
+            type: gradient.type,
+            reverse: gradient.reverse,
+            smooth: gradient.smooth,
+            stops: gradient.stops,
+            fg: foreground,
+            bg: background,
+          }}
           shape={{
             kind: shape.kind,
             strokeWidth: shape.strokeWidth,

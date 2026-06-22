@@ -3,10 +3,18 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Maximize2, Minus, Plus, X } from "lucide-react";
 import styles from "./CanvasArea.module.scss";
-import { clamp } from "../lib/color";
+import { clamp, parseColor, toHex8 } from "../lib/color";
 import { clampPan, normalizeRect, type Pan, type Rect } from "../lib/view";
-import type { MoveMode, SelectResizeMode, ShapeKind, ToolId } from "../lib/tools";
+import type {
+  GradientStop,
+  GradientType,
+  MoveMode,
+  SelectResizeMode,
+  ShapeKind,
+  ToolId,
+} from "../lib/tools";
 import { renderShape } from "../lib/shapes";
+import { resolveStops } from "../lib/gradient";
 import {
   PaintEngine,
   type BrushSettings,
@@ -363,6 +371,8 @@ export default function CanvasArea({
   tool,
   brush,
   color,
+  bucket,
+  gradient,
   shape,
   layers,
   activeLayerId,
@@ -411,6 +421,17 @@ export default function CanvasArea({
   tool: ToolId;
   brush: BrushSettings;
   color: string;
+  /** Paint-bucket settings (fill colour comes from `color`). */
+  bucket: { tolerance: number; opacity: number; contiguous: boolean };
+  /** Gradient settings + the colours used when no custom stops are set. */
+  gradient: {
+    type: GradientType;
+    reverse: boolean;
+    smooth: boolean;
+    stops: GradientStop[] | null;
+    fg: string;
+    bg: string;
+  };
   /** Shape-tool settings + colours (fill = primary, stroke = secondary). */
   shape: { kind: ShapeKind; strokeWidth: number; radius: number; fill: string; stroke: string };
   layers: LayerNode[];
@@ -491,6 +512,29 @@ export default function CanvasArea({
   // The committed-but-still-live shape (re-renderable until deselected). `box`
   // is the same object as its selection rect, so a selection change ends it.
   const liveShapeRef = useRef<{ layerId: string; box: Rect } | null>(null);
+  // Paint-bucket drag: the seed point + the previewed fill region (committed on
+  // release). The preview follows the cursor; recomputes are throttled.
+  const bucketSeedRef = useRef<{ x: number; y: number; shift: boolean; layerId: string | null } | null>(null);
+  const bucketRef = useRef<{ rects: Rect[]; color: string } | null>(null);
+  const bucketThrottle = useRef({ last: 0, timer: 0 });
+  const bucketOptsRef = useRef(bucket);
+  bucketOptsRef.current = bucket;
+  const colorRef = useRef(color);
+  colorRef.current = color;
+  // Live gradient: its endpoints + midpoint + the selection it was clipped to,
+  // re-renderable until committed. `drag` is the handle currently being dragged.
+  const gradientRef = useRef<{
+    layerId: string;
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+    mid: number;
+    sel: Rect[];
+    selAngle: number;
+    selPivot: { x: number; y: number } | null;
+  } | null>(null);
+  const gradDragRef = useRef<"start" | "end" | "mid" | null>(null);
+  const gradOptsRef = useRef(gradient);
+  gradOptsRef.current = gradient;
   const moveRef = useRef<{
     sx: number;
     sy: number;
@@ -771,6 +815,80 @@ export default function CanvasArea({
       ctx.restore();
     }
 
+    // --- paint-bucket: preview of the area that will be filled (follows cursor) ---
+    const bk = bucketRef.current;
+    if (bk && bk.rects.length) {
+      // Clip to the whole region and fill once. Filling each rect separately
+      // anti-aliases both sides of every shared edge, which shows as faint seam
+      // lines through a semi-transparent fill.
+      ctx.save();
+      ctx.beginPath();
+      for (const r of bk.rects) ctx.rect(p.x + r.x * s, p.y + r.y * s, r.w * s, r.h * s);
+      ctx.clip();
+      ctx.fillStyle = bk.color;
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.restore();
+    }
+
+    // --- gradient: the line, endpoint handles + the draggable midpoint tick ---
+    const grad = gradientRef.current;
+    if (grad) {
+      const ax = p.x + grad.start.x * s;
+      const ay = p.y + grad.start.y * s;
+      const bx = p.x + grad.end.x * s;
+      const by = p.y + grad.end.y * s;
+      const mx = ax + (bx - ax) * grad.mid;
+      const my = ay + (by - ay) * grad.mid;
+      ctx.setLineDash([]);
+      ctx.lineCap = "round";
+      // Connecting line (dark underlay + white).
+      for (const [w, col] of [
+        [3, "rgba(0,0,0,0.5)"],
+        [1, "#fff"],
+      ] as const) {
+        ctx.lineWidth = w;
+        ctx.strokeStyle = col;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+      }
+      // Endpoint dots.
+      const dot = (x: number, y: number) => {
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "rgba(0,0,0,0.75)";
+        ctx.stroke();
+      };
+      dot(ax, ay);
+      dot(bx, by);
+      // Perpendicular unit for the ticks.
+      const a = Math.atan2(by - ay, bx - ax) + Math.PI / 2;
+      const ux = Math.cos(a);
+      const uy = Math.sin(a);
+      const tick = (cx: number, cy: number, len: number, dw: number, lw: number) => {
+        for (const [w, col] of [
+          [dw, "rgba(0,0,0,0.5)"],
+          [lw, "#fff"],
+        ] as const) {
+          ctx.lineWidth = w;
+          ctx.strokeStyle = col;
+          ctx.beginPath();
+          ctx.moveTo(cx - ux * len, cy - uy * len);
+          ctx.lineTo(cx + ux * len, cy + uy * len);
+          ctx.stroke();
+        }
+      };
+      // Fixed marker at the geometric centre (50%) — a small reference tick.
+      tick(ax + (bx - ax) * 0.5, ay + (by - ay) * 0.5, 4, 2.5, 1);
+      // Draggable midpoint tick (where the colours' halfway point sits).
+      tick(mx, my, 7, 4, 2);
+      ctx.lineCap = "butt";
+    }
+
     // --- eyedropper: solid outline around the pixels being sampled ---
     const hov = hoverRef.current;
     if (toolRef.current === "eyedropper" && hov) {
@@ -853,6 +971,8 @@ export default function CanvasArea({
       dragRectRef.current ||
       lassoRef.current ||
       shapeRef.current ||
+      bucketRef.current ||
+      gradientRef.current ||
       (toolRef.current === "eyedropper" && hoverRef.current)
     ) {
       antsRaf.current = requestAnimationFrame(tickAnts);
@@ -938,6 +1058,21 @@ export default function CanvasArea({
     const live = liveShapeRef.current;
     if (live && selection[0] !== live.box) engine.endShape();
   }, [selection, engine]);
+
+  // Re-render the live gradient when its settings change (type / reverse / stops
+  // / colours), so it stays editable while its handles are up. Coalesced to one
+  // render per frame so dragging the colour picker (many ticks/s) stays smooth.
+  useEffect(() => {
+    if (!gradientRef.current) return;
+    const id = requestAnimationFrame(renderGradient);
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gradient.type, gradient.reverse, gradient.smooth, gradient.stops, gradient.fg, gradient.bg]);
+
+  // Commit the live gradient when leaving the gradient tool.
+  useEffect(() => {
+    if (tool !== "gradient") engine.endGradient();
+  }, [tool, engine]);
 
   // Live-update a magic-wand selection when its options change (e.g. dragging
   // the Tolerance slider) — re-run the wand from the same seed, reusing the
@@ -1148,6 +1283,11 @@ export default function CanvasArea({
     engine.onAdjustEnd = () => onAdjustEndRef.current();
     engine.onShapeEnd = () => {
       liveShapeRef.current = null;
+    };
+    engine.onGradientEnd = () => {
+      gradientRef.current = null;
+      gradDragRef.current = null;
+      ensureAnts();
     };
     paintRef.current = {
       undo: () => engine.undo(),
@@ -1413,6 +1553,67 @@ export default function CanvasArea({
     onZoomChangeRef.current(dir === 1 ? opts[0] : opts[opts.length - 1]);
   };
 
+  // Recompute the paint-bucket preview region from the current seed (reads refs
+  // so it stays correct when called from the throttle timer). `reuse` reuses the
+  // cached layer pixels (true after the first compute of a drag).
+  const recomputeBucket = (reuse: boolean) => {
+    const seed = bucketSeedRef.current;
+    if (!seed) return;
+    const o = bucketOptsRef.current;
+    const region = engine.magicWand(
+      seed.layerId ?? "",
+      seed.x,
+      seed.y,
+      { tolerance: o.tolerance, contiguous: !seed.shift && o.contiguous, sampleAll: false },
+      reuse,
+      null,
+    );
+    // No source (empty / no layer) → the whole canvas is the fill region.
+    const rects = region?.rects ?? [{ x: 0, y: 0, w: widthRef.current, h: heightRef.current }];
+    const c = parseColor(colorRef.current);
+    bucketRef.current = {
+      rects,
+      color: toHex8({ r: c.r, g: c.g, b: c.b, a: c.a * (o.opacity / 100) }),
+    };
+    ensureAnts();
+  };
+
+  // Re-render the live gradient from its current geometry + settings.
+  const renderGradient = () => {
+    const g = gradientRef.current;
+    if (!g) return;
+    const o = gradOptsRef.current;
+    engine.liveGradient(
+      g.layerId,
+      o.type,
+      g.start,
+      g.end,
+      g.mid,
+      resolveStops(o.stops, o.fg, o.bg, o.reverse),
+      g.sel.length ? g.sel : null,
+      g.selAngle,
+      g.selPivot,
+      o.smooth,
+    );
+  };
+
+  // Which gradient handle (if any) a doc-space point is over.
+  const gradientHandleAt = (p: { x: number; y: number }): "start" | "end" | "mid" | null => {
+    const g = gradientRef.current;
+    if (!g) return null;
+    const hit = 10 / (zoomRef.current / 100); // ~10 screen px in doc units
+    const mid = {
+      x: g.start.x + (g.end.x - g.start.x) * g.mid,
+      y: g.start.y + (g.end.y - g.start.y) * g.mid,
+    };
+    const near = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+      Math.hypot(a.x - b.x, a.y - b.y) <= hit;
+    if (near(p, g.end)) return "end";
+    if (near(p, g.start)) return "start";
+    if (near(p, mid)) return "mid";
+    return null;
+  };
+
   const onCanvasPointerDown = (e: React.PointerEvent) => {
     if (tool === "zoom") {
       // Left click zooms in, right click (or Alt) zooms out — toward the cursor.
@@ -1534,6 +1735,44 @@ export default function CanvasArea({
       viewRef.current?.setPointerCapture(e.pointerId);
       shapeRef.current = { x: p.x, y: p.y };
       shapeRectRef.current = { x: p.x, y: p.y, w: 0, h: 0 };
+      ensureAnts();
+      return;
+    }
+    if (tool === "bucket") {
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      const p = toDoc(e);
+      // Hold to preview the flood-fill region (Shift = all matching areas, even
+      // disconnected ones); it follows the cursor and only fills on release.
+      bucketSeedRef.current = { x: p.x, y: p.y, shift: e.shiftKey, layerId: activeLayerId };
+      bucketThrottle.current.last = performance.now();
+      recomputeBucket(false); // load source fresh
+      return;
+    }
+    if (tool === "gradient") {
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      const p = toDoc(e);
+      // Grab a handle of the current gradient to adjust it, otherwise draw a new one.
+      const hit = gradientHandleAt(p);
+      if (hit) {
+        gradDragRef.current = hit;
+        return;
+      }
+      engine.endGradient(); // commit the previous gradient
+      gradientRef.current = {
+        layerId: ensureLayer(),
+        start: p,
+        end: p,
+        mid: 0.5,
+        sel: selection.slice(),
+        selAngle: selectionAngle,
+        selPivot: selectionPivot,
+      };
+      gradDragRef.current = "end";
+      renderGradient();
       ensureAnts();
       return;
     }
@@ -1710,6 +1949,42 @@ export default function CanvasArea({
       // Add a point only after moving ~2 screen px, to keep the path light.
       const minD = 2 / (zoomRef.current / 100);
       if (Math.hypot(p.x - last.x, p.y - last.y) >= minD) pts.push({ x: p.x, y: p.y });
+      ensureAnts();
+      return;
+    }
+    if (bucketSeedRef.current) {
+      const p = toDoc(e);
+      bucketSeedRef.current = { ...bucketSeedRef.current, x: p.x, y: p.y, shift: e.shiftKey };
+      // Throttle the flood recompute so big fills don't stall the drag.
+      const t = bucketThrottle.current;
+      const now = performance.now();
+      clearTimeout(t.timer);
+      if (now - t.last >= 40) {
+        t.last = now;
+        recomputeBucket(true);
+      } else {
+        t.timer = window.setTimeout(() => {
+          bucketThrottle.current.last = performance.now();
+          recomputeBucket(true);
+        }, 40 - (now - t.last));
+      }
+      return;
+    }
+    if (gradDragRef.current && gradientRef.current) {
+      const p = toDoc(e);
+      const g = gradientRef.current;
+      if (gradDragRef.current === "end") g.end = { x: p.x, y: p.y };
+      else if (gradDragRef.current === "start") g.start = { x: p.x, y: p.y };
+      else {
+        // Project the cursor onto the line to pick the midpoint position.
+        const dx = g.end.x - g.start.x;
+        const dy = g.end.y - g.start.y;
+        const len2 = dx * dx + dy * dy;
+        let t = clamp(len2 > 0 ? ((p.x - g.start.x) * dx + (p.y - g.start.y) * dy) / len2 : 0.5, 0.05, 0.95);
+        if (Math.abs(t - 0.5) < 0.04) t = 0.5; // snap to the centre when close
+        g.mid = t;
+      }
+      renderGradient();
       ensureAnts();
       return;
     }
@@ -1900,6 +2175,32 @@ export default function CanvasArea({
       } else if (mode === "new") {
         onSelectionChange([]); // a click / empty lasso clears (plain only)
       }
+      ensureAnts();
+      return;
+    }
+    if (bucketSeedRef.current) {
+      clearTimeout(bucketThrottle.current.timer);
+      // Recompute precisely from the release point, then fill that region.
+      const p = toDoc(e);
+      bucketSeedRef.current = { ...bucketSeedRef.current, x: p.x, y: p.y, shift: e.shiftKey };
+      recomputeBucket(true);
+      const region = bucketRef.current;
+      bucketSeedRef.current = null;
+      bucketRef.current = null;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      if (region && region.rects.length) {
+        engine.fillSelection(ensureLayer(), region.rects, region.color);
+      }
+      ensureAnts();
+      return;
+    }
+    if (gradDragRef.current) {
+      // Stop dragging the handle; the gradient stays live (handles remain) until
+      // you switch tools, start a new one, or make another edit.
+      gradDragRef.current = null;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       ensureAnts();
       return;
     }
@@ -2137,7 +2438,9 @@ export default function CanvasArea({
                               tool === "select" ||
                               tool === "lasso" ||
                               tool === "wand" ||
-                              tool === "shape"
+                              tool === "shape" ||
+                              tool === "bucket" ||
+                              tool === "gradient"
                             ? "crosshair"
                             : "default"),
                 // Crisp, individually-visible pixels when zoomed in; smooth when zoomed out.

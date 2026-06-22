@@ -3,6 +3,7 @@
 import {
   Activity,
   ArrowDownToLine,
+  Blend,
   BoxSelect,
   Brush,
   ClipboardPaste,
@@ -41,6 +42,7 @@ function iconForStep(label: string, isFirst: boolean): LucideIcon {
   if (l.includes("brush")) return Brush;
   if (l.includes("eras")) return Eraser; // Erase
   if (l.includes("fill")) return PaintBucket;
+  if (l.includes("gradient")) return Blend;
   if (l.includes("shape")) return Shapes;
   if (l.includes("cut")) return Scissors;
   if (l.includes("deselect")) return SquareDashed; // Deselect

@@ -90,6 +90,31 @@ export const DEFAULT_TOOL: ToolId = "brush";
 /** Move tool sub-mode: move the marquee outline only, or the actual pixels. */
 export type MoveMode = "pixels" | "selection";
 
+/** Gradient tool: how the colour band is laid out. */
+export type GradientType = "linear" | "radial" | "angle" | "reflected";
+
+/** One colour stop of a gradient (pos 0..1 along the band). */
+export interface GradientStop {
+  color: string;
+  pos: number;
+}
+
+/** A saved multi-colour gradient. */
+export interface GradientPreset {
+  id: string;
+  name: string;
+  stops: GradientStop[];
+}
+
+/** Gradient tool settings. `stops: null` means use the primary→secondary colour. */
+export interface GradientSettings {
+  type: GradientType;
+  reverse: boolean;
+  /** Angle gradients only: blend across the wrap seam to soften its hard edge. */
+  smooth: boolean;
+  stops: GradientStop[] | null;
+}
+
 /** Shape tool: the geometry being drawn. */
 export type ShapeKind = "rect" | "ellipse" | "tri";
 
