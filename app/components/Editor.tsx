@@ -10,13 +10,34 @@ import RightDock, { type PanelVisibility } from "./RightDock";
 import StatusBar from "./StatusBar";
 import CanvasSizeDialog, { type CanvasSize } from "./CanvasSizeDialog";
 import PasteDialog, { type PasteDest } from "./PasteDialog";
+import PreferencesDialog from "./PreferencesDialog";
+import TooltipHost from "./Tooltip";
+import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
+import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
 import {
+  DEFAULT_BLUR,
+  DEFAULT_BLUR_FX,
+  DEFAULT_CLONE,
+  DEFAULT_CROP,
+  DEFAULT_DODGE,
+  DEFAULT_TEXT,
   DEFAULT_TOOL,
   SAMPLE_SIZE_PX,
   TOOL_BY_KEY,
+  cropAspect,
+  type BlurFxScope,
+  type BlurFxSettings,
+  type BlurSettings,
+  type CloneSettings,
+  type CropSettings,
+  type DodgeSettings,
+  type TextSettings,
+  type VectorText,
   type GradientSettings,
   type MoveMode,
+  type PenSettings,
   type SelectResizeMode,
+  type MarqueeShape,
   type ShapeSettings,
   type ToolId,
 } from "../lib/tools";
@@ -47,7 +68,12 @@ import type {
   HistorySummary,
   ImageTransform,
   PendingPaste,
+  TextRenderSpec,
 } from "../lib/paint";
+import BlurGalleryDialog from "./BlurGalleryDialog";
+import TrimDialog, { type TrimMode, type TrimSides } from "./TrimDialog";
+import SelectModifyDialog from "./SelectModifyDialog";
+import Toast from "./Toast";
 import SaveAsDialog from "./SaveAsDialog";
 import RecentsDialog from "./RecentsDialog";
 import ExportDialog from "./ExportDialog";
@@ -172,7 +198,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     smoothing: 0,
   });
   const [wand, setWand] = useState({ tolerance: 32, contiguous: true, sampleAll: false });
-  const [bucket, setBucket] = useState({ tolerance: 32, opacity: 100, contiguous: true });
+  const [bucket, setBucket] = useState({
+    tolerance: 32,
+    opacity: 100,
+    contiguous: true,
+    antialias: false,
+  });
   const [shape, setShape] = useState<ShapeSettings>({ kind: "rect", strokeWidth: 2, radius: 12 });
   const [gradient, setGradient] = useState<GradientSettings>({
     type: "linear",
@@ -180,6 +211,49 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     smooth: false,
     stops: null,
   });
+  const [pen, setPen] = useState<PenSettings>({ width: 8, taper: 0, bend: 0 });
+  const [blur, setBlur] = useState<BlurSettings>(DEFAULT_BLUR);
+  const [clone, setClone] = useState<CloneSettings>(DEFAULT_CLONE);
+  const [dodge, setDodge] = useState<DodgeSettings>(DEFAULT_DODGE);
+  const [textSettings, setTextSettings] = useState<TextSettings>(DEFAULT_TEXT);
+  const [cropSettings, setCropSettings] = useState<CropSettings>(DEFAULT_CROP);
+  // The pending crop rectangle (doc coords) while the crop tool is active; null
+  // means no crop is in progress. Edited interactively on the canvas overlay and
+  // via the options bar; committed with Enter / ✓, dropped with Esc.
+  const [cropBox, setCropBox] = useState<Rect | null>(null);
+  const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFS);
+  const [prefsOpen, setPrefsOpen] = useState(false);
+  const [trimOpen, setTrimOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef(0);
+  // Show a brief in-app notification (replaces blocking window.alert).
+  const showToast = (message: string) => {
+    setToast(message);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 3600);
+  };
+  const dismissToast = () => {
+    window.clearTimeout(toastTimer.current);
+    setToast(null);
+  };
+  const [blurFxOpen, setBlurFxOpen] = useState(false);
+  const [blurFx, setBlurFx] = useState<BlurFxSettings>(DEFAULT_BLUR_FX);
+  // The composited result of the live blur preview, shown inside the gallery dialog.
+  const [blurPreview, setBlurPreview] = useState<HTMLCanvasElement | null>(null);
+  const blurFxSessionRef = useRef<string[] | null>(null);
+  const blurFxTimerRef = useRef(0);
+  const blurFxOpenRef = useRef(false);
+  blurFxOpenRef.current = blurFxOpen;
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
+  // Load persisted preferences once on the client (localStorage is unavailable on the server).
+  useEffect(() => setPrefs(loadPrefs()), []);
+  const updatePrefs = (patch: Partial<Preferences>) =>
+    setPrefs((p) => {
+      const next = { ...p, ...patch };
+      savePrefs(next);
+      return next;
+    });
   const [history, setHistory] = useState<HistorySummary>({ items: [{ label: "New" }], index: 0 });
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const [recentsOpen, setRecentsOpen] = useState(false);
@@ -196,11 +270,106 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [compareComposite, setCompareComposite] = useState<HTMLCanvasElement | null | undefined>(undefined);
   const [adjust, setAdjust] = useState<Adjustments>(DEFAULT_ADJUST);
   const [adjustFilter, setAdjustFilter] = useState("Original");
+  const [selectionFeather, setSelectionFeather] = useState(0);
+  const selectionFeatherRef = useRef(0);
+  selectionFeatherRef.current = selectionFeather;
+  const [selectModify, setSelectModify] = useState<"feather" | "grow" | null>(null);
   const [moveMode, setMoveMode] = useState<MoveMode>("pixels");
   const [resizeMode, setResizeMode] = useState<SelectResizeMode>("bounds");
   const [resizeSmooth, setResizeSmooth] = useState(true);
+  const [marqueeShape, setMarqueeShape] = useState<MarqueeShape>("rect");
+  const marqueeShapeRef = useRef(marqueeShape);
+  marqueeShapeRef.current = marqueeShape;
+  const [triangleApex, setTriangleApex] = useState(0.5);
   const [sampleSizeLabel, setSampleSizeLabel] = useState("Point sample");
   const [sampleScopeLabel, setSampleScopeLabel] = useState("All layers");
+
+  // Restore every options-bar setting from the last session (client-only, so the
+  // server-rendered defaults don't mismatch), then persist them on any change.
+  useEffect(() => {
+    const p = loadToolPrefs();
+    if (p.foreground) setForeground(p.foreground);
+    if (p.background) setBackground(p.background);
+    if (p.brush) setBrush((s) => ({ ...s, ...p.brush }));
+    if (p.eraser) setEraser((s) => ({ ...s, ...p.eraser }));
+    if (p.pencil) setPencil((s) => ({ ...s, ...p.pencil }));
+    if (p.wand) setWand((s) => ({ ...s, ...p.wand }));
+    if (p.bucket) setBucket((s) => ({ ...s, ...p.bucket }));
+    if (p.shape) setShape((s) => ({ ...s, ...p.shape }));
+    if (p.gradient) setGradient((s) => ({ ...s, ...p.gradient }));
+    if (p.pen) setPen((s) => ({ ...s, ...p.pen }));
+    if (p.blur) setBlur((s) => ({ ...s, ...p.blur }));
+    if (p.clone) setClone((s) => ({ ...s, ...p.clone }));
+    if (p.dodge) setDodge((s) => ({ ...s, ...p.dodge }));
+    if (p.text) setTextSettings((s) => ({ ...s, ...p.text }));
+    if (p.crop) setCropSettings((s) => ({ ...s, ...p.crop }));
+    if (p.moveMode) setMoveMode(p.moveMode);
+    if (p.resizeMode) setResizeMode(p.resizeMode);
+    if (typeof p.resizeSmooth === "boolean") setResizeSmooth(p.resizeSmooth);
+    if (p.marqueeShape) setMarqueeShape(p.marqueeShape);
+    if (typeof p.triangleApex === "number") setTriangleApex(p.triangleApex);
+    if (p.sampleSize) setSampleSizeLabel(p.sampleSize);
+    if (p.sampleScope) setSampleScopeLabel(p.sampleScope);
+  }, []);
+  const toolSaveReady = useRef(false);
+  useEffect(() => {
+    if (!toolSaveReady.current) {
+      toolSaveReady.current = true; // skip the first run (defaults / just-loaded)
+      return;
+    }
+    const id = window.setTimeout(
+      () =>
+        saveToolPrefs({
+          foreground,
+          background,
+          brush,
+          eraser,
+          pencil,
+          wand,
+          bucket,
+          shape,
+          gradient,
+          pen,
+          blur,
+          clone,
+          dodge,
+          text: textSettings,
+          crop: cropSettings,
+          moveMode,
+          resizeMode,
+          resizeSmooth,
+          marqueeShape,
+          triangleApex,
+          sampleSize: sampleSizeLabel,
+          sampleScope: sampleScopeLabel,
+        }),
+      250,
+    );
+    return () => window.clearTimeout(id);
+  }, [
+    foreground,
+    background,
+    brush,
+    eraser,
+    pencil,
+    wand,
+    bucket,
+    shape,
+    gradient,
+    pen,
+    blur,
+    clone,
+    dodge,
+    textSettings,
+    cropSettings,
+    moveMode,
+    resizeMode,
+    resizeSmooth,
+    marqueeShape,
+    triangleApex,
+    sampleSizeLabel,
+    sampleScopeLabel,
+  ]);
   const [pasteSrc, setPasteSrc] = useState<PasteSrc | null>(null);
   const [pendingPaste, setPendingPaste] = useState<PendingPaste | null>(null);
   const [pendingLoads, setPendingLoads] = useState<PendingLoad[]>([]);
@@ -257,10 +426,20 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const selRef = useRef(active.selection);
   const activeLayerRef = useRef(active.activeLayerId);
   const activeDocRef = useRef(active);
+  const toolRef = useRef(tool);
+  const cropBoxRef = useRef(cropBox);
+  const cropSettingsRef = useRef(cropSettings);
+  const blurRef = useRef(blur);
+  const textSettingsRef = useRef(textSettings);
   activeIdRef.current = activeId;
   selRef.current = active.selection;
   activeLayerRef.current = active.activeLayerId;
   activeDocRef.current = active;
+  toolRef.current = tool;
+  cropBoxRef.current = cropBox;
+  cropSettingsRef.current = cropSettings;
+  blurRef.current = blur;
+  textSettingsRef.current = textSettings;
 
   // Where the last in-app copy came from, so an in-app paste can drop in place.
   const copyOriginRef = useRef({ x: 0, y: 0 });
@@ -340,8 +519,206 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     eng.pushStructural(TRANSFORM_LABEL[kind], backward, forward);
   };
 
+  // Image ▸ Crop — crop the canvas to the current selection's (axis-aligned) bounds.
+  const cropToSelection = () => {
+    const d = activeDocRef.current;
+    if (!d.selection.length) {
+      showToast("Crop trims the canvas to the selection — make a selection first.");
+      return;
+    }
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const r of d.selection) {
+      x0 = Math.min(x0, r.x);
+      y0 = Math.min(y0, r.y);
+      x1 = Math.max(x1, r.x + r.w);
+      y1 = Math.max(y1, r.y + r.h);
+    }
+    // A rotated selection: take the axis-aligned bounds of the rotated corners.
+    if (d.selectionAngle) {
+      const c = d.selectionPivot ?? { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+      const cos = Math.cos(d.selectionAngle);
+      const sin = Math.sin(d.selectionAngle);
+      const corners: [number, number][] = [
+        [x0, y0],
+        [x1, y0],
+        [x1, y1],
+        [x0, y1],
+      ];
+      x0 = Infinity;
+      y0 = Infinity;
+      x1 = -Infinity;
+      y1 = -Infinity;
+      for (const [px, py] of corners) {
+        const rx = c.x + (px - c.x) * cos - (py - c.y) * sin;
+        const ry = c.y + (px - c.x) * sin + (py - c.y) * cos;
+        x0 = Math.min(x0, rx);
+        y0 = Math.min(y0, ry);
+        x1 = Math.max(x1, rx);
+        y1 = Math.max(y1, ry);
+      }
+    }
+    cropToRect({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, "Crop");
+  };
+
+  // Image ▸ Trim — crop away a uniform border (transparent, or a corner colour),
+  // on the chosen sides. Scans the composited image for the content bounds.
+  const trimImage = (mode: TrimMode, sides: TrimSides) => {
+    const d = activeDocRef.current;
+    const comp = paintRef.current?.exportComposite(d.layers);
+    const ctx = comp?.getContext("2d");
+    if (!comp || !ctx) return;
+    const w = comp.width;
+    const h = comp.height;
+    const data = ctx.getImageData(0, 0, w, h).data;
+    const ref = mode === "bottom-right" ? ((h - 1) * w + (w - 1)) * 4 : 0;
+    const rr = data[ref];
+    const rg = data[ref + 1];
+    const rb = data[ref + 2];
+    const ra = data[ref + 3];
+    const trimmable = (i: number) =>
+      mode === "transparent"
+        ? data[i + 3] === 0
+        : data[i] === rr && data[i + 1] === rg && data[i + 2] === rb && data[i + 3] === ra;
+    let minX = w;
+    let minY = h;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (!trimmable((y * w + x) * 4)) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < 0) {
+      showToast("Nothing to trim — the image has no border to remove.");
+      return;
+    }
+    const left = sides.left ? minX : 0;
+    const top = sides.top ? minY : 0;
+    const right = sides.right ? maxX + 1 : w;
+    const bottom = sides.bottom ? maxY + 1 : h;
+    cropToRect({ x: left, y: top, w: right - left, h: bottom - top }, "Trim");
+  };
+
+  // Crop the document to `rect` (clamped to the canvas), as one undoable step —
+  // shared by the Crop tool, Image ▸ Crop and Image ▸ Trim.
+  const cropToRect = (rect: Rect, label: string, angle = 0) => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    if (!eng || !d.layers.length) return;
+    const x = Math.max(0, Math.round(rect.x));
+    const y = Math.max(0, Math.round(rect.y));
+    const r: Rect = {
+      x,
+      y,
+      w: Math.max(1, Math.min(Math.round(rect.w), d.width - x)),
+      h: Math.max(1, Math.min(Math.round(rect.h), d.height - y)),
+    };
+    if (angle === 0 && r.x === 0 && r.y === 0 && r.w === d.width && r.h === d.height) return; // no-op
+    const docId = activeIdRef.current;
+    const leafIds = collectLeafIds(d.layers);
+    const snap = eng.cropSnapshot(leafIds);
+    const setDims = (w: number, h: number) =>
+      setDocs((ds) =>
+        ds.map((x2) =>
+          x2.id === docId
+            ? { ...x2, width: w, height: h, selection: [], selectionAngle: 0, selectionPivot: null }
+            : x2,
+        ),
+      );
+    const redo = () => {
+      eng.applyCrop(r, leafIds, angle);
+      setDims(r.w, r.h);
+    };
+    const undo = () => {
+      eng.cropRestore(snap);
+      setDims(snap.w, snap.h);
+    };
+    redo();
+    eng.pushStructural(label, undo, redo);
+  };
+
+  // ---- Crop tool ----------------------------------------------------------
+  // Reset the pending crop box to the whole document (also the initial box when
+  // the crop tool is first selected). Straighten is left at 0.
+  const resetCropBox = useCallback(() => {
+    const d = activeDocRef.current;
+    setCropBox({ x: 0, y: 0, w: d.width, h: d.height });
+    setCropSettings((s) => ({ ...s, straighten: 0 }));
+  }, []);
+
+  // Commit the pending crop: snapshot, crop every leaf to the box (rotating by the
+  // straighten angle), resize the document, and fold it into one undoable step.
+  const applyCropNow = useCallback(() => {
+    const box = cropBoxRef.current;
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    if (!box || !eng || !d.layers.length) return;
+    const angle = cropSettingsRef.current.straighten;
+    const rect: Rect = {
+      x: Math.round(box.x),
+      y: Math.round(box.y),
+      w: Math.max(1, Math.round(box.w)),
+      h: Math.max(1, Math.round(box.h)),
+    };
+    // A no-op crop (full canvas, no straighten) isn't worth a history entry.
+    if (
+      angle === 0 &&
+      rect.x === 0 &&
+      rect.y === 0 &&
+      rect.w === d.width &&
+      rect.h === d.height
+    )
+      return;
+    const docId = activeIdRef.current;
+    const leafIds = collectLeafIds(d.layers);
+    const snap = eng.cropSnapshot(leafIds);
+    const setDims = (w: number, h: number) =>
+      setDocs((ds) =>
+        ds.map((x) =>
+          x.id === docId
+            ? { ...x, width: w, height: h, selection: [], selectionAngle: 0, selectionPivot: null }
+            : x,
+        ),
+      );
+    const redo = () => {
+      eng.applyCrop(rect, leafIds, angle);
+      setDims(rect.w, rect.h);
+    };
+    const undo = () => {
+      eng.cropRestore(snap);
+      setDims(snap.w, snap.h);
+    };
+    redo();
+    eng.pushStructural("Crop", undo, redo);
+    // Re-seat the crop box to the new, full canvas so the tool stays usable.
+    setCropBox({ x: 0, y: 0, w: rect.w, h: rect.h });
+    setCropSettings((s) => ({ ...s, straighten: 0 }));
+  }, []);
+
+  // Entering the crop tool (or switching documents while in it) seats the box on
+  // the whole canvas; leaving the tool drops the pending crop without applying it.
+  useEffect(() => {
+    if (tool !== "crop") {
+      setCropBox(null);
+      return;
+    }
+    const d = activeDocRef.current;
+    setCropBox({ x: 0, y: 0, w: d.width, h: d.height });
+    setCropSettings((s) => ({ ...s, straighten: 0 }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool, activeId]);
+
   // Setting a (new) selection resets its rotation transform.
-  const setSelection = (rects: Rect[]) =>
+  const setSelection = (rects: Rect[]) => {
+    setSelectionFeather(0); // a fresh selection starts unfeathered
     setDocs((ds) =>
       ds.map((d) =>
         d.id === activeIdRef.current
@@ -349,6 +726,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           : d,
       ),
     );
+  };
   // Update only the selection rects, preserving the rotation transform.
   const setSelectionRects = (rects: Rect[]) =>
     setDocs((ds) => ds.map((d) => (d.id === activeIdRef.current ? { ...d, selection: rects } : d)));
@@ -391,8 +769,37 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const before = selStateOf(activeDocRef.current);
     const after: SelState = { rects, angle, pivot };
     if (sameSelState(before, after)) return; // no-op → don't journal it
+    setSelectionFeather(0); // a changed selection region resets feather (Grow re-applies it)
     setSelState(docId, after);
     paintRef.current?.pushStructural(label, () => setSelState(docId, before), () => setSelState(docId, after));
+  };
+
+  // Select ▸ Grow — expand the selection rects outward by `px`, keeping feather.
+  const growSelection = (px: number) => {
+    const d = activeDocRef.current;
+    if (!d.selection.length) {
+      showToast("Grow needs an active selection — make one first.");
+      return;
+    }
+    const feather = selectionFeatherRef.current;
+    const grown = d.selection.map((r) => {
+      const x = Math.max(0, r.x - px);
+      const y = Math.max(0, r.y - px);
+      const right = Math.min(d.width, r.x + r.w + px);
+      const bottom = Math.min(d.height, r.y + r.h + px);
+      return { x, y, w: Math.max(1, right - x), h: Math.max(1, bottom - y) };
+    });
+    commitSelection("Grow", grown, d.selectionAngle, d.selectionPivot);
+    setSelectionFeather(feather); // growing keeps the feather radius
+  };
+
+  // Select ▸ Feather — soften the selection edges by `px` for fills/erases/moves.
+  const featherSelection = (px: number) => {
+    if (!activeDocRef.current.selection.length) {
+      showToast("Feather needs an active selection — make one first.");
+      return;
+    }
+    setSelectionFeather(px);
   };
 
   const selectAll = () => {
@@ -415,6 +822,20 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (!d.selection.length) return; // nothing selected → inverse is undefined here
     commitFloatIfAny();
     commitSelection("Invert Selection", invertRects(d.selection, d.width, d.height));
+  };
+
+  // Enter transform via the marquee's handles (drag a corner/edge to scale, the
+  // ring to rotate). `content` true = Free Transform (moves the pixels); false =
+  // Transform Selection (reshapes the marquee outline only). With no selection
+  // there's no outline to reshape, so both transform the whole layer's content.
+  const enterTransform = (content: boolean) => {
+    const d = activeDocRef.current;
+    if (!d.layers.length || !d.activeLayerId) return; // need a layer to transform
+    commitFloatIfAny();
+    const hasSel = d.selection.length > 0;
+    if (!hasSel) setSelection([{ x: 0, y: 0, w: d.width, h: d.height }]);
+    setResizeMode(content || !hasSel ? "content" : "bounds");
+    setTool("select");
   };
 
   // ---- Layer operations (act on the active document) ----
@@ -500,6 +921,108 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (node) after = insertRelative(before, leaf, node.id, true);
     else after = [leaf, ...before];
     commitLayerChange("New Layer", before, selNow(), after, single(leaf.id));
+  };
+
+  type TextGeom = { x: number; y: number; boxW: number | null; value: string };
+  const textLayerName = (value: string) => value.trim().split("\n")[0].slice(0, 24) || "Text";
+  // Build a render spec from the current text settings + a geometry/value.
+  const buildTextSpec = (p: TextGeom): TextRenderSpec => {
+    const t = textSettingsRef.current;
+    return {
+      text: p.value,
+      x: p.x,
+      y: p.y,
+      boxW: p.boxW,
+      fontFamily: t.fontFamily,
+      fontSize: t.fontSize,
+      bold: t.bold,
+      italic: t.italic,
+      underline: t.underline,
+      strike: t.strike,
+      align: t.align,
+      lineHeight: t.lineHeight,
+      tracking: t.tracking,
+      color: t.color,
+      antialias: t.antialias,
+    };
+  };
+  const textVectorOf = (spec: TextRenderSpec): VectorText => ({
+    type: "text",
+    ...spec,
+    bbox: paintRef.current?.textBounds(spec) ?? { x: spec.x, y: spec.y, w: 0, h: 0 },
+  });
+  const specFromTextVector = (v: VectorText): TextRenderSpec => ({
+    text: v.text,
+    x: v.x,
+    y: v.y,
+    boxW: v.boxW,
+    fontFamily: v.fontFamily,
+    fontSize: v.fontSize,
+    bold: v.bold,
+    italic: v.italic,
+    underline: v.underline,
+    strike: v.strike,
+    align: v.align,
+    lineHeight: v.lineHeight,
+    tracking: v.tracking,
+    color: v.color,
+    antialias: v.antialias,
+  });
+
+  // Commit a NEW text block: add a layer named after the text, rasterize it, and
+  // keep its vector source on the layer (so it stays re-editable) — one "Type" step.
+  const placeText = (p: TextGeom) => {
+    if (!p.value.trim()) return;
+    const before = active.layers;
+    const id = nextLeafId();
+    const spec = buildTextSpec(p);
+    const leaf: Layer = {
+      id,
+      type: "layer",
+      name: textLayerName(p.value),
+      visible: true,
+      opacity: 100,
+      blend: "Normal",
+      vector: textVectorOf(spec),
+    };
+    const node = active.activeLayerId ? findNode(before, active.activeLayerId) : null;
+    let after: LayerNode[];
+    if (node && node.type === "group") after = insertInGroup(before, leaf, node.id);
+    else if (node) after = insertRelative(before, leaf, node.id, true);
+    else after = [leaf, ...before];
+    commitLayerChange("Type", before, selNow(), after, single(id), () =>
+      paintRef.current?.renderText(id, spec),
+    );
+  };
+
+  // Commit a re-edit of an existing text layer: re-rasterize + update its vector
+  // in place (one "Edit Text" step that renders from the old/new vector on undo/redo).
+  const updateText = (layerId: string, p: TextGeom) => {
+    const eng = paintRef.current;
+    const docId = activeIdRef.current;
+    const treeBefore = activeDocRef.current.layers;
+    const node = findNode(treeBefore, layerId);
+    if (!eng || !node || node.type !== "layer") return;
+    const oldVec = node.vector?.type === "text" ? node.vector : null;
+    const spec = buildTextSpec(p);
+    const newVec = textVectorOf(spec);
+    const treeAfter = updateNode(treeBefore, layerId, {
+      vector: newVec,
+      name: textLayerName(p.value),
+    });
+    const setLayers = (tree: LayerNode[]) =>
+      setDocs((ds) => ds.map((d) => (d.id === docId ? { ...d, layers: tree } : d)));
+    const redo = () => {
+      eng.renderText(layerId, spec);
+      setLayers(treeAfter);
+    };
+    const undo = () => {
+      if (oldVec) eng.renderText(layerId, specFromTextVector(oldVec));
+      else eng.clearLayerPixels(layerId);
+      setLayers(treeBefore);
+    };
+    redo();
+    eng.pushStructural("Edit Text", undo, redo);
   };
 
   const removeSelected = () => {
@@ -742,6 +1265,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       d.selectionAngle,
       d.selectionPivot,
       "Cut",
+      selectionFeatherRef.current,
     );
   };
 
@@ -985,7 +1509,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     try {
       const [handle] = await picker({
         multiple: false,
-        types: [{ description: "Aperture Project", accept: { "application/json": [`.${PROJECT_EXT}`] } }],
+        types: [{ description: "Graphiq Project", accept: { "application/json": [`.${PROJECT_EXT}`] } }],
       });
       const file = await handle.getFile();
       if (loadProjectText(await file.text())) addRecent(file.name, { handle });
@@ -1026,6 +1550,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           visible: n.visible,
           opacity: n.opacity,
           blend: n.blend,
+          ...(n.vector ? { vector: n.vector } : {}),
         };
       });
 
@@ -1059,8 +1584,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const loadProjectText = (text: string): boolean => {
     try {
       const parsed = JSON.parse(text);
-      if (parsed?.format !== "aperture-project" || !Array.isArray(parsed.layers)) {
-        window.alert("This file isn't a valid Aperture project (.aproj).");
+      // Accept the current id plus the legacy "aperture-project" so older files open.
+      const fmt = parsed?.format;
+      if ((fmt !== "graphiq-project" && fmt !== "aperture-project") || !Array.isArray(parsed.layers)) {
+        window.alert("This file isn't a valid Graphiq project (.aproj).");
         return false;
       }
       loadProject(parsed as ProjectFile);
@@ -1091,6 +1618,156 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       await saveImageBlob(blob, `${base}.${opts.format.ext}`, opts.format);
     }
     setExportComposite(null);
+  };
+
+  // ---- Print (flatten → browser print dialog) ----
+  // Render the active document's composite, then print it from a hidden iframe
+  // (avoids popup blockers and prints only the artwork, not the whole app UI).
+  const printCanvas = () => {
+    const composite = paintRef.current?.exportComposite(activeDocRef.current.layers);
+    if (!composite) return;
+    const url = composite.toDataURL("image/png");
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("aria-hidden", "true");
+    iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
+    document.body.appendChild(iframe);
+    const cw = iframe.contentWindow;
+    const cd = iframe.contentDocument ?? cw?.document;
+    if (!cw || !cd) {
+      iframe.remove();
+      return;
+    }
+    cd.open();
+    cd.write(
+      '<!doctype html><html><head><meta charset="utf-8"><style>' +
+        "@page{margin:10mm;}" +
+        "*{margin:0;padding:0;box-sizing:border-box;}" +
+        ".wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}" +
+        ".wrap img{max-width:100%;max-height:100%;}" +
+        '</style></head><body><div class="wrap"><img alt=""></div></body></html>',
+    );
+    cd.close();
+    cd.title = activeDocRef.current.name;
+    let done = false;
+    let printed = false;
+    const cleanup = () => {
+      if (done) return;
+      done = true;
+      setTimeout(() => iframe.remove(), 500);
+    };
+    const fire = () => {
+      if (printed) return;
+      printed = true;
+      cw.focus();
+      cw.print();
+      cleanup();
+    };
+    cw.onafterprint = cleanup;
+    const img = cd.querySelector("img");
+    if (img) {
+      img.onload = fire;
+      img.onerror = cleanup;
+      img.src = url;
+      if (img.complete && img.naturalWidth) fire();
+    } else {
+      cleanup();
+    }
+    // Safety net if the print dialog never opens / afterprint never fires.
+    setTimeout(() => {
+      if (document.body.contains(iframe)) iframe.remove();
+    }, 60000);
+  };
+
+  // ---- Blur Gallery (Effects ▸ Blur Gallery) ----
+  // Live preview via an engine session: the affected layers' originals are kept,
+  // re-blurred on each change (debounced), committed on Apply, restored on Cancel.
+  const blurFxIds = (scope: BlurFxScope): string[] => {
+    const d = activeDocRef.current;
+    return scope === "canvas" ? collectLeafIds(d.layers) : d.activeLayerId ? [d.activeLayerId] : [];
+  };
+  const ensureBlurSession = (scope: BlurFxScope) => {
+    const ids = blurFxIds(scope);
+    const cur = blurFxSessionRef.current;
+    const same = !!cur && cur.length === ids.length && cur.every((id, i) => id === ids[i]);
+    if (same) return;
+    if (cur) paintRef.current?.cancelBlurFx(); // restore the previous scope's pixels
+    const d = activeDocRef.current;
+    paintRef.current?.beginBlurFx(
+      ids,
+      d.selection.length ? d.selection : null,
+      d.selectionAngle,
+      d.selectionPivot,
+    );
+    blurFxSessionRef.current = ids;
+  };
+  const renderBlurPreview = (s: BlurFxSettings, immediate = false) => {
+    ensureBlurSession(s.scope);
+    window.clearTimeout(blurFxTimerRef.current);
+    const run = () => {
+      paintRef.current?.previewBlurFx(s.kind, s.amount, s.angle, s.anchor.x, s.anchor.y);
+      // Snapshot the composited result for the dialog's preview pane.
+      setBlurPreview(paintRef.current?.exportComposite(activeDocRef.current.layers) ?? null);
+    };
+    if (immediate) run();
+    else blurFxTimerRef.current = window.setTimeout(run, 90);
+  };
+  const openBlurFx = () => {
+    const d = activeDocRef.current;
+    if (!d.layers.length) return; // nothing to blur
+    // Default the zoom/spin centre to the selection's centre, else the canvas centre.
+    let anchor = { x: 0.5, y: 0.5 };
+    if (d.selection.length) {
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const r of d.selection) {
+        x0 = Math.min(x0, r.x);
+        y0 = Math.min(y0, r.y);
+        x1 = Math.max(x1, r.x + r.w);
+        y1 = Math.max(y1, r.y + r.h);
+      }
+      anchor = { x: (x0 + x1) / 2 / d.width, y: (y0 + y1) / 2 / d.height };
+    }
+    const next = { ...blurFx, anchor };
+    setBlurFx(next);
+    setBlurPreview(null); // show the dialog's "rendering" state until the first preview
+    blurFxSessionRef.current = null; // force a fresh snapshot
+    setBlurFxOpen(true);
+    // Pop the dialog instantly, THEN do the (possibly heavy) snapshot + first
+    // preview — a double rAF lets the dialog paint before that work runs.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (blurFxOpenRef.current) renderBlurPreview(next, true);
+      }),
+    );
+  };
+  const changeBlurFx = (patch: Partial<BlurFxSettings>) => {
+    const next = { ...blurFx, ...patch };
+    setBlurFx(next);
+    renderBlurPreview(next);
+  };
+  const applyBlurFx = () => {
+    window.clearTimeout(blurFxTimerRef.current);
+    ensureBlurSession(blurFx.scope);
+    paintRef.current?.previewBlurFx(
+      blurFx.kind,
+      blurFx.amount,
+      blurFx.angle,
+      blurFx.anchor.x,
+      blurFx.anchor.y,
+    ); // flush latest
+    paintRef.current?.commitBlurFx("Blur");
+    blurFxSessionRef.current = null;
+    setBlurPreview(null);
+    setBlurFxOpen(false);
+  };
+  const closeBlurFx = () => {
+    window.clearTimeout(blurFxTimerRef.current);
+    paintRef.current?.cancelBlurFx();
+    blurFxSessionRef.current = null;
+    setBlurPreview(null);
+    setBlurFxOpen(false);
   };
 
   // ---- Import (one or more image files) ----
@@ -1314,6 +1991,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const al = active.activeLayerId;
     if (actionId === "canvas-size") openSizeDialog("canvas");
     else if (actionId === "image-size") openSizeDialog("image");
+    else if (actionId === "image-crop") cropToSelection();
+    else if (actionId === "image-trim") setTrimOpen(true);
     else if (actionId === "image-rotate-cw") applyImageTransform("rotate-cw");
     else if (actionId === "image-rotate-ccw") applyImageTransform("rotate-ccw");
     else if (actionId === "image-flip-h") applyImageTransform("flip-h");
@@ -1321,10 +2000,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "edit-cut") cutSelection();
     else if (actionId === "edit-copy") copySelection();
     else if (actionId === "edit-paste") pasteFromClipboard();
+    else if (actionId === "free-transform") enterTransform(true);
+    else if (actionId === "transform") enterTransform(false);
     else if (actionId === "select-all") selectAll();
     else if (actionId === "select-deselect") deselect();
     else if (actionId === "select-reselect") reselect();
     else if (actionId === "select-inverse") invertSelection();
+    else if (actionId === "select-feather") setSelectModify("feather");
+    else if (actionId === "select-grow") setSelectModify("grow");
     else if (actionId === "new-doc") createDoc();
     else if (actionId === "open") openProject();
     else if (actionId === "open-recent") setRecentsOpen(true);
@@ -1332,8 +2015,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "save-as") setSaveAsOpen(true);
     else if (actionId === "import") openImport();
     else if (actionId === "export-as") openExport();
+    else if (actionId === "print") printCanvas();
+    else if (actionId === "effect-blur") openBlurFx();
     else if (actionId === "color-manage") openColorDialog();
     else if (actionId === "color-compare") openCompare();
+    else if (actionId === "preferences") setPrefsOpen(true);
     else if (actionId.startsWith("window-")) handleWindowAction(actionId);
     else if (actionId.startsWith("view-")) handleViewAction(actionId);
     else if (actionId === "undo") doUndo();
@@ -1369,7 +2055,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       const origin = copyOriginRef.current;
       doPaste(source, w, h, "current-layer", false, origin.x, origin.y);
     } else {
-      setPasteSrc({ source, w, h });
+      // Honour the user's default-paste preference, else ask via the dialog.
+      const def = prefsRef.current.defaultPaste;
+      if (def !== "ask") doPaste(source, w, h, def, false);
+      else setPasteSrc({ source, w, h });
     }
   };
 
@@ -1443,12 +2132,143 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       // so letter shortcuts are correct on QWERTZ/AZERTY etc. (Z/Y aren't swapped).
       const key = e.key.toLowerCase();
 
+      // Crop tool: Enter / Esc commit or reset, arrows nudge the box, plus a few
+      // quick toggles. Handled first so they don't fall through to other bindings.
+      if (toolRef.current === "crop" && cropBoxRef.current && !e.ctrlKey && !e.metaKey) {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          applyCropNow();
+          return;
+        }
+        if (e.code === "Escape") {
+          e.preventDefault();
+          resetCropBox();
+          return;
+        }
+        if (e.key.startsWith("Arrow")) {
+          e.preventDefault();
+          const step = e.shiftKey ? 10 : 1;
+          const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+          const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+          const d = activeDocRef.current;
+          const clamp = cropSettingsRef.current.straighten === 0;
+          setCropBox((b) =>
+            b
+              ? {
+                  ...b,
+                  x: clamp ? Math.max(0, Math.min(d.width - b.w, b.x + dx)) : b.x + dx,
+                  y: clamp ? Math.max(0, Math.min(d.height - b.h, b.y + dy)) : b.y + dy,
+                }
+              : b,
+          );
+          return;
+        }
+      }
+
+      // Blur (focus) brush shortcuts: [ / ] size, { / } hardness, digits = strength.
+      if (toolRef.current === "blur" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === "[" || e.key === "]") {
+          e.preventDefault();
+          const dir = e.key === "]" ? 1 : -1;
+          setBlur((s) => {
+            const stepPx = Math.max(1, Math.round(s.size * 0.1));
+            return { ...s, size: Math.max(1, Math.min(500, s.size + dir * stepPx)) };
+          });
+          return;
+        }
+        if (e.key === "{" || e.key === "}") {
+          e.preventDefault();
+          const dir = e.key === "}" ? 1 : -1;
+          setBlur((s) => ({ ...s, hardness: Math.max(0, Math.min(100, s.hardness + dir * 10)) }));
+          return;
+        }
+        if (/^[0-9]$/.test(e.key)) {
+          e.preventDefault();
+          const n = parseInt(e.key, 10);
+          setBlur((s) => ({ ...s, strength: n === 0 ? 100 : n * 10 }));
+          return;
+        }
+      }
+
+      // Clone-stamp shortcuts: [ / ] size, { / } hardness, digits = opacity.
+      if (toolRef.current === "clone" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === "[" || e.key === "]") {
+          e.preventDefault();
+          const dir = e.key === "]" ? 1 : -1;
+          setClone((s) => {
+            const stepPx = Math.max(1, Math.round(s.size * 0.1));
+            return { ...s, size: Math.max(1, Math.min(500, s.size + dir * stepPx)) };
+          });
+          return;
+        }
+        if (e.key === "{" || e.key === "}") {
+          e.preventDefault();
+          const dir = e.key === "}" ? 1 : -1;
+          setClone((s) => ({ ...s, hardness: Math.max(0, Math.min(100, s.hardness + dir * 10)) }));
+          return;
+        }
+        if (/^[0-9]$/.test(e.key)) {
+          e.preventDefault();
+          const n = parseInt(e.key, 10);
+          setClone((s) => ({ ...s, opacity: n === 0 ? 100 : n * 10 }));
+          return;
+        }
+      }
+
+      // Dodge/Burn shortcuts: Shift+O toggles dodge↔burn, [ / ] size,
+      // { / } hardness, digits = exposure.
+      if (toolRef.current === "dodge" && !e.ctrlKey && !e.metaKey) {
+        if (e.shiftKey && key === "o") {
+          e.preventDefault();
+          setDodge((s) => ({ ...s, mode: s.mode === "dodge" ? "burn" : "dodge" }));
+          return;
+        }
+        if (!e.altKey) {
+          if (e.key === "[" || e.key === "]") {
+            e.preventDefault();
+            const dir = e.key === "]" ? 1 : -1;
+            setDodge((s) => {
+              const stepPx = Math.max(1, Math.round(s.size * 0.1));
+              return { ...s, size: Math.max(1, Math.min(500, s.size + dir * stepPx)) };
+            });
+            return;
+          }
+          if (e.key === "{" || e.key === "}") {
+            e.preventDefault();
+            const dir = e.key === "}" ? 1 : -1;
+            setDodge((s) => ({ ...s, hardness: Math.max(0, Math.min(100, s.hardness + dir * 10)) }));
+            return;
+          }
+          if (/^[0-9]$/.test(e.key)) {
+            e.preventDefault();
+            const n = parseInt(e.key, 10);
+            setDodge((s) => ({ ...s, exposure: n === 0 ? 100 : n * 10 }));
+            return;
+          }
+        }
+      }
+
       if (e.ctrlKey && e.altKey && key === "c") {
         e.preventDefault();
         openSizeDialog("canvas");
       } else if (e.ctrlKey && e.altKey && key === "i") {
         e.preventDefault();
         openSizeDialog("image");
+      } else if (e.ctrlKey && e.altKey && key === "r") {
+        e.preventDefault();
+        cropToSelection();
+      } else if (e.ctrlKey && e.altKey && key === "m") {
+        e.preventDefault();
+        setTrimOpen(true);
+      } else if (e.ctrlKey && e.altKey && key === "g") {
+        e.preventDefault();
+        setSelectModify("grow");
+      } else if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "F6") {
+        e.preventDefault();
+        setSelectModify("feather");
+      } else if (e.ctrlKey && !e.altKey && !e.shiftKey && key === "k") {
+        e.preventDefault();
+        setPrefsOpen(true);
       } else if (e.ctrlKey && !e.shiftKey && key === "n") {
         // Browsers reserve Ctrl+N (new window) and won't let a normal tab
         // preventDefault it, so Ctrl+Alt+N is the reliable "new canvas". The
@@ -1482,6 +2302,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === "e") {
         e.preventDefault();
         openExport();
+      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === "p") {
+        // Print the canvas (not the browser's print-the-whole-page default).
+        e.preventDefault();
+        printCanvas();
+      } else if (e.ctrlKey && e.altKey && key === "t") {
+        // Browser-safe (Ctrl+T is reserved): Ctrl+Alt+T = Free Transform (content),
+        // Ctrl+Alt+Shift+T = Transform Selection (outline only).
+        e.preventDefault();
+        enterTransform(!e.shiftKey);
       } else if (e.ctrlKey && key === "y") {
         e.preventDefault();
         doRedo();
@@ -1523,6 +2352,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           e.preventDefault();
           setSelection([]);
         }
+      } else if (e.key === "Enter" && paintRef.current?.isFloating()) {
+        // Commit an in-progress transform (the floated, scaled/rotated content).
+        e.preventDefault();
+        paintRef.current.commitFloat();
+        setSelection([]);
       } else if (e.code === "Delete") {
         if (selRef.current.length && activeLayerRef.current) {
           e.preventDefault();
@@ -1533,6 +2367,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             selRef.current,
             d.selectionAngle,
             d.selectionPivot,
+            "Delete",
+            selectionFeatherRef.current,
           );
         }
       } else if (e.code === "Backspace") {
@@ -1547,8 +2383,24 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             fill,
             d.selectionAngle,
             d.selectionPivot,
+            selectionFeatherRef.current,
           );
         }
+      } else if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "m") {
+        // Shift+M cycles the marquee shape (rectangle → ellipse → triangle), à la
+        // Photoshop, switching to the marquee tool so the change is visible.
+        e.preventDefault();
+        setTool("select");
+        const cur = marqueeShapeRef.current;
+        const next = cur === "rect" ? "ellipse" : cur === "ellipse" ? "triangle" : "rect";
+        setMarqueeShape(next);
+        showToast(
+          next === "rect"
+            ? "Rectangular marquee"
+            : next === "ellipse"
+              ? "Elliptical marquee"
+              : "Triangular marquee",
+        );
       } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
         // Single-key tool shortcuts (V move, M marquee, B brush, …).
         const id = TOOL_BY_KEY[e.key.toLowerCase()];
@@ -1570,7 +2422,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   return (
     <div className={styles.app}>
       <TopBar
-        initialTheme={initialTheme}
         onMenuAction={handleMenuAction}
         onUndo={doUndo}
         onRedo={doRedo}
@@ -1601,12 +2452,18 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onResizeMode={setResizeMode}
         resizeSmooth={resizeSmooth}
         onResizeSmooth={setResizeSmooth}
+        marqueeShape={marqueeShape}
+        onMarqueeShape={setMarqueeShape}
+        triangleApex={triangleApex}
+        onTriangleApex={setTriangleApex}
         wand={wand}
         onWand={(patch) => setWand((wd) => ({ ...wd, ...patch }))}
         bucket={bucket}
         onBucket={(patch) => setBucket((b) => ({ ...b, ...patch }))}
         gradient={gradient}
         onGradient={(patch) => setGradient((g) => ({ ...g, ...patch }))}
+        pen={pen}
+        onPen={(patch) => setPen((pn) => ({ ...pn, ...patch }))}
         eyedropper={{ size: sampleSizeLabel, scope: sampleScopeLabel }}
         onEyedropper={(patch) => {
           if (patch.size !== undefined) setSampleSizeLabel(patch.size);
@@ -1614,6 +2471,22 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         }}
         shape={shape}
         onShape={(patch) => setShape((s) => ({ ...s, ...patch }))}
+        blur={blur}
+        onBlur={(patch) => setBlur((b) => ({ ...b, ...patch }))}
+        clone={clone}
+        onClone={(patch) => setClone((c) => ({ ...c, ...patch }))}
+        dodge={dodge}
+        onDodge={(patch) => setDodge((d) => ({ ...d, ...patch }))}
+        text={textSettings}
+        onText={(patch) => setTextSettings((t) => ({ ...t, ...patch }))}
+        crop={cropSettings}
+        onCrop={(patch) => setCropSettings((s) => ({ ...s, ...patch }))}
+        cropBox={cropBox}
+        onCropBox={setCropBox}
+        onCropApply={applyCropNow}
+        onCropReset={resetCropBox}
+        docWidth={active.width}
+        docHeight={active.height}
         fill={foreground}
         onFill={setForeground}
         stroke={background}
@@ -1652,15 +2525,19 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           tool={tool}
           brush={activeBrush}
           color={paintColor}
+          foreground={foreground}
+          background={background}
           bucket={bucket}
           gradient={{
             type: gradient.type,
             reverse: gradient.reverse,
             smooth: gradient.smooth,
+            snap: prefs.gradientSnap,
             stops: gradient.stops,
             fg: foreground,
             bg: background,
           }}
+          pen={pen}
           shape={{
             kind: shape.kind,
             strokeWidth: shape.strokeWidth,
@@ -1668,6 +2545,20 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             fill: foreground,
             stroke: background,
           }}
+          blur={blur}
+          clone={clone}
+          dodge={dodge}
+          text={textSettings}
+          onText={(patch) => setTextSettings((t) => ({ ...t, ...patch }))}
+          onPlaceText={placeText}
+          onUpdateText={updateText}
+          cropBox={cropBox}
+          onCropBox={setCropBox}
+          cropGrid={cropSettings.grid}
+          cropShield={cropSettings.shield}
+          cropStraighten={cropSettings.straighten}
+          cropAspect={cropAspect(cropSettings, active.height ? active.width / active.height : 1)}
+          onCropApply={applyCropNow}
           layers={active.layers}
           activeLayerId={active.activeLayerId}
           ensureLayer={ensureLayer}
@@ -1676,11 +2567,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onSelectionRects={setSelectionRects}
           selectionAngle={active.selectionAngle}
           selectionPivot={active.selectionPivot}
+          selectionFeather={selectionFeather}
           onSelectionAngle={setSelectionAngle}
           onSelectionPivot={setSelectionPivot}
           moveMode={moveMode}
           resizeMode={resizeMode}
           resizeSmooth={resizeSmooth}
+          marqueeShape={marqueeShape}
+          triangleApex={triangleApex}
           wand={wand}
           sampleSize={SAMPLE_SIZE_PX[sampleSizeLabel] ?? 1}
           sampleAllLayers={sampleScopeLabel === "All layers"}
@@ -1708,6 +2602,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onActiveSlot={setActiveSlot}
           layers={layersApi}
           history={history}
+          maxHistoryRows={prefs.maxHistory}
           onHistoryJump={(i) => paintRef.current?.jumpTo(i)}
           view={{
             zoom,
@@ -1764,6 +2659,50 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         />
       )}
 
+      {prefsOpen && (
+        <PreferencesDialog
+          initialTheme={initialTheme}
+          prefs={prefs}
+          onChange={updatePrefs}
+          onClose={() => setPrefsOpen(false)}
+        />
+      )}
+
+      {blurFxOpen && (
+        <BlurGalleryDialog
+          settings={blurFx}
+          onChange={changeBlurFx}
+          onApply={applyBlurFx}
+          onClose={closeBlurFx}
+          hasSelection={active.selection.length > 0}
+          preview={blurPreview}
+        />
+      )}
+
+      {trimOpen && (
+        <TrimDialog
+          onTrim={(mode, sides) => {
+            trimImage(mode, sides);
+            setTrimOpen(false);
+          }}
+          onClose={() => setTrimOpen(false)}
+        />
+      )}
+
+      {selectModify && (
+        <SelectModifyDialog
+          kind={selectModify}
+          onApply={(px) => {
+            if (selectModify === "feather") featherSelection(px);
+            else growSelection(px);
+            setSelectModify(null);
+          }}
+          onClose={() => setSelectModify(null)}
+        />
+      )}
+
+      {toast && <Toast message={toast} onClose={dismissToast} />}
+
       {saveAsOpen && (
         <SaveAsDialog
           defaultName={active.name}
@@ -1819,6 +2758,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onChange={onImportPicked}
         hidden
       />
+
+      <TooltipHost />
     </div>
   );
 }

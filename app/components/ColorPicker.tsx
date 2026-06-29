@@ -1,6 +1,7 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Download, Plus, Upload } from "lucide-react";
 import styles from "./ColorPicker.module.scss";
 import { Select } from "./Select";
 import {
@@ -17,6 +18,16 @@ import {
   toRgbaCss,
   type Hsva,
 } from "../lib/color";
+import {
+  addSwatch,
+  getSwatches,
+  parseSwatchFile,
+  removeSwatchAt,
+  setSwatches,
+  subscribeSwatches,
+  swatchesToFileJSON,
+} from "../lib/swatches";
+import { downloadBlob } from "../lib/project";
 
 const SWATCHES = [
   "#000000", "#3f3f46", "#a1a1aa", "#ffffff", "#ef4444", "#f97316",
@@ -139,6 +150,11 @@ export default function ColorPicker({
   const [draft, setDraft] = useState<Draft>(() => buildDraft(rgbaToHsva(parseColor(value)), "HEX"));
   const editing = useRef(false);
 
+  // User's custom swatches (shared + persisted across every picker instance).
+  const [custom, setCustom] = useState<string[]>(() => getSwatches());
+  const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => subscribeSwatches(setCustom), []);
+
   // Adopt external value / format changes DURING RENDER (the React-recommended
   // "adjust state when a prop changes" pattern). No effects → no effect loops;
   // React re-renders before paint and the `prev*` guards make it settle.
@@ -178,6 +194,30 @@ export default function ColorPicker({
     setDraft((d) => ({ ...d, [key]: raw }));
     commitFn(raw);
   };
+
+  // Apply a saved swatch (with its own alpha).
+  const applySwatch = (c: string) => commit(rgbaToHsva(parseColor(c)));
+
+  // Merge an imported palette (JSON / .gpl / loose hex) into the saved swatches.
+  const importFile = async (file: File) => {
+    const parsed = parseSwatchFile(await file.text());
+    if (!parsed.length) return;
+    const merged = [...getSwatches()];
+    const seen = new Set(merged.map((x) => x.toLowerCase()));
+    for (const c of parsed) {
+      if (!seen.has(c.toLowerCase())) {
+        seen.add(c.toLowerCase());
+        merged.push(c);
+      }
+    }
+    setSwatches(merged);
+  };
+
+  const exportSwatches = () =>
+    downloadBlob(
+      new Blob([swatchesToFileJSON(getSwatches())], { type: "application/json" }),
+      "graphiq-swatches.json",
+    );
 
   const rgba = hsvaToRgba(hsva);
   const hueColor = `hsl(${hsva.h} 100% 50%)`;
@@ -328,7 +368,37 @@ export default function ColorPicker({
       </div>
 
       <div className={styles.swatchBlock}>
-        <span className={styles.swatchLabel}>Swatches</span>
+        <div className={styles.swatchHead}>
+          <span className={styles.swatchLabel}>Swatches</span>
+          <div className={styles.swatchActions}>
+            <button
+              type="button"
+              className={styles.swatchBtn}
+              title="Add the current colour as a swatch"
+              onClick={() => addSwatch(toHex8(rgba))}
+            >
+              <Plus size={13} />
+            </button>
+            <button
+              type="button"
+              className={styles.swatchBtn}
+              title="Import swatches…"
+              onClick={() => fileRef.current?.click()}
+            >
+              <Upload size={13} />
+            </button>
+            <button
+              type="button"
+              className={styles.swatchBtn}
+              disabled={!custom.length}
+              title="Export custom swatches"
+              onClick={exportSwatches}
+            >
+              <Download size={13} />
+            </button>
+          </div>
+        </div>
+
         <div className={styles.swatches}>
           {SWATCHES.map((c) => (
             <button
@@ -345,6 +415,41 @@ export default function ColorPicker({
             />
           ))}
         </div>
+
+        {custom.length > 0 && (
+          <>
+            <span className={styles.swatchSub}>Custom · Alt-click to remove</span>
+            <div className={styles.swatches}>
+              {custom.map((c, i) => (
+                <button
+                  key={`${c}-${i}`}
+                  type="button"
+                  className={styles.swatch}
+                  data-selected={c.toLowerCase() === toHex8(rgba).toLowerCase()}
+                  style={swatchBg(c)}
+                  title={`${c.toUpperCase()} — click to apply, Alt-click to remove`}
+                  onClick={(e) => (e.altKey ? removeSwatchAt(i) : applySwatch(c))}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    removeSwatchAt(i);
+                  }}
+                />
+              ))}
+            </div>
+          </>
+        )}
+
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".json,.gpl,.txt,application/json,text/plain"
+          hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) importFile(f);
+            e.target.value = ""; // allow re-importing the same file
+          }}
+        />
       </div>
     </div>
   );

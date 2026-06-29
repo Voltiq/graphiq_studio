@@ -8,7 +8,15 @@ import styles from "./TopBar.module.scss";
 const ONE_YEAR = 60 * 60 * 24 * 365;
 
 export default function ThemeToggle({ initialTheme }: { initialTheme: Theme }) {
-  const [theme, setTheme] = useState<Theme>(initialTheme);
+  // Read the live theme on mount (e.g. when re-opening Preferences) so the switch
+  // reflects the current document, not the possibly-stale server value.
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof document !== "undefined") {
+      const t = document.documentElement.getAttribute("data-theme");
+      if (t === "light" || t === "dark") return t;
+    }
+    return initialTheme;
+  });
 
   const toggle = () => {
     const next: Theme = theme === "dark" ? "light" : "dark";

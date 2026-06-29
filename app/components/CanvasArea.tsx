@@ -6,14 +6,25 @@ import styles from "./CanvasArea.module.scss";
 import { clamp, parseColor, toHex8 } from "../lib/color";
 import { clampPan, normalizeRect, type Pan, type Rect } from "../lib/view";
 import type {
+  BlurSettings,
+  CloneSettings,
+  CropGrid,
+  DodgeSettings,
+  MarqueeShape,
+  TextSettings,
   GradientStop,
   GradientType,
   MoveMode,
+  PenAnchor,
+  PenSettings,
   SelectResizeMode,
   ShapeKind,
   ToolId,
+  VectorData,
+  VectorShape,
+  VectorText,
 } from "../lib/tools";
-import { renderShape } from "../lib/shapes";
+import { renderShape, type ShapeGeom, type TrapInsets } from "../lib/shapes";
 import { resolveStops } from "../lib/gradient";
 import {
   PaintEngine,
@@ -288,6 +299,46 @@ function tracePerimeter(segs: Seg[]): Pt[][] {
   return loops;
 }
 
+/** Decompose a marquee region into per-row scanline rects (ellipse / triangle),
+ *  or a single rect. Fed to the engine's mask-based combine for a clean selection.
+ *  `pointDown` flips the triangle's apex to the bottom (when dragged downward);
+ *  `apex` is the apex's horizontal position as a fraction of width (0.5 = centred). */
+function marqueeSelRects(b: Rect, shape: MarqueeShape, pointDown = false, apex = 0.5): Rect[] {
+  const x = Math.round(b.x);
+  const y = Math.round(b.y);
+  const w = Math.round(b.w);
+  const h = Math.round(b.h);
+  if (w < 1 || h < 1) return [];
+  if (shape === "rect") return [{ x, y, w, h }];
+  const out: Rect[] = [];
+  if (shape === "ellipse") {
+    const cx = x + w / 2;
+    const cy = y + h / 2;
+    const rx = w / 2;
+    const ry = h / 2;
+    for (let i = 0; i < h; i++) {
+      const dy = (y + i + 0.5 - cy) / ry;
+      if (Math.abs(dy) >= 1) continue;
+      const dx = rx * Math.sqrt(1 - dy * dy);
+      const left = Math.round(cx - dx);
+      const right = Math.round(cx + dx);
+      if (right > left) out.push({ x: left, y: y + i, w: right - left, h: 1 });
+    }
+  } else {
+    // Triangle: apex on the top edge at `apex` (or the bottom edge, when pointDown),
+    // base across the opposite edge. Each row's span interpolates the two slanted
+    // edges from the apex toward the base, so the apex offset slants the triangle.
+    const ax = x + apex * w;
+    for (let i = 0; i < h; i++) {
+      const t = pointDown ? (h - i) / h : (i + 1) / h;
+      const left = Math.round(ax + (x - ax) * t);
+      const right = Math.round(ax + (x + w - ax) * t);
+      if (right > left) out.push({ x: left, y: y + i, w: right - left, h: 1 });
+    }
+  }
+  return out;
+}
+
 interface HandleEdges {
   left?: boolean;
   right?: boolean;
@@ -354,6 +405,96 @@ const EYEDROPPER_SVG =
 // Hotspot (4, 30): down-left of the drawn tip (~9, 25), so the tip aims at it.
 const EYEDROPPER_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(EYEDROPPER_SVG)}") 4 30, crosshair`;
 
+/** Strip a text vector down to a render spec (used to restore it on re-edit cancel). */
+function textSpecOf(v: VectorText) {
+  return {
+    text: v.text,
+    x: v.x,
+    y: v.y,
+    boxW: v.boxW,
+    fontFamily: v.fontFamily,
+    fontSize: v.fontSize,
+    bold: v.bold,
+    italic: v.italic,
+    underline: v.underline,
+    strike: v.strike,
+    align: v.align,
+    lineHeight: v.lineHeight,
+    tracking: v.tracking,
+    color: v.color,
+    antialias: v.antialias,
+  };
+}
+
+// Blue node colour for shapes' draggable geometry handles (trapezoid sides,
+// triangle apex) — distinct from the white resize handles. Plus the default
+// symmetric trapezoid top-edge insets.
+const SHAPE_NODE_COLOR = "#3b82f6";
+const TRAP_DEFAULT: TrapInsets = { l: 0.25, r: 0.25 };
+
+/** A fresh pen anchor as a "corner" (both bezier handles sit on the point). */
+function makeAnchor(x: number, y: number): PenAnchor {
+  return { x, y, ix: x, iy: y, ox: x, oy: y };
+}
+
+// Minimum on-screen length a pen handle is drawn at, so handles stay visible /
+// grabbable on every anchor at any zoom (even when retracted onto the point).
+const PEN_HANDLE_MIN_PX = 24;
+
+/** Does an anchor have an outgoing / incoming segment (so its handle matters)? */
+function penHasOut(i: number, n: number, closed: boolean) {
+  return closed || i < n - 1;
+}
+function penHasIn(i: number, n: number, closed: boolean) {
+  return closed || i > 0;
+}
+
+/**
+ * The doc-space DISPLAY position of an anchor handle: its real control point when
+ * pulled out far enough, otherwise a stub of length PEN_HANDLE_MIN_PX (screen) in
+ * the handle's direction — or, if retracted, along the local path tangent. `s` is
+ * the zoom scale. Used for both drawing and hit-testing so they always agree.
+ */
+function penHandlePos(
+  anchors: PenAnchor[],
+  i: number,
+  closed: boolean,
+  isOut: boolean,
+  s: number,
+): { x: number; y: number } {
+  const a = anchors[i];
+  let dx = (isOut ? a.ox : a.ix) - a.x;
+  let dy = (isOut ? a.oy : a.iy) - a.y;
+  let len = Math.hypot(dx, dy);
+  if (len > 1e-6) {
+    dx /= len;
+    dy /= len;
+  } else {
+    // Retracted → point along the local tangent (toward the next/prev anchor).
+    const n = anchors.length;
+    const prev = i > 0 ? anchors[i - 1] : closed ? anchors[n - 1] : null;
+    const next = i < n - 1 ? anchors[i + 1] : closed ? anchors[0] : null;
+    let tx = 1;
+    let ty = 0;
+    if (prev && next) {
+      tx = next.x - prev.x;
+      ty = next.y - prev.y;
+    } else if (next) {
+      tx = next.x - a.x;
+      ty = next.y - a.y;
+    } else if (prev) {
+      tx = a.x - prev.x;
+      ty = a.y - prev.y;
+    }
+    const tl = Math.hypot(tx, ty) || 1;
+    dx = (isOut ? tx : -tx) / tl;
+    dy = (isOut ? ty : -ty) / tl;
+    len = 0;
+  }
+  const docLen = Math.max(len, PEN_HANDLE_MIN_PX / Math.max(s, 1e-6));
+  return { x: a.x + dx * docLen, y: a.y + dy * docLen };
+}
+
 export default function CanvasArea({
   docs,
   activeId,
@@ -371,9 +512,26 @@ export default function CanvasArea({
   tool,
   brush,
   color,
+  foreground,
+  background,
   bucket,
   gradient,
+  pen,
   shape,
+  blur,
+  clone,
+  dodge,
+  text,
+  onText,
+  onPlaceText,
+  onUpdateText,
+  cropBox,
+  onCropBox,
+  cropGrid,
+  cropShield,
+  cropStraighten,
+  cropAspect,
+  onCropApply,
   layers,
   activeLayerId,
   ensureLayer,
@@ -382,11 +540,14 @@ export default function CanvasArea({
   onSelectionRects,
   selectionAngle,
   selectionPivot,
+  selectionFeather,
   onSelectionAngle,
   onSelectionPivot,
   moveMode,
   resizeMode,
   resizeSmooth,
+  marqueeShape,
+  triangleApex,
   wand,
   sampleSize,
   sampleAllLayers,
@@ -421,19 +582,54 @@ export default function CanvasArea({
   tool: ToolId;
   brush: BrushSettings;
   color: string;
+  /** Primary / secondary colours — left-button paints with `foreground`, right with `background`. */
+  foreground: string;
+  background: string;
   /** Paint-bucket settings (fill colour comes from `color`). */
-  bucket: { tolerance: number; opacity: number; contiguous: boolean };
+  bucket: { tolerance: number; opacity: number; contiguous: boolean; antialias: boolean };
   /** Gradient settings + the colours used when no custom stops are set. */
   gradient: {
     type: GradientType;
     reverse: boolean;
     smooth: boolean;
+    snap: boolean;
     stops: GradientStop[] | null;
     fg: string;
     bg: string;
   };
+  /** Pen tool stroke options (stroke colour = the active `color`). */
+  pen: PenSettings;
   /** Shape-tool settings + colours (fill = primary, stroke = secondary). */
   shape: { kind: ShapeKind; strokeWidth: number; radius: number; fill: string; stroke: string };
+  /** Blur (focus) brush settings. */
+  blur: BlurSettings;
+  /** Clone-stamp brush settings. */
+  clone: CloneSettings;
+  /** Dodge/Burn brush settings. */
+  dodge: DodgeSettings;
+  /** Text tool settings (styling for the live editor + rasterization). */
+  text: TextSettings;
+  /** Patch the text settings (used by the in-editor Ctrl+B/I/U shortcuts). */
+  onText: (patch: Partial<TextSettings>) => void;
+  /** Commit a finished text block: creates a layer and rasterizes it (Editor). */
+  onPlaceText: (p: { x: number; y: number; boxW: number | null; value: string }) => void;
+  /** Commit a re-edit of an existing text (vector) layer, in place (Editor). */
+  onUpdateText: (
+    layerId: string,
+    p: { x: number; y: number; boxW: number | null; value: string },
+  ) => void;
+  /** Crop tool: the pending crop rectangle (doc coords), null when not cropping. */
+  cropBox: Rect | null;
+  onCropBox: (b: Rect | null) => void;
+  cropGrid: CropGrid;
+  /** Dimming (0–90%) of the area outside the crop box. */
+  cropShield: number;
+  /** Straighten / rotate angle of the crop, −45…45°. */
+  cropStraighten: number;
+  /** Locked aspect ratio (w/h) while resizing, or null for a free crop. */
+  cropAspect: number | null;
+  /** Commit the pending crop (double-click inside the box). */
+  onCropApply: () => void;
   layers: LayerNode[];
   activeLayerId: string | null;
   ensureLayer: () => string;
@@ -443,11 +639,17 @@ export default function CanvasArea({
   onSelectionRects: (rects: Rect[]) => void;
   selectionAngle: number;
   selectionPivot: { x: number; y: number } | null;
+  /** Feather radius (px) applied to selection fills / erases / lifts. */
+  selectionFeather: number;
   onSelectionAngle: (angle: number) => void;
   onSelectionPivot: (pivot: { x: number; y: number } | null) => void;
   moveMode: MoveMode;
   resizeMode: SelectResizeMode;
   resizeSmooth: boolean;
+  /** Rectangular-marquee region shape (rectangle / ellipse / triangle). */
+  marqueeShape: MarqueeShape;
+  /** Triangle-marquee apex position as a fraction of width (0.5 = isosceles). */
+  triangleApex: number;
   wand: { tolerance: number; contiguous: boolean; sampleAll: boolean };
   sampleSize: number;
   sampleAllLayers: boolean;
@@ -512,15 +714,43 @@ export default function CanvasArea({
   // The committed-but-still-live shape (re-renderable until deselected). `box`
   // is the same object as its selection rect, so a selection change ends it.
   const liveShapeRef = useRef<{ layerId: string; box: Rect } | null>(null);
+  // Adjustable shape nodes: trapezoid top-edge insets (fractions of width) and the
+  // triangle apex x-position (fraction 0..1). `nodeDragRef` is the node being
+  // dragged; `nodeSnapRef` is true while snapped to centre (draws guide lines).
+  const trapRef = useRef<TrapInsets>({ ...TRAP_DEFAULT });
+  const triApexRef = useRef(0.5);
+  const nodeDragRef = useRef<"l" | "r" | "apex" | null>(null);
+  const nodeSnapRef = useRef(false);
   // Paint-bucket drag: the seed point + the previewed fill region (committed on
   // release). The preview follows the cursor; recomputes are throttled.
-  const bucketSeedRef = useRef<{ x: number; y: number; shift: boolean; layerId: string | null } | null>(null);
+  const bucketSeedRef = useRef<{
+    x: number;
+    y: number;
+    shift: boolean;
+    layerId: string | null;
+    slot: "primary" | "secondary"; // chosen at press: left = primary, right = secondary
+  } | null>(null);
+  // Committed-but-still-editable bucket fill: re-runs the flood + fill from the
+  // same seed when the options change, until the next action. `raf` coalesces.
+  const liveBucketRef = useRef<{
+    seedX: number;
+    seedY: number;
+    sampleLayerId: string | null;
+    fillLayerId: string;
+    slot: "primary" | "secondary";
+    shift: boolean;
+  } | null>(null);
+  const liveBucketRaf = useRef(0);
   const bucketRef = useRef<{ rects: Rect[]; color: string } | null>(null);
   const bucketThrottle = useRef({ last: 0, timer: 0 });
   const bucketOptsRef = useRef(bucket);
   bucketOptsRef.current = bucket;
   const colorRef = useRef(color);
   colorRef.current = color;
+  const fgRef = useRef(foreground);
+  fgRef.current = foreground;
+  const bgRef = useRef(background);
+  bgRef.current = background;
   // Live gradient: its endpoints + midpoint + the selection it was clipped to,
   // re-renderable until committed. `drag` is the handle currently being dragged.
   const gradientRef = useRef<{
@@ -535,6 +765,159 @@ export default function CanvasArea({
   const gradDragRef = useRef<"start" | "end" | "mid" | null>(null);
   const gradOptsRef = useRef(gradient);
   gradOptsRef.current = gradient;
+  // Live pen path: the editable anchors + which handle is being dragged. Stays
+  // editable (re-stroked) until committed (Enter / double-click / tool switch).
+  const penPathRef = useRef<{ anchors: PenAnchor[]; closed: boolean; layerId: string } | null>(null);
+  const penDragRef = useRef<{ kind: "new" | "anchor" | "in" | "out"; index: number } | null>(null);
+  const penGrabRef = useRef<{ px: number; py: number; anchor: PenAnchor } | null>(null);
+  const penOptsRef = useRef(pen);
+  penOptsRef.current = pen;
+  // Blur (focus) brush: latest settings + the hover point for the brush-ring
+  // cursor that's drawn on the overlay (so it scales with zoom + shows hardness).
+  const blurRef = useRef(blur);
+  blurRef.current = blur;
+  const blurHoverRef = useRef<{ x: number; y: number } | null>(null);
+  // Dodge/Burn brush: latest settings + hover point (brush-ring cursor on overlay).
+  const dodgeRef = useRef(dodge);
+  dodgeRef.current = dodge;
+  const dodgeHoverRef = useRef<{ x: number; y: number } | null>(null);
+  const dodgingRef = useRef(false);
+  // Clone stamp: latest settings, the sampled source point (Alt-click), the live
+  // source→dest offset, the hover point for the brush ring, and the Alt-held state
+  // (which swaps the ring for a "set source" reticle).
+  const cloneRef = useRef(clone);
+  cloneRef.current = clone;
+  const cloneHoverRef = useRef<{ x: number; y: number } | null>(null);
+  const cloneSrcRef = useRef<{ x: number; y: number } | null>(null);
+  const cloneOffRef = useRef<{ x: number; y: number } | null>(null);
+  const cloneAltRef = useRef(false);
+  // Text tool: the active edit session (a styled overlay <textarea>), plus the
+  // press point / drag rect used to start point- vs. paragraph-text on release.
+  const [textSession, setTextSession] = useState<{
+    x: number;
+    y: number;
+    boxW: number | null;
+    value: string;
+    /** When set, this is a re-edit of an existing vector layer (not a new one). */
+    editId?: string;
+    /** The layer's original vector, to restore on cancel. */
+    orig?: VectorText;
+  } | null>(null);
+  const textSessionRef = useRef(textSession);
+  textSessionRef.current = textSession;
+  const textRef = useRef(text);
+  textRef.current = text;
+  const onTextRef = useRef(onText);
+  onTextRef.current = onText;
+  const onPlaceTextRef = useRef(onPlaceText);
+  onPlaceTextRef.current = onPlaceText;
+  const onUpdateTextRef = useRef(onUpdateText);
+  onUpdateTextRef.current = onUpdateText;
+  const layersHitRef = useRef(layers);
+  layersHitRef.current = layers;
+  const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const textDownRef = useRef<{ x: number; y: number } | null>(null);
+  const textDragRef = useRef<Rect | null>(null);
+  // Rasterize the current text block (if it has content) and end the session.
+  // A re-edit (editId set) updates that layer in place; otherwise a new layer.
+  const commitText = useCallback(() => {
+    const s = textSessionRef.current;
+    if (!s) return;
+    const geom = { x: s.x, y: s.y, boxW: s.boxW, value: s.value };
+    if (s.editId) {
+      if (s.value.trim()) onUpdateTextRef.current(s.editId, geom);
+      else if (s.orig) engine.renderText(s.editId, textSpecOf(s.orig)); // empty → keep original
+    } else if (s.value.trim()) {
+      onPlaceTextRef.current(geom);
+    }
+    setTextSession(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Cancel a text edit: discard a new one, or restore the original for a re-edit.
+  const cancelText = useCallback(() => {
+    const s = textSessionRef.current;
+    if (s?.editId && s.orig) engine.renderText(s.editId, textSpecOf(s.orig));
+    setTextSession(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Open an existing text vector layer for editing: load its style, hide its
+  // rasterized pixels (the live textarea stands in), and seat the editor on it.
+  const openTextReedit = (id: string, v: VectorText) => {
+    onTextRef.current({
+      fontFamily: v.fontFamily,
+      fontSize: v.fontSize,
+      bold: v.bold,
+      italic: v.italic,
+      underline: v.underline,
+      strike: v.strike,
+      align: v.align,
+      lineHeight: v.lineHeight,
+      tracking: v.tracking,
+      color: v.color,
+    });
+    engine.clearLayerPixels(id);
+    setTextSession({ x: v.x, y: v.y, boxW: v.boxW, value: v.text, editId: id, orig: v });
+  };
+  // Topmost visible vector layer of `type` whose bounds contain `pt` (or null).
+  const vectorLayerAt = (
+    pt: { x: number; y: number },
+    type: "text" | "shape",
+  ): { id: string; vector: VectorData } | null => {
+    const pad = 4 / (zoomRef.current / 100);
+    const hit = (v: VectorData): boolean => {
+      if (v.type === "text") {
+        const b = v.bbox;
+        return pt.x >= b.x - pad && pt.x <= b.x + b.w + pad && pt.y >= b.y - pad && pt.y <= b.y + b.h + pad;
+      }
+      const cx = v.x + v.w / 2;
+      const cy = v.y + v.h / 2;
+      const cos = Math.cos(-v.angle);
+      const sin = Math.sin(-v.angle);
+      const dx = pt.x - cx;
+      const dy = pt.y - cy;
+      const lx = dx * cos - dy * sin;
+      const ly = dx * sin + dy * cos;
+      return Math.abs(lx) <= v.w / 2 + pad && Math.abs(ly) <= v.h / 2 + pad;
+    };
+    const search = (nodes: LayerNode[]): { id: string; vector: VectorData } | null => {
+      for (const n of nodes) {
+        if (n.type === "group") {
+          if (!n.visible) continue;
+          const r = search(n.children);
+          if (r) return r;
+        } else if (n.visible && n.vector && n.vector.type === type && hit(n.vector)) {
+          return { id: n.id, vector: n.vector };
+        }
+      }
+      return null;
+    };
+    return search(layersHitRef.current);
+  };
+  // Crop tool: latest box + settings reachable from the ants loop and handlers.
+  const cropBoxRef = useRef(cropBox);
+  cropBoxRef.current = cropBox;
+  const onCropBoxRef = useRef(onCropBox);
+  onCropBoxRef.current = onCropBox;
+  const cropGridRef = useRef(cropGrid);
+  cropGridRef.current = cropGrid;
+  const cropShieldRef = useRef(cropShield);
+  cropShieldRef.current = cropShield;
+  const cropStraightenRef = useRef(cropStraighten);
+  cropStraightenRef.current = cropStraighten;
+  const cropAspectRef = useRef(cropAspect);
+  cropAspectRef.current = cropAspect;
+  const onCropApplyRef = useRef(onCropApply);
+  onCropApplyRef.current = onCropApply;
+  // In-progress crop drag: which handle ("move" | corners nw/ne/se/sw | edges
+  // n/e/s/w | "new" rubber-band), the pointer-down doc point, and the box then.
+  const cropDragRef = useRef<{
+    handle: string;
+    px: number;
+    py: number;
+    box: Rect;
+  } | null>(null);
+  // True while a blur-brush stroke is in progress (distinct from paint strokes).
+  const blurringRef = useRef(false);
   const moveRef = useRef<{
     sx: number;
     sy: number;
@@ -588,10 +971,65 @@ export default function CanvasArea({
   const cancelRenameRef = useRef(false);
   toolRef.current = tool;
   sampleSizeRef.current = sampleSize;
+  const marqueeShapeRef = useRef(marqueeShape);
+  marqueeShapeRef.current = marqueeShape;
+  const marqueeApexRef = useRef(triangleApex);
+  marqueeApexRef.current = triangleApex;
+  // A just-committed triangle marquee, kept so the Apex slider can re-shape it while
+  // it's still the active selection. `key` is the selection it produced; once the
+  // selection changes by any other means the identity no longer matches and we drop it.
+  const liveTriangleRef = useRef<{
+    box: Rect;
+    pointDown: boolean;
+    base: Rect[];
+    mode: SelOp;
+    key: Rect[];
+  } | null>(null);
   // Drop any hover cursor when the active tool changes.
   useEffect(() => {
     setHoverCursor(null);
   }, [tool]);
+  // The clone source is in document coordinates, so forget it when the active
+  // document changes (a stale source would sample the wrong image / location).
+  useEffect(() => {
+    cloneSrcRef.current = null;
+    cloneOffRef.current = null;
+  }, [activeId]);
+  // Commit a pending text edit when leaving the Text tool.
+  useEffect(() => {
+    if (tool !== "text") commitText();
+  }, [tool, commitText]);
+  // Drop a pending text edit when the document changes (coords belong to it).
+  useEffect(() => {
+    setTextSession(null);
+  }, [activeId]);
+  // Focus the overlay editor whenever a new text session opens.
+  useEffect(() => {
+    if (textSession) {
+      const el = textAreaRef.current;
+      if (el) {
+        el.focus();
+        const len = el.value.length;
+        el.setSelectionRange(len, len);
+      }
+    }
+    // Only re-focus when a session begins/ends, not on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [textSession !== null]);
+  // Auto-grow the overlay editor: point text shrink-wraps to its content; a
+  // paragraph box keeps its width and grows in height as lines wrap.
+  useEffect(() => {
+    const el = textAreaRef.current;
+    if (!el || !textSession) return;
+    if (textSession.boxW == null) {
+      el.style.width = "1px";
+      el.style.width = `${el.scrollWidth + 2}px`;
+    } else {
+      el.style.width = `${textSession.boxW}px`;
+    }
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [textSession, text.fontFamily, text.fontSize, text.lineHeight, text.tracking, text.bold, text.italic]);
   const antsOffset = useRef(0);
   const antsRaf = useRef(0);
 
@@ -635,6 +1073,141 @@ export default function CanvasArea({
     ctx.clearRect(0, 0, cw, ch);
     const s = zoomRef.current / 100;
     const p = panR.current;
+
+    // --- crop overlay (its own complete UI: shield + box + grid + handles) ---
+    const cb = cropBoxRef.current;
+    if (toolRef.current === "crop" && cb) {
+      const ang = (cropStraightenRef.current * Math.PI) / 180;
+      const cx = cb.x + cb.w / 2;
+      const cy = cb.y + cb.h / 2;
+      const scx = p.x + cx * s;
+      const scy = p.y + cy * s;
+      const cos = Math.cos(ang);
+      const sin = Math.sin(ang);
+      // A box corner offset (doc px from centre) → rotated screen point.
+      const corner = (dx: number, dy: number): [number, number] => [
+        scx + (dx * cos - dy * sin) * s,
+        scy + (dx * sin + dy * cos) * s,
+      ];
+      const hw = cb.w / 2;
+      const hh = cb.h / 2;
+      const tl = corner(-hw, -hh);
+      const tr = corner(hw, -hh);
+      const br = corner(hw, hh);
+      const bl = corner(-hw, hh);
+      const lerp = (a: [number, number], b: [number, number], t: number): [number, number] => [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+      ];
+      const poly = (pts: [number, number][]) => {
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+        ctx.closePath();
+      };
+
+      // Shield: dim everything, then punch out the crop rectangle.
+      const shield = cropShieldRef.current / 100;
+      if (shield > 0) {
+        ctx.save();
+        ctx.fillStyle = `rgba(8,10,14,${shield})`;
+        ctx.fillRect(0, 0, cw, ch);
+        ctx.globalCompositeOperation = "destination-out";
+        poly([tl, tr, br, bl]);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Composition guide lines inside the box.
+      const grid = cropGridRef.current;
+      if (grid !== "none") {
+        ctx.save();
+        poly([tl, tr, br, bl]);
+        ctx.clip();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "rgba(255,255,255,0.4)";
+        const vline = (f: number) => {
+          const a = lerp(tl, tr, f);
+          const b = lerp(bl, br, f);
+          ctx.beginPath();
+          ctx.moveTo(a[0], a[1]);
+          ctx.lineTo(b[0], b[1]);
+          ctx.stroke();
+        };
+        const hline = (g: number) => {
+          const a = lerp(tl, bl, g);
+          const b = lerp(tr, br, g);
+          ctx.beginPath();
+          ctx.moveTo(a[0], a[1]);
+          ctx.lineTo(b[0], b[1]);
+          ctx.stroke();
+        };
+        if (grid === "thirds") {
+          [1 / 3, 2 / 3].forEach(vline);
+          [1 / 3, 2 / 3].forEach(hline);
+        } else if (grid === "grid") {
+          [0.25, 0.5, 0.75].forEach(vline);
+          [0.25, 0.5, 0.75].forEach(hline);
+        } else if (grid === "golden") {
+          [0.382, 0.618].forEach(vline);
+          [0.382, 0.618].forEach(hline);
+        } else if (grid === "diagonal") {
+          ctx.beginPath();
+          ctx.moveTo(tl[0], tl[1]);
+          ctx.lineTo(br[0], br[1]);
+          ctx.moveTo(tr[0], tr[1]);
+          ctx.lineTo(bl[0], bl[1]);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // Box outline.
+      ctx.save();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "rgba(255,255,255,0.95)";
+      poly([tl, tr, br, bl]);
+      ctx.stroke();
+
+      // Handles: 4 corners + 4 edge midpoints.
+      const mids: [number, number][] = [
+        lerp(tl, tr, 0.5),
+        lerp(tr, br, 0.5),
+        lerp(br, bl, 0.5),
+        lerp(bl, tl, 0.5),
+      ];
+      ctx.lineWidth = 1;
+      const drawHandle = (hx: number, hy: number, big: boolean) => {
+        const r = big ? 4.5 : 3.5;
+        ctx.fillStyle = "rgba(255,255,255,0.98)";
+        ctx.strokeStyle = "rgba(0,0,0,0.5)";
+        ctx.beginPath();
+        ctx.rect(hx - r, hy - r, r * 2, r * 2);
+        ctx.fill();
+        ctx.stroke();
+      };
+      [tl, tr, br, bl].forEach(([hx, hy]) => drawHandle(hx, hy, true));
+      mids.forEach(([hx, hy]) => drawHandle(hx, hy, false));
+
+      // Size readout.
+      const label = `${Math.round(cb.w)} × ${Math.round(cb.h)}${
+        cropStraightenRef.current ? `   ${cropStraightenRef.current}°` : ""
+      }`;
+      ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
+      const tw = ctx.measureText(label).width;
+      const lx = Math.min(tl[0], tr[0], br[0], bl[0]);
+      const ly = Math.min(tl[1], tr[1], br[1], bl[1]) - 22;
+      ctx.fillStyle = "rgba(8,10,14,0.8)";
+      ctx.beginPath();
+      ctx.rect(lx, ly, tw + 12, 17);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.92)";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, lx + 6, ly + 9);
+      ctx.restore();
+      return; // crop owns the overlay; skip the selection marching ants
+    }
+
     // --- selection marching ants ---
     const m = marqueeRef.current;
     const mv = moveRef.current;
@@ -644,8 +1217,10 @@ export default function CanvasArea({
       // Live preview while dragging a resize handle.
       rects = rz;
     } else if (m && m.mode === "new") {
-      // While replacing (plain drag), show only the new marquee.
-      rects = dragRectRef.current ? [dragRectRef.current] : [];
+      // While replacing (plain drag), show only the new marquee. Ellipse/triangle
+      // marquees are previewed as a smooth outline below instead of a rect.
+      rects =
+        dragRectRef.current && marqueeShapeRef.current === "rect" ? [dragRectRef.current] : [];
     } else if (mv) {
       // While moving, offset the selection outline by the drag delta.
       const d = moveDeltaRef.current;
@@ -655,8 +1230,10 @@ export default function CanvasArea({
       // previewed separately in red below.
       rects = selectionRef.current.slice();
     } else {
+      // Adding (or static): the existing selection is unchanged and drawn from its
+      // cached outline; the new region is previewed separately below so a large
+      // (many-rect) selection — e.g. an ellipse/triangle — never vanishes mid-drag.
       rects = selectionRef.current.slice();
-      if (dragRectRef.current) rects.push(dragRectRef.current); // additive drag
     }
     // Selection rotation (persisted, or live while dragging the ring): spin the
     // outline + handles about the pivot (anchor), in screen space.
@@ -670,8 +1247,12 @@ export default function CanvasArea({
       // up with the committed result; otherwise use the selection's pivot/centre.
       const pv = resizeRef.current ? resizeRef.current.pivot : selPivotRef.current;
       if (pv) {
-        scx = p.x + pv.x * s;
-        scy = p.y + pv.y * s;
+        // While moving, the pivot travels with the content so a rotated selection
+        // translates as a whole instead of swinging about a fixed point (which
+        // would make the outline drift away from the moved pixels).
+        const md = mv ? moveDeltaRef.current : { x: 0, y: 0 };
+        scx = p.x + (pv.x + md.x) * s;
+        scy = p.y + (pv.y + md.y) * s;
       } else {
         const bb = bboxOf(rects);
         scx = p.x + (bb.x + bb.w / 2) * s;
@@ -703,8 +1284,9 @@ export default function CanvasArea({
     } else if (isWand && mv) {
       const d = moveDeltaRef.current;
       segs = cache!.segs.map((g) => ({ x1: g.x1 + d.x, y1: g.y1 + d.y, x2: g.x2 + d.x, y2: g.y2 + d.y }));
-    } else if (isWand && !rz && (m?.mode === "subtract" || (!m && !dragRectRef.current))) {
-      // Static selection, or a subtract drag (the selection itself is unchanged).
+    } else if (isWand && !rz && m?.mode !== "new") {
+      // Static selection, or an add / subtract drag — the existing selection is
+      // unchanged, so reuse its cached outline (the new region is previewed below).
       segs = cache!.segs;
     } else {
       // unionSegments is O(rects³); never run it on a wand-sized rect set without
@@ -733,6 +1315,54 @@ export default function CanvasArea({
             if (i === 0) ctx.moveTo(sx, sy);
             else ctx.lineTo(sx, sy);
           }
+        }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+
+    // --- marquee region in progress: a dashed outline of the new region, drawn
+    //     separately from the existing ants. Ellipse/triangle marquees always use
+    //     this (any mode); an additive rectangle uses it too (a "new" rectangle is
+    //     drawn through the ants above; a subtracted one shows in red below). ---
+    const mShape = marqueeShapeRef.current;
+    const mdr = dragRectRef.current;
+    if (m && (mShape !== "rect" || m.mode === "add") && mdr && mdr.w >= 1 && mdr.h >= 1) {
+      const sx = (x: number) => p.x + x * s;
+      const sy = (y: number) => p.y + y * s;
+      // Apex points toward the drag direction: down when the anchor (initial click)
+      // sits at the top of the box (i.e. dragged downward), up otherwise.
+      const triDown = m.y <= mdr.y + mdr.h / 2;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      for (let pass = 0; pass < 2; pass++) {
+        ctx.strokeStyle = pass === 0 ? "rgba(0,0,0,0.75)" : "#fff";
+        ctx.lineDashOffset = -antsOffset.current + (pass === 0 ? 0 : 4);
+        ctx.beginPath();
+        if (mShape === "ellipse") {
+          ctx.ellipse(
+            sx(mdr.x + mdr.w / 2),
+            sy(mdr.y + mdr.h / 2),
+            (mdr.w / 2) * s,
+            (mdr.h / 2) * s,
+            0,
+            0,
+            Math.PI * 2,
+          );
+        } else if (mShape === "triangle") {
+          const apexX = sx(mdr.x + marqueeApexRef.current * mdr.w);
+          if (triDown) {
+            ctx.moveTo(sx(mdr.x), sy(mdr.y)); // top-left
+            ctx.lineTo(sx(mdr.x + mdr.w), sy(mdr.y)); // top-right
+            ctx.lineTo(apexX, sy(mdr.y + mdr.h)); // bottom apex
+          } else {
+            ctx.moveTo(apexX, sy(mdr.y)); // top apex
+            ctx.lineTo(sx(mdr.x + mdr.w), sy(mdr.y + mdr.h)); // bottom-right
+            ctx.lineTo(sx(mdr.x), sy(mdr.y + mdr.h)); // bottom-left
+          }
+          ctx.closePath();
+        } else {
+          ctx.rect(sx(mdr.x), sy(mdr.y), mdr.w * s, mdr.h * s); // additive rectangle
         }
         ctx.stroke();
       }
@@ -811,7 +1441,16 @@ export default function CanvasArea({
         h: shapeBox.h * s,
       };
       ctx.save();
-      renderShape(ctx, o.kind, screenBox, o.fill, o.stroke, o.strokeWidth * s, o.radius * s);
+      renderShape(
+        ctx,
+        o.kind,
+        screenBox,
+        o.fill,
+        o.stroke,
+        o.strokeWidth * s,
+        o.radius * s,
+        shapeGeom(o.kind),
+      );
       ctx.restore();
     }
 
@@ -828,6 +1467,24 @@ export default function CanvasArea({
       ctx.fillStyle = bk.color;
       ctx.fillRect(0, 0, cw, ch);
       ctx.restore();
+    }
+
+    // --- live bucket fill: a solid border on the clicked (seed) pixel ---
+    const lb = liveBucketRef.current;
+    if (lb) {
+      // The pixel itself, but never smaller than ~7px so it stays visible.
+      const size = Math.max(s, 7);
+      const cx = p.x + (lb.seedX + 0.5) * s;
+      const cy = p.y + (lb.seedY + 0.5) * s;
+      const x = Math.round(cx - size / 2) + 0.5;
+      const y = Math.round(cy - size / 2) + 0.5;
+      ctx.setLineDash([]);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(0,0,0,0.6)";
+      ctx.strokeRect(x, y, size, size);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "#fff";
+      ctx.strokeRect(x, y, size, size);
     }
 
     // --- gradient: the line, endpoint handles + the draggable midpoint tick ---
@@ -887,6 +1544,85 @@ export default function CanvasArea({
       // Draggable midpoint tick (where the colours' halfway point sits).
       tick(mx, my, 7, 4, 2);
       ctx.lineCap = "butt";
+    }
+
+    // --- pen: the editable path skeleton + anchor / handle nodes ---
+    const path = penPathRef.current;
+    if (path && path.anchors.length) {
+      const sx = (x: number) => p.x + x * s;
+      const sy = (y: number) => p.y + y * s;
+      const a = path.anchors;
+      ctx.setLineDash([]);
+      // Skeleton: the bezier path through the anchors (dark underlay + white).
+      if (a.length >= 2) {
+        const trace = () => {
+          ctx.beginPath();
+          ctx.moveTo(sx(a[0].x), sy(a[0].y));
+          for (let i = 1; i < a.length; i++) {
+            ctx.bezierCurveTo(sx(a[i - 1].ox), sy(a[i - 1].oy), sx(a[i].ix), sy(a[i].iy), sx(a[i].x), sy(a[i].y));
+          }
+          if (path.closed) {
+            const f = a[0];
+            const l = a[a.length - 1];
+            ctx.bezierCurveTo(sx(l.ox), sy(l.oy), sx(f.ix), sy(f.iy), sx(f.x), sy(f.y));
+          }
+        };
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(0,0,0,0.4)";
+        trace();
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = SHAPE_NODE_COLOR;
+        trace();
+        ctx.stroke();
+      }
+      // Bend handles: shown on EVERY anchor at all times — at the control point
+      // when pulled out, otherwise as a fixed-length stub along the path tangent —
+      // with a dark underlay + bright line + a dot, so they stay visible and
+      // grabbable on any background and at any zoom level.
+      for (let i = 0; i < a.length; i++) {
+        const an = a[i];
+        for (const isOut of [false, true]) {
+          if (isOut ? !penHasOut(i, a.length, path.closed) : !penHasIn(i, a.length, path.closed)) {
+            continue;
+          }
+          const h = penHandlePos(a, i, path.closed, isOut, s);
+          const ax = sx(an.x);
+          const ay = sy(an.y);
+          const bx = sx(h.x);
+          const by = sy(h.y);
+          for (const [w, col] of [
+            [3, "rgba(0,0,0,0.45)"],
+            [1, "rgba(255,255,255,0.95)"],
+          ] as const) {
+            ctx.lineWidth = w;
+            ctx.strokeStyle = col;
+            ctx.beginPath();
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(bx, by);
+            ctx.stroke();
+          }
+          ctx.beginPath();
+          ctx.arc(bx, by, 4, 0, Math.PI * 2);
+          ctx.fillStyle = "#fff";
+          ctx.fill();
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = "rgba(0,0,0,0.7)";
+          ctx.stroke();
+        }
+      }
+      // Anchor circles: white with a blue outline matching the path skeleton; the
+      // first one is larger to show where clicking closes the path.
+      a.forEach((an, i) => {
+        const r = i === 0 && !path.closed && a.length >= 2 ? 6 : 5;
+        ctx.beginPath();
+        ctx.arc(sx(an.x), sy(an.y), r, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff";
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = SHAPE_NODE_COLOR;
+        ctx.stroke();
+      });
     }
 
     // --- eyedropper: solid outline around the pixels being sampled ---
@@ -959,7 +1695,180 @@ export default function CanvasArea({
         ctx.lineWidth = 1;
         ctx.strokeStyle = "#000";
         ctx.stroke();
+
+        // Shape nodes on the top edge — the trapezoid's two side nodes or the
+        // triangle's apex — plus the centre/symmetry guide lines (vertical in the
+        // shape's own frame) shown while snapped.
+        const liveN = liveShapeRef.current;
+        const nodeKind = shapeOptsRef.current.kind;
+        if (toolRef.current === "shape" && liveN && (nodeKind === "trapezoid" || nodeKind === "tri")) {
+          const nb = liveN.box;
+          const nodeXs =
+            nodeKind === "trapezoid"
+              ? [nb.x + trapRef.current.l * nb.w, nb.x + nb.w - trapRef.current.r * nb.w]
+              : [nb.x + triApexRef.current * nb.w];
+          // Guide lines while snapped: trapezoid → the two node verticals; triangle
+          // → the centre vertical it snapped to.
+          if (nodeSnapRef.current) {
+            const ext = 14 / s; // extend a touch past the box, in doc units
+            const guideXs = nodeKind === "trapezoid" ? nodeXs : [nb.x + nb.w / 2];
+            for (const gx of guideXs) {
+              const [x1, y1] = rot(p.x + gx * s, p.y + (nb.y - ext) * s);
+              const [x2, y2] = rot(p.x + gx * s, p.y + (nb.y + nb.h + ext) * s);
+              for (const [w, col] of [
+                [3, "rgba(0,0,0,0.35)"],
+                [1, SHAPE_NODE_COLOR],
+              ] as const) {
+                ctx.lineWidth = w;
+                ctx.strokeStyle = col;
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.stroke();
+              }
+            }
+          }
+          for (const gx of nodeXs) {
+            const [hx, hy] = rot(p.x + gx * s, p.y + nb.y * s);
+            ctx.beginPath();
+            ctx.arc(Math.round(hx), Math.round(hy), 5, 0, Math.PI * 2);
+            ctx.fillStyle = SHAPE_NODE_COLOR;
+            ctx.fill();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = "#fff";
+            ctx.stroke();
+          }
+        }
       }
+    }
+
+    // --- brush-ring cursors (blur + clone) ------------------------------------
+    // Drawn on the overlay so they scale with zoom and show the hardness falloff;
+    // the OS cursor is hidden for these tools (see the view canvas style). A small
+    // contrasting cross-hair (dark under white) used as a precise centre marker.
+    const drawCross = (cxp: number, cyp: number, len: number) => {
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = "rgba(0,0,0,0.4)";
+      for (let pass = 0; pass < 2; pass++) {
+        ctx.beginPath();
+        ctx.moveTo(cxp - len, cyp);
+        ctx.lineTo(cxp + len, cyp);
+        ctx.moveTo(cxp, cyp - len);
+        ctx.lineTo(cxp, cyp + len);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "rgba(255,255,255,0.92)";
+      }
+    };
+    // A brush ring at full diameter + a dashed inner ring at the hardness radius.
+    const drawRing = (hx: number, hy: number, r: number, hardness: number) => {
+      ctx.beginPath();
+      ctx.arc(hx, hy, r, 0, Math.PI * 2);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(0,0,0,0.45)";
+      ctx.stroke();
+      ctx.lineWidth = 1.25;
+      ctx.strokeStyle = "rgba(255,255,255,0.95)";
+      ctx.stroke();
+      const inner = r * (hardness / 100);
+      if (hardness < 100 && inner < r - 1.5 && inner > 0.5) {
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(hx, hy, inner, 0, Math.PI * 2);
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = "rgba(0,0,0,0.35)";
+        ctx.stroke();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "rgba(255,255,255,0.8)";
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    };
+
+    if (toolRef.current === "blur" && blurHoverRef.current) {
+      const b = blurRef.current;
+      const hx = p.x + blurHoverRef.current.x * s;
+      const hy = p.y + blurHoverRef.current.y * s;
+      drawRing(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
+      drawCross(hx, hy, 4);
+    }
+
+    if (toolRef.current === "dodge" && dodgeHoverRef.current) {
+      const d = dodgeRef.current;
+      const hx = p.x + dodgeHoverRef.current.x * s;
+      const hy = p.y + dodgeHoverRef.current.y * s;
+      drawRing(hx, hy, Math.max(1, (d.size / 2) * s), d.hardness);
+      drawCross(hx, hy, 4);
+    }
+
+    if (toolRef.current === "clone" && cloneHoverRef.current) {
+      const c = cloneRef.current;
+      const hov = cloneHoverRef.current;
+      const hx = p.x + hov.x * s;
+      const hy = p.y + hov.y * s;
+      const r = Math.max(1, (c.size / 2) * s);
+      // Where the clone is (or would be) sampling from.
+      const off = cloneOffRef.current;
+      let srcPt: { x: number; y: number } | null = null;
+      if (paintingRef.current && off) srcPt = { x: hov.x + off.x, y: hov.y + off.y };
+      else if (cloneSrcRef.current)
+        srcPt = c.aligned && off ? { x: hov.x + off.x, y: hov.y + off.y } : cloneSrcRef.current;
+
+      if (srcPt) {
+        const sx = p.x + srcPt.x * s;
+        const sy = p.y + srcPt.y * s;
+        // Faint connector from source to the brush while actively cloning.
+        if (paintingRef.current && off) {
+          ctx.setLineDash([4, 4]);
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = "rgba(255,255,255,0.45)";
+          ctx.beginPath();
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(hx, hy);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+        // Source marker: a small ringed cross-hair.
+        ctx.beginPath();
+        ctx.arc(sx, sy, 6, 0, Math.PI * 2);
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(0,0,0,0.45)";
+        ctx.stroke();
+        ctx.lineWidth = 1.25;
+        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.stroke();
+        drawCross(sx, sy, 5);
+      }
+
+      // Alt held → "set source" reticle; otherwise the normal brush ring.
+      if (cloneAltRef.current) {
+        ctx.beginPath();
+        ctx.arc(hx, hy, 9, 0, Math.PI * 2);
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(0,0,0,0.45)";
+        ctx.stroke();
+        ctx.lineWidth = 1.25;
+        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.stroke();
+        drawCross(hx, hy, 7);
+      } else {
+        drawRing(hx, hy, r, c.hardness);
+        drawCross(hx, hy, 4);
+      }
+    }
+
+    // --- text paragraph-box rubber-band (while dragging to define a box) ------
+    const tdr = textDragRef.current;
+    if (toolRef.current === "text" && tdr) {
+      const rx = p.x + tdr.x * s;
+      const ry = p.y + tdr.y * s;
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(0,0,0,0.5)";
+      ctx.strokeRect(rx + 0.5, ry + 0.5, tdr.w * s, tdr.h * s);
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.strokeRect(rx + 0.5, ry + 0.5, tdr.w * s, tdr.h * s);
+      ctx.setLineDash([]);
     }
   }, []);
 
@@ -972,7 +1881,14 @@ export default function CanvasArea({
       lassoRef.current ||
       shapeRef.current ||
       bucketRef.current ||
+      liveBucketRef.current ||
       gradientRef.current ||
+      penPathRef.current ||
+      (toolRef.current === "crop" && cropBoxRef.current) ||
+      (toolRef.current === "blur" && blurHoverRef.current) ||
+      (toolRef.current === "dodge" && dodgeHoverRef.current) ||
+      (toolRef.current === "clone" && cloneHoverRef.current) ||
+      (toolRef.current === "text" && textDragRef.current) ||
       (toolRef.current === "eyedropper" && hoverRef.current)
     ) {
       antsRaf.current = requestAnimationFrame(tickAnts);
@@ -986,6 +1902,12 @@ export default function CanvasArea({
   const ensureAnts = useCallback(() => {
     if (!antsRaf.current) antsRaf.current = requestAnimationFrame(tickAnts);
   }, [tickAnts]);
+
+  // Keep the overlay loop alive while a crop box is present so it stays drawn and
+  // reflects live edits (drag, W/H fields, ratio, straighten).
+  useEffect(() => {
+    if (tool === "crop" && cropBox) ensureAnts();
+  }, [tool, cropBox, cropGrid, cropShield, cropStraighten, cropAspect, ensureAnts]);
 
   // ---- Undoable selection transforms (resize / rotate) ----
   // Snapshot the live selection (rects + rotation + wand ants cache) and restore
@@ -1010,6 +1932,23 @@ export default function CanvasArea({
     undo: () => applySel(before),
     redo: () => applySel(after),
   });
+
+  // Re-shape a just-created triangle marquee live as the Apex slider moves — but
+  // only while it is still the active selection (any other change drops tracking).
+  useEffect(() => {
+    const lt = liveTriangleRef.current;
+    if (!lt) return;
+    if (selectionRef.current !== lt.key) {
+      liveTriangleRef.current = null; // selection changed elsewhere — stop tracking
+      return;
+    }
+    const sel = marqueeSelRects(lt.box, "triangle", lt.pointDown, triangleApex);
+    const result = engine.combineSelection(lt.base, sel, lt.mode === "subtract" ? "subtract" : "add");
+    applyCombined(result);
+    liveTriangleRef.current = result && result.rects.length ? { ...lt, key: result.rects } : null;
+    ensureAnts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [triangleApex]);
 
   useEffect(() => {
     if (selection.length) {
@@ -1038,18 +1977,7 @@ export default function CanvasArea({
   // Re-render the live shape whenever its settings change (colour / stroke /
   // radius / kind) — it stays editable while its selection is up.
   useEffect(() => {
-    const live = liveShapeRef.current;
-    if (!live) return;
-    engine.liveShape(
-      live.layerId,
-      live.box,
-      selAngleRef.current,
-      shape.kind,
-      shape.fill,
-      shape.stroke,
-      shape.strokeWidth,
-      shape.radius,
-    );
+    reRenderLiveShape();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shape.kind, shape.fill, shape.stroke, shape.strokeWidth, shape.radius]);
 
@@ -1072,6 +2000,74 @@ export default function CanvasArea({
   // Commit the live gradient when leaving the gradient tool.
   useEffect(() => {
     if (tool !== "gradient") engine.endGradient();
+  }, [tool, engine]);
+
+  // Re-stroke the live pen path when its options change (width / taper / bend) or
+  // the stroke colour changes, so the preview stays current while it's editable.
+  useEffect(() => {
+    if (penPathRef.current) renderPenLive();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pen.width, pen.taper, pen.bend, color]);
+
+  // Commit the live pen path when leaving the pen tool.
+  useEffect(() => {
+    if (tool !== "pen" && penPathRef.current) finishPenPath();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool, engine]);
+
+  // Re-run the live bucket fill when its options (tolerance / opacity /
+  // contiguous) or the fill colours change — coalesced to one run per frame.
+  useEffect(() => {
+    if (liveBucketRef.current) scheduleLiveBucket();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bucket.tolerance, bucket.opacity, bucket.contiguous, bucket.antialias, foreground, background]);
+
+  // Commit the live bucket fill when leaving the bucket tool.
+  useEffect(() => {
+    if (tool !== "bucket" && liveBucketRef.current) finishLiveBucket();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool, engine]);
+
+  // Esc deselects the just-filled pixel — keeping the fill, dropping the marker.
+  useEffect(() => {
+    if (tool !== "bucket") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && liveBucketRef.current) {
+        e.preventDefault();
+        finishLiveBucket();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool, engine]);
+
+  // Esc commits the drawn gradient — the gradient stays, its control handles vanish.
+  useEffect(() => {
+    if (tool !== "gradient") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && gradientRef.current) {
+        e.preventDefault();
+        engine.endGradient();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool, engine]);
+
+  // Finish (commit) the pen path with Enter / Escape while the pen tool is active.
+  useEffect(() => {
+    if (tool !== "pen") return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.key === "Enter" || e.key === "Escape") && penPathRef.current) {
+        e.preventDefault();
+        finishPenPath();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, engine]);
 
   // Live-update a magic-wand selection when its options change (e.g. dragging
@@ -1289,14 +2285,24 @@ export default function CanvasArea({
       gradDragRef.current = null;
       ensureAnts();
     };
+    engine.onPathEnd = () => {
+      penPathRef.current = null;
+      penDragRef.current = null;
+      penGrabRef.current = null;
+      ensureAnts();
+    };
+    engine.onFillEnd = () => {
+      liveBucketRef.current = null;
+      ensureAnts();
+    };
     paintRef.current = {
       undo: () => engine.undo(),
       redo: () => engine.redo(),
       jumpTo: (i) => engine.jumpTo(i),
-      fillSelection: (layerId, rects, col, angle, pivot) =>
-        engine.fillSelection(layerId, rects, col, angle, pivot),
-      eraseSelection: (layerId, rects, angle, pivot, label) =>
-        engine.eraseSelection(layerId, rects, angle, pivot, label),
+      fillSelection: (layerId, rects, col, angle, pivot, feather) =>
+        engine.fillSelection(layerId, rects, col, angle, pivot, feather),
+      eraseSelection: (layerId, rects, angle, pivot, label, feather) =>
+        engine.eraseSelection(layerId, rects, angle, pivot, label, feather),
       copyRegion: (rects, angle, pivot) => engine.copyRegion(rects, angle, pivot),
       isFloating: () => engine.isFloating,
       commitFloat: () => engine.commitFloat(),
@@ -1311,6 +2317,24 @@ export default function CanvasArea({
       subscribe: (cb) => engine.addChangeListener(cb),
       resizeImage: (w, h, ids, smooth) => engine.resizeImage(w, h, ids, smooth),
       transformImage: (kind, ids) => engine.transformImage(kind, ids),
+      clearLayerPixels: (id) => engine.clearLayerPixels(id),
+      renderText: (id, spec) => engine.renderText(id, spec),
+      textBounds: (spec) => engine.textBounds(spec),
+      rasterizeShape: (id, box, angle, kind, fill, stroke, sw, radius, geom) =>
+        engine.rasterizeShape(id, box, angle, kind, fill, stroke, sw, radius, geom),
+      beginBlurFx: (ids, sel, selAngle, selPivot) =>
+        engine.beginBlurFx(ids, sel, selAngle, selPivot),
+      previewBlurFx: (kind, amount, angle, anchorX, anchorY) =>
+        engine.previewBlurFx(kind, amount, angle, anchorX, anchorY),
+      commitBlurFx: (label) => engine.commitBlurFx(label),
+      cancelBlurFx: () => engine.cancelBlurFx(),
+      beginBlur: (layerId, blur, x, y, clip, clipAngle, clipPivot) =>
+        engine.beginBlur(layerId, blur, x, y, clip, clipAngle, clipPivot),
+      moveBlur: (x, y) => engine.moveBlur(x, y),
+      endBlur: () => engine.endBlur(),
+      cropSnapshot: (ids) => engine.cropSnapshot(ids),
+      applyCrop: (rect, ids, angle) => engine.applyCrop(rect, ids, angle),
+      cropRestore: (snap) => engine.cropRestore(snap),
       applyAdjust: (layerId, adj, sel, angle, pivot) =>
         engine.applyAdjust(layerId, adj, sel, angle, pivot),
       endAdjust: () => engine.endAdjust(),
@@ -1458,6 +2482,164 @@ export default function CanvasArea({
     if (hex) onPick(hex);
   };
 
+  // ---- Crop tool geometry --------------------------------------------------
+  // Classify a doc-space point against the current (possibly straightened) crop
+  // box: a corner (nw/ne/se/sw), an edge (n/e/s/w), "move" (inside), or "outside".
+  const cropHandleAt = (pt: { x: number; y: number }): string | null => {
+    const cb = cropBoxRef.current;
+    if (!cb) return null;
+    const a = (-cropStraightenRef.current * Math.PI) / 180;
+    const cx = cb.x + cb.w / 2;
+    const cy = cb.y + cb.h / 2;
+    const cos = Math.cos(a);
+    const sin = Math.sin(a);
+    const dx = pt.x - cx;
+    const dy = pt.y - cy;
+    const lx = dx * cos - dy * sin; // into the box's leveled frame
+    const ly = dx * sin + dy * cos;
+    const hw = cb.w / 2;
+    const hh = cb.h / 2;
+    const tol = 9 / (zoomRef.current / 100); // handle grab radius in doc px
+    if (lx < -hw - tol || lx > hw + tol || ly < -hh - tol || ly > hh + tol) return "outside";
+    const nL = Math.abs(lx + hw) <= tol;
+    const nR = Math.abs(lx - hw) <= tol;
+    const nT = Math.abs(ly + hh) <= tol;
+    const nB = Math.abs(ly - hh) <= tol;
+    if (nT && nL) return "nw";
+    if (nT && nR) return "ne";
+    if (nB && nL) return "sw";
+    if (nB && nR) return "se";
+    if (nT) return "n";
+    if (nB) return "s";
+    if (nL) return "w";
+    if (nR) return "e";
+    return "move";
+  };
+
+  const CROP_CURSOR: Record<string, string> = {
+    nw: "nwse-resize",
+    se: "nwse-resize",
+    ne: "nesw-resize",
+    sw: "nesw-resize",
+    n: "ns-resize",
+    s: "ns-resize",
+    e: "ew-resize",
+    w: "ew-resize",
+    move: "move",
+    outside: "crosshair",
+  };
+
+  // Resolve a crop drag (move / resize a handle / rubber-band a new box) to the
+  // next box, honouring the locked aspect ratio and clamping to the canvas when
+  // the crop isn't straightened.
+  const computeCropDrag = (
+    drag: { handle: string; px: number; py: number; box: Rect },
+    pt: { x: number; y: number },
+  ): Rect => {
+    const aspect = cropAspectRef.current;
+    const ang = cropStraightenRef.current;
+    const rad = (ang * Math.PI) / 180;
+    const clampToCanvas = ang === 0;
+    const minSize = 8;
+    const round = (r: Rect): Rect => ({
+      x: Math.round(r.x),
+      y: Math.round(r.y),
+      w: Math.max(1, Math.round(r.w)),
+      h: Math.max(1, Math.round(r.h)),
+    });
+
+    if (drag.handle === "move") {
+      let nx = drag.box.x + (pt.x - drag.px);
+      let ny = drag.box.y + (pt.y - drag.py);
+      if (clampToCanvas) {
+        nx = Math.max(0, Math.min(width - drag.box.w, nx));
+        ny = Math.max(0, Math.min(height - drag.box.h, ny));
+      }
+      return round({ ...drag.box, x: nx, y: ny });
+    }
+
+    if (drag.handle === "new") {
+      let x = Math.min(drag.px, pt.x);
+      let y = Math.min(drag.py, pt.y);
+      let w = Math.abs(pt.x - drag.px);
+      let h = Math.abs(pt.y - drag.py);
+      if (aspect) {
+        if (w / Math.max(1, h) > aspect) w = h * aspect;
+        else h = w / aspect;
+        x = pt.x < drag.px ? drag.px - w : drag.px;
+        y = pt.y < drag.py ? drag.py - h : drag.py;
+      }
+      if (clampToCanvas) {
+        x = Math.max(0, Math.min(width - 1, x));
+        y = Math.max(0, Math.min(height - 1, y));
+        w = Math.min(w, width - x);
+        h = Math.min(h, height - y);
+      }
+      return round({ x, y, w: Math.max(minSize, w), h: Math.max(minSize, h) });
+    }
+
+    // Edge / corner resize, computed in the box's leveled frame.
+    const b = drag.box;
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const toLocal = (q: { x: number; y: number }) => {
+      const ddx = q.x - cx;
+      const ddy = q.y - cy;
+      return { x: ddx * cos + ddy * sin, y: -ddx * sin + ddy * cos };
+    };
+    const toDocPt = (l: { x: number; y: number }) => ({
+      x: cx + l.x * cos - l.y * sin,
+      y: cy + l.x * sin + l.y * cos,
+    });
+    const PL = toLocal(pt);
+    let left = -b.w / 2;
+    let right = b.w / 2;
+    let top = -b.h / 2;
+    let bottom = b.h / 2;
+    const mL = drag.handle.includes("w");
+    const mR = drag.handle.includes("e");
+    const mT = drag.handle.includes("n");
+    const mB = drag.handle.includes("s");
+    if (mL) left = Math.min(PL.x, right - minSize);
+    if (mR) right = Math.max(PL.x, left + minSize);
+    if (mT) top = Math.min(PL.y, bottom - minSize);
+    if (mB) bottom = Math.max(PL.y, top + minSize);
+
+    if (aspect) {
+      const corner = (mL || mR) && (mT || mB);
+      let w = right - left;
+      let h = bottom - top;
+      if (corner) {
+        h = w / aspect;
+        if (mT) top = bottom - h;
+        else bottom = top + h;
+      } else if (mL || mR) {
+        h = w / aspect;
+        const midY = (top + bottom) / 2;
+        top = midY - h / 2;
+        bottom = midY + h / 2;
+      } else {
+        w = h * aspect;
+        const midX = (left + right) / 2;
+        left = midX - w / 2;
+        right = midX + w / 2;
+      }
+    }
+
+    const w = right - left;
+    const h = bottom - top;
+    const center = toDocPt({ x: (left + right) / 2, y: (top + bottom) / 2 });
+    let nx = center.x - w / 2;
+    let ny = center.y - h / 2;
+    if (clampToCanvas) {
+      nx = Math.max(0, Math.min(width - w, nx));
+      ny = Math.max(0, Math.min(height - h, ny));
+    }
+    return round({ x: nx, y: ny, w, h });
+  };
+
   // Start a selection transform (rotate-anchor / resize / rotate-ring) if the
   // press landed on a handle / ring / anchor. Shared by the Marquee and Wand
   // tools so wand selections can be transformed without switching tools.
@@ -1483,7 +2665,7 @@ export default function CanvasArea({
       viewRef.current?.setPointerCapture(e.pointerId);
       let content = false;
       if ((tool === "shape" || resizeMode === "content") && activeLayerId) {
-        content = engine.beginFloatFromSelection(activeLayerId, selection, selectionAngle, selectionPivot);
+        content = engine.beginFloatFromSelection(activeLayerId, selection, selectionAngle, selectionPivot, selectionFeather);
       }
       resizeRef.current = {
         rects: selection,
@@ -1503,7 +2685,7 @@ export default function CanvasArea({
     if (zone.kind === "ring") {
       let content = false;
       if ((tool === "shape" || resizeMode === "content") && activeLayerId) {
-        content = engine.beginFloatFromSelection(activeLayerId, selection, selectionAngle, selectionPivot);
+        content = engine.beginFloatFromSelection(activeLayerId, selection, selectionAngle, selectionPivot, selectionFeather);
       }
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
@@ -1570,12 +2752,155 @@ export default function CanvasArea({
     );
     // No source (empty / no layer) → the whole canvas is the fill region.
     const rects = region?.rects ?? [{ x: 0, y: 0, w: widthRef.current, h: heightRef.current }];
-    const c = parseColor(colorRef.current);
+    const c = parseColor(seed.slot === "secondary" ? bgRef.current : fgRef.current);
     bucketRef.current = {
       rects,
       color: toHex8({ r: c.r, g: c.g, b: c.b, a: c.a * (o.opacity / 100) }),
     };
     ensureAnts();
+  };
+
+  // Re-run the live (committed-but-editable) bucket fill from its seed with the
+  // current options — the magic-wand reuses the cached ORIGINAL pixels, so the
+  // region is right even though the layer already shows the fill.
+  const renderLiveBucket = () => {
+    const lb = liveBucketRef.current;
+    if (!lb) return;
+    const o = bucketOptsRef.current;
+    const region = engine.magicWand(
+      lb.sampleLayerId ?? "",
+      lb.seedX,
+      lb.seedY,
+      { tolerance: o.tolerance, contiguous: !lb.shift && o.contiguous, sampleAll: false },
+      true, // reuse the cached original source
+      null,
+    );
+    const rects = region?.rects ?? [{ x: 0, y: 0, w: widthRef.current, h: heightRef.current }];
+    const c = parseColor(lb.slot === "secondary" ? bgRef.current : fgRef.current);
+    engine.liveFill(
+      lb.fillLayerId,
+      rects,
+      toHex8({ r: c.r, g: c.g, b: c.b, a: c.a * (o.opacity / 100) }),
+      o.antialias,
+    );
+  };
+
+  const scheduleLiveBucket = () => {
+    if (liveBucketRaf.current) return;
+    liveBucketRaf.current = requestAnimationFrame(() => {
+      liveBucketRaf.current = 0;
+      renderLiveBucket();
+    });
+  };
+
+  // Commit (bake) the live bucket fill and drop the editing marker.
+  const finishLiveBucket = () => {
+    if (liveBucketRaf.current) {
+      cancelAnimationFrame(liveBucketRaf.current);
+      liveBucketRaf.current = 0;
+    }
+    engine.endFill();
+    liveBucketRef.current = null;
+    ensureAnts();
+  };
+
+  // The node-adjustable geometry for the current shape kind (trapezoid insets /
+  // triangle apex), or undefined for kinds without nodes.
+  const shapeGeom = (kind: ShapeKind): ShapeGeom | undefined =>
+    kind === "trapezoid"
+      ? { trap: trapRef.current }
+      : kind === "tri"
+        ? { apex: triApexRef.current }
+        : undefined;
+
+  // Re-render the live shape from its box + current settings (+ node geometry).
+  const reRenderLiveShape = () => {
+    const live = liveShapeRef.current;
+    if (!live) return;
+    const o = shapeOptsRef.current;
+    engine.liveShape(
+      live.layerId,
+      live.box,
+      selAngleRef.current,
+      o.kind,
+      o.fill,
+      o.stroke,
+      o.strokeWidth,
+      o.radius,
+      shapeGeom(o.kind),
+    );
+  };
+
+  // Which shape node (if any) a doc-space point is over: the trapezoid's two side
+  // nodes or the triangle's apex. Works in the shape's local (un-rotated) frame.
+  const shapeNodeAt = (pt: { x: number; y: number }): "l" | "r" | "apex" | null => {
+    const live = liveShapeRef.current;
+    if (!live) return null;
+    const kind = shapeOptsRef.current.kind;
+    if (kind !== "trapezoid" && kind !== "tri") return null;
+    const box = live.box;
+    const ang = selAngleRef.current;
+    const piv = selPivotRef.current ?? { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+    let lx = pt.x;
+    let ly = pt.y;
+    if (ang) {
+      const c = Math.cos(-ang);
+      const sn = Math.sin(-ang);
+      lx = piv.x + (pt.x - piv.x) * c - (pt.y - piv.y) * sn;
+      ly = piv.y + (pt.x - piv.x) * sn + (pt.y - piv.y) * c;
+    }
+    const hit = 9 / (zoomRef.current / 100);
+    if (kind === "tri") {
+      return Math.hypot(lx - (box.x + triApexRef.current * box.w), ly - box.y) <= hit
+        ? "apex"
+        : null;
+    }
+    const t = trapRef.current;
+    if (Math.hypot(lx - (box.x + t.l * box.w), ly - box.y) <= hit) return "l";
+    if (Math.hypot(lx - (box.x + box.w - t.r * box.w), ly - box.y) <= hit) return "r";
+    return null;
+  };
+
+  // Re-stroke the live pen path from its anchors + current options.
+  const renderPenLive = () => {
+    const path = penPathRef.current;
+    if (!path || path.anchors.length < 2) return;
+    engine.livePath(path.layerId, path.anchors, path.closed, penOptsRef.current, colorRef.current);
+  };
+
+  // Commit (bake) the live pen path and drop the editing state. Also clears a
+  // single-anchor path, which never started an engine session to commit.
+  const finishPenPath = () => {
+    engine.endPath();
+    penPathRef.current = null;
+    penDragRef.current = null;
+    penGrabRef.current = null;
+    ensureAnts();
+  };
+
+  // Hit-test the active path's anchors / handles (handles take priority).
+  const penHitAt = (p: { x: number; y: number }): { kind: "anchor" | "in" | "out"; index: number } | null => {
+    const path = penPathRef.current;
+    if (!path) return null;
+    const s = zoomRef.current / 100;
+    const r = 8 / s;
+    const near = (ax: number, ay: number) => Math.hypot(p.x - ax, p.y - ay) <= r;
+    const a = path.anchors;
+    const n = a.length;
+    // Handles take priority; they're hit at their displayed (stub) positions so
+    // even retracted handles can be grabbed.
+    for (let i = 0; i < n; i++) {
+      if (penHasOut(i, n, path.closed)) {
+        const out = penHandlePos(a, i, path.closed, true, s);
+        if (near(out.x, out.y)) return { kind: "out", index: i };
+      }
+      if (penHasIn(i, n, path.closed)) {
+        const inn = penHandlePos(a, i, path.closed, false, s);
+        if (near(inn.x, inn.y)) return { kind: "in", index: i };
+      }
+    }
+    for (let i = 0; i < n; i++) if (near(a[i].x, a[i].y)) return { kind: "anchor", index: i };
+    return null;
   };
 
   // Re-render the live gradient from its current geometry + settings.
@@ -1637,6 +2962,26 @@ export default function CanvasArea({
       ensureAnts();
       return;
     }
+    if (tool === "crop") {
+      if (!cropBoxRef.current) return;
+      e.preventDefault();
+      const p = toDoc(e);
+      const handle = cropHandleAt(p);
+      // Double-click inside the box commits the crop.
+      if (e.detail >= 2 && handle === "move") {
+        onCropApplyRef.current();
+        return;
+      }
+      viewRef.current?.setPointerCapture(e.pointerId);
+      cropDragRef.current = {
+        handle: handle === "outside" || handle === null ? "new" : handle,
+        px: p.x,
+        py: p.y,
+        box: { ...cropBoxRef.current },
+      };
+      ensureAnts();
+      return;
+    }
     if (tool === "move") {
       const p = toDoc(e);
       if (moveMode === "selection") {
@@ -1654,6 +2999,7 @@ export default function CanvasArea({
             selection,
             selectionAngle,
             selectionPivot,
+            selectionFeather,
           );
         }
         if (floating) {
@@ -1705,9 +3051,9 @@ export default function CanvasArea({
       if (engine.isFloating) engine.commitFloat(); // merge before reselecting
       const p = toDoc(e);
       const op = selectOp(e);
-      // Plain drag may grab a transform handle; Ctrl-add / Alt-subtract always
-      // start a new marquee.
-      if (op === "new" && tryStartTransform(e, p, zoom / 100)) return;
+      // Plain drag may grab a transform handle; Ctrl-add / Alt-subtract and a
+      // Shift (1:1-constrained) drag always start a fresh marquee.
+      if (op === "new" && !e.shiftKey && tryStartTransform(e, p, zoom / 100)) return;
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
       marqueeRef.current = { x: p.x, y: p.y, mode: op };
@@ -1728,11 +3074,22 @@ export default function CanvasArea({
     if (tool === "shape") {
       if (engine.isFloating) engine.commitFloat();
       const p = toDoc(e);
+      // Grab a shape node (trapezoid side / triangle apex) to reshape it live.
+      const node = shapeNodeAt(p);
+      if (node) {
+        e.preventDefault();
+        viewRef.current?.setPointerCapture(e.pointerId);
+        nodeDragRef.current = node;
+        setHoverCursor("grabbing");
+        return;
+      }
       // Grab a handle on the just-drawn shape's selection to transform it.
       if (tryStartTransform(e, p, zoom / 100)) return;
       engine.endShape(); // commit any previous live shape before drawing a new one
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
+      trapRef.current = { ...TRAP_DEFAULT }; // a fresh trapezoid starts symmetric
+      triApexRef.current = 0.5; // a fresh triangle starts centred
       shapeRef.current = { x: p.x, y: p.y };
       shapeRectRef.current = { x: p.x, y: p.y, w: 0, h: 0 };
       ensureAnts();
@@ -1740,12 +3097,20 @@ export default function CanvasArea({
     }
     if (tool === "bucket") {
       if (engine.isFloating) engine.commitFloat();
+      finishLiveBucket(); // bake any previous editable fill before a new one
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
       const p = toDoc(e);
       // Hold to preview the flood-fill region (Shift = all matching areas, even
       // disconnected ones); it follows the cursor and only fills on release.
-      bucketSeedRef.current = { x: p.x, y: p.y, shift: e.shiftKey, layerId: activeLayerId };
+      // Left button fills with the primary colour, right button with the secondary.
+      bucketSeedRef.current = {
+        x: p.x,
+        y: p.y,
+        shift: e.shiftKey,
+        layerId: activeLayerId,
+        slot: e.button === 2 ? "secondary" : "primary",
+      };
       bucketThrottle.current.last = performance.now();
       recomputeBucket(false); // load source fresh
       return;
@@ -1776,6 +3141,47 @@ export default function CanvasArea({
       ensureAnts();
       return;
     }
+    if (tool === "pen") {
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      const p = toDoc(e);
+      const path = penPathRef.current;
+      if (path) {
+        const hit = penHitAt(p);
+        if (hit) {
+          // Clicking the first anchor closes the path; otherwise grab to edit.
+          if (hit.kind === "anchor" && hit.index === 0 && !path.closed && path.anchors.length >= 2) {
+            path.closed = true;
+            renderPenLive();
+            ensureAnts();
+            return;
+          }
+          penDragRef.current = hit;
+          penGrabRef.current = { px: p.x, py: p.y, anchor: { ...path.anchors[hit.index] } };
+          return;
+        }
+        if (path.closed) {
+          engine.endPath(); // a closed path is complete → start a fresh one
+        } else {
+          // Extend the path with a new anchor (corner; drag to give it handles).
+          path.anchors.push(makeAnchor(p.x, p.y));
+          penDragRef.current = { kind: "new", index: path.anchors.length - 1 };
+          renderPenLive();
+          ensureAnts();
+          return;
+        }
+      }
+      // Start a new path at the first anchor.
+      penPathRef.current = {
+        anchors: [makeAnchor(p.x, p.y)],
+        closed: false,
+        layerId: ensureLayer(),
+      };
+      penDragRef.current = { kind: "new", index: 0 };
+      ensureAnts();
+      return;
+    }
     if (tool === "brush" || tool === "pencil" || tool === "eraser") {
       if (engine.isFloating) engine.commitFloat(); // merge before painting on it
       let layerId: string;
@@ -1789,10 +3195,12 @@ export default function CanvasArea({
       viewRef.current?.setPointerCapture(e.pointerId);
       paintingRef.current = true;
       const p = toDoc(e);
+      // Left button paints with the primary colour, right button with the secondary.
+      const paintCol = e.button === 2 ? background : foreground;
       engine.beginStroke(
         layerId,
         brush,
-        color,
+        paintCol,
         p.x,
         p.y,
         tool === "eraser" ? "erase" : "paint",
@@ -1801,6 +3209,104 @@ export default function CanvasArea({
         selectionPivot,
         tool === "eraser" ? "Erase" : tool === "pencil" ? "Pencil" : "Brush",
       );
+    }
+    if (tool === "blur") {
+      if (!activeLayerId) return; // nothing to soften on an empty doc
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      blurringRef.current = true;
+      const p = toDoc(e);
+      blurHoverRef.current = { x: p.x, y: p.y };
+      engine.beginBlur(
+        activeLayerId,
+        blur,
+        p.x,
+        p.y,
+        selection.length ? selection : null,
+        selectionAngle,
+        selectionPivot,
+      );
+    }
+    if (tool === "dodge") {
+      if (!activeLayerId) return; // nothing to dodge/burn on an empty doc
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      dodgingRef.current = true;
+      const p = toDoc(e);
+      dodgeHoverRef.current = { x: p.x, y: p.y };
+      engine.beginDodge(
+        activeLayerId,
+        dodge,
+        p.x,
+        p.y,
+        selection.length ? selection : null,
+        selectionAngle,
+        selectionPivot,
+      );
+    }
+    if (tool === "clone") {
+      const p = toDoc(e);
+      cloneHoverRef.current = { x: p.x, y: p.y };
+      // Alt / Option click sets the clone source (re-anchoring the offset).
+      if (e.altKey) {
+        e.preventDefault();
+        cloneSrcRef.current = { x: p.x, y: p.y };
+        cloneOffRef.current = null;
+        cloneAltRef.current = true;
+        ensureAnts();
+        return;
+      }
+      if (!cloneSrcRef.current) return; // no source defined yet → nothing to paint
+      if (engine.isFloating) engine.commitFloat();
+      const layerId = ensureLayer();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      paintingRef.current = true;
+      // Aligned keeps the previous offset; otherwise (or on the first stroke after
+      // sampling) re-anchor so the stroke starts sampling from the source point.
+      let off = cloneOffRef.current;
+      if (!clone.aligned || !off) {
+        off = { x: cloneSrcRef.current.x - p.x, y: cloneSrcRef.current.y - p.y };
+        cloneOffRef.current = off;
+      }
+      const cloneBrush: BrushSettings = {
+        size: clone.size,
+        hardness: clone.hardness,
+        opacity: clone.opacity,
+        flow: clone.flow,
+        blend: "Normal",
+        smoothing: clone.smoothing,
+      };
+      engine.beginClone(
+        layerId,
+        cloneBrush,
+        p.x,
+        p.y,
+        off,
+        clone.sampleAll,
+        clone.spacing,
+        selection.length ? selection : null,
+        selectionAngle,
+        selectionPivot,
+      );
+    }
+    if (tool === "text") {
+      e.preventDefault();
+      // Clicking the canvas (outside the editor) commits any text being edited.
+      if (textSessionRef.current) commitText();
+      const p = toDoc(e);
+      // Click on an existing text layer → re-edit it as a vector.
+      const hit = vectorLayerAt(p, "text");
+      if (hit && hit.vector.type === "text") {
+        openTextReedit(hit.id, hit.vector);
+        return;
+      }
+      // Otherwise arm a press → click = point text, drag = paragraph box on release.
+      textDownRef.current = { x: p.x, y: p.y };
+      textDragRef.current = null;
+      viewRef.current?.setPointerCapture(e.pointerId);
     }
   };
   const onCanvasPointerMove = (e: React.PointerEvent) => {
@@ -1824,6 +3330,45 @@ export default function CanvasArea({
       return;
     }
 
+    // Blur: track the pointer so the brush-ring cursor follows it (drawn on the overlay).
+    if (toolRef.current === "blur") {
+      blurHoverRef.current = { x: cur.x, y: cur.y };
+      ensureAnts();
+    }
+    // Dodge/Burn: same brush-ring tracking.
+    if (toolRef.current === "dodge") {
+      dodgeHoverRef.current = { x: cur.x, y: cur.y };
+      ensureAnts();
+    }
+    // Clone: track the pointer + Alt state for the brush ring / source marker.
+    if (toolRef.current === "clone") {
+      cloneHoverRef.current = { x: cur.x, y: cur.y };
+      cloneAltRef.current = e.altKey;
+      ensureAnts();
+    }
+    // Text: drag from the press point rubber-bands a paragraph box (preview).
+    if (textDownRef.current) {
+      const start = textDownRef.current;
+      textDragRef.current = normalizeRect(start.x, start.y, cur.x, cur.y, width, height);
+      ensureAnts();
+      return;
+    }
+
+    // Crop: drag a handle / move / rubber-band, else show the right hover cursor.
+    if (toolRef.current === "crop") {
+      if (cropDragRef.current) {
+        onCropBoxRef.current(computeCropDrag(cropDragRef.current, cur));
+        ensureAnts();
+        return;
+      }
+      if (cropBoxRef.current) {
+        const h = cropHandleAt(cur) ?? "outside";
+        const next = CROP_CURSOR[h] ?? "crosshair";
+        setHoverCursor((c) => (c === next ? c : next));
+      }
+      return;
+    }
+
     // Hover feedback (Marquee / Wand / Shape): rotate / resize / anchor cursor.
     if (
       (toolRef.current === "select" ||
@@ -1832,7 +3377,8 @@ export default function CanvasArea({
       !rotateRef.current &&
       !anchorRef.current &&
       !resizeRef.current &&
-      !marqueeRef.current
+      !marqueeRef.current &&
+      !nodeDragRef.current
     ) {
       const sel = selectionRef.current;
       let next: string | null = null;
@@ -1844,6 +3390,8 @@ export default function CanvasArea({
         if (zone.kind === "anchor") next = "grab";
         else if (zone.kind === "resize") next = resizeCursor(zone.edges, selAngleRef.current);
         else if (zone.kind === "ring") next = rotateCursorToward(p.x, p.y, pivot);
+        // Shape nodes sit on the top edge and take priority over resize.
+        if (toolRef.current === "shape" && shapeNodeAt(p)) next = "grab";
       }
       setHoverCursor((c) => (c === next ? c : next));
     }
@@ -1906,16 +3454,21 @@ export default function CanvasArea({
       x1 = Math.round(x1);
       y1 = Math.round(y1);
       const nb = { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
-      // Scale every selection rect proportionally within the new bounding box,
-      // rounding to whole pixels (so multi-rect selections snap too).
+      // Scale every selection rect proportionally within the new bounding box.
+      // Round each rect by its EDGES (not origin + size): an irregular lasso/wand
+      // selection is made of many vertically-stacked scanline rects, and rounding
+      // y and h independently would leave 1px gaps between them — those gaps later
+      // show up as horizontal lines when the mask is used to lift/clip content.
+      // Edge rounding keeps contiguous rects sharing an edge (no gaps).
       const sx = nb.w / o.w;
       const sy = nb.h / o.h;
-      resizePreviewRef.current = orig.map((r) => ({
-        x: Math.round(nb.x + (r.x - o.x) * sx),
-        y: Math.round(nb.y + (r.y - o.y) * sy),
-        w: Math.max(1, Math.round(r.w * sx)),
-        h: Math.max(1, Math.round(r.h * sy)),
-      }));
+      resizePreviewRef.current = orig.map((r) => {
+        const nx0 = Math.round(nb.x + (r.x - o.x) * sx);
+        const ny0 = Math.round(nb.y + (r.y - o.y) * sy);
+        const nx1 = Math.round(nb.x + (r.x + r.w - o.x) * sx);
+        const ny1 = Math.round(nb.y + (r.y + r.h - o.y) * sy);
+        return { x: nx0, y: ny0, w: Math.max(1, nx1 - nx0), h: Math.max(1, ny1 - ny0) };
+      });
       // In content mode, scale the lifted pixels to match the new bounds. For a
       // rotated selection the scale is applied in its own (un-rotated) frame.
       if (resizeRef.current.content) {
@@ -1986,10 +3539,102 @@ export default function CanvasArea({
         const dy = g.end.y - g.start.y;
         const len2 = dx * dx + dy * dy;
         let t = clamp(len2 > 0 ? ((p.x - g.start.x) * dx + (p.y - g.start.y) * dy) / len2 : 0.5, 0.05, 0.95);
-        if (Math.abs(t - 0.5) < 0.04) t = 0.5; // snap to the centre when close
+        // Snap to the centre when close (unless disabled in Preferences).
+        if (gradOptsRef.current.snap && Math.abs(t - 0.5) < 0.04) t = 0.5;
         g.mid = t;
       }
       renderGradient();
+      ensureAnts();
+      return;
+    }
+    if (penDragRef.current && penPathRef.current) {
+      const p = toDoc(e);
+      const d = penDragRef.current;
+      const a = penPathRef.current.anchors[d.index];
+      // By default the opposite handle mirrors for a smooth anchor; holding Shift
+      // breaks the symmetry so only the dragged handle moves (an independent corner).
+      const mirror = !e.shiftKey;
+      if (d.kind === "new" || d.kind === "out") {
+        a.ox = p.x;
+        a.oy = p.y;
+        if (mirror) {
+          a.ix = 2 * a.x - p.x;
+          a.iy = 2 * a.y - p.y;
+        }
+      } else if (d.kind === "in") {
+        a.ix = p.x;
+        a.iy = p.y;
+        if (mirror) {
+          a.ox = 2 * a.x - p.x;
+          a.oy = 2 * a.y - p.y;
+        }
+      } else {
+        // Move the whole anchor (point + both handles) by the drag delta.
+        const g = penGrabRef.current;
+        if (g) {
+          const dx = p.x - g.px;
+          const dy = p.y - g.py;
+          a.x = g.anchor.x + dx;
+          a.y = g.anchor.y + dy;
+          a.ix = g.anchor.ix + dx;
+          a.iy = g.anchor.iy + dy;
+          a.ox = g.anchor.ox + dx;
+          a.oy = g.anchor.oy + dy;
+        }
+      }
+      renderPenLive();
+      ensureAnts();
+      return;
+    }
+    if (nodeDragRef.current) {
+      const live = liveShapeRef.current;
+      if (!live) {
+        nodeDragRef.current = null;
+        return;
+      }
+      const box = live.box;
+      const p = toDoc(e);
+      const ang = selAngleRef.current;
+      const piv = selPivotRef.current ?? { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+      // Work in the shape's local (un-rotated) frame; only the x-position matters.
+      let lx = p.x;
+      if (ang) {
+        const c = Math.cos(-ang);
+        const sn = Math.sin(-ang);
+        lx = piv.x + (p.x - piv.x) * c - (p.y - piv.y) * sn;
+      }
+      const sc = zoomRef.current / 100;
+      const SNAP_PX = 6;
+      let snapped = false;
+      if (nodeDragRef.current === "apex") {
+        // Triangle apex: slide along the top edge, snapping to centre (isosceles).
+        let a = clamp((lx - box.x) / box.w, 0, 1);
+        if (Math.abs(a - 0.5) * box.w * sc < SNAP_PX) {
+          a = 0.5;
+          snapped = true;
+        }
+        triApexRef.current = a;
+      } else {
+        const t = { ...trapRef.current };
+        if (nodeDragRef.current === "l") {
+          let l = clamp((lx - box.x) / box.w, 0, 0.5);
+          if (Math.abs(l - t.r) * box.w * sc < SNAP_PX) {
+            l = t.r; // snap to symmetry
+            snapped = true;
+          }
+          t.l = l;
+        } else {
+          let r = clamp((box.x + box.w - lx) / box.w, 0, 0.5);
+          if (Math.abs(r - t.l) * box.w * sc < SNAP_PX) {
+            r = t.l;
+            snapped = true;
+          }
+          t.r = r;
+        }
+        trapRef.current = t;
+      }
+      nodeSnapRef.current = snapped;
+      reRenderLiveShape();
       ensureAnts();
       return;
     }
@@ -2011,11 +3656,37 @@ export default function CanvasArea({
     if (marqueeRef.current) {
       const m = marqueeRef.current;
       const p = toDoc(e);
-      const dr = normalizeRect(m.x, m.y, p.x, p.y, width, height);
+      let px = p.x;
+      let py = p.y;
+      if (e.shiftKey) {
+        // Shift constrains to a 1:1 box (square / circle / symmetric triangle).
+        const sx = Math.sign(px - m.x) || 1;
+        const sy = Math.sign(py - m.y) || 1;
+        let side = Math.max(Math.abs(px - m.x), Math.abs(py - m.y));
+        // Keep the square inside the canvas so the edge can't clamp it out of square.
+        side = Math.min(
+          side,
+          Math.max(0, sx > 0 ? width - m.x : m.x),
+          Math.max(0, sy > 0 ? height - m.y : m.y),
+        );
+        px = m.x + sx * side;
+        py = m.y + sy * side;
+      }
+      const dr = normalizeRect(m.x, m.y, px, py, width, height);
       // Snap selections to whole pixels when Snap is on.
       dragRectRef.current = snap
         ? { x: Math.round(dr.x), y: Math.round(dr.y), w: Math.round(dr.w), h: Math.round(dr.h) }
         : dr;
+      return;
+    }
+    if (blurringRef.current) {
+      const p = toDoc(e);
+      engine.moveBlur(p.x, p.y);
+      return;
+    }
+    if (dodgingRef.current) {
+      const p = toDoc(e);
+      engine.moveDodge(p.x, p.y);
       return;
     }
     if (!paintingRef.current) return;
@@ -2028,6 +3699,32 @@ export default function CanvasArea({
       setHoverCursor(null);
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      return;
+    }
+    if (cropDragRef.current) {
+      cropDragRef.current = null;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      ensureAnts();
+      return;
+    }
+    if (textDownRef.current) {
+      const start = textDownRef.current;
+      const drag = textDragRef.current;
+      textDownRef.current = null;
+      textDragRef.current = null;
+      const pt = toDoc(e);
+      // A real drag → paragraph box; a click → point text (auto-width).
+      const session =
+        drag && Math.abs(pt.x - start.x) > 6 && Math.abs(pt.y - start.y) > 6
+          ? { x: drag.x, y: drag.y, boxW: Math.max(24, drag.w), value: "" }
+          : { x: start.x, y: start.y, boxW: null, value: "" };
+      // New text defaults to the primary colour.
+      onText({ color: foreground });
+      setTextSession(session);
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      ensureAnts();
       return;
     }
     if (anchorRef.current) {
@@ -2154,7 +3851,18 @@ export default function CanvasArea({
       if (!float && mode === "pixels") engine.endMove();
       // Selection follows whatever moved (float, lifted pixels, or selection-only).
       if (selection.length && (d.x !== 0 || d.y !== 0)) {
-        onSelectionChange(selection.map((r) => ({ ...r, x: r.x + d.x, y: r.y + d.y })));
+        const moved = selection.map((r) => ({ ...r, x: r.x + d.x, y: r.y + d.y }));
+        if (selAngleRef.current !== 0) {
+          // Keep the rotation and shift the pivot with the rects, so a rotated
+          // selection's outline stays locked to its (rotated) pixels. Resetting
+          // the angle here would leave an axis-aligned mask over rotated content,
+          // which later clips it into scanlines.
+          onSelectionRects(moved);
+          const piv = selPivotRef.current;
+          if (piv) onSelectionPivot({ x: piv.x + d.x, y: piv.y + d.y });
+        } else {
+          onSelectionChange(moved);
+        }
       }
       moveDeltaRef.current = { x: 0, y: 0 };
       const v = viewRef.current;
@@ -2185,17 +3893,28 @@ export default function CanvasArea({
     }
     if (bucketSeedRef.current) {
       clearTimeout(bucketThrottle.current.timer);
-      // Recompute precisely from the release point, then fill that region.
+      // Recompute precisely from the release point, then start an editable fill.
       const p = toDoc(e);
-      bucketSeedRef.current = { ...bucketSeedRef.current, x: p.x, y: p.y, shift: e.shiftKey };
+      const seed = { ...bucketSeedRef.current, x: p.x, y: p.y, shift: e.shiftKey };
+      bucketSeedRef.current = seed;
       recomputeBucket(true);
-      const region = bucketRef.current;
+      const hasRegion = !!bucketRef.current?.rects.length;
       bucketSeedRef.current = null;
-      bucketRef.current = null;
+      bucketRef.current = null; // the fill goes onto the layer now (no overlay preview)
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
-      if (region && region.rects.length) {
-        engine.fillSelection(ensureLayer(), region.rects, region.color);
+      if (hasRegion) {
+        // Keep the fill live: re-runs from this seed when the options change,
+        // until the next action. The seed pixel is marked on the overlay.
+        liveBucketRef.current = {
+          seedX: Math.floor(p.x),
+          seedY: Math.floor(p.y),
+          sampleLayerId: seed.layerId,
+          fillLayerId: seed.layerId ?? ensureLayer(),
+          slot: seed.slot,
+          shift: seed.shift,
+        };
+        renderLiveBucket();
       }
       ensureAnts();
       return;
@@ -2208,6 +3927,24 @@ export default function CanvasArea({
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       // Pointer is still over the handle it just released → show "grab", not "grabbing".
       setHoverCursor(gradientHandleAt(toDoc(e)) ? "grab" : null);
+      ensureAnts();
+      return;
+    }
+    if (penDragRef.current) {
+      // Finish this anchor/handle drag; the path stays live until committed.
+      penDragRef.current = null;
+      penGrabRef.current = null;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      ensureAnts();
+      return;
+    }
+    if (nodeDragRef.current) {
+      nodeDragRef.current = null;
+      nodeSnapRef.current = false; // guides only show during the snapped drag
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      setHoverCursor(shapeNodeAt(toDoc(e)) ? "grab" : null);
       ensureAnts();
       return;
     }
@@ -2226,9 +3963,20 @@ export default function CanvasArea({
           h: Math.round(rect.h),
         };
         const layerId = ensureLayer();
-        // Draw it as a "live" shape: still editable (colour/stroke/radius) while
-        // its selection is up, and resizable / rotatable via the handles.
-        engine.liveShape(layerId, box, 0, o.kind, o.fill, o.stroke, o.strokeWidth, o.radius);
+        // Draw it as a "live" shape: still editable (colour/stroke/radius, and the
+        // trapezoid's side nodes) while its selection is up, and resizable /
+        // rotatable via the handles.
+        engine.liveShape(
+          layerId,
+          box,
+          0,
+          o.kind,
+          o.fill,
+          o.stroke,
+          o.strokeWidth,
+          o.radius,
+          shapeGeom(o.kind),
+        );
         liveShapeRef.current = { layerId, box };
         onSelectionChange([box]); // `box` is the same object → selection identifies the shape
       }
@@ -2236,21 +3984,46 @@ export default function CanvasArea({
       return;
     }
     if (marqueeRef.current) {
-      const mode = marqueeRef.current.mode;
+      const anchor = marqueeRef.current;
+      const mode = anchor.mode;
       const rect = dragRectRef.current;
       marqueeRef.current = null;
       dragRectRef.current = null;
+      liveTriangleRef.current = null; // a new marquee op supersedes any live triangle
       if (rect && rect.w >= 1 && rect.h >= 1) {
-        if (mode === "add") onSelectionChange([...selection, rect]);
-        else if (mode === "subtract")
-          applyCombined(engine.combineSelection(selection, [rect], "subtract"));
-        else onSelectionChange([rect]);
+        if (mode === "new" && marqueeShape === "rect") {
+          onSelectionChange([rect]); // plain replace — a single rect needs no tracing
+        } else {
+          // Rasterize the region (rect / ellipse / triangle) and mask-combine so the
+          // engine hands back a clean, pre-traced selection. Routing add/subtract
+          // through here — rather than [...selection, rect] — keeps it fast even when
+          // the existing selection is a many-rect ellipse/triangle: a plain concat
+          // would make the next repaint run an O(n³) unionSegments over the union.
+          // A triangle dragged downward (anchor at the top) points its apex down.
+          const pointDown = anchor.y <= rect.y + rect.h / 2;
+          const sel = marqueeSelRects(rect, marqueeShape, pointDown, triangleApex);
+          const base = mode === "new" ? [] : selection;
+          const result = engine.combineSelection(base, sel, mode === "subtract" ? "subtract" : "add");
+          applyCombined(result);
+          // Remember a freshly-made triangle so the Apex slider can re-shape it.
+          if (marqueeShape === "triangle" && result && result.rects.length) {
+            liveTriangleRef.current = { box: rect, pointDown, base, mode, key: result.rects };
+          }
+        }
       } else if (mode === "new") {
         onSelectionChange([]); // a plain click clears the selection
       }
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       return;
+    }
+    if (blurringRef.current) {
+      engine.endBlur();
+      blurringRef.current = false;
+    }
+    if (dodgingRef.current) {
+      engine.endDodge();
+      dodgingRef.current = false;
     }
     if (paintingRef.current) {
       engine.endStroke();
@@ -2437,19 +4210,25 @@ export default function CanvasArea({
                       ? "grab"
                       : tool === "zoom"
                         ? "zoom-in"
-                        : tool === "eyedropper"
-                          ? EYEDROPPER_CURSOR
-                          : tool === "brush" ||
-                              tool === "pencil" ||
-                              tool === "eraser" ||
-                              tool === "select" ||
-                              tool === "lasso" ||
-                              tool === "wand" ||
-                              tool === "shape" ||
-                              tool === "bucket" ||
-                              tool === "gradient"
-                            ? "crosshair"
-                            : "default"),
+                        : tool === "blur" || tool === "clone" || tool === "dodge"
+                          ? "none" // brush ring is drawn on the overlay instead
+                          : tool === "text"
+                            ? "text"
+                            : tool === "eyedropper"
+                            ? EYEDROPPER_CURSOR
+                            : tool === "brush" ||
+                                tool === "pencil" ||
+                                tool === "eraser" ||
+                                tool === "select" ||
+                                tool === "lasso" ||
+                                tool === "wand" ||
+                                tool === "shape" ||
+                                tool === "bucket" ||
+                                tool === "gradient" ||
+                                tool === "pen" ||
+                                tool === "crop"
+                              ? "crosshair"
+                              : "default"),
                 // Crisp, individually-visible pixels when zoomed in; smooth when zoomed out.
                 imageRendering: zoom >= 100 ? "pixelated" : "auto",
               }}
@@ -2457,14 +4236,41 @@ export default function CanvasArea({
               onPointerMove={onCanvasPointerMove}
               onPointerUp={onCanvasPointerUp}
               onPointerCancel={onCanvasPointerUp}
+              onDoubleClick={() => {
+                // Double-click finishes (commits) the live pen path.
+                if (tool === "pen" && penPathRef.current) finishPenPath();
+              }}
               onContextMenu={(e) => {
-                // Let the zoom tool use right-click for zoom-out (no browser menu).
-                if (tool === "zoom") e.preventDefault();
+                // Suppress the browser menu where right-click is a tool action:
+                // zoom-out, and right-button painting / filling (secondary colour).
+                if (
+                  tool === "zoom" ||
+                  tool === "brush" ||
+                  tool === "pencil" ||
+                  tool === "eraser" ||
+                  tool === "bucket"
+                ) {
+                  e.preventDefault();
+                }
               }}
               onPointerLeave={() => {
                 if (handRef.current) return; // keep the grab cursor while panning
                 setHoverCursor(null);
                 onCursor(null);
+                // Hide the blur / clone brush-ring when the pointer leaves the
+                // canvas (unless mid-stroke, so the ring stays while dragging out).
+                if (!blurringRef.current) {
+                  blurHoverRef.current = null;
+                  ensureAnts();
+                }
+                if (!dodgingRef.current) {
+                  dodgeHoverRef.current = null;
+                  ensureAnts();
+                }
+                if (!paintingRef.current) {
+                  cloneHoverRef.current = null;
+                  ensureAnts();
+                }
                 if (!pickingRef.current) {
                   hoverRef.current = null;
                   ensureAnts();
@@ -2474,6 +4280,80 @@ export default function CanvasArea({
           </div>
           <canvas ref={gridRef} className={styles.overlay} />
           <canvas ref={overlayRef} className={styles.overlay} />
+          {textSession && (
+            <textarea
+              ref={textAreaRef}
+              className={styles.textInput}
+              spellCheck={false}
+              value={textSession.value}
+              onChange={(e) => setTextSession((sx) => (sx ? { ...sx, value: e.target.value } : sx))}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  cancelText(); // discard a new edit, or restore the original re-edit
+                } else if (
+                  e.code === "NumpadEnter" ||
+                  ((e.ctrlKey || e.metaKey) && e.key === "Enter")
+                ) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  commitText();
+                } else if (
+                  (e.ctrlKey || e.metaKey) &&
+                  !e.altKey &&
+                  "biu".includes(e.key.toLowerCase())
+                ) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const t = textRef.current;
+                  const k = e.key.toLowerCase();
+                  if (k === "b") onTextRef.current({ bold: !t.bold });
+                  else if (k === "i") onTextRef.current({ italic: !t.italic });
+                  else onTextRef.current({ underline: !t.underline });
+                } else if (
+                  (e.ctrlKey || e.metaKey) &&
+                  e.shiftKey &&
+                  "lcr".includes(e.key.toLowerCase())
+                ) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const k = e.key.toLowerCase();
+                  onTextRef.current({ align: k === "l" ? "left" : k === "c" ? "center" : "right" });
+                } else if (
+                  (e.ctrlKey || e.metaKey) &&
+                  e.shiftKey &&
+                  (e.key === ">" || e.key === "<" || e.key === "." || e.key === ",")
+                ) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const inc = e.key === ">" || e.key === ".";
+                  const t = textRef.current;
+                  onTextRef.current({ fontSize: Math.max(1, Math.min(2000, t.fontSize + (inc ? 2 : -2))) });
+                }
+              }}
+              style={{
+                left: pan.x + textSession.x * scale,
+                top: pan.y + textSession.y * scale,
+                transform: `scale(${scale})`,
+                transformOrigin: "top left",
+                fontFamily: text.fontFamily,
+                fontSize: text.fontSize,
+                fontWeight: text.bold ? 700 : 400,
+                fontStyle: text.italic ? "italic" : "normal",
+                lineHeight: String(text.lineHeight),
+                letterSpacing: `${text.tracking}px`,
+                color: text.color,
+                textAlign: text.align,
+                textDecoration:
+                  [text.underline ? "underline" : "", text.strike ? "line-through" : ""]
+                    .filter(Boolean)
+                    .join(" ") || "none",
+                whiteSpace: textSession.boxW != null ? "pre-wrap" : "pre",
+              }}
+            />
+          )}
         </div>
 
         <div className={styles.zoomBar}>

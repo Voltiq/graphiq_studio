@@ -15,13 +15,14 @@ import {
   type ParsedPreset,
 } from "../../lib/adjust";
 
-const PRESETS_KEY = "aperture:adjust-presets";
+const PRESETS_KEY = "graphiq:adjust-presets";
+const LEGACY_PRESETS_KEY = "aperture:adjust-presets"; // pre-rebrand fallback
 
 /** Read saved custom presets (empty list on first run / parse failure). */
 function loadPresets(): AdjustPreset[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(PRESETS_KEY);
+    const raw = window.localStorage.getItem(PRESETS_KEY) ?? window.localStorage.getItem(LEGACY_PRESETS_KEY);
     const list = raw ? (JSON.parse(raw) as AdjustPreset[]) : [];
     return Array.isArray(list) ? list : [];
   } catch {

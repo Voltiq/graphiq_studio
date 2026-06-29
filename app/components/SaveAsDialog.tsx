@@ -61,7 +61,7 @@ export default function SaveAsDialog({
 
           <span className={styles.groupLabel}>Format</span>
           <select style={{ ...field, padding: "0 8px" }} defaultValue="project" aria-label="File format">
-            <option value="project">Aperture Project (.{PROJECT_EXT})</option>
+            <option value="project">Graphiq Project (.{PROJECT_EXT})</option>
           </select>
 
           <p style={{ fontSize: 11.5, color: "var(--text-3)", lineHeight: 1.45, margin: 0 }}>

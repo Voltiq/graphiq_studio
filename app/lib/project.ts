@@ -1,7 +1,7 @@
 import type { LayerGroup, LayerLeaf, LayerNode } from "./layers";
 import type { Rect } from "./view";
 
-/** Aperture project file extension (keeps layers, groups & settings; lossless). */
+/** Graphiq project file extension (keeps layers, groups & settings; lossless). */
 export const PROJECT_EXT = "aproj";
 
 type SerializedLeaf = LayerLeaf & { data: string | null };
@@ -9,7 +9,7 @@ type SerializedGroup = Omit<LayerGroup, "children"> & { children: SerializedNode
 export type SerializedNode = SerializedLeaf | SerializedGroup;
 
 export interface ProjectFile {
-  format: "aperture-project";
+  format: "graphiq-project";
   version: number;
   name: string;
   width: number;
@@ -59,7 +59,7 @@ export function serializeProject(
   getImage: (id: string) => string | null,
 ): ProjectFile {
   return {
-    format: "aperture-project",
+    format: "graphiq-project",
     version: 1,
     name: doc.name,
     width: doc.width,
@@ -112,7 +112,7 @@ export async function saveProjectFile(
         suggestedName,
         types: [
           {
-            description: "Aperture Project",
+            description: "Graphiq Project",
             accept: { "application/json": [`.${PROJECT_EXT}`] },
           },
         ],

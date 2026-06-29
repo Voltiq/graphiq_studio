@@ -80,13 +80,13 @@ export function coerceAdjust(raw: unknown): Adjustments {
 
 /** Serialize one preset to an .aifp file body. */
 export function presetToFileJSON(p: AdjustPreset): string {
-  return JSON.stringify({ format: "aperture-filter", version: 1, name: p.name, adjust: p.adjust }, null, 2);
+  return JSON.stringify({ format: "graphiq-filter", version: 1, name: p.name, adjust: p.adjust }, null, 2);
 }
 
 /** Serialize several presets to an .aifpack bundle body. */
 export function packToFileJSON(presets: AdjustPreset[]): string {
   return JSON.stringify(
-    { format: "aperture-filter-pack", version: 1, presets: presets.map((p) => ({ name: p.name, adjust: p.adjust })) },
+    { format: "graphiq-filter-pack", version: 1, presets: presets.map((p) => ({ name: p.name, adjust: p.adjust })) },
     null,
     2,
   );

@@ -26,7 +26,6 @@
   width: 28px;
   height: 28px;
   flex-shrink: 0;
-  border-radius: var(--r-md);
   overflow: hidden;
   box-shadow: var(--shadow-sm);
 
@@ -225,37 +224,6 @@
       color: var(--text-3);
     }
   }
-}
-
-.shareBtn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 12px;
-  font-size: 13px;
-  font-weight: 550;
-  color: var(--accent-contrast);
-  background: var(--accent);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-sm);
-  transition: background 0.12s ease;
-
-  &:hover {
-    background: color-mix(in srgb, var(--accent) 90%, #000);
-  }
-}
-
-.avatar {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  font-size: 11px;
-  font-weight: 650;
-  color: var(--accent-contrast);
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
 }
 
 /* ------------------------------ Theme toggle ------------------------------ */

@@ -1,15 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, Redo2, Search, Share2, Undo2 } from "lucide-react";
+import { Check, Redo2, Search, Undo2 } from "lucide-react";
 import styles from "./TopBar.module.scss";
 import logo from "../icon.png";
 import { MENUS } from "../lib/menus";
-import ThemeToggle from "./ThemeToggle";
-import type { Theme } from "../lib/theme";
 
 export default function TopBar({
-  initialTheme,
   onMenuAction,
   onUndo,
   onRedo,
@@ -17,7 +14,6 @@ export default function TopBar({
   canRedo = false,
   checks,
 }: {
-  initialTheme: Theme;
   onMenuAction?: (action: string) => void;
   onUndo?: () => void;
   onRedo?: () => void;
@@ -51,9 +47,9 @@ export default function TopBar({
       <div className={styles.brand}>
         <span className={styles.logo}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={logo.src} alt="Aperture" />
+          <img src={logo.src} alt="Graphiq Studio" />
         </span>
-        <span className={styles.brandName}>Aperture</span>
+        <span className={styles.brandName}>Graphiq</span>
         <span className={styles.brandTag}>Studio</span>
       </div>
 
@@ -133,17 +129,6 @@ export default function TopBar({
         <div className={styles.search}>
           <Search size={14} />
           <input placeholder="Search tools & menus…" aria-label="Search" />
-        </div>
-
-        <ThemeToggle initialTheme={initialTheme} />
-
-        <button type="button" className={styles.shareBtn}>
-          <Share2 size={14} />
-          Share
-        </button>
-
-        <div className={styles.avatar} title="Account" aria-hidden>
-          V
         </div>
       </div>
     </header>

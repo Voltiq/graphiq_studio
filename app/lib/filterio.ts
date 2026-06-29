@@ -52,7 +52,7 @@ export async function exportPresets(presets: AdjustPreset[]): Promise<boolean> {
   if (picker) {
     try {
       const root = await picker({ mode: "readwrite" });
-      const dir = await root.getDirectoryHandle("Aperture Filters", { create: true });
+      const dir = await root.getDirectoryHandle("Graphiq Filters", { create: true });
       const used = new Set<string>();
       for (const p of presets) {
         const base = safeFileName(p.name);
@@ -74,7 +74,7 @@ export async function exportPresets(presets: AdjustPreset[]): Promise<boolean> {
 
   downloadBlob(
     new Blob([packToFileJSON(presets)], { type: "application/json" }),
-    `Aperture Filters.${FILTER_PACK_EXT}`,
+    `Graphiq Filters.${FILTER_PACK_EXT}`,
   );
   return true;
 }

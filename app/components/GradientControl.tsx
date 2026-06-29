@@ -9,7 +9,8 @@ import { sampleGradient } from "../lib/gradient";
 import { swatchBg } from "../lib/color";
 import type { GradientSettings, GradientStop } from "../lib/tools";
 
-const PRESETS_KEY = "aperture:gradient-presets";
+const PRESETS_KEY = "graphiq:gradient-presets";
+const LEGACY_PRESETS_KEY = "aperture:gradient-presets"; // pre-rebrand fallback
 
 interface SavedGradient {
   id: string;
@@ -47,7 +48,7 @@ const BUILTINS: SavedGradient[] = [
 function loadSaved(): SavedGradient[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(PRESETS_KEY);
+    const raw = window.localStorage.getItem(PRESETS_KEY) ?? window.localStorage.getItem(LEGACY_PRESETS_KEY);
     const list = raw ? (JSON.parse(raw) as SavedGradient[]) : [];
     return Array.isArray(list) ? list : [];
   } catch {

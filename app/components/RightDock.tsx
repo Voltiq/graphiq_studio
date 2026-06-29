@@ -55,8 +55,10 @@ const DEFAULT_ORDER: PanelId[] = [
   "history",
   "metadata",
 ];
-const ORDER_KEY = "aperture:panel-order";
-const OPEN_KEY = "aperture:panel-open";
+const ORDER_KEY = "graphiq:panel-order";
+const OPEN_KEY = "graphiq:panel-open";
+const LEGACY_ORDER_KEY = "aperture:panel-order"; // pre-rebrand fallbacks
+const LEGACY_OPEN_KEY = "aperture:panel-open";
 
 /** Default collapsed/expanded state per panel. */
 const DEFAULT_OPEN: Record<PanelId, boolean> = {
@@ -73,7 +75,7 @@ const DEFAULT_OPEN: Record<PanelId, boolean> = {
 function loadOrder(): PanelId[] {
   if (typeof window === "undefined") return DEFAULT_ORDER;
   try {
-    const raw = window.localStorage.getItem(ORDER_KEY);
+    const raw = window.localStorage.getItem(ORDER_KEY) ?? window.localStorage.getItem(LEGACY_ORDER_KEY);
     if (!raw) return DEFAULT_ORDER;
     const saved = (JSON.parse(raw) as string[]).filter((id): id is PanelId =>
       (DEFAULT_ORDER as string[]).includes(id),
@@ -88,7 +90,7 @@ function loadOrder(): PanelId[] {
 function loadOpen(): Record<PanelId, boolean> {
   if (typeof window === "undefined") return DEFAULT_OPEN;
   try {
-    const raw = window.localStorage.getItem(OPEN_KEY);
+    const raw = window.localStorage.getItem(OPEN_KEY) ?? window.localStorage.getItem(LEGACY_OPEN_KEY);
     if (!raw) return DEFAULT_OPEN;
     const saved = JSON.parse(raw) as Partial<Record<PanelId, boolean>>;
     const next = { ...DEFAULT_OPEN };
@@ -110,6 +112,7 @@ interface Props {
   onActiveSlot: (slot: "primary" | "secondary") => void;
   layers: LayersApi;
   history: HistorySummary;
+  maxHistoryRows: number;
   onHistoryJump: (index: number) => void;
   view: NavigatorView;
   panels: PanelVisibility;
@@ -151,6 +154,7 @@ export default function RightDock({
   onActiveSlot,
   layers,
   history,
+  maxHistoryRows,
   onHistoryJump,
   view,
   adjust,
@@ -296,7 +300,12 @@ export default function RightDock({
       case "history":
         return panels.history ? (
           <Panel key="history" title="History" icon={History} {...dp}>
-            <HistoryPanel items={history.items} index={history.index} onJump={onHistoryJump} />
+            <HistoryPanel
+              items={history.items}
+              index={history.index}
+              onJump={onHistoryJump}
+              maxRows={maxHistoryRows}
+            />
           </Panel>
         ) : null;
       case "metadata":

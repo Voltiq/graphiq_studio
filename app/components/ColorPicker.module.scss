@@ -200,12 +200,50 @@
   gap: 6px;
 }
 
+.swatchHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
 .swatchLabel {
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-2);
+}
+
+.swatchActions {
+  display: flex;
+  gap: 4px;
+}
+
+.swatchBtn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+
+  &:hover:not(:disabled) {
+    background: var(--surface-hover);
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+}
+
+.swatchSub {
+  font-size: 10.5px;
+  color: var(--text-3);
 }
 
 .swatches {
@@ -218,6 +256,7 @@
   aspect-ratio: 1;
   border-radius: var(--r-md);
   border: 1px solid var(--border);
+  background-clip: padding-box;
   transition: transform 0.1s ease;
 
   &:hover {

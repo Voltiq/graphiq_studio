@@ -265,6 +265,28 @@ $ruler: 22px;
   z-index: 4;
 }
 
+/* Live text editor: a transparent, auto-growing textarea positioned over the
+   artwork and scaled with the zoom (transform set inline). The visible text IS
+   the preview; on commit it's rasterized onto a layer. */
+.textInput {
+  position: absolute;
+  z-index: 6;
+  margin: 0;
+  padding: 0;
+  /* outline (not border) so the dashed frame doesn't shift the glyphs, keeping
+     the live preview aligned with the rasterized result. */
+  border: none;
+  outline: 1px dashed color-mix(in srgb, var(--accent) 75%, transparent);
+  background: transparent;
+  resize: none;
+  overflow: hidden;
+  min-width: 2px;
+  box-sizing: content-box;
+  white-space: pre;
+  word-break: break-word;
+  caret-color: currentColor;
+}
+
 /* ------------------------------ Zoom control ------------------------------ */
 .zoomBar {
   position: absolute;

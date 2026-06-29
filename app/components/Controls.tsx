@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import styles from "./Controls.module.scss";
 import ColorPopover from "./ColorPopover";
@@ -85,21 +85,63 @@ export function Slider({
 
 export function NumberField({
   label,
-  defaultValue,
+  defaultValue = "",
+  value,
+  onChange,
   unit = "",
   width = 64,
+  min,
+  max,
 }: {
   label?: string;
-  defaultValue: string | number;
+  defaultValue?: string | number;
+  /** Controlled numeric value; when set, edits commit through onChange. */
+  value?: number;
+  onChange?: (n: number) => void;
   unit?: string;
   width?: number;
+  min?: number;
+  max?: number;
 }) {
-  const [value, setValue] = useState(String(defaultValue));
+  const [draft, setDraft] = useState(String(value ?? defaultValue));
+  const [editing, setEditing] = useState(false);
+  // Reflect external changes while the user isn't actively typing.
+  useEffect(() => {
+    if (!editing && value !== undefined) setDraft(String(value));
+  }, [value, editing]);
+
+  const commit = () => {
+    setEditing(false);
+    if (!onChange) return;
+    let n = parseFloat(draft);
+    if (Number.isNaN(n)) {
+      if (value !== undefined) setDraft(String(value));
+      return;
+    }
+    if (min !== undefined) n = Math.max(min, n);
+    if (max !== undefined) n = Math.min(max, n);
+    n = Math.round(n);
+    onChange(n);
+    setDraft(String(n));
+  };
+
   return (
     <label className={styles.numField}>
       {label && <span className={styles.label}>{label}</span>}
       <span className={styles.numBox} style={{ width }}>
-        <input value={value} onChange={(e) => setValue(e.target.value)} />
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={() => setEditing(true)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+            else if (e.key === "Escape" && value !== undefined) {
+              setDraft(String(value));
+              e.currentTarget.blur();
+            }
+          }}
+        />
         {unit && <span className={styles.unit}>{unit}</span>}
       </span>
     </label>

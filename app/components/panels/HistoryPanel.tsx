@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import {
   Activity,
   ArrowDownToLine,
@@ -20,6 +21,7 @@ import {
   Move,
   PaintBucket,
   Pencil,
+  PenTool,
   Plus,
   RotateCcw,
   RotateCw,
@@ -43,6 +45,7 @@ function iconForStep(label: string, isFirst: boolean): LucideIcon {
   if (l.includes("eras")) return Eraser; // Erase
   if (l.includes("fill")) return PaintBucket;
   if (l.includes("gradient")) return Blend;
+  if (l.includes("path")) return PenTool;
   if (l.includes("shape")) return Shapes;
   if (l.includes("cut")) return Scissors;
   if (l.includes("deselect")) return SquareDashed; // Deselect
@@ -68,17 +71,36 @@ function iconForStep(label: string, isFirst: boolean): LucideIcon {
   return Activity; // generic fallback
 }
 
+// A history row: 24px icon + 6px padding top/bottom = 36px, with a 2px gap.
+const ITEM_H = 36;
+const GAP = 2;
+
 export default function HistoryPanel({
   items,
   index,
   onJump,
+  maxRows = 25,
 }: {
   items: { label: string }[];
   index: number;
   onJump: (index: number) => void;
+  /** Rows shown before the list becomes scrollable. */
+  maxRows?: number;
 }) {
+  const listRef = useRef<HTMLOListElement | null>(null);
+
+  // Keep the current step visible as it changes (no-op if already in view).
+  useEffect(() => {
+    listRef.current
+      ?.querySelector<HTMLElement>('[data-active="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [index, items.length]);
+
+  const rows = Math.max(3, Math.min(200, Math.round(maxRows) || 25));
+  const maxHeight = rows * ITEM_H + (rows - 1) * GAP;
+
   return (
-    <ol className={styles.history}>
+    <ol ref={listRef} className={styles.history} style={{ maxHeight, overflowY: "auto" }}>
       {items.map((h, i) => {
         const Icon = iconForStep(h.label, i === 0);
         return (

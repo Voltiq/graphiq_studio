@@ -40,7 +40,7 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Aperture — Photo Editor",
+  title: "Graphiq Studio — Photo Editor",
   description: "A modern, clean photo editing studio built with Next.js.",
   // The app ships its own dark/light theme, so tell the Dark Reader extension
   // to leave the page alone — it otherwise rewrites SVG/inline styles before

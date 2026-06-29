@@ -45,12 +45,38 @@ interface Pt {
   y: number;
 }
 
-/** The three corners of the triangle that fills `box` (apex up). */
-function triPoints(box: Rect): Pt[] {
+/** Trapezoid top-edge insets, as fractions (0..0.5) of the box width per side. */
+export interface TrapInsets {
+  l: number;
+  r: number;
+}
+
+/** Extra, node-adjustable geometry for shapes that have it. */
+export interface ShapeGeom {
+  /** Trapezoid: top-edge insets per side. */
+  trap?: TrapInsets;
+  /** Triangle: apex horizontal position, as a fraction (0..1) of the box width. */
+  apex?: number;
+}
+
+/** The three corners of the triangle in `box` (apex on the top edge at `apex`). */
+function triPoints(box: Rect, apex = 0.5): Pt[] {
   return [
-    { x: box.x + box.w / 2, y: box.y },
+    { x: box.x + Math.max(0, Math.min(1, apex)) * box.w, y: box.y },
     { x: box.x + box.w, y: box.y + box.h },
     { x: box.x, y: box.y + box.h },
+  ];
+}
+
+/** The four corners of a trapezoid in `box`: full-width bottom, inset top. */
+function trapPoints(box: Rect, trap: TrapInsets): Pt[] {
+  const l = Math.max(0, Math.min(0.5, trap.l));
+  const r = Math.max(0, Math.min(0.5, trap.r));
+  return [
+    { x: box.x + l * box.w, y: box.y }, // top-left
+    { x: box.x + box.w - r * box.w, y: box.y }, // top-right
+    { x: box.x + box.w, y: box.y + box.h }, // bottom-right
+    { x: box.x, y: box.y + box.h }, // bottom-left
   ];
 }
 
@@ -131,6 +157,7 @@ export function renderShape(
   stroke: string,
   strokeWidth: number,
   radius: number,
+  geom?: ShapeGeom,
 ) {
   const sw = Math.max(0, strokeWidth);
 
@@ -162,8 +189,11 @@ export function renderShape(
     return;
   }
 
-  if (kind === "tri") {
-    const outer = triPoints(box);
+  if (kind === "tri" || kind === "trapezoid") {
+    const outer =
+      kind === "tri"
+        ? triPoints(box, geom?.apex)
+        : trapPoints(box, geom?.trap ?? { l: 0.25, r: 0.25 });
     const r = Math.max(0, Math.min(radius, polyInradius(outer)));
     const hasStroke = sw > 0 && !!stroke;
     const inner = hasStroke && sw < polyInradius(outer) ? insetPoly(outer, sw) : null;

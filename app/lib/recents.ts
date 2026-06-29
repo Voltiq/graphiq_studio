@@ -16,7 +16,8 @@ interface FileHandleLike {
   requestPermission?: (opts: { mode: "read" | "readwrite" }) => Promise<PermissionState>;
 }
 
-const DB_NAME = "aperture-editor";
+const DB_NAME = "graphiq-editor";
+const LEGACY_DB_NAME = "aperture-editor"; // pre-rebrand store, still read as a fallback
 const DB_VERSION = 1;
 const META = "recent-meta";
 const PAYLOAD = "recent-payload";
@@ -24,9 +25,9 @@ const MAX_RECENTS = 8;
 
 const supported = () => typeof indexedDB !== "undefined";
 
-function openDB(): Promise<IDBDatabase> {
+function openDB(name: string = DB_NAME): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    const req = indexedDB.open(name, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(META)) db.createObjectStore(META, { keyPath: "id" });
@@ -52,13 +53,28 @@ function reqValue<T>(r: IDBRequest<T>): Promise<T> {
   });
 }
 
+async function listFrom(name: string): Promise<RecentMeta[]> {
+  const db = await openDB(name);
+  const metas = (await reqValue(
+    db.transaction(META, "readonly").objectStore(META).getAll(),
+  )) as RecentMeta[];
+  db.close();
+  return metas;
+}
+
 export async function listRecents(): Promise<RecentMeta[]> {
   if (!supported()) return [];
   try {
-    const db = await openDB();
-    const metas = await reqValue(db.transaction(META, "readonly").objectStore(META).getAll());
-    db.close();
-    return (metas as RecentMeta[]).sort((a, b) => b.savedAt - a.savedAt);
+    let metas = await listFrom(DB_NAME);
+    // Fall back to the pre-rebrand store until the new one has its own entries.
+    if (!metas.length) {
+      try {
+        metas = await listFrom(LEGACY_DB_NAME);
+      } catch {
+        /* no legacy store */
+      }
+    }
+    return metas.sort((a, b) => b.savedAt - a.savedAt);
   } catch {
     return [];
   }
@@ -114,31 +130,37 @@ export async function addRecent(
   }
 }
 
+async function readFrom(name: string, id: string): Promise<string | null> {
+  const db = await openDB(name);
+  const meta = (await reqValue(
+    db.transaction(META, "readonly").objectStore(META).get(id),
+  )) as RecentMeta | undefined;
+  const payload = await reqValue(db.transaction(PAYLOAD, "readonly").objectStore(PAYLOAD).get(id));
+  db.close();
+  if (!meta || payload == null) return null;
+
+  if (meta.kind === "handle") {
+    const h = payload as FileHandleLike;
+    if (h.queryPermission) {
+      let perm = await h.queryPermission({ mode: "read" });
+      if (perm !== "granted" && h.requestPermission) {
+        perm = await h.requestPermission({ mode: "read" });
+      }
+      if (perm !== "granted") return null;
+    }
+    const file = await h.getFile();
+    return await file.text();
+  }
+  return await (payload as Blob).text();
+}
+
 /** Read a recent project's `.aproj` text, or null if unavailable / permission denied. */
 export async function readRecent(id: string): Promise<string | null> {
   if (!supported()) return null;
   try {
-    const db = await openDB();
-    const meta = (await reqValue(
-      db.transaction(META, "readonly").objectStore(META).get(id),
-    )) as RecentMeta | undefined;
-    const payload = await reqValue(db.transaction(PAYLOAD, "readonly").objectStore(PAYLOAD).get(id));
-    db.close();
-    if (!meta || payload == null) return null;
-
-    if (meta.kind === "handle") {
-      const h = payload as FileHandleLike;
-      if (h.queryPermission) {
-        let perm = await h.queryPermission({ mode: "read" });
-        if (perm !== "granted" && h.requestPermission) {
-          perm = await h.requestPermission({ mode: "read" });
-        }
-        if (perm !== "granted") return null;
-      }
-      const file = await h.getFile();
-      return await file.text();
-    }
-    return await (payload as Blob).text();
+    const fromNew = await readFrom(DB_NAME, id);
+    if (fromNew != null) return fromNew;
+    return await readFrom(LEGACY_DB_NAME, id); // legacy recents stored pre-rebrand
   } catch {
     return null;
   }

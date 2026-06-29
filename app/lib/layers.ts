@@ -1,3 +1,5 @@
+import type { VectorData } from "./tools";
+
 export interface LayerBase {
   id: string;
   name: string;
@@ -10,6 +12,8 @@ export interface LayerBase {
 /** A pixel layer (has its own canvas in the paint engine, keyed by id). */
 export interface LayerLeaf extends LayerBase {
   type: "layer";
+  /** If set, the layer is a rasterized shape/text that can be re-edited as a vector. */
+  vector?: VectorData;
 }
 
 /** A folder of layers/groups. Has no pixels of its own; composites its children. */
@@ -27,7 +31,7 @@ export type Layer = LayerLeaf;
 /** Patch shape accepted by the panel/update (common props + group's expanded). */
 export type LayerPatch = Partial<
   Pick<LayerBase, "name" | "visible" | "opacity" | "blend">
-> & { expanded?: boolean };
+> & { expanded?: boolean; vector?: VectorData };
 
 export const BLEND_MODES = [
   "Normal",

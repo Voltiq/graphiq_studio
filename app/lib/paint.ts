@@ -2,9 +2,18 @@ import { parseColor, toHex8 } from "./color";
 import type { Rect } from "./view";
 import type { LayerNode } from "./layers";
 import { applyAdjustments, isDefaultAdjust, type Adjustments } from "./adjust";
-import { renderShape } from "./shapes";
+import { renderShape, type ShapeGeom } from "./shapes";
 import { buildCanvasGradient } from "./gradient";
-import type { GradientStop, GradientType, ShapeKind } from "./tools";
+import { renderPenStroke } from "./pen";
+import type {
+  BlurSettings,
+  DodgeSettings,
+  GradientStop,
+  GradientType,
+  PenAnchor,
+  PenSettings,
+  ShapeKind,
+} from "./tools";
 
 export interface BrushSettings {
   size: number; // px (document space)
@@ -147,6 +156,7 @@ export interface EngineHandle {
     colorHex: string,
     angle?: number,
     pivot?: { x: number; y: number } | null,
+    feather?: number,
   ) => void;
   eraseSelection: (
     layerId: string,
@@ -154,6 +164,7 @@ export interface EngineHandle {
     angle?: number,
     pivot?: { x: number; y: number } | null,
     label?: string,
+    feather?: number,
   ) => void;
   copyRegion: (
     rects: Rect[] | null,
@@ -176,6 +187,58 @@ export interface EngineHandle {
   resizeImage: (w: number, h: number, ids?: string[], smooth?: boolean) => void;
   /** Rotate/flip the whole image (90° rotations swap the dimensions). */
   transformImage: (kind: ImageTransform, ids?: string[]) => void;
+  /** Erase a layer's pixels (e.g. to hide a vector layer while re-editing it). */
+  clearLayerPixels: (layerId: string) => void;
+  /** Rasterise styled text onto a layer (no history; caller folds into a step). */
+  renderText: (layerId: string, spec: TextRenderSpec) => void;
+  /** The bounds styled text would rasterize into (for re-edit hit-testing). */
+  textBounds: (spec: TextRenderSpec) => { x: number; y: number; w: number; h: number };
+  /** Rasterise a shape onto a layer, clearing it first (no history). */
+  rasterizeShape: (
+    layerId: string,
+    box: Rect,
+    angle: number,
+    kind: ShapeKind,
+    fill: string,
+    stroke: string,
+    strokeWidth: number,
+    radius: number,
+    geom?: ShapeGeom,
+  ) => void;
+  /** Blur brush: begin / extend / finish a focus-softening stroke. */
+  beginBlur: (
+    layerId: string,
+    blur: BlurSettings,
+    x: number,
+    y: number,
+    clip?: Rect[] | null,
+    clipAngle?: number,
+    clipPivot?: { x: number; y: number } | null,
+  ) => void;
+  moveBlur: (x: number, y: number) => void;
+  endBlur: () => void;
+  /** Blur Gallery: begin / preview / commit / cancel a live blur-effect session. */
+  beginBlurFx: (
+    ids: string[],
+    sel: Rect[] | null,
+    selAngle?: number,
+    selPivot?: { x: number; y: number } | null,
+  ) => void;
+  previewBlurFx: (
+    kind: string,
+    amount: number,
+    angle: number,
+    anchorX?: number,
+    anchorY?: number,
+  ) => void;
+  commitBlurFx: (label: string) => void;
+  cancelBlurFx: () => void;
+  /** Snapshot owned layers + size for an undoable crop. */
+  cropSnapshot: (ids: string[]) => CropSnapshot;
+  /** Crop (and optionally straighten) owned layers to `rect`, resizing the doc. */
+  applyCrop: (rect: Rect, ids: string[], angle?: number) => void;
+  /** Restore a pre-crop snapshot (crop undo/redo). */
+  cropRestore: (snap: CropSnapshot) => void;
   applyAdjust: (
     layerId: string,
     adj: Adjustments,
@@ -255,6 +318,35 @@ interface Layer {
 
 export type StrokeMode = "paint" | "erase";
 
+/** Everything needed to rasterise a block of styled text onto a layer. */
+export interface TextRenderSpec {
+  text: string;
+  /** Top-left of the text block, doc coords. */
+  x: number;
+  y: number;
+  /** Paragraph box width (doc px) for word-wrap; null = point text (no wrap). */
+  boxW: number | null;
+  fontFamily: string;
+  fontSize: number;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strike: boolean;
+  align: "left" | "center" | "right";
+  lineHeight: number;
+  tracking: number;
+  color: string;
+  /** Anti-alias edges; false thresholds the alpha to hard 1-bit edges. */
+  antialias: boolean;
+}
+
+/** Pre-crop layer pixels + document size, captured so a crop can be undone. */
+export interface CropSnapshot {
+  w: number;
+  h: number;
+  layers: { id: string; c: HTMLCanvasElement }[];
+}
+
 /** Whole-image transforms (Image menu). 90° rotations swap the dimensions. */
 export type ImageTransform = "rotate-cw" | "rotate-ccw" | "flip-h" | "flip-v";
 
@@ -276,6 +368,238 @@ interface Entry {
   after?: ImageData;
 }
 
+const clampi = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
+
+/**
+ * One running-sum box-blur pass over a single float channel of a w×h block, along
+ * the horizontal or vertical axis. Edges extend (clamp the sample index). Three
+ * passes per axis approximate a Gaussian; O(1) per pixel regardless of radius, so
+ * even large blur radii on big brushes stay cheap.
+ */
+function boxBlurPass(ch: Float32Array, w: number, h: number, r: number, horizontal: boolean) {
+  if (r < 1) return;
+  const norm = 1 / (2 * r + 1);
+  if (horizontal) {
+    const tmp = new Float32Array(w);
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      let sum = 0;
+      for (let k = -r; k <= r; k++) sum += ch[row + clampi(k, 0, w - 1)];
+      for (let x = 0; x < w; x++) {
+        tmp[x] = sum * norm;
+        sum += ch[row + clampi(x + r + 1, 0, w - 1)] - ch[row + clampi(x - r, 0, w - 1)];
+      }
+      ch.set(tmp, row);
+    }
+  } else {
+    const tmp = new Float32Array(h);
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      for (let k = -r; k <= r; k++) sum += ch[clampi(k, 0, h - 1) * w + x];
+      for (let y = 0; y < h; y++) {
+        tmp[y] = sum * norm;
+        sum += ch[clampi(y + r + 1, 0, h - 1) * w + x] - ch[clampi(y - r, 0, h - 1) * w + x];
+      }
+      for (let y = 0; y < h; y++) ch[y * w + x] = tmp[y];
+    }
+  }
+}
+
+/** Premultiply an RGBA8 region into per-channel float arrays (alpha kept 0–255). */
+function premultChannels(d: Uint8ClampedArray, n: number) {
+  const R = new Float32Array(n);
+  const G = new Float32Array(n);
+  const B = new Float32Array(n);
+  const A = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = d[i * 4 + 3];
+    const af = a / 255;
+    R[i] = d[i * 4] * af;
+    G[i] = d[i * 4 + 1] * af;
+    B[i] = d[i * 4 + 2] * af;
+    A[i] = a;
+  }
+  return { R, G, B, A };
+}
+
+/**
+ * Apply a Blur Gallery effect to a whole-layer RGBA region (premultiplied so
+ * alpha edges don't darken). When `mask` is given the blurred result is blended
+ * back only inside it (a selection), reading neighbours from the full image so
+ * the selection edge isn't darkened. `cx,cy` is the centre for zoom/spin.
+ */
+function computeBlurFx(
+  orig: ImageData,
+  kind: string,
+  amount: number,
+  angle: number,
+  mask: Uint8ClampedArray | null,
+  cx: number,
+  cy: number,
+  cs: PredefinedColorSpace,
+): ImageData {
+  const w = orig.width;
+  const h = orig.height;
+  const n = w * h;
+  const sd = orig.data;
+  const { R: sR, G: sG, B: sB, A: sA } = premultChannels(sd, n);
+  let dR: Float32Array;
+  let dG: Float32Array;
+  let dB: Float32Array;
+  let dA: Float32Array;
+
+  if (kind === "box" || kind === "gaussian") {
+    dR = sR.slice();
+    dG = sG.slice();
+    dB = sB.slice();
+    dA = sA.slice();
+    const r = Math.max(1, Math.round(amount));
+    const passes = kind === "gaussian" ? 3 : 1;
+    const br = kind === "gaussian" ? Math.max(1, Math.round(r / 2)) : r;
+    for (let p = 0; p < passes; p++) {
+      for (const ch of [dR, dG, dB, dA]) {
+        boxBlurPass(ch, w, h, br, true);
+        boxBlurPass(ch, w, h, br, false);
+      }
+    }
+  } else {
+    dR = new Float32Array(n);
+    dG = new Float32Array(n);
+    dB = new Float32Array(n);
+    dA = new Float32Array(n);
+    // Per-pixel offset list: where to read N samples for the pixel at (px,py).
+    // Box/gaussian don't reach here. Each branch fills dst as the sample average.
+    if (kind === "motion") {
+      const rad = (angle * Math.PI) / 180;
+      const ux = Math.cos(rad);
+      const uy = Math.sin(rad);
+      const len = Math.max(1, amount);
+      const N = clampi(Math.round(len), 3, 48);
+      const half = (N - 1) / 2 || 1;
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          let r = 0;
+          let g = 0;
+          let b = 0;
+          let a = 0;
+          for (let k = 0; k < N; k++) {
+            const t = ((k - half) / half) * (len / 2);
+            const si =
+              clampi(Math.round(py + uy * t), 0, h - 1) * w + clampi(Math.round(px + ux * t), 0, w - 1);
+            r += sR[si];
+            g += sG[si];
+            b += sB[si];
+            a += sA[si];
+          }
+          const di = py * w + px;
+          dR[di] = r / N;
+          dG[di] = g / N;
+          dB[di] = b / N;
+          dA[di] = a / N;
+        }
+      }
+    } else if (kind === "zoom" || kind === "spin") {
+      const zoom = kind === "zoom";
+      const strength = amount / 100; // zoom: scale span
+      const arc = (amount * Math.PI) / 180; // spin: angle span
+      const N = clampi(zoom ? Math.round(12 + strength * 36) : Math.round(8 + amount), 8, 44);
+      const half = (N - 1) / 2 || 1;
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          const ox = px - cx;
+          const oy = py - cy;
+          let r = 0;
+          let g = 0;
+          let b = 0;
+          let a = 0;
+          for (let k = 0; k < N; k++) {
+            const f = (k - half) / half; // -1..1
+            let sx: number;
+            let sy: number;
+            if (zoom) {
+              const s = 1 + f * strength;
+              sx = cx + ox * s;
+              sy = cy + oy * s;
+            } else {
+              const phi = f * arc * 0.5;
+              const c = Math.cos(phi);
+              const sn = Math.sin(phi);
+              sx = cx + ox * c - oy * sn;
+              sy = cy + ox * sn + oy * c;
+            }
+            const si = clampi(Math.round(sy), 0, h - 1) * w + clampi(Math.round(sx), 0, w - 1);
+            r += sR[si];
+            g += sG[si];
+            b += sB[si];
+            a += sA[si];
+          }
+          const di = py * w + px;
+          dR[di] = r / N;
+          dG[di] = g / N;
+          dB[di] = b / N;
+          dA[di] = a / N;
+        }
+      }
+    } else {
+      // Bokeh: average over a disc of `amount` radius (golden-angle sample points).
+      const radius = Math.max(1, amount);
+      const N = 36;
+      const offs = new Float32Array(N * 2);
+      for (let k = 0; k < N; k++) {
+        const rr = radius * Math.sqrt((k + 0.5) / N);
+        const aa = k * 2.399963229728653;
+        offs[k * 2] = rr * Math.cos(aa);
+        offs[k * 2 + 1] = rr * Math.sin(aa);
+      }
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          let r = 0;
+          let g = 0;
+          let b = 0;
+          let a = 0;
+          for (let k = 0; k < N; k++) {
+            const si =
+              clampi(Math.round(py + offs[k * 2 + 1]), 0, h - 1) * w +
+              clampi(Math.round(px + offs[k * 2]), 0, w - 1);
+            r += sR[si];
+            g += sG[si];
+            b += sB[si];
+            a += sA[si];
+          }
+          const di = py * w + px;
+          dR[di] = r / N;
+          dG[di] = g / N;
+          dB[di] = b / N;
+          dA[di] = a / N;
+        }
+      }
+    }
+  }
+
+  const out = new Uint8ClampedArray(n * 4);
+  for (let i = 0; i < n; i++) {
+    const a = dA[i];
+    const inv = a > 0 ? 255 / a : 0;
+    let r = dR[i] * inv;
+    let g = dG[i] * inv;
+    let b = dB[i] * inv;
+    let al = a;
+    const o = i * 4;
+    if (mask) {
+      const m = mask[i] / 255;
+      r = sd[o] + (r - sd[o]) * m;
+      g = sd[o + 1] + (g - sd[o + 1]) * m;
+      b = sd[o + 2] + (b - sd[o + 2]) * m;
+      al = sd[o + 3] + (al - sd[o + 3]) * m;
+    }
+    out[o] = r;
+    out[o + 1] = g;
+    out[o + 2] = b;
+    out[o + 3] = al;
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
 /**
  * Imperative raster paint engine. Holds one offscreen canvas per layer plus a
  * per-stroke buffer. Painting accumulates into the stroke buffer; the buffer is
@@ -291,6 +615,7 @@ export class PaintEngine {
   private layers = new Map<string, Layer>();
   private stroke: Layer | null = null;
   private scratch: Layer | null = null;
+  private measureCtx: CanvasRenderingContext2D | null = null; // throwaway ctx for text measuring
   // Working colour space. Layer/scratch/float/export buffers use it (wide-gamut
   // preserved); the stroke buffer + brush tip stay sRGB so brush colours, which
   // are authored from sRGB hex, convert correctly when composited onto layers.
@@ -315,6 +640,60 @@ export class PaintEngine {
   // smoothing. Baking once avoids re-dithering a gradient on every stamp.
   private tip: HTMLCanvasElement | null = null;
   private tipHard = false;
+
+  // Blur-brush session. We never destroy the original pixels mid-stroke: `blurOrig`
+  // holds them, `blurCov` accumulates per-pixel brush coverage (0–1), and the live
+  // result is always lerp(orig, blur(orig), cov × strength). This keeps a stroke
+  // even (no blotches on slow drags) while still compounding across strokes (each
+  // new stroke re-reads the layer, i.e. the previous result).
+  private blurring = false;
+  private blurLayer: string | null = null;
+  private blurOrig: ImageData | null = null; // layer pixels at stroke start
+  private blurSrc: ImageData | null = null; // blur source (orig, or composite for sampleAll)
+  private blurCov: Float32Array | null = null; // per-pixel coverage 0–1, doc-sized
+  private blurTip: { data: Float32Array; size: number; r: number } | null = null;
+  private blurOpts: BlurSettings | null = null;
+  private blurDirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  private blurStep = 1;
+  private blurResidual = 0;
+  private blurLast = { x: 0, y: 0 };
+  private blurLastRaw = { x: 0, y: 0 };
+  private blurSmoothPt = { x: 0, y: 0 };
+  private blurSelMask: Uint8ClampedArray | null = null;
+
+  // Dodge/Burn session. Same coverage-mask model as blur (orig snapshot + a 0–1
+  // coverage buffer, re-baked as effect(orig, coverage × exposure)), so a stroke
+  // stays even and compounds across strokes. `bakeDodge` applies the tonal curve.
+  private dodging = false;
+  private dodgeLayer: string | null = null;
+  private dodgeOrig: ImageData | null = null;
+  private dodgeCov: Float32Array | null = null;
+  private dodgeTip: { data: Float32Array; size: number; r: number } | null = null;
+  private dodgeOpts: DodgeSettings | null = null;
+  private dodgeDirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  private dodgeStep = 1;
+  private dodgeResidual = 0;
+  private dodgeLast = { x: 0, y: 0 };
+  private dodgeLastRaw = { x: 0, y: 0 };
+  private dodgeSmoothPt = { x: 0, y: 0 };
+  private dodgeSelMask: Uint8ClampedArray | null = null;
+
+  // Blur Gallery (Effects ▸ Blur Gallery) live preview session: the affected
+  // layers' original pixels + a selection mask + the zoom/spin centre.
+  private blurFx: {
+    ids: string[];
+    orig: Map<string, ImageData>;
+    mask: Uint8ClampedArray | null;
+  } | null = null;
+
+  // Clone-stamp session. Reuses the brush stroke buffer/flow/opacity pipeline, but
+  // each dab paints pixels sampled from `cloneSample` at (brushPoint + cloneOff)
+  // instead of a solid colour. `cloneSample` is snapshotted at stroke start so the
+  // clone never feeds back on itself mid-stroke.
+  private cloneActive = false;
+  private cloneSample: Layer | null = null;
+  private cloneDab: Layer | null = null;
+  private cloneOff: { x: number; y: number } | null = null;
 
   // Move session
   private moving = false;
@@ -366,6 +745,23 @@ export class PaintEngine {
   private gradOrig: ImageData | null = null;
   private gradBounds: Rect | null = null;
   private gradEntry: Entry | null = null;
+  // Live pen-path session (re-renderable until finalized by endPath). The path
+  // grows as anchors are added, so the whole layer is snapshotted for restores
+  // and the history entry is captured once — tightly — at commit time.
+  private pathLayer: string | null = null;
+  private pathOrig: Layer | null = null;
+  private pathState: {
+    anchors: PenAnchor[];
+    closed: boolean;
+    settings: PenSettings;
+    color: string;
+  } | null = null;
+  // Live bucket-fill session (re-renderable from its region + colour until
+  // finalized by endFill). The region can grow with tolerance, so the whole
+  // layer is snapshotted for restores; the tight entry is captured at commit.
+  private fillLayer: string | null = null;
+  private fillOrig: Layer | null = null;
+  private fillState: { rects: Rect[]; color: string; antialias: boolean } | null = null;
   // Cached magic-wand source pixels, reused across live (tolerance) re-runs and
   // dropped on any layer mutation (see invalidateWandSrc).
   private wandSrc: {
@@ -401,6 +797,10 @@ export class PaintEngine {
   onShapeEnd: () => void = () => {};
   /** Fired when a live gradient session ends (so the UI can drop its handles). */
   onGradientEnd: () => void = () => {};
+  /** Fired when a live pen-path session ends (so the UI can drop the path). */
+  onPathEnd: () => void = () => {};
+  /** Fired when a live bucket-fill session ends (so the UI can drop its marker). */
+  onFillEnd: () => void = () => {};
   /** Extra content-change listeners (e.g. the live histogram panel). */
   private changeListeners = new Set<() => void>();
 
@@ -542,6 +942,78 @@ export class PaintEngine {
     this.emitChange();
   }
 
+  /**
+   * Clone every owned layer plus the current document size into a snapshot, so an
+   * (otherwise destructive) crop can be undone pixel-perfectly. Cheap relative to
+   * the crop itself and held only by the crop's history step.
+   */
+  cropSnapshot(ownLayerIds: string[]): CropSnapshot {
+    const layers = ownLayerIds.map((id) => {
+      const l = this.layer(id);
+      const snap = this.mk(l.c.width, l.c.height, true);
+      snap.ctx.drawImage(l.c, 0, 0);
+      return { id, c: snap.c };
+    });
+    return { w: this.w, h: this.h, layers };
+  }
+
+  /**
+   * Crop (and optionally straighten) every owned layer to `rect`, resizing the
+   * document to the rectangle. With a non-zero `angle` the content is rotated by
+   * −angle about the rectangle's centre first, so a tilted crop comes out level.
+   * Destructive — the caller pairs it with cropSnapshot/cropRestore for undo. Call
+   * BEFORE updating the doc width/height (the follow-up setDoc is then a no-op).
+   */
+  applyCrop(rect: Rect, ownLayerIds: string[], angle = 0) {
+    const nw = Math.max(1, Math.round(rect.w));
+    const nh = Math.max(1, Math.round(rect.h));
+    this.endAdjust();
+    if (this.floatActive) this.discardFloat();
+    this.wandSrc = null;
+    const rad = (-angle * Math.PI) / 180;
+    const cx = rect.x + rect.w / 2;
+    const cy = rect.y + rect.h / 2;
+    for (const [id, l] of this.layers) {
+      if (!ownLayerIds.includes(id)) continue;
+      const next = this.mk(nw, nh, true);
+      const ctx = next.ctx;
+      if (angle) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.translate(nw / 2, nh / 2);
+        ctx.rotate(rad);
+        ctx.translate(-cx, -cy);
+        ctx.drawImage(l.c, 0, 0);
+      } else {
+        ctx.imageSmoothingEnabled = false; // axis-aligned: keep pixels exact
+        ctx.drawImage(l.c, -Math.round(rect.x), -Math.round(rect.y));
+      }
+      this.layers.set(id, next);
+    }
+    this.w = nw;
+    this.h = nh;
+    this.stroke = makeCanvas(nw, nh);
+    this.scratch = this.mk(nw, nh);
+    this.emitChange();
+  }
+
+  /** Restore a pre-crop snapshot (layers + document size) for crop undo/redo. */
+  cropRestore(snap: CropSnapshot) {
+    this.endAdjust();
+    if (this.floatActive) this.discardFloat();
+    this.wandSrc = null;
+    this.w = snap.w;
+    this.h = snap.h;
+    this.stroke = makeCanvas(snap.w, snap.h);
+    this.scratch = this.mk(snap.w, snap.h);
+    for (const { id, c } of snap.layers) {
+      const next = this.mk(c.width, c.height, true);
+      next.ctx.drawImage(c, 0, 0);
+      this.layers.set(id, next);
+    }
+    this.emitChange();
+  }
+
   private layer(id: string): Layer {
     let l = this.layers.get(id);
     if (!l) {
@@ -577,13 +1049,13 @@ export class PaintEngine {
   }
 
   /** Clip to the selection — a rotated quad path about `pivot` when `angle` ≠ 0. */
-  private clipTo(
+  /** Trace the selection rects (optionally rotated about `pivot`) into a path. */
+  private pathOf(
     ctx: CanvasRenderingContext2D,
-    rects: Rect[] | null,
+    rects: Rect[],
     angle = 0,
     pivot: { x: number; y: number } | null = null,
   ) {
-    if (!rects || !rects.length) return;
     ctx.beginPath();
     if (!angle) {
       for (const r of rects) ctx.rect(r.x, r.y, r.w, r.h);
@@ -601,7 +1073,64 @@ export class PaintEngine {
         ctx.closePath();
       }
     }
+  }
+
+  private clipTo(
+    ctx: CanvasRenderingContext2D,
+    rects: Rect[] | null,
+    angle = 0,
+    pivot: { x: number; y: number } | null = null,
+  ) {
+    if (!rects || !rects.length) return;
+    this.pathOf(ctx, rects, angle, pivot);
     ctx.clip();
+  }
+
+  /**
+   * Render the selection to an opaque-white alpha mask (full doc size), used via
+   * destination-in / -out instead of clip() when lifting content.
+   *
+   * For a ROTATED irregular selection the shape is filled AXIS-ALIGNED first and
+   * then the bitmap is rotated — the same way the content itself is baked. Filling
+   * hundreds of thin *rotated* scanline rects directly leaves hairline interior
+   * seams (rasterizers don't perfectly cancel adjacent rotated edges) and a
+   * rotated complex clip path drops whole rows; rotating one solid bitmap can do
+   * neither, and it lines up pixel-for-pixel with the rotated pixels.
+   */
+  private selectionMask(
+    rects: Rect[],
+    angle: number,
+    pivot: { x: number; y: number } | null,
+    feather = 0,
+  ): HTMLCanvasElement {
+    const base = this.mk(this.w, this.h);
+    base.ctx.fillStyle = "#fff";
+    if (!angle) {
+      this.pathOf(base.ctx, rects, 0, null);
+      base.ctx.fill();
+    } else {
+      // Solid axis-aligned shape (abutting upright rects fill without seams)…
+      const flat = this.mk(this.w, this.h);
+      flat.ctx.fillStyle = "#fff";
+      this.pathOf(flat.ctx, rects, 0, null);
+      flat.ctx.fill();
+      // …then rotate that bitmap about the same pivot as the content.
+      const c = pivot ?? this.centerOf(rects);
+      base.ctx.save();
+      base.ctx.translate(c.x, c.y);
+      base.ctx.rotate(angle);
+      base.ctx.translate(-c.x, -c.y);
+      base.ctx.imageSmoothingEnabled = true;
+      base.ctx.drawImage(flat.c, 0, 0);
+      base.ctx.restore();
+    }
+    if (feather <= 0) return base.c;
+    // Feather = soften the mask edges with a Gaussian blur.
+    const out = this.mk(this.w, this.h);
+    out.ctx.filter = `blur(${feather}px)`;
+    out.ctx.drawImage(base.c, 0, 0);
+    out.ctx.filter = "none";
+    return out.c;
   }
 
   /** Draw the current stroke buffer onto a context, clipped to the selection. */
@@ -668,9 +1197,11 @@ export class PaintEngine {
     label: string,
     side?: HistorySide,
   ) {
-    this.endAdjust(); // any other pixel op finalizes a live adjustment / shape / gradient
+    this.endAdjust(); // any other pixel op finalizes a live adjustment / shape / gradient / path / fill
     this.endShape();
     this.endGradient();
+    this.endPath();
+    this.endFill();
     if (this.pos < this.entries.length) this.entries.length = this.pos;
     this.entries.push({ layerId, rect, before, after, label, side });
     this.pos = this.entries.length;
@@ -682,6 +1213,8 @@ export class PaintEngine {
     this.endAdjust();
     this.endShape();
     this.endGradient();
+    this.endPath();
+    this.endFill();
     if (this.pos < this.entries.length) this.entries.length = this.pos;
     this.entries.push({ label, side: { undo, redo } });
     this.pos = this.entries.length;
@@ -695,21 +1228,44 @@ export class PaintEngine {
     colorHex: string,
     angle = 0,
     pivot: { x: number; y: number } | null = null,
+    feather = 0,
   ) {
-    const bounds = this.boundsOf(rects, angle, pivot);
+    const bounds = this.featherBounds(this.boundsOf(rects, angle, pivot), feather);
     if (!bounds) return;
     const l = this.layer(layerId);
     const before = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
-    l.ctx.save();
-    this.clipTo(l.ctx, rects, angle, pivot);
-    l.ctx.globalAlpha = 1;
-    l.ctx.globalCompositeOperation = "source-over";
-    l.ctx.fillStyle = colorHex;
-    l.ctx.fillRect(bounds.x, bounds.y, bounds.w, bounds.h);
-    l.ctx.restore();
+    if (feather > 0) {
+      // Lay the colour down only where a feathered mask is opaque (soft edges).
+      const mask = this.selectionMask(rects, angle, pivot, feather);
+      const tmp = this.mk(this.w, this.h);
+      tmp.ctx.fillStyle = colorHex;
+      tmp.ctx.fillRect(bounds.x, bounds.y, bounds.w, bounds.h);
+      tmp.ctx.globalCompositeOperation = "destination-in";
+      tmp.ctx.drawImage(mask, 0, 0);
+      l.ctx.drawImage(tmp.c, 0, 0);
+    } else {
+      l.ctx.save();
+      this.clipTo(l.ctx, rects, angle, pivot);
+      l.ctx.globalAlpha = 1;
+      l.ctx.globalCompositeOperation = "source-over";
+      l.ctx.fillStyle = colorHex;
+      l.ctx.fillRect(bounds.x, bounds.y, bounds.w, bounds.h);
+      l.ctx.restore();
+    }
     const after = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
     this.pushEntry(layerId, bounds, before, after, "Fill");
     this.emitChange();
+  }
+
+  /** Expand a selection bounds by a feather radius (3σ reach), clamped to canvas. */
+  private featherBounds(b: Rect | null, feather: number): Rect | null {
+    if (!b || feather <= 0) return b;
+    const pad = Math.ceil(feather * 3) + 2;
+    const x = Math.max(0, b.x - pad);
+    const y = Math.max(0, b.y - pad);
+    const x1 = Math.min(this.w, b.x + b.w + pad);
+    const y1 = Math.min(this.h, b.y + b.h + pad);
+    return { x, y, w: x1 - x, h: y1 - y };
   }
 
   /** Paint a shape (filled + stroked) into ctx, rotated about its box centre.
@@ -723,6 +1279,7 @@ export class PaintEngine {
     stroke: string,
     strokeWidth: number,
     radius: number,
+    geom?: ShapeGeom,
   ) {
     ctx.save();
     ctx.globalAlpha = 1;
@@ -734,7 +1291,7 @@ export class PaintEngine {
       ctx.rotate(angle);
       ctx.translate(-cx, -cy);
     }
-    renderShape(ctx, kind, box, fill, stroke, strokeWidth, radius);
+    renderShape(ctx, kind, box, fill, stroke, strokeWidth, radius, geom);
     ctx.restore();
   }
 
@@ -753,10 +1310,13 @@ export class PaintEngine {
     stroke: string,
     strokeWidth: number,
     radius: number,
+    geom?: ShapeGeom,
   ) {
     if (box.w < 1 || box.h < 1) return;
-    this.endAdjust(); // a shape and an adjustment / gradient can't be live at once
+    this.endAdjust(); // a shape and an adjustment / gradient / path / fill can't be live at once
     this.endGradient();
+    this.endPath();
+    this.endFill();
     if (this.shapeLayer && this.shapeLayer !== layerId) this.endShape();
     const l = this.layer(layerId);
     const fresh = this.shapeLayer !== layerId || !this.shapeOrig || !this.shapeBounds;
@@ -779,7 +1339,7 @@ export class PaintEngine {
       l.ctx.globalCompositeOperation = "source-over";
       l.ctx.putImageData(this.shapeOrig!, b.x, b.y); // restore pre-shape pixels
     }
-    this.paintShape(l.ctx, box, angle, kind, fill, stroke, strokeWidth, radius);
+    this.paintShape(l.ctx, box, angle, kind, fill, stroke, strokeWidth, radius, geom);
     const after = l.ctx.getImageData(b.x, b.y, b.w, b.h);
     if (!this.shapeEntry) {
       if (this.pos < this.entries.length) this.entries.length = this.pos;
@@ -790,6 +1350,28 @@ export class PaintEngine {
     } else {
       this.shapeEntry.after = after; // same entry, restyled pixels
     }
+    this.emitChange();
+  }
+
+  /**
+   * Rasterise a shape onto a (dedicated) layer, clearing it first. No history of
+   * its own — the caller folds it into a structural step (like renderText). Used
+   * to bake a vector shape layer on create and re-edit.
+   */
+  rasterizeShape(
+    layerId: string,
+    box: Rect,
+    angle: number,
+    kind: ShapeKind,
+    fill: string,
+    stroke: string,
+    strokeWidth: number,
+    radius: number,
+    geom?: ShapeGeom,
+  ) {
+    const ctx = this.layer(layerId).ctx;
+    ctx.clearRect(0, 0, this.w, this.h);
+    this.paintShape(ctx, box, angle, kind, fill, stroke, strokeWidth, radius, geom);
     this.emitChange();
   }
 
@@ -822,6 +1404,8 @@ export class PaintEngine {
   ) {
     this.endAdjust();
     this.endShape();
+    this.endPath();
+    this.endFill();
     if (this.gradLayer && this.gradLayer !== layerId) this.endGradient();
     const l = this.layer(layerId);
     const fresh = this.gradLayer !== layerId || !this.gradOrig || !this.gradBounds;
@@ -876,6 +1460,194 @@ export class PaintEngine {
     this.onGradientEnd();
   }
 
+  /** Tight canvas-clamped bounds of a pen path's stroke (control hull + width). */
+  private penBounds(anchors: PenAnchor[], o: PenSettings): Rect | null {
+    if (anchors.length < 2) return null;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const a of anchors) {
+      for (const [x, y] of [
+        [a.x, a.y],
+        [a.ix, a.iy],
+        [a.ox, a.oy],
+      ]) {
+        x0 = Math.min(x0, x);
+        y0 = Math.min(y0, y);
+        x1 = Math.max(x1, x);
+        y1 = Math.max(y1, y);
+      }
+    }
+    const pad = Math.ceil((o.width * (1 + Math.max(0, o.bend))) / 2) + 3;
+    x0 = Math.max(0, Math.floor(x0 - pad));
+    y0 = Math.max(0, Math.floor(y0 - pad));
+    x1 = Math.min(this.w, Math.ceil(x1 + pad));
+    y1 = Math.min(this.h, Math.ceil(y1 + pad));
+    if (x1 <= x0 || y1 <= y0) return null;
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+
+  /**
+   * Draw / redraw a "live" pen-path stroke onto a layer. Re-renderable as the
+   * path's anchors / handles / stroke options change, until finalized by endPath.
+   * The layer is snapshotted on the first call and restored before each redraw.
+   */
+  livePath(
+    layerId: string,
+    anchors: PenAnchor[],
+    closed: boolean,
+    settings: PenSettings,
+    color: string,
+  ) {
+    this.endAdjust();
+    this.endShape();
+    this.endGradient();
+    this.endFill();
+    if (this.pathLayer && this.pathLayer !== layerId) this.endPath();
+    const l = this.layer(layerId);
+    if (this.pathLayer !== layerId || !this.pathOrig) {
+      this.pathLayer = layerId;
+      this.pathOrig = this.mk(this.w, this.h, true);
+      this.pathOrig.ctx.drawImage(l.c, 0, 0);
+    }
+    // Restore the pre-path pixels, then stroke the current path on top.
+    l.ctx.globalAlpha = 1;
+    l.ctx.globalCompositeOperation = "source-over";
+    l.ctx.clearRect(0, 0, this.w, this.h);
+    l.ctx.drawImage(this.pathOrig.c, 0, 0);
+    renderPenStroke(l.ctx, anchors, closed, settings, color);
+    this.pathState = { anchors, closed, settings, color };
+    this.emitChange();
+  }
+
+  /** Finalize the live pen path, baking it as one tight "Path" history entry. */
+  endPath() {
+    if (!this.pathLayer) return;
+    const layerId = this.pathLayer;
+    const orig = this.pathOrig;
+    const st = this.pathState;
+    this.pathLayer = null; // clear first so pushEntry's own endPath() is a no-op
+    this.pathOrig = null;
+    this.pathState = null;
+    if (st && orig && st.anchors.length >= 2) {
+      const b = this.penBounds(st.anchors, st.settings);
+      if (b) {
+        const l = this.layer(layerId);
+        const before = orig.ctx.getImageData(b.x, b.y, b.w, b.h);
+        const after = l.ctx.getImageData(b.x, b.y, b.w, b.h);
+        this.pushEntry(layerId, b, before, after, "Path");
+      }
+    }
+    this.onPathEnd();
+  }
+
+  /**
+   * Draw / redraw a "live" bucket fill onto a layer — re-editable from its region
+   * (rects) + colour until finalized by endFill. The layer is snapshotted on the
+   * first call and restored before each redraw, so re-filling with a new region
+   * or colour never stacks up.
+   */
+  liveFill(layerId: string, rects: Rect[], color: string, antialias = false) {
+    this.endAdjust();
+    this.endShape();
+    this.endGradient();
+    this.endPath();
+    if (this.fillLayer && this.fillLayer !== layerId) this.endFill();
+    const l = this.layer(layerId);
+    if (this.fillLayer !== layerId || !this.fillOrig) {
+      this.fillLayer = layerId;
+      this.fillOrig = this.mk(this.w, this.h, true);
+      this.fillOrig.ctx.drawImage(l.c, 0, 0);
+    }
+    // Restore the pre-fill pixels, then fill the region on top.
+    l.ctx.globalAlpha = 1;
+    l.ctx.globalCompositeOperation = "source-over";
+    l.ctx.clearRect(0, 0, this.w, this.h);
+    l.ctx.drawImage(this.fillOrig.c, 0, 0);
+    if (rects.length) {
+      if (antialias) {
+        this.fillAA(l.ctx, rects, color);
+      } else {
+        const b = this.boundsOf(rects) ?? { x: 0, y: 0, w: this.w, h: this.h };
+        l.ctx.save();
+        this.clipTo(l.ctx, rects);
+        l.ctx.fillStyle = color;
+        l.ctx.fillRect(b.x, b.y, b.w, b.h);
+        l.ctx.restore();
+      }
+    }
+    this.fillState = { rects, color, antialias };
+    this.emitChange();
+  }
+
+  // Padding (px) around an anti-aliased fill to hold the softened edge.
+  private static FILL_AA_PAD = 4;
+
+  /**
+   * Fill the region with softened (anti-aliased) edges: rasterize the region as
+   * an opaque mask, blur it a touch into an alpha-coverage mask, tint that to the
+   * colour, and composite it — so the boundary pixels get partial coverage
+   * instead of a hard pixel staircase. The interior is identical to a hard fill.
+   */
+  private fillAA(ctx: CanvasRenderingContext2D, rects: Rect[], color: string) {
+    const r = this.boundsOf(rects);
+    if (!r) return;
+    const pad = PaintEngine.FILL_AA_PAD;
+    const x0 = Math.max(0, r.x - pad);
+    const y0 = Math.max(0, r.y - pad);
+    const x1 = Math.min(this.w, r.x + r.w + pad);
+    const y1 = Math.min(this.h, r.y + r.h + pad);
+    const mw = x1 - x0;
+    const mh = y1 - y0;
+    if (mw < 1 || mh < 1) return;
+    // Hard region mask (white) in a buffer offset to the region's bounds.
+    const mask = this.mk(mw, mh);
+    mask.ctx.translate(-x0, -y0);
+    this.clipTo(mask.ctx, rects);
+    mask.ctx.fillStyle = "#fff";
+    mask.ctx.fillRect(x0, y0, mw, mh);
+    // Blur into a coverage mask, then tint to the fill colour (keeps the colour's
+    // own alpha × the edge coverage).
+    const soft = this.mk(mw, mh);
+    soft.ctx.filter = "blur(0.8px)";
+    soft.ctx.drawImage(mask.c, 0, 0);
+    soft.ctx.filter = "none";
+    soft.ctx.globalCompositeOperation = "source-in";
+    soft.ctx.fillStyle = color;
+    soft.ctx.fillRect(0, 0, mw, mh);
+    ctx.drawImage(soft.c, x0, y0);
+  }
+
+  /** Finalize the live bucket fill, baking one tight "Fill" history entry. */
+  endFill() {
+    if (!this.fillLayer) return;
+    const layerId = this.fillLayer;
+    const orig = this.fillOrig;
+    const st = this.fillState;
+    this.fillLayer = null; // clear first so pushEntry's own endFill() is a no-op
+    this.fillOrig = null;
+    this.fillState = null;
+    if (st && orig && st.rects.length) {
+      const r = this.boundsOf(st.rects);
+      if (r) {
+        // Anti-aliased fills bleed a few px past the region — include that in the
+        // entry so undo restores the softened edge too.
+        const pad = st.antialias ? PaintEngine.FILL_AA_PAD : 0;
+        const x0 = Math.max(0, r.x - pad);
+        const y0 = Math.max(0, r.y - pad);
+        const x1 = Math.min(this.w, r.x + r.w + pad);
+        const y1 = Math.min(this.h, r.y + r.h + pad);
+        const b = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+        const l = this.layer(layerId);
+        const before = orig.ctx.getImageData(b.x, b.y, b.w, b.h);
+        const after = l.ctx.getImageData(b.x, b.y, b.w, b.h);
+        this.pushEntry(layerId, b, before, after, "Fill");
+      }
+    }
+    this.onFillEnd();
+  }
+
   /** Clear (erase to transparent) the selection on a layer (records history).
       `label` lets callers journal it as e.g. "Cut" instead of "Delete". */
   eraseSelection(
@@ -884,17 +1656,23 @@ export class PaintEngine {
     angle = 0,
     pivot: { x: number; y: number } | null = null,
     label = "Delete",
+    feather = 0,
   ) {
-    const bounds = this.boundsOf(rects, angle, pivot);
+    const bounds = this.featherBounds(this.boundsOf(rects, angle, pivot), feather);
     if (!bounds) return;
     const l = this.layer(layerId);
     const before = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
     l.ctx.save();
-    this.clipTo(l.ctx, rects, angle, pivot);
     l.ctx.globalAlpha = 1;
     l.ctx.globalCompositeOperation = "destination-out";
-    l.ctx.fillStyle = "#000";
-    l.ctx.fillRect(bounds.x, bounds.y, bounds.w, bounds.h);
+    if (feather > 0) {
+      // The mask's (feathered) alpha removes the layer's alpha proportionally.
+      l.ctx.drawImage(this.selectionMask(rects, angle, pivot, feather), 0, 0);
+    } else {
+      this.clipTo(l.ctx, rects, angle, pivot);
+      l.ctx.fillStyle = "#000";
+      l.ctx.fillRect(bounds.x, bounds.y, bounds.w, bounds.h);
+    }
     l.ctx.restore();
     const after = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
     this.pushEntry(layerId, bounds, before, after, label);
@@ -1338,9 +2116,12 @@ export class PaintEngine {
     rects: Rect[],
     angle = 0,
     pivot: { x: number; y: number } | null = null,
+    feather = 0,
   ): boolean {
-    this.endShape(); // finalize a live shape / gradient before lifting pixels to transform
+    this.endShape(); // finalize a live shape / gradient / path / fill before lifting pixels to transform
     this.endGradient();
+    this.endPath();
+    this.endFill();
     if (this.floatActive) this.commitFloat();
     const src = this.boundsOf(rects, angle, pivot);
     if (!src) return false;
@@ -1348,20 +2129,21 @@ export class PaintEngine {
     // Pristine copy of the layer for history & discard.
     this.floatOrig = this.mk(this.w, this.h, true);
     this.floatOrig.ctx.drawImage(l.c, 0, 0);
-    // Lifted content: the layer clipped to the selection (full doc size).
+    // Mask the selection with a single anti-aliased fill (not clip()) so an
+    // irregular rotated selection lifts every row — a complex rotated clip path
+    // drops thin scanline rects, leaving stray pixel lines behind. A feather
+    // radius softens the lifted (and removed) edges.
+    const mask = this.selectionMask(rects, angle, pivot, feather);
+    // Lifted content: the layer kept only where the mask is opaque (full doc size).
     const lifted = this.mk(this.w, this.h);
-    lifted.ctx.save();
-    this.clipTo(lifted.ctx, rects, angle, pivot);
     lifted.ctx.drawImage(l.c, 0, 0);
-    lifted.ctx.restore();
+    lifted.ctx.globalCompositeOperation = "destination-in";
+    lifted.ctx.drawImage(mask, 0, 0);
+    lifted.ctx.globalCompositeOperation = "source-over";
     this.floatSource = lifted.c;
-    // Remove the lifted pixels from the layer (the hole).
-    l.ctx.save();
-    this.clipTo(l.ctx, rects, angle, pivot);
+    // Remove the lifted pixels from the layer (the hole) using the same mask.
     l.ctx.globalCompositeOperation = "destination-out";
-    l.ctx.fillStyle = "#000";
-    l.ctx.fillRect(src.x, src.y, src.w, src.h);
-    l.ctx.restore();
+    l.ctx.drawImage(mask, 0, 0);
     l.ctx.globalCompositeOperation = "source-over";
     this.floatActive = true;
     this.floatLayer = layerId;
@@ -1812,6 +2594,17 @@ export class PaintEngine {
     const sg = data[si + 1];
     const sb = data[si + 2];
     const sa = data[si + 3];
+    // Match on PREMULTIPLIED colour (the visible contribution) + alpha, rather
+    // than straight RGBA. So the flood spreads by how a pixel actually looks: an
+    // opaque pixel matches on its colour and joins early, while the more
+    // transparent a pixel is, the less colour it contributes and the more
+    // tolerance it needs to match an opaque seed. (For fully opaque pixels this
+    // reduces to the plain RGB test, so opaque artwork is unchanged.) Premult is
+    // scaled by 255 to keep it integer and avoid a per-pixel divide.
+    const tScaled = t * 255;
+    const spr = sr * sa;
+    const spg = sg * sa;
+    const spb = sb * sa;
 
     // Reuse big scratch buffers across (live) re-runs — allocating ~12MB of
     // typed arrays per slider tick was a major source of GC-driven jank.
@@ -1858,11 +2651,12 @@ export class PaintEngine {
       while (sp > 0) {
         const p = stack[--sp];
         const i = p * 4; // match test inlined (hot loop, no closure)
+        const a3 = data[i + 3];
         if (
-          Math.abs(data[i] - sr) > t ||
-          Math.abs(data[i + 1] - sg) > t ||
-          Math.abs(data[i + 2] - sb) > t ||
-          Math.abs(data[i + 3] - sa) > t
+          Math.abs(data[i] * a3 - spr) > tScaled ||
+          Math.abs(data[i + 1] * a3 - spg) > tScaled ||
+          Math.abs(data[i + 2] * a3 - spb) > tScaled ||
+          Math.abs(a3 - sa) > t
         )
           continue;
         mask[p] = 1;
@@ -1882,11 +2676,12 @@ export class PaintEngine {
       for (let cy = 0; cy < h; cy++) {
         for (let cx = 0; cx < w; cx++, p++) {
           const i = p * 4;
+          const a3 = data[i + 3];
           if (
-            Math.abs(data[i] - sr) <= t &&
-            Math.abs(data[i + 1] - sg) <= t &&
-            Math.abs(data[i + 2] - sb) <= t &&
-            Math.abs(data[i + 3] - sa) <= t
+            Math.abs(data[i] * a3 - spr) <= tScaled &&
+            Math.abs(data[i + 1] * a3 - spg) <= tScaled &&
+            Math.abs(data[i + 2] * a3 - spb) <= tScaled &&
+            Math.abs(a3 - sa) <= t
           ) {
             mask[p] = 1;
             if (cx < minX) minX = cx;
@@ -2150,6 +2945,776 @@ export class PaintEngine {
     this.clip = null;
     this.tip = null;
     this.dirty = null;
+    if (this.cloneActive) {
+      this.cloneActive = false;
+      this.cloneSample = null;
+      this.cloneDab = null;
+      this.cloneOff = null;
+    }
+    this.emitChange();
+  }
+
+  // ---- Clone stamp ---------------------------------------------------------
+  /**
+   * Begin a clone-stamp stroke. `offset` is the source→destination vector (source
+   * point = brush point + offset). The sample source (active layer, or the merged
+   * composite when `sampleAll`) is snapshotted now so painting can't feed back on
+   * itself. Reuses the brush stroke buffer so flow/opacity/blend work identically.
+   */
+  beginClone(
+    layerId: string,
+    brush: BrushSettings,
+    x: number,
+    y: number,
+    offset: { x: number; y: number },
+    sampleAll: boolean,
+    spacing: number,
+    clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
+  ) {
+    if (!this.stroke) return;
+    this.layer(layerId);
+    this.painting = true;
+    this.strokeLayer = layerId;
+    this.brush = brush;
+    this.mode = "paint";
+    this.strokeLabel = "Clone Stamp";
+    this.clip = clip && clip.length ? clip : null;
+    this.clipAngle = clipAngle;
+    this.clipPivot = clipPivot;
+    this.col = { r: 0, g: 0, b: 0, a: 1 };
+    const r = Math.max(0.5, brush.size / 2);
+    const flow = Math.max(0, Math.min(1, brush.flow / 100));
+    this.tipHard = brush.hardness >= 100 || brush.size <= 1;
+    this.tip = this.tipHard
+      ? this.buildHardTip(r, 0, 0, 0, flow)
+      : this.buildSoftTip(r, 0, 0, 0, flow, brush.hardness);
+    // Snapshot the source so the clone reads a stable image, not its own output.
+    const sample = this.mk(this.w, this.h, true);
+    if (sampleAll && this.view) sample.ctx.drawImage(this.view, 0, 0);
+    else sample.ctx.drawImage(this.layer(layerId).c, 0, 0);
+    this.cloneSample = sample;
+    this.cloneDab = this.mk(this.tip.width, this.tip.height, true);
+    this.cloneOff = offset;
+    this.cloneActive = true;
+    this.stroke.ctx.clearRect(0, 0, this.w, this.h);
+    this.step = Math.max(1, brush.size * (spacing / 100));
+    this.last = { x, y };
+    this.lastRaw = { x, y };
+    this.smooth = { x, y };
+    this.residual = 0;
+    this.dirty = null;
+    this.stamp(x, y);
+    this.residual = this.step;
+    this.emitChange();
+  }
+
+  /** One clone dab: sampled source region, masked by the brush tip, into the buffer. */
+  private cloneStamp(x: number, y: number) {
+    const tip = this.tip;
+    const sample = this.cloneSample;
+    const dab = this.cloneDab;
+    const off = this.cloneOff;
+    if (!tip || !sample || !dab || !off) return;
+    const tw = tip.width;
+    const th = tip.height;
+    const dctx = dab.ctx;
+    // Draw the source so its (x+off, y+off) point lands at the dab centre, then
+    // intersect with the tip's alpha (its flow-scaled soft falloff).
+    dctx.globalCompositeOperation = "source-over";
+    dctx.clearRect(0, 0, tw, th);
+    dctx.imageSmoothingEnabled = true;
+    dctx.drawImage(sample.c, -(x + off.x - tw / 2), -(y + off.y - th / 2));
+    dctx.globalCompositeOperation = "destination-in";
+    dctx.drawImage(tip, 0, 0);
+    dctx.globalCompositeOperation = "source-over";
+    // Composite the finished dab into the stroke buffer at the brush position.
+    const ctx = this.stroke!.ctx;
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+    if (this.tipHard) {
+      ctx.imageSmoothingEnabled = false;
+      const ix = Math.round(x - tw / 2);
+      const iy = Math.round(y - th / 2);
+      ctx.drawImage(dab.c, ix, iy);
+      this.expandDirty(ix, iy, ix + tw, iy + th);
+    } else {
+      ctx.imageSmoothingEnabled = true;
+      const dx = x - tw / 2;
+      const dy = y - th / 2;
+      ctx.drawImage(dab.c, dx, dy);
+      this.expandDirty(Math.floor(dx), Math.floor(dy), Math.ceil(dx + tw), Math.ceil(dy + th));
+    }
+  }
+
+  /** Erase a layer's pixels (used to hide a vector layer while it's re-edited). */
+  clearLayerPixels(layerId: string) {
+    this.layer(layerId).ctx.clearRect(0, 0, this.w, this.h);
+    this.emitChange();
+  }
+
+  // ---- Text ----------------------------------------------------------------
+  /** Configure a context for `spec` and split the text into (wrapped) lines. */
+  private textLines(ctx: CanvasRenderingContext2D, spec: TextRenderSpec): string[] {
+    ctx.font = `${spec.italic ? "italic " : ""}${spec.bold ? "700" : "400"} ${spec.fontSize}px ${spec.fontFamily}`;
+    const lsCtx = ctx as CanvasRenderingContext2D & { letterSpacing: string };
+    if ("letterSpacing" in ctx) lsCtx.letterSpacing = `${spec.tracking}px`;
+    const wrap = (para: string, maxW: number): string[] => {
+      const out: string[] = [];
+      let cur = "";
+      for (const word of para.split(" ")) {
+        const test = cur ? `${cur} ${word}` : word;
+        if (!cur || ctx.measureText(test).width <= maxW) cur = test;
+        else {
+          out.push(cur);
+          cur = word;
+        }
+      }
+      out.push(cur);
+      return out;
+    };
+    const paras = spec.text.split("\n");
+    return spec.boxW != null ? paras.flatMap((p) => wrap(p, spec.boxW!)) : paras;
+  }
+
+  /** Bounding box (doc px) the text would rasterize into — for re-edit hit-testing. */
+  textBounds(spec: TextRenderSpec): { x: number; y: number; w: number; h: number } {
+    if (!this.measureCtx) this.measureCtx = makeCanvas(8, 8).ctx;
+    const ctx = this.measureCtx;
+    const lines = this.textLines(ctx, spec);
+    let maxW = 0;
+    for (const line of lines) maxW = Math.max(maxW, ctx.measureText(line).width);
+    const leading = spec.fontSize * spec.lineHeight;
+    const w = spec.boxW != null ? spec.boxW : Math.max(1, Math.ceil(maxW));
+    const x =
+      spec.boxW != null
+        ? spec.x
+        : spec.align === "left"
+          ? spec.x
+          : spec.align === "right"
+            ? spec.x - w
+            : spec.x - w / 2;
+    const h = Math.max(leading, lines.length * leading);
+    return { x: Math.round(x), y: Math.round(spec.y), w: Math.round(w), h: Math.round(h) };
+  }
+
+  /**
+   * Rasterise styled text onto a layer (no history of its own — the caller folds
+   * it into a structural "Type" step that snapshots the new layer). Handles
+   * multi-line + word-wrapped paragraph text, alignment, leading, tracking and
+   * underline / strike-through. `boxW` null = point text (no wrapping). Clears the
+   * layer first so re-rendering an edited text layer replaces the old pixels.
+   */
+  renderText(layerId: string, spec: TextRenderSpec) {
+    const ctx = this.layer(layerId).ctx;
+    ctx.clearRect(0, 0, this.w, this.h);
+    ctx.save();
+    const lines = this.textLines(ctx, spec); // sets font + letterSpacing, wraps
+    ctx.fillStyle = spec.color;
+    ctx.textBaseline = "alphabetic";
+    ctx.textAlign = spec.align;
+
+    const m = ctx.measureText("Mg");
+    const ascent = m.fontBoundingBoxAscent || m.actualBoundingBoxAscent || spec.fontSize * 0.8;
+    const descent = m.fontBoundingBoxDescent || m.actualBoundingBoxDescent || spec.fontSize * 0.2;
+    const leading = spec.fontSize * spec.lineHeight;
+    const baseline0 = spec.y + (leading - (ascent + descent)) / 2 + ascent;
+    const thickness = Math.max(1, spec.fontSize / 16);
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const baseline = baseline0 + i * leading;
+      const anchorX =
+        spec.boxW == null
+          ? spec.x
+          : spec.align === "left"
+            ? spec.x
+            : spec.align === "right"
+              ? spec.x + spec.boxW
+              : spec.x + spec.boxW / 2;
+      if (line) ctx.fillText(line, anchorX, baseline);
+      if ((spec.underline || spec.strike) && line) {
+        const w = ctx.measureText(line).width;
+        const left =
+          spec.align === "left" ? anchorX : spec.align === "right" ? anchorX - w : anchorX - w / 2;
+        if (spec.underline) ctx.fillRect(left, baseline + descent * 0.45, w, thickness);
+        if (spec.strike) ctx.fillRect(left, baseline - ascent * 0.32, w, thickness);
+      }
+    }
+    ctx.restore();
+
+    // No anti-aliasing: threshold the rendered alpha to hard 1-bit edges. The
+    // solid value is the colour's own alpha (so text opacity is preserved); edge
+    // pixels (partial coverage) snap to fully on/off at the 50%-coverage line.
+    if (!spec.antialias) {
+      const b = this.textBounds(spec);
+      const pad = Math.ceil(spec.fontSize * 0.5) + 2;
+      const x = Math.max(0, Math.floor(b.x - pad));
+      const y = Math.max(0, Math.floor(b.y - pad));
+      const x1 = Math.min(this.w, Math.ceil(b.x + b.w + pad));
+      const y1 = Math.min(this.h, Math.ceil(b.y + b.h + pad));
+      const rw = x1 - x;
+      const rh = y1 - y;
+      if (rw > 0 && rh > 0) {
+        const ca = Math.round(parseColor(spec.color).a * 255);
+        const t = Math.max(1, ca >> 1);
+        const img = ctx.getImageData(x, y, rw, rh);
+        const d = img.data;
+        for (let i = 3; i < d.length; i += 4) d[i] = d[i] >= t ? ca : 0;
+        ctx.putImageData(img, x, y);
+      }
+    }
+    this.emitChange();
+  }
+
+  // ---- Coverage brushes (blur, dodge/burn) ---------------------------------
+  /** A soft falloff tip (coverage 0–1, no colour) for the coverage brushes. */
+  private buildCoverageTip(r: number, hardness: number): { data: Float32Array; size: number; r: number } {
+    const size = Math.max(2, Math.ceil(r * 2) + 2);
+    const data = new Float32Array(size * size);
+    const center = size / 2;
+    const inner = Math.max(0, Math.min(0.999, hardness / 100)) * r;
+    const span = Math.max(0.0001, r - inner);
+    for (let py = 0; py < size; py++) {
+      for (let px = 0; px < size; px++) {
+        const dx = px + 0.5 - center;
+        const dy = py + 0.5 - center;
+        const dist = Math.hypot(dx, dy);
+        data[py * size + px] = dist <= inner ? 1 : dist >= r ? 0 : 1 - (dist - inner) / span;
+      }
+    }
+    return { data, size, r };
+  }
+
+  /** Copy a rectangular sub-region of a full-doc ImageData into a new one. */
+  private subImage(img: ImageData, x: number, y: number, w: number, h: number): ImageData {
+    const out = new Uint8ClampedArray(w * h * 4);
+    const sw = img.width;
+    for (let yy = 0; yy < h; yy++) {
+      const srcStart = ((y + yy) * sw + x) * 4;
+      out.set(img.data.subarray(srcStart, srcStart + w * 4), yy * w * 4);
+    }
+    return new ImageData(out, w, h, { colorSpace: this.cs });
+  }
+
+  beginBlur(
+    layerId: string,
+    blur: BlurSettings,
+    x: number,
+    y: number,
+    clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
+  ) {
+    if (this.w < 1 || this.h < 1) return;
+    this.endAdjust();
+    const l = this.layer(layerId);
+    this.blurring = true;
+    this.blurLayer = layerId;
+    this.blurOpts = { ...blur };
+    this.blurOrig = l.ctx.getImageData(0, 0, this.w, this.h);
+    if (blur.sampleAll && this.vctx) {
+      try {
+        this.blurSrc = this.vctx.getImageData(0, 0, this.w, this.h);
+      } catch {
+        this.blurSrc = this.blurOrig;
+      }
+    } else {
+      this.blurSrc = this.blurOrig;
+    }
+    this.blurCov = new Float32Array(this.w * this.h);
+    this.blurSelMask = null;
+    if (clip && clip.length) {
+      const mask = this.selectionMask(clip, clipAngle, clipPivot);
+      const md = mask.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
+      const sa = new Uint8ClampedArray(this.w * this.h);
+      for (let i = 0; i < sa.length; i++) sa[i] = md[i * 4 + 3];
+      this.blurSelMask = sa;
+    }
+    this.blurTip = this.buildCoverageTip(Math.max(0.5, blur.size / 2), blur.hardness);
+    this.blurStep = Math.max(1, blur.size * (blur.spacing / 100));
+    this.blurResidual = 0;
+    this.blurDirty = null;
+    this.blurLast = { x, y };
+    this.blurLastRaw = { x, y };
+    this.blurSmoothPt = { x, y };
+    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    this.stampBlur(x, y, seg);
+    this.blurResidual = this.blurStep;
+    if (seg.x1 >= seg.x0) this.bakeBlur(seg.x0, seg.y0, seg.x1, seg.y1);
+    this.emitChange();
+  }
+
+  moveBlur(rawX: number, rawY: number) {
+    if (!this.blurring || !this.blurOpts) return;
+    this.blurLastRaw = { x: rawX, y: rawY };
+    const alpha = 1 - (this.blurOpts.smoothing / 100) * 0.85;
+    this.blurSmoothPt.x += (rawX - this.blurSmoothPt.x) * alpha;
+    this.blurSmoothPt.y += (rawY - this.blurSmoothPt.y) * alpha;
+    this.blurLineTo(this.blurSmoothPt.x, this.blurSmoothPt.y);
+    this.emitChange();
+  }
+
+  private blurLineTo(x: number, y: number) {
+    const dx = x - this.blurLast.x;
+    const dy = y - this.blurLast.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist === 0) return;
+    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    let d = this.blurResidual;
+    while (d <= dist) {
+      const t = d / dist;
+      this.stampBlur(this.blurLast.x + dx * t, this.blurLast.y + dy * t, seg);
+      d += this.blurStep;
+    }
+    this.blurResidual = d - dist;
+    this.blurLast = { x, y };
+    if (seg.x1 >= seg.x0) this.bakeBlur(seg.x0, seg.y0, seg.x1, seg.y1);
+  }
+
+  /** Accumulate one dab's coverage into blurCov, growing the seg + total bounds. */
+  private stampBlur(
+    cx: number,
+    cy: number,
+    seg: { x0: number; y0: number; x1: number; y1: number },
+  ) {
+    const tip = this.blurTip;
+    const cov = this.blurCov;
+    if (!tip || !cov) return;
+    const size = tip.size;
+    const half = size / 2;
+    const left = Math.floor(cx - half);
+    const top = Math.floor(cy - half);
+    for (let py = 0; py < size; py++) {
+      const gy = top + py;
+      if (gy < 0 || gy >= this.h) continue;
+      for (let px = 0; px < size; px++) {
+        const gx = left + px;
+        if (gx < 0 || gx >= this.w) continue;
+        const f = tip.data[py * size + px];
+        if (f <= 0) continue;
+        const idx = gy * this.w + gx;
+        if (f > cov[idx]) cov[idx] = f;
+        if (gx < seg.x0) seg.x0 = gx;
+        if (gy < seg.y0) seg.y0 = gy;
+        if (gx > seg.x1) seg.x1 = gx;
+        if (gy > seg.y1) seg.y1 = gy;
+        const D = this.blurDirty;
+        if (!D) this.blurDirty = { x0: gx, y0: gy, x1: gx, y1: gy };
+        else {
+          if (gx < D.x0) D.x0 = gx;
+          if (gy < D.y0) D.y0 = gy;
+          if (gx > D.x1) D.x1 = gx;
+          if (gy > D.y1) D.y1 = gy;
+        }
+      }
+    }
+  }
+
+  /** Re-bake one region of the layer as lerp(orig, blur(src), coverage×strength). */
+  private bakeBlur(x0: number, y0: number, x1: number, y1: number) {
+    const orig = this.blurOrig;
+    const src = this.blurSrc;
+    const cov = this.blurCov;
+    const opts = this.blurOpts;
+    if (!orig || !src || !cov || !opts || this.blurLayer == null) return;
+    const ix = Math.max(0, x0);
+    const iy = Math.max(0, y0);
+    const ax = Math.min(this.w - 1, x1);
+    const ay = Math.min(this.h - 1, y1);
+    const iw = ax - ix + 1;
+    const ih = ay - iy + 1;
+    if (iw <= 0 || ih <= 0) return;
+    const R = Math.max(0, Math.round(opts.radius));
+    const br = Math.max(1, Math.round(R / 2));
+    // Read an R-wide margin so the blur over the inner region is seam-free.
+    const rx = Math.max(0, ix - R);
+    const ry = Math.max(0, iy - R);
+    const ax2 = Math.min(this.w - 1, ax + R);
+    const ay2 = Math.min(this.h - 1, ay + R);
+    const rw = ax2 - rx + 1;
+    const rh = ay2 - ry + 1;
+    const sd = src.data;
+    const sw = this.w;
+    const n = rw * rh;
+    const Rc = new Float32Array(n);
+    const Gc = new Float32Array(n);
+    const Bc = new Float32Array(n);
+    const Ac = new Float32Array(n);
+    for (let yy = 0; yy < rh; yy++) {
+      for (let xx = 0; xx < rw; xx++) {
+        const si = ((ry + yy) * sw + (rx + xx)) * 4;
+        const a = sd[si + 3];
+        const af = a / 255;
+        const di = yy * rw + xx;
+        Rc[di] = sd[si] * af;
+        Gc[di] = sd[si + 1] * af;
+        Bc[di] = sd[si + 2] * af;
+        Ac[di] = a;
+      }
+    }
+    if (R > 0) {
+      for (let p = 0; p < 3; p++) {
+        boxBlurPass(Rc, rw, rh, br, true);
+        boxBlurPass(Gc, rw, rh, br, true);
+        boxBlurPass(Bc, rw, rh, br, true);
+        boxBlurPass(Ac, rw, rh, br, true);
+        boxBlurPass(Rc, rw, rh, br, false);
+        boxBlurPass(Gc, rw, rh, br, false);
+        boxBlurPass(Bc, rw, rh, br, false);
+        boxBlurPass(Ac, rw, rh, br, false);
+      }
+    }
+    const od = orig.data;
+    const sel = this.blurSelMask;
+    const strength = opts.strength / 100;
+    const out = new Uint8ClampedArray(iw * ih * 4);
+    for (let yy = 0; yy < ih; yy++) {
+      for (let xx = 0; xx < iw; xx++) {
+        const gx = ix + xx;
+        const gy = iy + yy;
+        const ci = gy * this.w + gx;
+        let m = cov[ci] * strength;
+        if (sel) m *= sel[ci] / 255;
+        const oi = ci * 4;
+        const ri = (gy - ry) * rw + (gx - rx);
+        const a = Ac[ri];
+        const inv = a > 0 ? 255 / a : 0;
+        const tr = Rc[ri] * inv;
+        const tg = Gc[ri] * inv;
+        const tb = Bc[ri] * inv;
+        const doI = (yy * iw + xx) * 4;
+        out[doI] = od[oi] + (tr - od[oi]) * m;
+        out[doI + 1] = od[oi + 1] + (tg - od[oi + 1]) * m;
+        out[doI + 2] = od[oi + 2] + (tb - od[oi + 2]) * m;
+        out[doI + 3] = od[oi + 3] + (a - od[oi + 3]) * m;
+      }
+    }
+    this.layer(this.blurLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
+  }
+
+  endBlur() {
+    if (!this.blurring) return;
+    this.blurLineTo(this.blurLastRaw.x, this.blurLastRaw.y);
+    const D = this.blurDirty;
+    const layerId = this.blurLayer;
+    if (D && layerId != null && this.blurOrig) {
+      const x = Math.max(0, D.x0);
+      const y = Math.max(0, D.y0);
+      const w = Math.min(this.w - 1, D.x1) - x + 1;
+      const h = Math.min(this.h - 1, D.y1) - y + 1;
+      if (w > 0 && h > 0) {
+        const before = this.subImage(this.blurOrig, x, y, w, h);
+        const after = this.layer(layerId).ctx.getImageData(x, y, w, h);
+        this.pushEntry(layerId, { x, y, w, h }, before, after, "Blur");
+      }
+    }
+    this.blurring = false;
+    this.blurLayer = null;
+    this.blurOrig = null;
+    this.blurSrc = null;
+    this.blurCov = null;
+    this.blurTip = null;
+    this.blurOpts = null;
+    this.blurDirty = null;
+    this.blurSelMask = null;
+    this.wandSrc = null;
+    this.emitChange();
+  }
+
+  // ---- Dodge / Burn brush --------------------------------------------------
+  beginDodge(
+    layerId: string,
+    opts: DodgeSettings,
+    x: number,
+    y: number,
+    clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
+  ) {
+    if (this.w < 1 || this.h < 1) return;
+    this.endAdjust();
+    const l = this.layer(layerId);
+    this.dodging = true;
+    this.dodgeLayer = layerId;
+    this.dodgeOpts = { ...opts };
+    this.dodgeOrig = l.ctx.getImageData(0, 0, this.w, this.h);
+    this.dodgeCov = new Float32Array(this.w * this.h);
+    this.dodgeSelMask = null;
+    if (clip && clip.length) {
+      const mask = this.selectionMask(clip, clipAngle, clipPivot);
+      const md = mask.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
+      const sa = new Uint8ClampedArray(this.w * this.h);
+      for (let i = 0; i < sa.length; i++) sa[i] = md[i * 4 + 3];
+      this.dodgeSelMask = sa;
+    }
+    this.dodgeTip = this.buildCoverageTip(Math.max(0.5, opts.size / 2), opts.hardness);
+    this.dodgeStep = Math.max(1, opts.size * (opts.spacing / 100));
+    this.dodgeResidual = 0;
+    this.dodgeDirty = null;
+    this.dodgeLast = { x, y };
+    this.dodgeLastRaw = { x, y };
+    this.dodgeSmoothPt = { x, y };
+    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    this.stampDodge(x, y, seg);
+    this.dodgeResidual = this.dodgeStep;
+    if (seg.x1 >= seg.x0) this.bakeDodge(seg.x0, seg.y0, seg.x1, seg.y1);
+    this.emitChange();
+  }
+
+  moveDodge(rawX: number, rawY: number) {
+    if (!this.dodging || !this.dodgeOpts) return;
+    this.dodgeLastRaw = { x: rawX, y: rawY };
+    const alpha = 1 - (this.dodgeOpts.smoothing / 100) * 0.85;
+    this.dodgeSmoothPt.x += (rawX - this.dodgeSmoothPt.x) * alpha;
+    this.dodgeSmoothPt.y += (rawY - this.dodgeSmoothPt.y) * alpha;
+    this.dodgeLineTo(this.dodgeSmoothPt.x, this.dodgeSmoothPt.y);
+    this.emitChange();
+  }
+
+  private dodgeLineTo(x: number, y: number) {
+    const dx = x - this.dodgeLast.x;
+    const dy = y - this.dodgeLast.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist === 0) return;
+    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    let d = this.dodgeResidual;
+    while (d <= dist) {
+      const t = d / dist;
+      this.stampDodge(this.dodgeLast.x + dx * t, this.dodgeLast.y + dy * t, seg);
+      d += this.dodgeStep;
+    }
+    this.dodgeResidual = d - dist;
+    this.dodgeLast = { x, y };
+    if (seg.x1 >= seg.x0) this.bakeDodge(seg.x0, seg.y0, seg.x1, seg.y1);
+  }
+
+  private stampDodge(
+    cx: number,
+    cy: number,
+    seg: { x0: number; y0: number; x1: number; y1: number },
+  ) {
+    const tip = this.dodgeTip;
+    const cov = this.dodgeCov;
+    if (!tip || !cov) return;
+    const size = tip.size;
+    const half = size / 2;
+    const left = Math.floor(cx - half);
+    const top = Math.floor(cy - half);
+    for (let py = 0; py < size; py++) {
+      const gy = top + py;
+      if (gy < 0 || gy >= this.h) continue;
+      for (let px = 0; px < size; px++) {
+        const gx = left + px;
+        if (gx < 0 || gx >= this.w) continue;
+        const f = tip.data[py * size + px];
+        if (f <= 0) continue;
+        const idx = gy * this.w + gx;
+        if (f > cov[idx]) cov[idx] = f;
+        if (gx < seg.x0) seg.x0 = gx;
+        if (gy < seg.y0) seg.y0 = gy;
+        if (gx > seg.x1) seg.x1 = gx;
+        if (gy > seg.y1) seg.y1 = gy;
+        const D = this.dodgeDirty;
+        if (!D) this.dodgeDirty = { x0: gx, y0: gy, x1: gx, y1: gy };
+        else {
+          if (gx < D.x0) D.x0 = gx;
+          if (gy < D.y0) D.y0 = gy;
+          if (gx > D.x1) D.x1 = gx;
+          if (gy > D.y1) D.y1 = gy;
+        }
+      }
+    }
+  }
+
+  /** Re-bake one region as the dodge/burn of the original, by coverage×exposure. */
+  private bakeDodge(x0: number, y0: number, x1: number, y1: number) {
+    const orig = this.dodgeOrig;
+    const cov = this.dodgeCov;
+    const opts = this.dodgeOpts;
+    if (!orig || !cov || !opts || this.dodgeLayer == null) return;
+    const ix = Math.max(0, x0);
+    const iy = Math.max(0, y0);
+    const ax = Math.min(this.w - 1, x1);
+    const ay = Math.min(this.h - 1, y1);
+    const iw = ax - ix + 1;
+    const ih = ay - iy + 1;
+    if (iw <= 0 || ih <= 0) return;
+    const od = orig.data;
+    const sel = this.dodgeSelMask;
+    const exposure = opts.exposure / 100;
+    const dodge = opts.mode === "dodge";
+    const protect = opts.protect;
+    const range = opts.range;
+    const MASTER = 0.5; // exposure 100% in-range ≈ a 50% push per pass
+    const out = new Uint8ClampedArray(iw * ih * 4);
+    for (let yy = 0; yy < ih; yy++) {
+      for (let xx = 0; xx < iw; xx++) {
+        const gx = ix + xx;
+        const gy = iy + yy;
+        const ci = gy * this.w + gx;
+        const oi = ci * 4;
+        const r = od[oi];
+        const g = od[oi + 1];
+        const b = od[oi + 2];
+        const doI = (yy * iw + xx) * 4;
+        let m = cov[ci];
+        if (sel) m *= sel[ci] / 255;
+        if (m <= 0) {
+          out[doI] = r;
+          out[doI + 1] = g;
+          out[doI + 2] = b;
+          out[doI + 3] = od[oi + 3];
+          continue;
+        }
+        const L = (0.299 * r + 0.587 * g + 0.114 * b) / 255; // 0..1
+        const w =
+          range === "shadows" ? 1 - L : range === "highlights" ? L : 1 - Math.abs(2 * L - 1);
+        let a = m * exposure * w * MASTER;
+        if (a > 0.95) a = 0.95;
+        let nr = r;
+        let ng = g;
+        let nb = b;
+        if (dodge) {
+          if (protect && L > 0.02) {
+            const scale = (L + (1 - L) * a) / L;
+            nr = r * scale;
+            ng = g * scale;
+            nb = b * scale;
+          } else {
+            nr = r + (255 - r) * a;
+            ng = g + (255 - g) * a;
+            nb = b + (255 - b) * a;
+          }
+        } else {
+          // Burn (multiplicative toward black preserves hue inherently).
+          const k = 1 - a;
+          nr = r * k;
+          ng = g * k;
+          nb = b * k;
+        }
+        out[doI] = nr;
+        out[doI + 1] = ng;
+        out[doI + 2] = nb;
+        out[doI + 3] = od[oi + 3];
+      }
+    }
+    this.layer(this.dodgeLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
+  }
+
+  endDodge() {
+    if (!this.dodging) return;
+    this.dodgeLineTo(this.dodgeLastRaw.x, this.dodgeLastRaw.y);
+    const D = this.dodgeDirty;
+    const layerId = this.dodgeLayer;
+    if (D && layerId != null && this.dodgeOrig) {
+      const x = Math.max(0, D.x0);
+      const y = Math.max(0, D.y0);
+      const w = Math.min(this.w - 1, D.x1) - x + 1;
+      const h = Math.min(this.h - 1, D.y1) - y + 1;
+      if (w > 0 && h > 0) {
+        const before = this.subImage(this.dodgeOrig, x, y, w, h);
+        const after = this.layer(layerId).ctx.getImageData(x, y, w, h);
+        const label = this.dodgeOpts?.mode === "burn" ? "Burn" : "Dodge";
+        this.pushEntry(layerId, { x, y, w, h }, before, after, label);
+      }
+    }
+    this.dodging = false;
+    this.dodgeLayer = null;
+    this.dodgeOrig = null;
+    this.dodgeCov = null;
+    this.dodgeTip = null;
+    this.dodgeOpts = null;
+    this.dodgeDirty = null;
+    this.dodgeSelMask = null;
+    this.wandSrc = null;
+    this.emitChange();
+  }
+
+  // ---- Blur Gallery (Effects) ----------------------------------------------
+  /** Begin a blur-effect preview session over `ids` (clipped to `sel` if given). */
+  beginBlurFx(
+    ids: string[],
+    sel: Rect[] | null,
+    selAngle = 0,
+    selPivot: { x: number; y: number } | null = null,
+  ) {
+    this.endAdjust();
+    this.endShape();
+    this.endGradient();
+    this.endPath();
+    this.endFill();
+    const orig = new Map<string, ImageData>();
+    for (const id of ids) orig.set(id, this.layer(id).ctx.getImageData(0, 0, this.w, this.h));
+    let mask: Uint8ClampedArray | null = null;
+    if (sel && sel.length) {
+      const m = this.selectionMask(sel, selAngle, selPivot);
+      const md = m.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
+      const sa = new Uint8ClampedArray(this.w * this.h);
+      for (let i = 0; i < sa.length; i++) sa[i] = md[i * 4 + 3];
+      mask = sa;
+    }
+    this.blurFx = { ids, orig, mask };
+  }
+
+  /**
+   * Re-render the preview from the originals. `anchorX/anchorY` (0–1 of the doc)
+   * is the centre for zoom/spin blur; ignored by the other kinds.
+   */
+  previewBlurFx(kind: string, amount: number, angle: number, anchorX = 0.5, anchorY = 0.5) {
+    const fx = this.blurFx;
+    if (!fx) return;
+    const cx = anchorX * this.w;
+    const cy = anchorY * this.h;
+    for (const id of fx.ids) {
+      const o = fx.orig.get(id);
+      if (!o) continue;
+      const out = computeBlurFx(o, kind, amount, angle, fx.mask, cx, cy, this.cs);
+      this.layer(id).ctx.putImageData(out, 0, 0);
+    }
+    this.emitChange();
+  }
+
+  /** Keep the previewed blur as one undoable step (undo/redo swap the snapshots). */
+  commitBlurFx(label: string) {
+    const fx = this.blurFx;
+    if (!fx) return;
+    const { ids, orig } = fx;
+    const after = new Map<string, ImageData>();
+    for (const id of ids) after.set(id, this.layer(id).ctx.getImageData(0, 0, this.w, this.h));
+    this.blurFx = null;
+    this.wandSrc = null;
+    this.pushStructural(
+      label,
+      () => {
+        for (const id of ids) {
+          const o = orig.get(id);
+          if (o) this.layer(id).ctx.putImageData(o, 0, 0);
+        }
+        this.wandSrc = null;
+        this.emitChange();
+      },
+      () => {
+        for (const id of ids) {
+          const a = after.get(id);
+          if (a) this.layer(id).ctx.putImageData(a, 0, 0);
+        }
+        this.wandSrc = null;
+        this.emitChange();
+      },
+    );
+  }
+
+  /** Discard the blur preview, restoring the original pixels. */
+  cancelBlurFx() {
+    const fx = this.blurFx;
+    if (!fx) return;
+    for (const id of fx.ids) {
+      const o = fx.orig.get(id);
+      if (o) this.layer(id).ctx.putImageData(o, 0, 0);
+    }
+    this.blurFx = null;
     this.emitChange();
   }
 
@@ -2228,6 +3793,10 @@ export class PaintEngine {
   }
 
   private stamp(x: number, y: number) {
+    if (this.cloneActive) {
+      this.cloneStamp(x, y);
+      return;
+    }
     const tip = this.tip;
     if (!tip) return;
     const ctx = this.stroke!.ctx;
@@ -2282,9 +3851,11 @@ export class PaintEngine {
       this.layer(e.layerId).ctx.putImageData(e.before, e.rect.x, e.rect.y);
   }
   jumpTo(target: number) {
-    this.endAdjust(); // finalize a live adjustment / shape / gradient before navigating history
+    this.endAdjust(); // finalize a live adjustment / shape / gradient / path / fill before navigating history
     this.endShape();
     this.endGradient();
+    this.endPath();
+    this.endFill();
     target = Math.max(0, Math.min(this.entries.length, target));
     while (this.pos > target) {
       this.pos--;
