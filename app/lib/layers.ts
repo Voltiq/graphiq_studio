@@ -1,4 +1,19 @@
+import type { AdjustmentSpec } from "./adjust";
+import type { FxKey, LayerEffects } from "./effects";
 import type { VectorData } from "./tools";
+
+/** Per-layer mask metadata. The mask *pixels* live in the paint engine (keyed by
+ *  layer id, mirroring layer pixels); only this metadata lives on the tree. */
+export interface MaskMeta {
+  /** Mask participates in compositing when true; false = temporarily disabled. */
+  enabled: boolean;
+  /** When true, Move transforms layer + mask together; false = only the active
+   *  surface moves. */
+  linked: boolean;
+}
+
+/** Which surface of a layer paint tools currently target. */
+export type ActiveSurface = "pixels" | "mask";
 
 export interface LayerBase {
   id: string;
@@ -7,6 +22,15 @@ export interface LayerBase {
   /** 0–100 */
   opacity: number;
   blend: string;
+  /** Present ⇒ the layer carries a raster mask (pixels held by the engine). */
+  mask?: MaskMeta;
+  /** Non-destructive layer effects (drop shadow, glow, stroke, …); rendered at
+   *  composite time from the layer's alpha — never baked into pixels. */
+  effects?: LayerEffects;
+  /** Clip this layer to the alpha silhouette of the layer directly below it in
+   *  the same parent (a clipping mask). Absent ⇒ not clipped. Positional: moving
+   *  the layer changes what it clips to; inert when there is no valid base below. */
+  clipped?: boolean;
 }
 
 /** A pixel layer (has its own canvas in the paint engine, keyed by id). */
@@ -23,7 +47,17 @@ export interface LayerGroup extends LayerBase {
   children: LayerNode[];
 }
 
-export type LayerNode = LayerLeaf | LayerGroup;
+/** A non-destructive adjustment node: leaf-like (no children) and pixel-less
+ *  (the engine holds no canvas for it). It re-processes the composite of every
+ *  layer below it within its parent at composite time. `clipped` restricts the
+ *  effect to the pixel layer directly beneath. */
+export interface LayerAdjustment extends LayerBase {
+  type: "adjustment";
+  adjustment: AdjustmentSpec;
+  // `clipped` is inherited from LayerBase (promoted in Spec 05 from this node kind).
+}
+
+export type LayerNode = LayerLeaf | LayerGroup | LayerAdjustment;
 
 /** Back-compat alias: most call sites that say "Layer" mean a pixel layer. */
 export type Layer = LayerLeaf;
@@ -31,7 +65,14 @@ export type Layer = LayerLeaf;
 /** Patch shape accepted by the panel/update (common props + group's expanded). */
 export type LayerPatch = Partial<
   Pick<LayerBase, "name" | "visible" | "opacity" | "blend">
-> & { expanded?: boolean; vector?: VectorData };
+> & {
+  expanded?: boolean;
+  vector?: VectorData;
+  mask?: MaskMeta | undefined;
+  adjustment?: AdjustmentSpec;
+  clipped?: boolean;
+  effects?: LayerEffects | undefined;
+};
 
 export const BLEND_MODES = [
   "Normal",
@@ -57,12 +98,13 @@ export const BLEND_MODES = [
 
 // ---- Tree helpers (all pure; never mutate the input) ----
 
-/** Ids of every pixel layer (leaf) in the tree, in order. */
+/** Ids of every pixel layer (leaf) in the tree, in order. Adjustment nodes are
+ *  pixel-less, so they are excluded (the engine holds no canvas for them). */
 export function collectLeafIds(nodes: LayerNode[]): string[] {
   const out: string[] = [];
   for (const n of nodes) {
     if (n.type === "group") out.push(...collectLeafIds(n.children));
-    else out.push(n.id);
+    else if (n.type === "layer") out.push(n.id);
   }
   return out;
 }
@@ -171,14 +213,16 @@ export function cloneSubtree(
   gen: () => string,
 ): { node: LayerNode; leafPairs: [string, string][] } {
   const id = gen();
+  // Deep-copy effects so the clone's style edits never alias the original's.
+  const fx = node.effects ? { effects: structuredClone(node.effects) } : {};
   if (node.type === "group") {
     const results = node.children.map((c) => cloneSubtree(c, gen));
     return {
-      node: { ...node, id, children: results.map((r) => r.node) },
+      node: { ...node, id, ...fx, children: results.map((r) => r.node) },
       leafPairs: results.flatMap((r) => r.leafPairs),
     };
   }
-  return { node: { ...node, id }, leafPairs: [[node.id, id]] };
+  return { node: { ...node, id, ...fx }, leafPairs: [[node.id, id]] };
 }
 
 /** Replace the node `id` with `replacement`, in place. */
@@ -218,6 +262,47 @@ export function topLevelSelected(nodes: LayerNode[], selected: Set<string>): Lay
   };
   walk(nodes);
   return out;
+}
+
+/** A clip group: a pixel-bearing base plus the contiguous run of `clipped` nodes
+ *  directly above it (bottom→top draw order). `members` is empty for a node drawn
+ *  on its own (a plain layer, or a clipped node whose flag is inert). */
+export interface ClipGroup {
+  base: LayerNode;
+  members: LayerNode[];
+}
+
+/** Whether a node can anchor a clip group (have members clip to it). Adjustments
+ *  carry no pixels/alpha, so they are never a valid base. */
+function canBeClipBase(node: LayerNode): boolean {
+  return node.type !== "adjustment";
+}
+
+/**
+ * Partition an ordered child list (index 0 = top … last = bottom) into clip-group
+ * draw units, returned in **bottom→top** order. Each unit's `members` are the
+ * contiguous `clipped` nodes directly above its base (also bottom→top). A clipped
+ * node whose base would be invalid (a non-pixel node, or none — e.g. the bottom
+ * layer) is inert: it becomes its own member-less unit and composites normally.
+ */
+export function clipGroupsOf(children: LayerNode[]): ClipGroup[] {
+  const n = children.length;
+  const consumed = new Set<number>();
+  const units: ClipGroup[] = [];
+  for (let i = n - 1; i >= 0; i--) {
+    if (consumed.has(i)) continue;
+    const base = children[i];
+    const members: LayerNode[] = [];
+    if (canBeClipBase(base)) {
+      // Collect the contiguous run of clipped nodes directly above this base.
+      for (let j = i - 1; j >= 0 && children[j].clipped; j--) {
+        members.push(children[j]); // decreasing index ⇒ bottom→top within the group
+        consumed.add(j);
+      }
+    }
+    units.push({ base, members });
+  }
+  return units;
 }
 
 /** Visible row ids in order (children of collapsed groups omitted). */
@@ -280,4 +365,35 @@ export interface LayersApi {
   ungroup: (id: string) => void;
   merge: () => void;
   flatten: () => void;
+  // ---- Layer masks ----
+  /** The active layer's current paint surface (drives the active-surface ring). */
+  maskSurface: ActiveSurface;
+  /** Make `id`'s pixels or mask the active paint surface. */
+  chooseSurface: (id: string, surface: ActiveSurface) => void;
+  /** Add a mask to the active layer (reveal-all / hide-all / from-selection). */
+  addMask: (init: "reveal" | "hide" | "selection") => void;
+  removeMask: () => void;
+  applyMask: () => void;
+  toggleMaskEnabled: (id: string) => void;
+  toggleMaskLinked: (id: string) => void;
+  loadMaskAsSelection: () => void;
+  // ---- Adjustment layers ----
+  /** Create a non-destructive adjustment layer above the active layer. */
+  addAdjustment: (typeId: string) => void;
+  /** Set a layer's clip-to-layer-below flag (any kind). */
+  setAdjustmentClipped: (id: string, clipped: boolean) => void;
+  /** Toggle a layer's clipping mask (Alt-click boundary / context menu). */
+  toggleClip: (id: string) => void;
+  /** Re-open a Curves/Levels adjustment's editor (other adjustments just select). */
+  editAdjustment: (id: string) => void;
+  // ---- Layer effects (styles) ----
+  /** Open the Layer Style dialog bound to `id` (also selects it). */
+  openLayerStyle: (id: string) => void;
+  /** Enable/disable one effect on a layer (the eye toggle in the sub-list). */
+  toggleEffect: (id: string, key: FxKey, enabled: boolean) => void;
+  copyLayerStyle: (id: string) => void;
+  pasteLayerStyle: (id: string) => void;
+  clearLayerStyle: (id: string) => void;
+  /** True when a copied style is available to paste. */
+  canPasteStyle: boolean;
 }

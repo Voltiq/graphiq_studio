@@ -552,6 +552,8 @@ export default function CanvasArea({
   sampleSize,
   sampleAllLayers,
   onPick,
+  tonePick,
+  onTonePick,
   pendingPaste,
   onPasteDone,
   pendingLoads,
@@ -654,6 +656,9 @@ export default function CanvasArea({
   sampleSize: number;
   sampleAllLayers: boolean;
   onPick: (hex: string) => void;
+  /** While a Levels eyedropper is armed, the next canvas click samples a colour. */
+  tonePick: boolean;
+  onTonePick: (rgb: { r: number; g: number; b: number }) => void;
   pendingPaste: PendingPaste | null;
   onPasteDone: () => void;
   pendingLoads: PendingLoad[];
@@ -885,7 +890,7 @@ export default function CanvasArea({
           if (!n.visible) continue;
           const r = search(n.children);
           if (r) return r;
-        } else if (n.visible && n.vector && n.vector.type === type && hit(n.vector)) {
+        } else if (n.type === "layer" && n.visible && n.vector && n.vector.type === type && hit(n.vector)) {
           return { id: n.id, vector: n.vector };
         }
       }
@@ -2312,6 +2317,8 @@ export default function CanvasArea({
       removeLayer: (id) => engine.removeLayer(id),
       getLayerImage: (id) => engine.getLayerImage(id),
       setLayerImage: (id, src) => engine.setLayerImage(id, src),
+      getMaskImage: (id) => engine.getMaskImage(id),
+      setMaskImage: (id, src) => engine.setMaskImage(id, src),
       exportComposite: (tree) => engine.exportComposite(tree),
       histogram: (tree) => engine.histogram(tree),
       subscribe: (cb) => engine.addChangeListener(cb),
@@ -2337,12 +2344,24 @@ export default function CanvasArea({
       cropRestore: (snap) => engine.cropRestore(snap),
       applyAdjust: (layerId, adj, sel, angle, pivot) =>
         engine.applyAdjust(layerId, adj, sel, angle, pivot),
+      previewTone: (layerId, spec, sel, angle, pivot) =>
+        engine.previewTone(layerId, spec, sel, angle, pivot),
       endAdjust: () => engine.endAdjust(),
       revertAdjust: () => engine.revertAdjust(),
       setColorSpace: (cs) => engine.setColorSpace(cs),
       captureLeaves: (ids) => engine.captureLeaves(ids),
       restoreLeaves: (snaps) => engine.restoreLeaves(snaps),
       pushStructural: (label, undo, redo) => engine.pushStructural(label, undo, redo),
+      hasMask: (id) => engine.hasMask(id),
+      allocMask: (id, init, rects, angle, pivot) => engine.allocMask(id, init, rects, angle, pivot),
+      freeMask: (id) => engine.freeMask(id),
+      captureMask: (id) => engine.captureMask(id),
+      restoreMask: (id, img) => engine.restoreMask(id, img),
+      applyMaskToLayer: (id) => engine.applyMaskToLayer(id),
+      offsetMask: (id, dx, dy) => engine.offsetMask(id, dx, dy),
+      maskSelectionRects: (id) => engine.maskSelectionRects(id),
+      setActiveSurface: (id, surface) => engine.setActiveSurface(id, surface),
+      getActiveSurface: (id) => engine.getActiveSurface(id),
     };
     engine.syncHistory();
     scheduleComposite();
@@ -2390,8 +2409,8 @@ export default function CanvasArea({
     engine.setDoc(width, height, collectLeafIds(layers));
     let cancelled = false;
     (async () => {
-      await Promise.all(
-        entry.images.map(async ({ id, data, source }) => {
+      await Promise.all([
+        ...entry.images.map(async ({ id, data, source }) => {
           if (source) {
             if (!cancelled) engine.setLayerImage(id, source);
             return;
@@ -2406,7 +2425,22 @@ export default function CanvasArea({
           }
           if (!cancelled) engine.setLayerImage(id, img);
         }),
-      );
+        ...(entry.masks ?? []).map(async ({ id, data, source }) => {
+          if (source) {
+            if (!cancelled) engine.setMaskImage(id, source);
+            return;
+          }
+          if (!data) return;
+          const img = new Image();
+          img.src = data;
+          try {
+            await img.decode();
+          } catch {
+            return;
+          }
+          if (!cancelled) engine.setMaskImage(id, img);
+        }),
+      ]);
       if (!cancelled) {
         onLoadDone(entry.docId);
         scheduleComposite();
@@ -2940,6 +2974,18 @@ export default function CanvasArea({
   };
 
   const onCanvasPointerDown = (e: React.PointerEvent) => {
+    // Levels eyedropper: sample the composite under the cursor, then hand back the
+    // RGB (the active tool's normal action is suppressed for this one click).
+    if (tonePick) {
+      e.preventDefault();
+      const p = toDoc(e);
+      const hex = engine.sampleColor(Math.floor(p.x), Math.floor(p.y), 1, true, activeLayerId);
+      if (hex) {
+        const c = parseColor(hex);
+        onTonePick({ r: c.r, g: c.g, b: c.b });
+      }
+      return;
+    }
     if (tool === "zoom") {
       // Left click zooms in, right click (or Alt) zooms out — toward the cursor.
       e.preventDefault();
@@ -3185,7 +3231,11 @@ export default function CanvasArea({
     if (tool === "brush" || tool === "pencil" || tool === "eraser") {
       if (engine.isFloating) engine.commitFloat(); // merge before painting on it
       let layerId: string;
-      if (tool === "eraser") {
+      if (activeLayerId && engine.getActiveSurface(activeLayerId) === "mask") {
+        // Painting the active layer's (or group's) mask — target it directly so
+        // brush/pencil don't auto-create a new pixel layer via ensureLayer.
+        layerId = activeLayerId;
+      } else if (tool === "eraser") {
         if (!activeLayerId) return; // nothing to erase
         layerId = activeLayerId;
       } else {

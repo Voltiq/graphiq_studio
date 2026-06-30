@@ -1,9 +1,19 @@
 import { parseColor, toHex8 } from "./color";
 import type { Rect } from "./view";
-import type { LayerNode } from "./layers";
+import { clipGroupsOf } from "./layers";
+import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerNode } from "./layers";
 import { applyAdjustments, isDefaultAdjust, type Adjustments } from "./adjust";
 import { renderShape, type ShapeGeom } from "./shapes";
+import { boxBlurPass, clampi } from "./blur";
+import { fxHash, hasEnabledFx, renderStyled } from "./effects";
 import { buildCanvasGradient } from "./gradient";
+import {
+  applyToneLUTs,
+  buildCurvesLUTs,
+  buildLevelsLUTs,
+  type ToneAdjustment,
+  type ToneLUTs,
+} from "./tone";
 import { renderPenStroke } from "./pen";
 import type {
   BlurSettings,
@@ -178,6 +188,8 @@ export interface EngineHandle {
   rasterize: (targetId: string, nodes: LayerNode[], deleteIds: string[]) => void;
   removeLayer: (id: string) => void;
   getLayerImage: (id: string) => string | null;
+  getMaskImage: (id: string) => string | null;
+  setMaskImage: (id: string, source: CanvasImageSource) => void;
   setLayerImage: (id: string, source: CanvasImageSource) => void;
   exportComposite: (tree: LayerNode[]) => HTMLCanvasElement;
   /** Per-channel tonal distribution of the composited canvas. */
@@ -246,14 +258,39 @@ export interface EngineHandle {
     angle?: number,
     pivot?: { x: number; y: number } | null,
   ) => void;
+  /** Destructive Curves/Levels live preview (same session as applyAdjust). */
+  previewTone: (
+    layerId: string,
+    spec: ToneAdjustment,
+    sel?: Rect[] | null,
+    angle?: number,
+    pivot?: { x: number; y: number } | null,
+  ) => void;
   /** Finalize the live adjustment session, keeping its history entry. */
   endAdjust: () => void;
   /** Discard the live adjustment session (restore original, drop its entry). */
   revertAdjust: () => void;
   setColorSpace: (cs: PredefinedColorSpace) => void;
-  captureLeaves: (ids: string[]) => Map<string, ImageData | null>;
-  restoreLeaves: (snaps: Map<string, ImageData | null>) => void;
+  captureLeaves: (ids: string[]) => Map<string, LeafSnapshot>;
+  restoreLeaves: (snaps: Map<string, LeafSnapshot>) => void;
   pushStructural: (label: string, undo: () => void, redo: () => void) => void;
+  // ---- Layer masks (pixel lifecycle; history coordinated by the caller) ----
+  hasMask: (id: string) => boolean;
+  allocMask: (
+    id: string,
+    init: "reveal" | "hide" | "selection",
+    rects?: Rect[] | null,
+    angle?: number,
+    pivot?: { x: number; y: number } | null,
+  ) => void;
+  freeMask: (id: string) => void;
+  captureMask: (id: string) => ImageData | null;
+  restoreMask: (id: string, img: ImageData) => void;
+  applyMaskToLayer: (id: string) => void;
+  offsetMask: (id: string, dx: number, dy: number) => void;
+  maskSelectionRects: (id: string) => Rect[];
+  setActiveSurface: (id: string, surface: ActiveSurface) => void;
+  getActiveSurface: (id: string) => ActiveSurface;
 }
 
 export interface CopyResult {
@@ -345,6 +382,16 @@ export interface CropSnapshot {
   w: number;
   h: number;
   layers: { id: string; c: HTMLCanvasElement }[];
+  /** Per-layer masks (grayscale) present at snapshot time, for crop undo/redo. */
+  masks?: { id: string; c: HTMLCanvasElement }[];
+}
+
+/** A structural-history snapshot of one leaf: its pixels plus its mask grayscale
+ *  (either may be null when absent). Lets layer add/delete/duplicate undo restore
+ *  both surfaces; the mask *metadata* is restored separately via the layer tree. */
+export interface LeafSnapshot {
+  layer: ImageData | null;
+  mask: ImageData | null;
 }
 
 /** Whole-image transforms (Image menu). 90° rotations swap the dimensions. */
@@ -366,43 +413,8 @@ interface Entry {
   rect?: { x: number; y: number; w: number; h: number };
   before?: ImageData;
   after?: ImageData;
-}
-
-const clampi = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
-
-/**
- * One running-sum box-blur pass over a single float channel of a w×h block, along
- * the horizontal or vertical axis. Edges extend (clamp the sample index). Three
- * passes per axis approximate a Gaussian; O(1) per pixel regardless of radius, so
- * even large blur radii on big brushes stay cheap.
- */
-function boxBlurPass(ch: Float32Array, w: number, h: number, r: number, horizontal: boolean) {
-  if (r < 1) return;
-  const norm = 1 / (2 * r + 1);
-  if (horizontal) {
-    const tmp = new Float32Array(w);
-    for (let y = 0; y < h; y++) {
-      const row = y * w;
-      let sum = 0;
-      for (let k = -r; k <= r; k++) sum += ch[row + clampi(k, 0, w - 1)];
-      for (let x = 0; x < w; x++) {
-        tmp[x] = sum * norm;
-        sum += ch[row + clampi(x + r + 1, 0, w - 1)] - ch[row + clampi(x - r, 0, w - 1)];
-      }
-      ch.set(tmp, row);
-    }
-  } else {
-    const tmp = new Float32Array(h);
-    for (let x = 0; x < w; x++) {
-      let sum = 0;
-      for (let k = -r; k <= r; k++) sum += ch[clampi(k, 0, h - 1) * w + x];
-      for (let y = 0; y < h; y++) {
-        tmp[y] = sum * norm;
-        sum += ch[clampi(y + r + 1, 0, h - 1) * w + x] - ch[clampi(y - r, 0, h - 1) * w + x];
-      }
-      for (let y = 0; y < h; y++) ch[y * w + x] = tmp[y];
-    }
-  }
+  // Which surface the pixel payload patches; absent ⇒ "layer" (back-compat).
+  surface?: "layer" | "mask";
 }
 
 /** Premultiply an RGBA8 region into per-channel float arrays (alpha kept 0–255). */
@@ -621,9 +633,59 @@ export class PaintEngine {
   // are authored from sRGB hex, convert correctly when composited onto layers.
   private cs: PredefinedColorSpace = "srgb";
 
+  // --- Layer masks (non-destructive) -----------------------------------------
+  // Grayscale mask per layer id (R=G=B=value); absent ⇒ no mask. Colour-agnostic
+  // (always sRGB) — never gamut-converted — and editable by the brush pipeline.
+  private masks = new Map<string, Layer>();
+  // Derived alpha cache per id (RGB=0, A=coverage). Recomputed only on mask
+  // mutation, scoped to the changed rect — never per composite frame. The mask's
+  // own alpha is folded in (A = R × maskAlpha/255) so eraser strokes read right.
+  private maskAlpha = new Map<string, Layer>();
+  // Which surface paint tools target, per layer ("pixels" default; "mask" only
+  // while that layer has a mask).
+  private surfaces = new Map<string, ActiveSurface>();
+  // True while the in-progress stroke paints the mask (set in beginStroke).
+  private strokeOnMask = false;
+  // Reused buffers for the live mask-paint preview (grayscale + derived alpha).
+  private maskPrevG: Layer | null = null;
+  private maskPrevA: Layer | null = null;
+  // Reused scratch for the per-node masked composite (src ⊗ mask alpha).
+  private maskTmp: Layer | null = null;
+  // Reused buffers for the adjustment-layer composite (offscreen accumulator that
+  // adjustment nodes read back, plus the adjusted/modulation/clip-base scratch).
+  private adjBufs: { [k: string]: Layer | undefined } = {};
+
+  // --- Layer effects (styles) ------------------------------------------------
+  // Cached styled buffer per leaf id, keyed by (pixelVersion, fxHash, space, epoch).
+  private effectsCache = new Map<string, { c: HTMLCanvasElement; key: string }>();
+  // Monotonic per-layer pixel version (bumped on any committed pixel write) and a
+  // document epoch (bumped on resize/crop/transform/colour-space) — together they
+  // invalidate styled buffers precisely.
+  private pixelVersion = new Map<string, number>();
+  private docEpoch = 0;
+  // Compiled Curves/Levels LUTs per adjustment-node id, keyed by the spec JSON.
+  private toneCache = new Map<string, { key: string; luts: ToneLUTs }>();
+
+  /** Mark a layer's pixels changed → its styled buffer re-renders next composite. */
+  private bumpPixel(id: string) {
+    this.pixelVersion.set(id, (this.pixelVersion.get(id) ?? 0) + 1);
+  }
+
+  /** Drop all styled-buffer caches (document geometry or colour space changed). */
+  private invalidateStyled() {
+    this.effectsCache.clear();
+    this.docEpoch++;
+  }
+
   /** Make a canvas in the working colour space (for layer-content buffers). */
   private mk(w: number, h: number, readFreq = false) {
     return makeCanvas(w, h, readFreq, this.cs);
+  }
+
+  /** Make a colour-agnostic (sRGB) buffer for mask data — masks are coverage,
+   *  not colour, so they never participate in gamut conversion. */
+  private mkMask(readFreq = true): Layer {
+    return makeCanvas(this.w, this.h, readFreq, "srgb");
   }
 
   private painting = false;
@@ -734,6 +796,7 @@ export class PaintEngine {
   private adjOrig: ImageData | null = null;
   private adjEntry: Entry | null = null;
   private adjPending: Adjustments | null = null;
+  private adjTone: ToneAdjustment | null = null; // pending Curves/Levels (destructive)
   private adjRaf = 0;
   // Live shape session (re-renderable until finalized by endShape).
   private shapeLayer: string | null = null;
@@ -762,6 +825,7 @@ export class PaintEngine {
   private fillLayer: string | null = null;
   private fillOrig: Layer | null = null;
   private fillState: { rects: Rect[]; color: string; antialias: boolean } | null = null;
+  private fillOnMask = false; // the live bucket fill targets the active layer's mask
   // Cached magic-wand source pixels, reused across live (tolerance) re-runs and
   // dropped on any layer mutation (see invalidateWandSrc).
   private wandSrc: {
@@ -831,6 +895,7 @@ export class PaintEngine {
   setColorSpace(cs: PredefinedColorSpace) {
     if (cs === this.cs) return;
     this.wandSrc = null;
+    this.invalidateStyled();
     this.cs = cs;
     if (this.scratch) this.scratch = this.mk(this.w, this.h);
     // drawImage converts each layer's pixels from the old space into the new one.
@@ -850,6 +915,7 @@ export class PaintEngine {
   setDoc(w: number, h: number, ownLayerIds?: string[]) {
     if (this.w === w && this.h === h && this.stroke) return;
     this.wandSrc = null;
+    this.invalidateStyled();
     this.w = w;
     this.h = h;
     this.stroke = makeCanvas(w, h); // sRGB (brush colours authored from sRGB hex)
@@ -863,6 +929,14 @@ export class PaintEngine {
         this.layers.set(id, next);
       }
     }
+    // Masks track the canvas size; any extended area reveals (white) while the old
+    // footprint (including erased transparency) is preserved.
+    this.transformMasks(ownLayerIds, (ctx, src) => {
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, this.w, this.h);
+      ctx.clearRect(0, 0, src.width, src.height);
+      ctx.drawImage(src, 0, 0);
+    });
   }
 
   /**
@@ -875,6 +949,7 @@ export class PaintEngine {
     if ((this.w === w && this.h === h) || w < 1 || h < 1) return;
     this.endAdjust();
     if (this.floatActive) this.discardFloat();
+    this.invalidateStyled();
     const ow = this.w;
     const oh = this.h;
     this.w = w;
@@ -889,6 +964,11 @@ export class PaintEngine {
       next.ctx.drawImage(l.c, 0, 0, l.c.width || ow, l.c.height || oh, 0, 0, w, h);
       this.layers.set(id, next);
     }
+    this.transformMasks(ownLayerIds, (ctx, src) => {
+      ctx.imageSmoothingEnabled = smooth;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(src, 0, 0, src.width || ow, src.height || oh, 0, 0, w, h);
+    });
     // Resampling rewrites all pixels; a prior history would restore wrong sizes.
     this.entries.length = 0;
     this.pos = 0;
@@ -909,6 +989,7 @@ export class PaintEngine {
     this.endAdjust();
     if (this.floatActive) this.discardFloat();
     this.wandSrc = null;
+    this.invalidateStyled();
     const rot = kind === "rotate-cw" || kind === "rotate-ccw";
     const nw = rot ? this.h : this.w;
     const nh = rot ? this.w : this.h;
@@ -939,6 +1020,25 @@ export class PaintEngine {
     this.h = nh;
     this.stroke = makeCanvas(nw, nh);
     this.scratch = this.mk(nw, nh);
+    this.transformMasks(ownLayerIds, (ctx, src) => {
+      ctx.imageSmoothingEnabled = false; // axis-aligned: keep mask pixels exact
+      ctx.save();
+      if (kind === "rotate-cw") {
+        ctx.translate(nw, 0);
+        ctx.rotate(Math.PI / 2);
+      } else if (kind === "rotate-ccw") {
+        ctx.translate(0, nh);
+        ctx.rotate(-Math.PI / 2);
+      } else if (kind === "flip-h") {
+        ctx.translate(nw, 0);
+        ctx.scale(-1, 1);
+      } else {
+        ctx.translate(0, nh);
+        ctx.scale(1, -1);
+      }
+      ctx.drawImage(src, 0, 0);
+      ctx.restore();
+    });
     this.emitChange();
   }
 
@@ -954,7 +1054,14 @@ export class PaintEngine {
       snap.ctx.drawImage(l.c, 0, 0);
       return { id, c: snap.c };
     });
-    return { w: this.w, h: this.h, layers };
+    const masks: { id: string; c: HTMLCanvasElement }[] = [];
+    for (const [id, m] of this.masks) {
+      if (!ownLayerIds.includes(id)) continue;
+      const snap = this.mkMask(false);
+      snap.ctx.drawImage(m.c, 0, 0);
+      masks.push({ id, c: snap.c });
+    }
+    return { w: this.w, h: this.h, layers, masks };
   }
 
   /**
@@ -970,6 +1077,7 @@ export class PaintEngine {
     this.endAdjust();
     if (this.floatActive) this.discardFloat();
     this.wandSrc = null;
+    this.invalidateStyled();
     const rad = (-angle * Math.PI) / 180;
     const cx = rect.x + rect.w / 2;
     const cy = rect.y + rect.h / 2;
@@ -994,14 +1102,28 @@ export class PaintEngine {
     this.h = nh;
     this.stroke = makeCanvas(nw, nh);
     this.scratch = this.mk(nw, nh);
+    this.transformMasks(ownLayerIds, (ctx, src) => {
+      if (angle) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.translate(nw / 2, nh / 2);
+        ctx.rotate(rad);
+        ctx.translate(-cx, -cy);
+        ctx.drawImage(src, 0, 0);
+      } else {
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(src, -Math.round(rect.x), -Math.round(rect.y));
+      }
+    });
     this.emitChange();
   }
 
-  /** Restore a pre-crop snapshot (layers + document size) for crop undo/redo. */
+  /** Restore a pre-crop snapshot (layers + masks + document size) for crop undo/redo. */
   cropRestore(snap: CropSnapshot) {
     this.endAdjust();
     if (this.floatActive) this.discardFloat();
     this.wandSrc = null;
+    this.invalidateStyled();
     this.w = snap.w;
     this.h = snap.h;
     this.stroke = makeCanvas(snap.w, snap.h);
@@ -1010,6 +1132,12 @@ export class PaintEngine {
       const next = this.mk(c.width, c.height, true);
       next.ctx.drawImage(c, 0, 0);
       this.layers.set(id, next);
+    }
+    for (const { id, c } of snap.masks ?? []) {
+      const next = this.mkMask(true);
+      next.ctx.drawImage(c, 0, 0);
+      this.masks.set(id, next);
+      this.deriveMaskAlpha(id);
     }
     this.emitChange();
   }
@@ -1021,6 +1149,221 @@ export class PaintEngine {
       this.layers.set(id, l);
     }
     return l;
+  }
+
+  // ---- Layer-mask surface resolution & alpha derivation --------------------
+
+  /** The surface paint tools should target for `id` — "mask" only while a mask
+   *  exists and has been selected as the active surface. */
+  activeSurface(id: string): ActiveSurface {
+    return this.masks.has(id) && this.surfaces.get(id) === "mask" ? "mask" : "pixels";
+  }
+
+  getActiveSurface(id: string): ActiveSurface {
+    return this.activeSurface(id);
+  }
+
+  setActiveSurface(id: string, surface: ActiveSurface): void {
+    if (surface === "mask" && !this.masks.has(id)) return; // no mask to paint
+    this.surfaces.set(id, surface);
+    this.emitChange();
+  }
+
+  /** The canvas a paint op should draw into for `id`: the mask when it is the
+   *  active surface, otherwise the layer. The single chokepoint that lets every
+   *  tool paint a mask with no per-tool changes. */
+  private surfaceTarget(id: string): Layer {
+    if (this.activeSurface(id) === "mask") return this.masks.get(id)!;
+    return this.layer(id);
+  }
+
+  /** Recompute the alpha cache from the grayscale mask, scoped to `rect` (whole
+   *  mask if omitted): out.A = R × maskAlpha / 255, out.RGB = 0. Runs only on
+   *  mask mutation, never per composite frame. */
+  private deriveMaskAlpha(id: string, rect?: Rect): void {
+    const mask = this.masks.get(id);
+    if (!mask) return;
+    let cache = this.maskAlpha.get(id);
+    if (!cache || cache.c.width !== this.w || cache.c.height !== this.h) {
+      cache = this.mkMask(false);
+      this.maskAlpha.set(id, cache);
+    }
+    const r = rect ?? { x: 0, y: 0, w: this.w, h: this.h };
+    const x = Math.max(0, Math.floor(r.x));
+    const y = Math.max(0, Math.floor(r.y));
+    const w = Math.min(this.w, Math.ceil(r.x + r.w)) - x;
+    const h = Math.min(this.h, Math.ceil(r.y + r.h)) - y;
+    if (w < 1 || h < 1) return;
+    const img = mask.ctx.getImageData(x, y, w, h);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      d[i + 3] = (d[i] * d[i + 3]) / 255;
+      d[i] = 0;
+      d[i + 1] = 0;
+      d[i + 2] = 0;
+    }
+    cache.ctx.putImageData(img, x, y);
+  }
+
+  /** Alpha buffer to multiply into a layer/group when compositing. Returns the
+   *  committed cache, or — while a mask stroke is live on this layer — a preview
+   *  derived from (committed grayscale + in-progress stroke), bounded to the
+   *  stroke's dirty rect so the mask brush previews live without a full re-derive. */
+  private maskDisplay(id: string): HTMLCanvasElement | null {
+    if (this.painting && this.strokeOnMask && this.strokeLayer === id && this.stroke) {
+      const mask = this.masks.get(id);
+      if (mask) {
+        if (!this.maskPrevG || this.maskPrevG.c.width !== this.w || this.maskPrevG.c.height !== this.h)
+          this.maskPrevG = this.mkMask(true);
+        if (!this.maskPrevA || this.maskPrevA.c.width !== this.w || this.maskPrevA.c.height !== this.h)
+          this.maskPrevA = this.mkMask(false);
+        const g = this.maskPrevG;
+        g.ctx.globalAlpha = 1;
+        g.ctx.globalCompositeOperation = "source-over";
+        g.ctx.clearRect(0, 0, this.w, this.h);
+        g.ctx.drawImage(mask.c, 0, 0);
+        this.drawStroke(g.ctx); // live stroke onto the grayscale preview
+        const a = this.maskPrevA;
+        a.ctx.globalAlpha = 1;
+        a.ctx.globalCompositeOperation = "source-over";
+        a.ctx.clearRect(0, 0, this.w, this.h);
+        const cache = this.maskAlpha.get(id);
+        if (cache) a.ctx.drawImage(cache.c, 0, 0); // seed with committed alpha (GPU)
+        const r = this.dirtyRect();
+        if (r) {
+          const img = g.ctx.getImageData(r.x, r.y, r.w, r.h);
+          const d = img.data;
+          for (let i = 0; i < d.length; i += 4) {
+            d[i + 3] = (d[i] * d[i + 3]) / 255;
+            d[i] = 0;
+            d[i + 1] = 0;
+            d[i + 2] = 0;
+          }
+          a.ctx.putImageData(img, r.x, r.y);
+        }
+        return a.c;
+      }
+    }
+    return this.maskAlpha.get(id)?.c ?? null;
+  }
+
+  // ---- Layer-mask pixel lifecycle (history is coordinated by the caller) ----
+
+  /** True when `id` currently carries a mask. */
+  hasMask(id: string): boolean {
+    return this.masks.has(id);
+  }
+
+  /** Allocate a grayscale mask for `id`: white (reveal-all), black (hide-all), or
+   *  the current selection rasterized white-on-black. Derives the alpha cache. */
+  allocMask(
+    id: string,
+    init: "reveal" | "hide" | "selection",
+    rects: Rect[] | null = null,
+    angle = 0,
+    pivot: { x: number; y: number } | null = null,
+  ): void {
+    const m = this.mkMask(true);
+    m.ctx.globalCompositeOperation = "source-over";
+    if (init === "selection" && rects && rects.length) {
+      m.ctx.fillStyle = "#000"; // hidden outside the selection
+      m.ctx.fillRect(0, 0, this.w, this.h);
+      m.ctx.drawImage(this.selectionMask(rects, angle, pivot, 0), 0, 0); // white inside
+    } else {
+      m.ctx.fillStyle = init === "hide" ? "#000" : "#fff";
+      m.ctx.fillRect(0, 0, this.w, this.h);
+    }
+    this.masks.set(id, m);
+    this.deriveMaskAlpha(id);
+    this.emitChange();
+  }
+
+  /** Free a mask + its alpha cache, resetting the active surface to pixels. */
+  freeMask(id: string): void {
+    this.masks.delete(id);
+    this.maskAlpha.delete(id);
+    if (this.surfaces.get(id) === "mask") this.surfaces.set(id, "pixels");
+    this.emitChange();
+  }
+
+  /** Snapshot the grayscale mask (for history); null if the layer has no mask. */
+  captureMask(id: string): ImageData | null {
+    const m = this.masks.get(id);
+    return m ? m.ctx.getImageData(0, 0, this.w, this.h) : null;
+  }
+
+  /** Recreate a mask from a grayscale snapshot and derive its alpha cache. */
+  restoreMask(id: string, img: ImageData): void {
+    const m = this.mkMask(true);
+    m.ctx.putImageData(img, 0, 0);
+    this.masks.set(id, m);
+    this.deriveMaskAlpha(id);
+    this.emitChange();
+  }
+
+  /** Bake an enabled mask into the layer's own alpha (destructive), then free it.
+   *  The caller snapshots layer pixels + mask around this for one history step. */
+  applyMaskToLayer(id: string): void {
+    const cache = this.maskAlpha.get(id);
+    const l = this.layers.get(id);
+    if (cache && l) {
+      l.ctx.globalCompositeOperation = "destination-in";
+      l.ctx.drawImage(cache.c, 0, 0);
+      l.ctx.globalCompositeOperation = "source-over";
+    }
+    this.freeMask(id);
+  }
+
+  /** Threshold a mask's coverage (≥ 50%) into run-length selection rects. */
+  maskSelectionRects(id: string): Rect[] {
+    const cache = this.maskAlpha.get(id);
+    if (!cache) return [];
+    const d = cache.ctx.getImageData(0, 0, this.w, this.h).data;
+    const out: Rect[] = [];
+    for (let y = 0; y < this.h; y++) {
+      let x0 = -1;
+      const row = y * this.w;
+      for (let x = 0; x < this.w; x++) {
+        const on = d[(row + x) * 4 + 3] >= 128;
+        if (on && x0 < 0) x0 = x;
+        else if (!on && x0 >= 0) {
+          out.push({ x: x0, y, w: x - x0, h: 1 });
+          x0 = -1;
+        }
+      }
+      if (x0 >= 0) out.push({ x: x0, y, w: this.w - x0, h: 1 });
+    }
+    return out;
+  }
+
+  /** Translate a mask's pixels by (dx,dy) for an unlinked mask move; re-derives. */
+  offsetMask(id: string, dx: number, dy: number): void {
+    const m = this.masks.get(id);
+    if (!m || (dx === 0 && dy === 0)) return;
+    const snap = m.ctx.getImageData(0, 0, this.w, this.h);
+    m.ctx.globalCompositeOperation = "source-over";
+    m.ctx.fillStyle = "#000";
+    m.ctx.fillRect(0, 0, this.w, this.h); // vacated area = hidden
+    m.ctx.putImageData(snap, Math.round(dx), Math.round(dy));
+    this.deriveMaskAlpha(id);
+    this.emitChange();
+  }
+
+  /** Re-make every owned mask through `fn` (which draws the old mask canvas into a
+   *  fresh, current-doc-sized target ctx) and re-derive its alpha cache. Used by
+   *  the resize / rotate / flip / crop paths so masks track their layers exactly.
+   *  Callers must have set this.w/this.h to the new dimensions first. */
+  private transformMasks(
+    ids: string[] | undefined,
+    fn: (ctx: CanvasRenderingContext2D, src: HTMLCanvasElement) => void,
+  ): void {
+    for (const [id, m] of this.masks) {
+      if (ids && !ids.includes(id)) continue;
+      const next = this.mkMask(true);
+      fn(next.ctx, m.c);
+      this.masks.set(id, next);
+      this.deriveMaskAlpha(id);
+    }
   }
 
   /** Final alpha the whole stroke is composited at. Erasing ignores colour alpha. */
@@ -1196,6 +1539,7 @@ export class PaintEngine {
     after: ImageData,
     label: string,
     side?: HistorySide,
+    surface: "layer" | "mask" = "layer",
   ) {
     this.endAdjust(); // any other pixel op finalizes a live adjustment / shape / gradient / path / fill
     this.endShape();
@@ -1203,8 +1547,9 @@ export class PaintEngine {
     this.endPath();
     this.endFill();
     if (this.pos < this.entries.length) this.entries.length = this.pos;
-    this.entries.push({ layerId, rect, before, after, label, side });
+    this.entries.push({ layerId, rect, before, after, label, side, surface });
     this.pos = this.entries.length;
+    if (surface !== "mask") this.bumpPixel(layerId); // layer pixels changed → restyle
     this.emitHistory();
   }
 
@@ -1232,7 +1577,8 @@ export class PaintEngine {
   ) {
     const bounds = this.featherBounds(this.boundsOf(rects, angle, pivot), feather);
     if (!bounds) return;
-    const l = this.layer(layerId);
+    const onMask = this.activeSurface(layerId) === "mask";
+    const l = onMask ? this.masks.get(layerId)! : this.layer(layerId);
     const before = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
     if (feather > 0) {
       // Lay the colour down only where a feathered mask is opaque (soft edges).
@@ -1253,7 +1599,8 @@ export class PaintEngine {
       l.ctx.restore();
     }
     const after = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
-    this.pushEntry(layerId, bounds, before, after, "Fill");
+    this.pushEntry(layerId, bounds, before, after, "Fill", undefined, onMask ? "mask" : "layer");
+    if (onMask) this.deriveMaskAlpha(layerId, bounds);
     this.emitChange();
   }
 
@@ -1350,6 +1697,7 @@ export class PaintEngine {
     } else {
       this.shapeEntry.after = after; // same entry, restyled pixels
     }
+    this.bumpPixel(layerId);
     this.emitChange();
   }
 
@@ -1407,7 +1755,8 @@ export class PaintEngine {
     this.endPath();
     this.endFill();
     if (this.gradLayer && this.gradLayer !== layerId) this.endGradient();
-    const l = this.layer(layerId);
+    const onMask = this.activeSurface(layerId) === "mask";
+    const l = onMask ? this.masks.get(layerId)! : this.layer(layerId);
     const fresh = this.gradLayer !== layerId || !this.gradOrig || !this.gradBounds;
     let b: Rect;
     if (fresh) {
@@ -1440,13 +1789,22 @@ export class PaintEngine {
     const after = l.ctx.getImageData(b.x, b.y, b.w, b.h);
     if (!this.gradEntry) {
       if (this.pos < this.entries.length) this.entries.length = this.pos;
-      this.gradEntry = { layerId, rect: b, before: this.gradOrig!, after, label: "Gradient" };
+      this.gradEntry = {
+        layerId,
+        rect: b,
+        before: this.gradOrig!,
+        after,
+        label: "Gradient",
+        surface: onMask ? "mask" : "layer",
+      };
       this.entries.push(this.gradEntry);
       this.pos = this.entries.length;
       this.emitHistory();
     } else {
       this.gradEntry.after = after;
     }
+    if (onMask) this.deriveMaskAlpha(layerId, b);
+    else this.bumpPixel(layerId);
     this.emitChange();
   }
 
@@ -1518,6 +1876,7 @@ export class PaintEngine {
     l.ctx.drawImage(this.pathOrig.c, 0, 0);
     renderPenStroke(l.ctx, anchors, closed, settings, color);
     this.pathState = { anchors, closed, settings, color };
+    this.bumpPixel(layerId);
     this.emitChange();
   }
 
@@ -1554,10 +1913,11 @@ export class PaintEngine {
     this.endGradient();
     this.endPath();
     if (this.fillLayer && this.fillLayer !== layerId) this.endFill();
-    const l = this.layer(layerId);
+    this.fillOnMask = this.activeSurface(layerId) === "mask";
+    const l = this.fillOnMask ? this.masks.get(layerId)! : this.layer(layerId);
     if (this.fillLayer !== layerId || !this.fillOrig) {
       this.fillLayer = layerId;
-      this.fillOrig = this.mk(this.w, this.h, true);
+      this.fillOrig = this.fillOnMask ? this.mkMask(true) : this.mk(this.w, this.h, true);
       this.fillOrig.ctx.drawImage(l.c, 0, 0);
     }
     // Restore the pre-fill pixels, then fill the region on top.
@@ -1578,6 +1938,7 @@ export class PaintEngine {
       }
     }
     this.fillState = { rects, color, antialias };
+    if (this.fillOnMask) this.deriveMaskAlpha(layerId); // refresh cache so the mask preview updates
     this.emitChange();
   }
 
@@ -1639,12 +2000,15 @@ export class PaintEngine {
         const x1 = Math.min(this.w, r.x + r.w + pad);
         const y1 = Math.min(this.h, r.y + r.h + pad);
         const b = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-        const l = this.layer(layerId);
+        const onMask = this.fillOnMask;
+        const l = onMask ? this.masks.get(layerId)! : this.layer(layerId);
         const before = orig.ctx.getImageData(b.x, b.y, b.w, b.h);
         const after = l.ctx.getImageData(b.x, b.y, b.w, b.h);
-        this.pushEntry(layerId, b, before, after, "Fill");
+        this.pushEntry(layerId, b, before, after, "Fill", undefined, onMask ? "mask" : "layer");
+        if (onMask) this.deriveMaskAlpha(layerId, b);
       }
     }
+    this.fillOnMask = false;
     this.onFillEnd();
   }
 
@@ -1660,7 +2024,8 @@ export class PaintEngine {
   ) {
     const bounds = this.featherBounds(this.boundsOf(rects, angle, pivot), feather);
     if (!bounds) return;
-    const l = this.layer(layerId);
+    const onMask = this.activeSurface(layerId) === "mask";
+    const l = onMask ? this.masks.get(layerId)! : this.layer(layerId);
     const before = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
     l.ctx.save();
     l.ctx.globalAlpha = 1;
@@ -1675,41 +2040,83 @@ export class PaintEngine {
     }
     l.ctx.restore();
     const after = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
-    this.pushEntry(layerId, bounds, before, after, label);
+    this.pushEntry(layerId, bounds, before, after, label, undefined, onMask ? "mask" : "layer");
+    if (onMask) this.deriveMaskAlpha(layerId, bounds);
     this.emitChange();
   }
 
-  /** Copy a layer's pixels into another (new) layer id. */
+  /** Copy a layer's pixels (and mask) into another (new) layer id. Adjustment
+   *  nodes have no canvas, so only their mask (if any) is copied. */
   duplicateLayer(srcId: string, dstId: string) {
     const src = this.layers.get(srcId);
-    const dst = this.layer(dstId);
-    dst.ctx.globalAlpha = 1;
-    dst.ctx.globalCompositeOperation = "source-over";
-    dst.ctx.clearRect(0, 0, this.w, this.h);
-    if (src) dst.ctx.drawImage(src.c, 0, 0);
+    if (src) {
+      const dst = this.layer(dstId);
+      dst.ctx.globalAlpha = 1;
+      dst.ctx.globalCompositeOperation = "source-over";
+      dst.ctx.clearRect(0, 0, this.w, this.h);
+      dst.ctx.drawImage(src.c, 0, 0);
+    }
+    // Carry the mask too (the clone keeps its MaskMeta via clone-subtree).
+    const srcMask = this.masks.get(srcId);
+    if (srcMask) {
+      const m = this.mkMask(true);
+      m.ctx.drawImage(srcMask.c, 0, 0);
+      this.masks.set(dstId, m);
+      this.deriveMaskAlpha(dstId);
+    } else {
+      this.freeMask(dstId);
+    }
+    this.bumpPixel(dstId);
     this.emitChange();
   }
 
-  /** Composite `nodes` (top→bottom) into one new layer, dropping `deleteIds`. */
+  /** Composite `nodes` (top→bottom) into one new layer, dropping `deleteIds`.
+   *  Uses drawStack so masks, adjustment layers, AND layer effects all bake in. */
   rasterize(targetId: string, nodes: LayerNode[], deleteIds: string[]) {
     const { c, ctx } = this.mk(this.w, this.h, true);
-    for (let i = nodes.length - 1; i >= 0; i--) this.drawNode(ctx, nodes[i]);
+    this.drawStack(ctx, nodes);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
-    for (const id of deleteIds) this.layers.delete(id);
+    for (const id of deleteIds) {
+      this.layers.delete(id);
+      this.freeMask(id);
+      this.effectsCache.delete(id);
+    }
+    this.freeMask(targetId); // the merged result is flat — no mask
+    this.effectsCache.delete(targetId);
     this.layers.set(targetId, { c, ctx });
+    this.bumpPixel(targetId);
     this.emitChange();
   }
 
-  /** Forget a layer's offscreen canvas (after it's removed from the document). */
+  /** Forget a layer's offscreen canvas + mask + styled cache (after removal). */
   removeLayer(id: string) {
     this.layers.delete(id);
+    this.freeMask(id);
+    this.effectsCache.delete(id);
+    this.pixelVersion.delete(id);
+    this.toneCache.delete(id);
   }
 
   /** A leaf layer's pixels as a PNG data URL (null if it has no canvas yet). */
   getLayerImage(id: string): string | null {
     const l = this.layers.get(id);
     return l ? l.c.toDataURL("image/png") : null;
+  }
+
+  /** A layer's grayscale mask as a PNG data URL (null if it has no mask). */
+  getMaskImage(id: string): string | null {
+    const m = this.masks.get(id);
+    return m ? m.c.toDataURL("image/png") : null;
+  }
+
+  /** Restore a mask from a decoded image (project load) + derive its alpha. */
+  setMaskImage(id: string, source: CanvasImageSource): void {
+    const m = this.mkMask(true);
+    m.ctx.drawImage(source, 0, 0);
+    this.masks.set(id, m);
+    this.deriveMaskAlpha(id);
+    this.emitChange();
   }
 
   // ---- Adjustments (live preview on a leaf, baked on commit) ----
@@ -1719,8 +2126,22 @@ export class PaintEngine {
    * Adjust `before` everywhere, then (if a selection is active) keep the result
    * only inside the selection region and the original pixels outside it.
    */
-  private maskedAdjust(before: ImageData, adj: Adjustments): ImageData {
-    const res = applyAdjustments(before, adj, this.cs);
+  /** Process the live-adjustment session's `before` snapshot with whichever spec
+   *  is pending — slider `Adjustments` or a Curves/Levels tone spec — then confine
+   *  to the active selection (if any). One path for both destructive tools. */
+  private processAdjust(before: ImageData): ImageData {
+    let res: ImageData;
+    if (this.adjTone) {
+      const copy = new ImageData(new Uint8ClampedArray(before.data), before.width, before.height, {
+        colorSpace: this.cs,
+      });
+      const luts = this.adjTone.type === "levels" ? buildLevelsLUTs(this.adjTone) : buildCurvesLUTs(this.adjTone);
+      res = applyToneLUTs(copy, luts);
+    } else if (this.adjPending) {
+      res = applyAdjustments(before, this.adjPending, this.cs);
+    } else {
+      return before;
+    }
     if (!this.adjSel || !this.adjSel.length) return res; // whole layer
     const out = this.mk(this.w, this.h);
     out.ctx.putImageData(before, 0, 0); // original everywhere
@@ -1766,8 +2187,36 @@ export class PaintEngine {
     this.adjSelAngle = angle;
     this.adjSelPivot = pivot;
     this.adjPending = adj;
+    this.adjTone = null;
     // First change bakes + pushes synchronously (so the entry always exists);
     // rapid follow-ups are rAF-throttled and only refresh that entry.
+    if (fresh) this.flushAdjust();
+    else if (!this.adjRaf) this.adjRaf = requestAnimationFrame(() => this.flushAdjust());
+  }
+
+  /** Destructive Curves/Levels: live-preview a tone spec on a layer through the
+   *  same session as the slider adjustments (Apply = endAdjust, Reset = revertAdjust). */
+  previewTone(
+    layerId: string,
+    spec: ToneAdjustment,
+    sel: Rect[] | null = null,
+    angle = 0,
+    pivot: { x: number; y: number } | null = null,
+  ) {
+    if (this.adjLayer && this.adjLayer !== layerId) this.endAdjust();
+    const fresh = this.adjLayer !== layerId || !this.adjOrig;
+    if (fresh) {
+      const l = this.layers.get(layerId);
+      if (!l) return;
+      this.adjLayer = layerId;
+      this.adjOrig = l.ctx.getImageData(0, 0, this.w, this.h);
+      this.adjEntry = null;
+    }
+    this.adjSel = sel && sel.length ? sel : null;
+    this.adjSelAngle = angle;
+    this.adjSelPivot = pivot;
+    this.adjTone = spec;
+    this.adjPending = null;
     if (fresh) this.flushAdjust();
     else if (!this.adjRaf) this.adjRaf = requestAnimationFrame(() => this.flushAdjust());
   }
@@ -1775,8 +2224,8 @@ export class PaintEngine {
   /** Bake the pending adjustment into the layer; push or refresh its entry. */
   private flushAdjust() {
     this.adjRaf = 0;
-    if (!this.adjPending || !this.adjOrig || !this.adjLayer) return;
-    const after = this.maskedAdjust(this.adjOrig, this.adjPending);
+    if ((!this.adjPending && !this.adjTone) || !this.adjOrig || !this.adjLayer) return;
+    const after = this.processAdjust(this.adjOrig);
     const l = this.layer(this.adjLayer);
     l.ctx.globalAlpha = 1;
     l.ctx.globalCompositeOperation = "source-over";
@@ -1788,7 +2237,7 @@ export class PaintEngine {
         rect: { x: 0, y: 0, w: this.w, h: this.h },
         before: this.adjOrig,
         after,
-        label: "Adjustments",
+        label: this.adjTone ? (this.adjTone.type === "levels" ? "Levels" : "Curves") : "Adjustments",
       };
       this.entries.push(this.adjEntry);
       this.pos = this.entries.length;
@@ -1796,6 +2245,7 @@ export class PaintEngine {
     } else {
       this.adjEntry.after = after; // same entry, newer pixels (list unchanged)
     }
+    if (this.adjLayer) this.bumpPixel(this.adjLayer);
     this.emitChange();
   }
 
@@ -1806,11 +2256,12 @@ export class PaintEngine {
       cancelAnimationFrame(this.adjRaf);
       this.adjRaf = 0;
     }
-    if (this.adjPending && !this.adjEntry) this.flushAdjust(); // safety: never-flushed
+    if ((this.adjPending || this.adjTone) && !this.adjEntry) this.flushAdjust(); // safety: never-flushed
     this.adjLayer = null;
     this.adjOrig = null;
     this.adjEntry = null;
     this.adjPending = null;
+    this.adjTone = null;
     this.adjSel = null;
     this.adjSelAngle = 0;
     this.adjSelPivot = null;
@@ -1841,6 +2292,7 @@ export class PaintEngine {
     this.adjOrig = null;
     this.adjEntry = null;
     this.adjPending = null;
+    this.adjTone = null;
     this.adjSel = null;
     this.adjSelAngle = 0;
     this.adjSelPivot = null;
@@ -1856,31 +2308,40 @@ export class PaintEngine {
     l.ctx.globalCompositeOperation = "source-over";
     l.ctx.clearRect(0, 0, this.w, this.h);
     l.ctx.drawImage(source, 0, 0);
+    this.bumpPixel(id);
     this.emitChange();
   }
 
-  /** Snapshot the full pixels of the given leaf layers (null = no canvas). */
-  captureLeaves(ids: string[]): Map<string, ImageData | null> {
-    const m = new Map<string, ImageData | null>();
+  /** Snapshot the full pixels + mask of the given leaf layers (null = absent). */
+  captureLeaves(ids: string[]): Map<string, LeafSnapshot> {
+    const m = new Map<string, LeafSnapshot>();
     for (const id of ids) {
       const l = this.layers.get(id);
-      m.set(id, l ? l.ctx.getImageData(0, 0, this.w, this.h) : null);
+      const mk = this.masks.get(id);
+      m.set(id, {
+        layer: l ? l.ctx.getImageData(0, 0, this.w, this.h) : null,
+        mask: mk ? mk.ctx.getImageData(0, 0, this.w, this.h) : null,
+      });
     }
     return m;
   }
 
-  /** Restore leaf layers from snapshots (null = delete that layer's canvas). */
-  restoreLeaves(snaps: Map<string, ImageData | null>) {
+  /** Restore leaf layers + masks from snapshots (null surface = delete it). */
+  restoreLeaves(snaps: Map<string, LeafSnapshot>) {
     for (const [id, snap] of snaps) {
-      if (snap) {
+      if (snap.layer) {
         const l = this.layer(id);
         l.ctx.globalAlpha = 1;
         l.ctx.globalCompositeOperation = "source-over";
         l.ctx.clearRect(0, 0, this.w, this.h);
-        l.ctx.putImageData(snap, 0, 0);
+        l.ctx.putImageData(snap.layer, 0, 0);
+        this.bumpPixel(id);
       } else {
         this.layers.delete(id);
+        this.effectsCache.delete(id);
       }
+      if (snap.mask) this.restoreMask(id, snap.mask);
+      else this.freeMask(id);
     }
     this.emitChange();
   }
@@ -1889,7 +2350,9 @@ export class PaintEngine {
   private leafDisplay(id: string): HTMLCanvasElement | null {
     const l = this.layers.get(id);
     const s = this.scratch?.ctx;
-    if (this.painting && this.stroke && s && id === this.strokeLayer) {
+    if (this.painting && !this.strokeOnMask && this.stroke && s && id === this.strokeLayer) {
+      // A pixel stroke previews on the layer; a mask stroke leaves layer pixels
+      // untouched and previews through maskDisplay() instead.
       s.globalAlpha = 1;
       s.globalCompositeOperation = "source-over";
       s.clearRect(0, 0, this.w, this.h);
@@ -1953,33 +2416,219 @@ export class PaintEngine {
     return l ? l.c : null;
   }
 
-  /** Draw one layer node (recursing into groups via their own buffer). */
-  private drawNode(ctx: CanvasRenderingContext2D, node: LayerNode) {
-    if (!node.visible) return;
-    if (node.type === "group") {
-      if (!node.children.length) return;
-      const { c: bc, ctx: bctx } = this.mk(this.w, this.h);
-      for (let i = node.children.length - 1; i >= 0; i--) this.drawNode(bctx, node.children[i]);
-      ctx.globalAlpha = Math.max(0, Math.min(1, node.opacity / 100));
-      ctx.globalCompositeOperation = blendOp(node.blend);
-      ctx.drawImage(bc, 0, 0);
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = "source-over";
-      return;
-    }
+  /** Multiply an enabled mask's alpha into `src`, returning a transient buffer;
+   *  returns `src` unchanged when the node has no enabled mask. One extra
+   *  destination-in drawImage against the cached alpha — no per-pixel JS loop. */
+  private maskedSource(node: LayerNode, src: HTMLCanvasElement): HTMLCanvasElement {
+    if (!node.mask?.enabled) return src;
+    const alpha = this.maskDisplay(node.id);
+    if (!alpha) return src;
+    if (!this.maskTmp || this.maskTmp.c.width !== this.w || this.maskTmp.c.height !== this.h)
+      this.maskTmp = this.mk(this.w, this.h);
+    const t = this.maskTmp;
+    t.ctx.globalAlpha = 1;
+    t.ctx.globalCompositeOperation = "source-over";
+    t.ctx.clearRect(0, 0, this.w, this.h);
+    t.ctx.drawImage(src, 0, 0);
+    t.ctx.globalCompositeOperation = "destination-in";
+    t.ctx.drawImage(alpha, 0, 0);
+    t.ctx.globalCompositeOperation = "source-over";
+    return t.c;
+  }
+
+  /** Composite a group's children + its own effects into a fresh buffer — the
+   *  merged group result BEFORE the group's mask / opacity / blend. Reused by the
+   *  normal group draw and by clip groups (a group base/member). */
+  private groupMerged(node: LayerGroup): HTMLCanvasElement {
+    // A CPU-readable buffer is needed when a child adjustment reads it back.
+    const hasAdj = node.children.some((c) => c.type === "adjustment");
+    const styled = hasEnabledFx(node.effects);
+    const { c: bc, ctx: bctx } = this.mk(this.w, this.h, hasAdj || styled);
+    this.drawStack(bctx, node.children); // sub-stack: clip groups / adjustments stay group-isolated
+    return styled ? renderStyled(bc, node.effects!, this.cs).canvas : bc;
+  }
+
+  /** The display source for a single leaf/group node WITH its effects (but without
+   *  its mask / opacity / blend). Null when a leaf has no canvas. */
+  private styledSource(node: LayerNode): HTMLCanvasElement | null {
+    if (node.type === "group") return node.children.length ? this.groupMerged(node) : null;
     const disp = this.leafDisplay(node.id);
-    if (!disp) return;
+    if (!disp) return null;
+    return hasEnabledFx(node.effects) ? this.styledLeaf(node, disp) : disp;
+  }
+
+  /** Draw one (non-clipped, non-adjustment) layer node onto `ctx` with its mask,
+   *  opacity and blend mode. Clip groups + adjustments are handled by drawStack. */
+  private drawNode(ctx: CanvasRenderingContext2D, node: LayerNode) {
+    if (!node.visible || node.type === "adjustment") return;
+    const styled = this.styledSource(node);
+    if (!styled) return;
+    const src = this.maskedSource(node, styled);
     ctx.globalAlpha = Math.max(0, Math.min(1, node.opacity / 100));
     ctx.globalCompositeOperation = blendOp(node.blend);
-    ctx.drawImage(disp, 0, 0);
+    ctx.drawImage(src, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  /** The styled buffer for a leaf with effects: a cached render keyed by
+   *  (pixelVersion, fxHash, space, epoch), bypassed (re-rendered each frame) while
+   *  the layer is being edited live so the in-progress edit shows. */
+  private styledLeaf(node: LayerNode, src: HTMLCanvasElement): HTMLCanvasElement {
+    const fx = node.effects!;
+    const id = node.id;
+    const live =
+      (this.painting && this.strokeLayer === id) ||
+      (this.moving && this.moveLayer === id) ||
+      (this.floatActive && this.floatLayer === id) ||
+      (this.blurring && this.blurLayer === id) ||
+      (this.dodging && this.dodgeLayer === id);
+    const key = `${this.pixelVersion.get(id) ?? 0}|${this.cs}|${this.docEpoch}|${fxHash(fx)}`;
+    if (!live) {
+      const hit = this.effectsCache.get(id);
+      if (hit && hit.key === key) return hit.c;
+    }
+    const styled = renderStyled(src, fx, this.cs).canvas;
+    if (!live) this.effectsCache.set(id, { c: styled, key });
+    return styled;
+  }
+
+  /** Borrow a reusable doc-sized buffer (lazily (re)allocated on size change). */
+  private adjBuf(key: string, readFreq = false): Layer {
+    let b = this.adjBufs[key];
+    if (!b || b.c.width !== this.w || b.c.height !== this.h) {
+      b = this.mk(this.w, this.h, readFreq);
+      this.adjBufs[key] = b;
+    }
+    return b;
+  }
+
+  /** Composite a sibling list bottom→top into `ctx`. The list is first partitioned
+   *  into clip groups (`clipGroupsOf`): a plain node draws on its own; a base with
+   *  clipped members above it is assembled and clipped to the base's silhouette.
+   *  Adjustment nodes (solo) read what is already beneath them in `ctx`. */
+  private drawStack(ctx: CanvasRenderingContext2D, nodes: LayerNode[]) {
+    for (const unit of clipGroupsOf(nodes)) {
+      if (unit.members.length) {
+        this.renderClipGroup(ctx, unit.base, unit.members);
+        continue;
+      }
+      const node = unit.base;
+      if (!node.visible) continue;
+      if (node.type === "adjustment") this.applyAdjustmentNode(ctx, node);
+      else this.drawNode(ctx, node);
+    }
+  }
+
+  /** Assemble a clip group — the base plus its clipped members (bottom→top) — and
+   *  composite it onto `ctx`. Members blend within the group, the whole group is
+   *  clipped to the base's masked silhouette, then drawn with the base's opacity +
+   *  blend. Fresh buffers (not pooled) so nested clip groups never clobber. */
+  private renderClipGroup(ctx: CanvasRenderingContext2D, base: LayerNode, members: LayerNode[]) {
+    if (!base.visible) return; // hidden base ⇒ the whole group shows nothing
+    const w = this.w;
+    const h = this.h;
+    const baseStyled = this.styledSource(base);
+    if (!baseStyled) return;
+    // 1. base pixels (masked) into the clip-group buffer.
+    const hasAdj = members.some((m) => m.type === "adjustment");
+    const { c: cgC, ctx: cg } = this.mk(w, h, hasAdj);
+    cg.drawImage(this.maskedSource(base, baseStyled), 0, 0);
+    // 2. snapshot the clip silhouette (base alpha, post-mask) before members grow it.
+    const { c: clipC, ctx: clipCtx } = this.mk(w, h);
+    clipCtx.drawImage(cgC, 0, 0);
+    // 3. draw each visible member with its own blend + opacity + mask (adjustments
+    //    process the base-shaped buffer in place).
+    for (const m of members) {
+      if (!m.visible) continue;
+      if (m.type === "adjustment") {
+        this.applyAdjustmentNode(cg, m);
+        continue;
+      }
+      const ms = this.styledSource(m);
+      if (!ms) continue;
+      cg.globalAlpha = Math.max(0, Math.min(1, m.opacity / 100));
+      cg.globalCompositeOperation = blendOp(m.blend);
+      cg.drawImage(this.maskedSource(m, ms), 0, 0);
+      cg.globalAlpha = 1;
+      cg.globalCompositeOperation = "source-over";
+    }
+    // 4. clip the assembled group to the base silhouette.
+    cg.globalCompositeOperation = "destination-in";
+    cg.drawImage(clipC, 0, 0);
+    cg.globalCompositeOperation = "source-over";
+    // 5. composite the clipped group onto the accumulator with the base's opacity/blend.
+    ctx.globalAlpha = Math.max(0, Math.min(1, base.opacity / 100));
+    ctx.globalCompositeOperation = blendOp(base.blend);
+    ctx.drawImage(cgC, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  /** Build (and cache per spec) the LUTs for a Curves/Levels node. */
+  private toneLUTs(id: string, spec: ToneAdjustment): ToneLUTs {
+    const key = JSON.stringify(spec);
+    const hit = this.toneCache.get(id);
+    if (hit && hit.key === key) return hit.luts;
+    const luts = spec.type === "levels" ? buildLevelsLUTs(spec) : buildCurvesLUTs(spec);
+    this.toneCache.set(id, { key, luts });
+    return luts;
+  }
+
+  /** Re-process everything in `ctx` beneath this adjustment node, modulated by the
+   *  node's opacity × layer-mask and blended with its blend mode. Sliders reuse
+   *  `applyAdjustments`; Curves/Levels apply cached LUTs. Clipping is NOT handled
+   *  here — a clipped adjustment is a clip-group member processed against the
+   *  already-base-shaped buffer (see renderClipGroup). */
+  private applyAdjustmentNode(ctx: CanvasRenderingContext2D, node: LayerAdjustment) {
+    const w = this.w;
+    const h = this.h;
+    if (w < 1 || h < 1) return;
+    const spec = node.adjustment;
+    if (spec.type === "sliders" && isDefaultAdjust(spec.params)) return; // neutral → no-op
+    const below = ctx.getImageData(0, 0, w, h);
+    const out =
+      spec.type === "sliders"
+        ? applyAdjustments(below, spec.params, this.cs) // REUSED slider math
+        : applyToneLUTs(below, this.toneLUTs(node.id, spec)); // single LUT pass (mutates `below`)
+    const maskAlpha = node.mask?.enabled ? this.maskDisplay(node.id) : null;
+    const opacity = Math.max(0, Math.min(1, node.opacity / 100));
+    const op = blendOp(node.blend);
+    if (opacity >= 1 && !maskAlpha && op === "source-over") {
+      ctx.putImageData(out, 0, 0); // fast path: full, unmasked, Normal replace
+      return;
+    }
+    // Adjusted pixels in a temp, then confine them to the modulation alpha.
+    const tmp = this.adjBuf("tmp");
+    tmp.ctx.globalAlpha = 1;
+    tmp.ctx.globalCompositeOperation = "source-over";
+    tmp.ctx.clearRect(0, 0, w, h);
+    tmp.ctx.putImageData(out, 0, 0);
+    const mod = this.adjBuf("mod");
+    mod.ctx.globalAlpha = 1;
+    mod.ctx.globalCompositeOperation = "source-over";
+    mod.ctx.clearRect(0, 0, w, h);
+    mod.ctx.fillStyle = `rgba(0,0,0,${opacity})`; // uniform opacity as alpha
+    mod.ctx.fillRect(0, 0, w, h);
+    if (maskAlpha) {
+      mod.ctx.globalCompositeOperation = "destination-in";
+      mod.ctx.drawImage(maskAlpha, 0, 0);
+    }
+    mod.ctx.globalCompositeOperation = "source-over";
+    tmp.ctx.globalCompositeOperation = "destination-in";
+    tmp.ctx.drawImage(mod.c, 0, 0);
+    tmp.ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = op;
+    ctx.drawImage(tmp.c, 0, 0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
   }
 
   /** Flatten the layer tree into a new doc-sized canvas (for image export). */
   exportComposite(tree: LayerNode[]): HTMLCanvasElement {
-    const { c, ctx } = this.mk(this.w, this.h);
-    for (let i = tree.length - 1; i >= 0; i--) this.drawNode(ctx, tree[i]);
+    const { c, ctx } = this.mk(this.w, this.h, true); // readback for adjustment nodes
+    this.drawStack(ctx, tree);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
     return c;
@@ -1997,7 +2646,7 @@ export class PaintEngine {
     const b = new Array<number>(256).fill(0);
     if (this.w < 1 || this.h < 1) return { r, g, b };
     const full = this.mk(this.w, this.h, true);
-    for (let i = tree.length - 1; i >= 0; i--) this.drawNode(full.ctx, tree[i]);
+    this.drawStack(full.ctx, tree);
     full.ctx.globalAlpha = 1;
     full.ctx.globalCompositeOperation = "source-over";
 
@@ -2024,16 +2673,21 @@ export class PaintEngine {
     return { r, g, b };
   }
 
-  /** Composite the layer tree (bottom→top, nested groups) onto the view canvas. */
+  /** Composite the layer tree (bottom→top, nested groups) onto the view canvas.
+   *  Builds into an offscreen accumulator first so adjustment nodes can read back
+   *  what is beneath them from a willReadFrequently buffer, then blits to the view. */
   composite(tree: LayerNode[]) {
     const ctx = this.vctx;
     if (!ctx) return;
+    const acc = this.adjBuf("comp", true);
+    acc.ctx.globalAlpha = 1;
+    acc.ctx.globalCompositeOperation = "source-over";
+    acc.ctx.clearRect(0, 0, this.w, this.h);
+    this.drawStack(acc.ctx, tree);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
     ctx.clearRect(0, 0, this.w, this.h);
-    for (let i = tree.length - 1; i >= 0; i--) this.drawNode(ctx, tree[i]);
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(acc.c, 0, 0);
   }
 
   /** Begin moving pixels: lift the selection (or whole layer) into a float buffer. */
@@ -2868,6 +3522,7 @@ export class PaintEngine {
     this.layer(layerId); // ensure the target layer has a canvas so the live stroke composites
     this.painting = true;
     this.strokeLayer = layerId;
+    this.strokeOnMask = this.activeSurface(layerId) === "mask"; // paint the mask when it's active
     this.brush = brush;
     this.mode = mode;
     this.strokeLabel = label;
@@ -2929,18 +3584,29 @@ export class PaintEngine {
     this.lineTo(this.lastRaw.x, this.lastRaw.y);
 
     const layerId = this.strokeLayer!;
-    const l = this.layer(layerId);
+    const onMask = this.strokeOnMask && this.masks.has(layerId);
+    const target = onMask ? this.masks.get(layerId)! : this.layer(layerId);
     const rect = this.dirtyRect();
     if (rect) {
-      const before = l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
-      this.drawStroke(l.ctx);
-      const after = l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
-      this.pushEntry(layerId, rect, before, after, this.strokeLabel);
+      const before = target.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
+      this.drawStroke(target.ctx);
+      const after = target.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
+      this.pushEntry(
+        layerId,
+        rect,
+        before,
+        after,
+        onMask ? `Mask ${this.strokeLabel}` : this.strokeLabel,
+        undefined,
+        onMask ? "mask" : "layer",
+      );
+      if (onMask) this.deriveMaskAlpha(layerId, rect); // refresh the alpha cache for the painted region
     }
 
     this.stroke.ctx.clearRect(0, 0, this.w, this.h);
     this.painting = false;
     this.strokeLayer = null;
+    this.strokeOnMask = false;
     this.brush = null;
     this.clip = null;
     this.tip = null;
@@ -3051,6 +3717,7 @@ export class PaintEngine {
   /** Erase a layer's pixels (used to hide a vector layer while it's re-edited). */
   clearLayerPixels(layerId: string) {
     this.layer(layerId).ctx.clearRect(0, 0, this.w, this.h);
+    this.bumpPixel(layerId);
     this.emitChange();
   }
 
@@ -3842,13 +4509,25 @@ export class PaintEngine {
   }
 
   // ---- history ----
+  /** Put a pixel patch onto the entry's surface (layer or mask), re-deriving the
+   *  mask alpha cache for the patched rect when it targets a mask. */
+  private putPatch(e: Entry, img: ImageData) {
+    if (!e.layerId || !e.rect) return;
+    if (e.surface === "mask") {
+      const mask = this.masks.get(e.layerId);
+      if (!mask) return;
+      mask.ctx.putImageData(img, e.rect.x, e.rect.y);
+      this.deriveMaskAlpha(e.layerId, e.rect);
+    } else {
+      this.layer(e.layerId).ctx.putImageData(img, e.rect.x, e.rect.y);
+      this.bumpPixel(e.layerId); // restyle on undo/redo of a pixel patch
+    }
+  }
   private apply(e: Entry) {
-    if (e.layerId && e.rect && e.after)
-      this.layer(e.layerId).ctx.putImageData(e.after, e.rect.x, e.rect.y);
+    if (e.after) this.putPatch(e, e.after);
   }
   private revert(e: Entry) {
-    if (e.layerId && e.rect && e.before)
-      this.layer(e.layerId).ctx.putImageData(e.before, e.rect.x, e.rect.y);
+    if (e.before) this.putPatch(e, e.before);
   }
   jumpTo(target: number) {
     this.endAdjust(); // finalize a live adjustment / shape / gradient / path / fill before navigating history

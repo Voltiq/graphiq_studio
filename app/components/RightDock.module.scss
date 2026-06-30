@@ -788,6 +788,61 @@
   background-size: 8px 8px;
 }
 
+/* The active-surface ring: which of pixels / mask paint tools currently target. */
+.layerThumb[data-active="true"],
+.maskThumb[data-active="true"] {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+/* A layer-mask chip beside the pixel thumbnail (grayscale gradient placeholder). */
+.maskThumb {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: linear-gradient(135deg, #fff 0%, #808080 50%, #111 100%);
+
+  &[data-disabled="true"] {
+    opacity: 0.45;
+  }
+
+  &:hover {
+    border-color: var(--accent);
+  }
+}
+
+.maskOff {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #ff5a5a;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Chain toggle between the pixel and mask thumbnails. */
+.maskLink {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  flex-shrink: 0;
+  color: var(--text-3);
+
+  &[data-on="true"] {
+    color: var(--accent);
+  }
+
+  &:hover {
+    color: var(--text);
+  }
+}
+
 /* Two-line text column: name + "{kind} · {opacity}%" meta. */
 .layerMeta {
   flex: 1;

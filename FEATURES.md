@@ -1,0 +1,270 @@
+# Graphiq Studio — Features & Architecture
+
+A browser-based, **fully client-side** raster photo editor with a non-destructive layer stack. There is no server, database, or upload — images never leave the machine; everything is computed in the browser on HTML `<canvas>` elements.
+
+**Stack:** Next.js 16 (App Router) · React 19 (with the React Compiler) · TypeScript (strict) · SCSS modules · `lucide-react` icons. **No image-processing libraries** — every pixel operation (compositing, blending, blurs, filters, tone curves, selections, layer effects, history) is hand-written against the Canvas 2D API and `ImageData`.
+
+**Status:** the destructive editor (18 tools, 19 blend modes, selections, live sessions, colour management) plus the **full non-destructive stack** — layer **masks**, **adjustment layers**, **layer effects**, **Curves & Levels**, and **clipping masks**. Project files (`.aproj`) are at **format version 6**. The render-graph cache (Spec 06) and smart filters (Spec 07) are not yet built; see [Part 3 — Known limitations](#part-3--known-limitations--not-yet-implemented).
+
+This document is written so someone **without the code** understands exactly what exists, what works, **how** it works, and what does not.
+
+---
+
+# Part 1 — Feature inventory
+
+## Documents & canvas
+
+- **Multiple documents** open as renamable tabs. Each tab is fully independent: its own layer tree, undo history, selection, view (zoom/pan), working colour space, and metadata.
+- **New / Open (.aproj) / Import (image)**; arbitrary canvas sizes.
+- **Image Size** (resample — content scales) vs **Canvas Size** (reframe — content stays, the frame grows/shrinks).
+- **Rotate 90° CW/CCW**, **Flip Horizontal/Vertical** (whole image).
+- **Crop** (interactive box: aspect presets, rule-of-thirds/grid overlay, straighten, shield) and **Trim** (auto-remove uniform border pixels).
+
+## Tools (18, single-key shortcuts)
+
+| Tool | Key | Notes |
+|---|---|---|
+| Move | `V` | Move layer pixels or a floating selection. |
+| Rectangular Marquee | `M` | **Rectangle / ellipse / triangle** region shapes (`Shift+M` cycles); hold `Shift` for a 1:1 square/circle; the triangle's apex follows the drag direction and has an adjustable, live-updating apex position. |
+| Lasso | `L` | Freehand selection. |
+| Magic Wand | `W` | Contiguous or global colour selection; tolerance, sample-all-layers. |
+| Crop | `C` | Aspect presets, grid overlay, straighten, shield. |
+| Eyedropper | `I` | Sample colour; configurable sample radius. |
+| Brush / Pencil / Eraser | `B` / `N` / `E` | Independent size, hardness, opacity, flow, smoothing. |
+| Clone Stamp | `S` | Alt-set source, paint sampled pixels. |
+| Paint Bucket | `G` | Flood fill: tolerance, contiguity, anti-alias, opacity. |
+| Gradient | `G` | Linear/radial, draggable re-editable on-canvas control + multi-stop editor; `Esc` keeps the fill and hides the controls. |
+| Blur | `R` | Blur brush with an on-canvas brush-ring cursor (coverage-mask model). |
+| Dodge / Burn | `O` | Tonal range (shadows/mids/highlights) + exposure. |
+| Text | `T` | On-canvas editor; rasterises on commit but stays re-editable as a vector; optional anti-alias on rasterise. |
+| Pen | `P` | Bezier paths (anchors with handles), taper/bend stroke. |
+| Shape | `U` | Rectangle / ellipse / triangle / trapezoid, kept as re-editable vectors (fill, stroke, radius, apex/corner geometry). |
+| Hand / Zoom | `H` / `Z` | Pan / zoom. |
+
+All Options-Bar settings, the foreground/background colours, and the marquee shape + triangle apex **persist to `localStorage`** and restore on reload.
+
+## Selections
+
+- The selection model is a **list of rectangles** plus an optional rotation **angle + pivot**. Freeform/curved regions (wand, ellipse, triangle, lasso) are rasterised to per-row scanline rects and merged by the engine's **mask-based combine**, which returns clean **pre-traced marching-ant outlines** — so even a 500-rect ellipse animates its ants cheaply (no per-frame O(n³) boundary union).
+- **Add (Ctrl) / Subtract (Alt)** while dragging; the existing selection stays visible during the drag and the new region previews separately.
+- **Select menu:** All `Ctrl+A`, Deselect `Ctrl+D`, Reselect `Ctrl+Shift+D`, Inverse `Ctrl+Shift+I`, **Feather…** `Shift+F6`, **Grow…** (Feather blurs the selection mask for fills/deletes/moves; Grow expands the region by N px).
+- **Free Transform** `Ctrl+Alt+T` and **Transform Selection** `Ctrl+Alt+Shift+T` — scale/rotate either the pixels or just the outline, with corner/edge handles, a rotation ring, and a movable pivot.
+- Fill with foreground/background (`Backspace`/`Delete`), Cut/Copy/Paste of selected pixels.
+
+## Layers
+
+- A **tree** of three node kinds: **pixel layers** (`LayerLeaf`), **groups** (`LayerGroup`, nestable folders), and **adjustment layers** (`LayerAdjustment`, pixel-less — see below).
+- Per-node **visibility, opacity (0–100), blend mode** (19 modes), an optional **mask**, optional **layer effects**, and a **clipped** flag.
+- **New / Duplicate / Delete / Group (`Ctrl+G`) / Ungroup / Merge Down (`Ctrl+E`) / Flatten**. Drag to reorder (can re-parent across groups). Multi-select. Inline rename.
+- Group **opacity/blend/mask** apply to the *merged* group result (isolated grouping), exactly like Photoshop.
+
+## The non-destructive stack
+
+These five systems are the heart of the editor. They are all **composite-time**: they change how the layer tree is rendered, never the stored pixels (except an explicit "Apply/bake").
+
+### 1. Layer masks
+- Any pixel layer **or group** can carry one **grayscale raster mask** (white = visible, black = hidden, grey = partial). It modulates the layer's alpha at composite time; the layer's own pixels are never altered.
+- **Create** reveal-all / hide-all / from-selection; **Delete**; **Apply** (bake into the layer, destructive); **Enable/Disable**; **Link/Unlink**; **Load Mask as Selection**.
+- **Active-surface switch:** click a layer's mask thumbnail to make the mask the paint target; click the pixel thumbnail to switch back. **Every paint tool that uses the brush/fill/gradient pipeline then paints the mask with no per-tool code** — brush, pencil, eraser, clone, paint bucket, gradient, plus Backspace-fill and Delete.
+- Layers panel: mask thumbnail beside the pixel thumbnail, an **active-surface ring**, a chain (link) toggle, Shift-click to disable; Layer menu has the full submenu; the **Channels** panel and the masking interact correctly (mask multiplies the *final* styled result, so a mask also hides a layer's effects).
+
+### 2. Adjustment layers
+- A **`LayerAdjustment`** node holds an **`AdjustmentSpec`** and **re-processes the composite of everything below it** within its parent — non-destructively, re-editable forever.
+- Types (all routed through the existing `applyAdjustments` math so there is one colour engine): **Brightness/Contrast, Exposure, Vibrance, Color Balance, Black & White, Photo Filter (Warm/Cool)**, the named **filter presets** (Vivid/Noir/Vintage/…), and **Curves / Levels** (below).
+- Honours its own **opacity, blend mode, mask, and clip**. Created from **Layer ▸ Adjustment ▸ {type}** or the **Adjustments panel** ("Create Adjustment Layer", "Curves", "Levels"). Editing is **live with no Apply step**; one cheap, params-only undo step per edit gesture.
+- The destructive Adjustments-panel path (live preview on a pixel layer + the slider set) still exists; a **"Create adjustment layer"** button converts that preview into a node.
+
+### 3. Layer effects (layer styles)
+- Eight non-destructive effects rendered from the layer's **alpha silhouette** at composite time: **Drop Shadow, Inner Shadow, Outer Glow, Inner Glow, Stroke, Color Overlay, Gradient Overlay, Bevel & Emboss** — each with its own blend mode + opacity.
+- A **Layer Style dialog** (left column = effect checklist, right column = per-effect controls, with a **live document preview**) reusing the app's custom colour picker. **Copy / Paste / Clear Layer Style**; an **fx badge** + footer button + context menu in the Layers panel.
+- Shadows/glows use the **shared separable blur** (the same primitive as the Blur Gallery). Effects render in the correct stacking order and compose with masks, adjustments, opacity, blend, and groups.
+
+### 4. Curves & Levels
+- **Curves:** a **monotone-cubic** spline (Fritsch–Carlson — guaranteed monotonic, no overshoot) over a live histogram backdrop, per channel (RGB/R/G/B); click to add a node, drag to move, right-click to delete; numeric input/output readout; **presets** (Linear, Increase/Decrease Contrast, Negative, Lighten/Darken Midtones).
+- **Levels:** input black/gamma/white + output black/white as **draggable triangles** over a live histogram, per channel, with numeric fields, **Auto** (per-channel contrast stretch), and **black / grey / white eyedroppers** (click the image to set the point or neutralise a colour cast).
+- Both compile to **per-channel 256-entry LUTs** (composite⊕channel composed, alpha untouched) applied in one typed-array pass. Available **non-destructively** (as adjustment layers, re-editable via the dialogs) and **destructively** (Image ▸ Adjust ▸ Levels/Curves… → live preview → Apply/Cancel).
+
+### 5. Clipping masks
+- Any leaf, group, or adjustment can be **clipped** to the layer directly below it (its *base*): it shows only within the base's silhouette. A **clip group** = a base + the contiguous run of clipped layers above it.
+- Members **blend within the group**; the base's opacity/blend/mask then govern the whole group against the layers below. Toggle with **`Ctrl+Alt+G`**, **Alt-click a layer row**, or the context menu. The Layers panel shows clip groups **indented with a ↳ elbow** under an **underlined base name**.
+
+## Adjustments & filters (destructive panel)
+
+- **Adjustments panel** previews live on the active layer (no Apply button — it auto-bakes on session end; Reset discards): **Light** (exposure, contrast, highlights, shadows, whites, blacks) · **Colour** (temperature, tint, vibrance, saturation) · **Detail** (sharpen, clarity, noise).
+- **Filter presets** (Original, Vivid, Mono, Noir, Warm, Cool, Vintage, Fade) and **custom presets** that **import/export** to `.aifp`/`.aifpack` files.
+
+## Effects (Blur Gallery)
+
+- **Effects ▸ Blur Gallery…** — a large dialog with an embedded **live-preview canvas**: **Box, Gaussian, Motion, Zoom, Spin, Bokeh**. Zoom/Spin have a **draggable centre point**. Scope = selection (if any) or the whole layer/canvas.
+
+## Colour, file, panels, view, UI
+
+- **Colour:** primary/secondary swatches (remembered), swap & reset, alpha-aware over a checkerboard; a custom **colour picker** + popover used everywhere (options bar, gradient, layer styles); **Compare Colour Profiles** dialog; colour-management dialog.
+- **File/export:** Save/Open **`.aproj`**; **Export As** PNG · JPEG · WebP · AVIF (quality + alpha, feature-detected); **Print** `Ctrl+P`; **Recents** list; EXIF **Metadata** panel.
+- **Panels (Window menu):** Color · Adjustments · Layers · History · Navigator · Channels · Metadata, in a right dock; Reset Workspace.
+- **View:** Zoom In/Out, **Fit** `Ctrl+0`, **100%** `Ctrl+1`, Rulers, **Pixel Grid** `Ctrl+'`, Snap, Navigator overview.
+- **UI/UX:** token-driven neutral-dark theme + blue accent, light/dark toggle; **Preferences** `Ctrl+K`; non-blocking toasts; tooltips; full menu bar.
+
+---
+
+# Part 2 — Architecture
+
+## Module map (`app/lib`)
+
+| File | Responsibility |
+|---|---|
+| `paint.ts` | **`PaintEngine`** — all pixels, the compositor, every live session, history, caches. |
+| `layers.ts` | Immutable layer **tree** types + pure functions; `clipGroupsOf` resolver; `LayersApi`. |
+| `adjust.ts` | The slider `Adjustments` type, `applyAdjustments` (the one colour-math fn), filter presets, `AdjustmentSpec` union. |
+| `adjustment-types.ts` | Registry of adjustment-layer types (label + seed params). |
+| `tone.ts` | Curves/Levels LUT math (levels formula, monotone-cubic curve, compose, auto-levels, gray-point). |
+| `effects.ts` | Layer-effects renderer (`renderStyled`) — all 8 effects from a layer's alpha. |
+| `blur.ts` | Shared separable box/Gaussian blur (used by Blur Gallery **and** effects). |
+| `gradient.ts` | Multi-stop gradient model + canvas-gradient builder. |
+| `color.ts` | Colour parsing + RGBA/HSV/HSL conversions + swatch helpers. |
+| `project.ts` | `.aproj` (de)serialisation. |
+| `view.ts`, `tools.ts`, `menus.ts`, `metadata.ts`, `imageio.ts`, `filterio.ts`, `pen.ts`, `shapes.ts`, `recents.ts`, `prefs.ts`, `toolPrefs.ts`, `swatches.ts`, `theme.ts` | View math, tool/type defs, menus, EXIF, export/import, filter files, pen/shape geometry, recents, preferences, persistence, theme tokens. |
+
+React talks to the engine through a curated **`EngineHandle`** interface; it never touches pixels directly.
+
+## The paint engine
+
+`PaintEngine` (`paint.ts`) owns one offscreen `<canvas>` per pixel layer (a `Map` keyed by layer id), plus several reusable buffers:
+
+- **`stroke`** — the in-progress brush dab/stroke (kept **sRGB**, see Colour).
+- **`scratch`** — live-session previews.
+- **mask buffers** — `masks` (grayscale mask per id) and `maskAlpha` (derived alpha cache per id) Maps.
+- **adjustment/clip buffers** — a small pool (`adjBufs`) including the offscreen composite **accumulator**.
+
+### Live "session" model
+Almost every gesture is a temporary, cancellable session that snapshots the original pixels, shows a live result, and **bakes once on commit** (one history entry). Independent sessions exist for: **paint stroke** (brush/pencil/eraser), **blur brush** and **dodge/burn** (a *coverage-mask* model — original snapshot + a 0–1 coverage buffer re-baked as `mix(orig, effect(orig), coverage×strength)`, so a stroke stays even and successive strokes compound), **clone**, **move/float**, **live shape**, **live gradient**, **live pen path**, **live bucket fill**, **live (destructive) adjustment**, **destructive tone** (Curves/Levels via `previewTone`), and the **Blur Gallery** preview.
+
+The brush **tip is pre-baked once per stroke** (hard tips crisp on the integer grid, soft tips sub-pixel); eraser = `destination-out`.
+
+## The compositor (the core)
+
+`composite(tree)` renders into an **offscreen accumulator** (`willReadFrequently`, so adjustment layers can read it back) and then blits to the on-screen view canvas. `exportComposite(tree)` does the same into a fresh buffer for flatten/export. Both call **`drawStack(ctx, nodes)`**.
+
+```
+drawStack(ctx, nodes):
+  for unit in clipGroupsOf(nodes)        // bottom → top, clip groups resolved
+    if unit has clipped members:  renderClipGroup(ctx, unit.base, unit.members)
+    else if base is adjustment:   applyAdjustmentNode(ctx, base)   // reads what's beneath in ctx
+    else:                         drawNode(ctx, base)
+```
+
+**`drawNode`** draws one ordinary leaf/group:
+```
+src = styledSource(node)                 // leaf pixels (+ effects) OR group merged buffer (+ group effects)
+src = maskedSource(node, src)            // destination-in the node's mask alpha cache (if any)
+ctx.draw(src) with opacity + blendOp(blend)
+```
+- **`styledSource`** → a leaf's display canvas (run through `styledLeaf` if it has effects), or a group's `groupMerged` (children composited via `drawStack` into a fresh buffer + the group's own effects).
+- **`leafDisplay(id)`** is the live-preview indirection: normally the layer canvas, but during a live session on that layer it returns the `scratch` buffer with the layer + in-progress edit — so previews composite correctly under blend modes/opacity without touching real pixels.
+- **`maskedSource`** multiplies the node's mask in with a single `destination-in` of the cached alpha (no per-pixel JS).
+
+**`applyAdjustmentNode(ctx, node)`** (for an adjustment that is *not* a clip member): reads the accumulator beneath it (`getImageData`), runs `applyAdjustments` (sliders) **or** the cached tone LUTs (Curves/Levels), then writes the result back **modulated by the node's opacity × its own mask** and blended with its blend mode. A neutral spec is a no-op. Group isolation is automatic because a group's children composite into the group's own buffer.
+
+**`renderClipGroup(ctx, base, members)`** (the clip-group assembly):
+```
+1. render base (masked) into a FRESH buffer cg          // nesting-safe; not pooled
+2. clipAlpha = snapshot of cg's alpha (the base silhouette, post-mask)
+3. for each visible member (bottom→top):
+     adjustment → applyAdjustmentNode(cg, member)        // processes the base-shaped buffer
+     else       → draw member (its effects, mask, blend, opacity) onto cg
+4. cg ⊗= clipAlpha   (destination-in)                    // clip the whole group to the base
+5. draw cg onto ctx with the BASE's opacity + blend mode
+```
+This single path also subsumes "clipped adjustment layer" (Spec 02's old standalone clip-base logic was deleted).
+
+**Blend modes (19)** map to Canvas 2D `globalCompositeOperation`. A few are pragmatic approximations: **Add→`lighter`**, **Linear Burn→`multiply`**, **Dissolve→`source-over`** (no true dither). Hue/Saturation/Color/Luminosity use the non-separable canvas modes.
+
+## How the non-destructive features are implemented
+
+- **Masks:** the grayscale mask is colour-agnostic (always sRGB, never gamut-converted). On any mask edit the **alpha cache** is re-derived **scoped to the changed rect** (`A = R × maskAlpha/255`, RGB=0). A `surfaces` map records each layer's active paint surface; `surfaceTarget(id)` is the single chokepoint that points the brush/fill/gradient at the layer canvas **or** the mask canvas. A live mask brush previews through `maskDisplay(id)`. History pixel entries carry a `surface: 'layer' | 'mask'` field. Canvas resize/crop/rotate/flip transform masks in lockstep with their layers.
+- **Adjustment & tone:** **params live entirely on the tree** — the engine holds no canvas for an adjustment node; it just reads them while compositing. Tone LUTs are cached per node id + spec hash (`toneCache`).
+- **Effects:** rendered by the pure `renderStyled(src, fx, space)` (document-sized buffer). The styled buffer is **cached per layer** keyed by `pixelVersion | colourSpace | docEpoch | fxHash` (`effectsCache`) — re-rendered only when the layer's pixels, its effect params, the colour space, or the document geometry change; **bypassed (re-rendered each frame) only while that layer is being painted**.
+- **Clipping:** `clipped` is a boolean on every node; membership is **derived each composite** by `clipGroupsOf(children)` (never stored). A clipped node with no valid base below is **inert**.
+
+## History (undo/redo)
+
+A **single linear stack** of `Entry` objects + a position pointer:
+- **Pixel entry:** `layerId`, a bounding `rect`, `before`/`after` `ImageData` (only the changed region), and a `surface` (layer vs mask).
+- **Structural entry:** a `side` with `undo()`/`redo()` callbacks for tree changes (add/remove/group/merge/crop/resize/paste, mask add/apply, **adjustment param edits, layer-effect edits, clip toggles** — all params-only, no pixel data). Pixel + structural can be combined into one step (e.g. paste, Apply Mask).
+- `jumpTo(target)` walks the pointer, reverting/applying entries (pixels via `putImageData`, structure via the `side` callbacks); `undo`/`redo` are ±1; a new edit truncates the redo branch. Live sessions finalise before navigation. A label+index summary drives the History panel.
+- Non-destructive edits (sliders, curve points, effect params, clip flags) are **debounced to one undo step per gesture** and carry **no pixel data** — the whole point of non-destructive editing.
+
+## Layering (tree)
+
+`LayerBase` (shared by all kinds): `id, name, visible, opacity, blend`, optional `mask`, optional `effects`, optional `clipped`. `LayerLeaf` adds an optional `vector` (re-editable shape/text); `LayerGroup` adds `expanded` + `children`; `LayerAdjustment` adds `adjustment: AdjustmentSpec`.
+
+All tree edits are **pure functions returning a new tree** (find, update, remove, insert-relative/into-group, wrap-in-group, ungroup, **clone-subtree** with fresh ids + deep-copied effects, replace, remove-many, merge-down, flatten, multi-select helpers, visible-row order, and the `clipGroupsOf` clip resolver). The engine mirrors structural ops (`duplicateLayer`, `rasterize` for merge/flatten — which now bake masks + adjustments + effects + clipping, since it composites through `drawStack`).
+
+## Colour management
+
+- Per-document **working colour space: sRGB or Display-P3** (feature-detected). Layer/scratch/group/accumulator/export buffers are all in that space, so wide-gamut content is preserved end to end.
+- The **brush `stroke` buffer stays sRGB** because brush/UI colours are authored as sRGB hex; compositing onto a P3 layer lets the browser convert correctly. Layer-effect colours work the same way (sRGB hex filled onto a P3 buffer).
+- `setColorSpace` converts existing layers by drawing them through a new-space canvas; masks are **not** converted (coverage, not colour); effect/tone caches invalidate.
+
+## Performance & caching
+
+- **Per-layer `pixelVersion`** (bumped at every committed pixel write — strokes, fills, gradients, shapes, paths, adjustments, text, load, duplicate, merge, undo/redo) + a document **`docEpoch`** (bumped on resize/crop/transform/colour-space) form the cache keys for effects/tone. Painting on one layer never invalidates another's styled cache.
+- **Effects** composite as a single `drawImage` of the cached styled buffer when idle. **Tone** LUTs are built once per spec change and applied as one typed-array pass. **Clip groups** add one buffer + one composite pass per group (the `destination-in` clip is GPU, no per-pixel JS).
+- Group and clip-group buffers are **fresh per composite** (nesting-safe) — consistent with the existing group compositing; pooled buffers are used only where re-entrancy can't occur.
+
+## Persistence (`.aproj`, format v6)
+
+- A self-describing JSON: doc name/size, foreground/background, active/selected layers, selection, and the layer tree. **Pixel layers** serialise as PNG data-URLs; **masks** as grayscale PNG data-URLs + `{enabled, linked}`; **adjustment specs**, **layer effects**, and **clipped** flags as plain JSON. Adjustment/effect/clip nodes carry **no raster** — they re-render from params on load.
+- **Backward-compatible:** older files (any earlier version, missing mask/effects/adjustment/clipped fields) open unchanged with those features simply absent.
+- Tool options, colours, marquee shape/apex, view toggles, and theme persist separately in `localStorage`.
+- *Saved history is labels + index only* — the live undo stack (in-memory callbacks) is not replayable from a file.
+
+---
+
+# Part 3 — Known limitations / not yet implemented
+
+Honest list of what is **partial, deferred, or absent**:
+
+**Non-destructive stack gaps**
+- **Linked-mask move:** the mask **link/unlink** flag is stored, serialised, and shown in the UI, and the engine has an `offsetMask` method, but the **Move tool does not yet translate a linked mask with its layer** — moving a masked layer's pixels currently leaves the mask in place.
+- **Blur / Dodge-Burn on a mask:** these two brushes are **not** routed to the active mask surface (brush/pencil/eraser/clone/gradient/bucket are). Painting a mask uses those instead.
+- **Curves "targeted on-canvas adjustment"** (click-drag the image to move the curve node at the sampled tone) is **not** implemented (it was optional in the spec).
+- **Gradient stroke effect:** the engine can render a gradient-filled stroke, but the Layer Style dialog exposes Stroke as **colour-only** (the Gradient *Overlay* has a 2-stop editor).
+- **Clip edge case:** a clipped layer sitting directly above a **non-clipped adjustment layer** is treated as **inert** rather than clipping to the pixel base *below* the adjustment (a rare configuration; the spec permitted "inert" as a fallback).
+- **Channels-panel mask channel** and an **options-bar "Mask" pill** were deferred (the Layers-panel active-surface ring is the indicator instead).
+
+**Performance not yet optimised (correctness-first)**
+- Adjustment layers and layer effects render at **full document size** each recomposite (no viewport/dirty-region scoping or persistent output cache). On a 4000×3000 document with large blurs or stacked adjustments this can drop below the 60 fps target while dragging — this is exactly what the **render-graph cache (Spec 06)** is meant to add and is **not yet built**.
+
+**Engine ceiling (deliberate, "v2-engine" territory)**
+- **8-bit only.** All processing is Canvas 2D `ImageData` (8-bit per channel); there is **no 16/32-bit pipeline** and **no WebGL/WebGPU** path. High-bit-depth, a GPU renderer, and RAW development are future research tracks, not built.
+
+**Placeholder UI (present but inert)**
+- Effects menu: **Sharpen, Distort, Noise, Pixelate, Stylize, Liquify** are menu stubs (the **Blur Gallery** is the only wired Effects entry). **Smart Filters (Spec 07)** would implement these.
+- A few **Settings/Help** menu items (Keyboard Shortcuts, Performance, Scratch Disks, the Help pages) are stubs.
+
+**Roadmap status:** Specs **01 (Masks), 02 (Adjustment Layers), 03 (Layer Effects), 04 (Curves & Levels), 05 (Clipping Masks)** are implemented. Spec **06 (Render Graph / caching)** and **07 (Smart Filters)** remain.
+
+---
+
+# Appendix — keyboard shortcuts
+
+| Action | Shortcut |
+|---|---|
+| New / Open / Save / Save As | `Ctrl+Alt+N` / `Ctrl+O` / `Ctrl+S` / `Ctrl+Shift+S` |
+| Export As / Print | `Ctrl+Shift+E` / `Ctrl+P` |
+| Undo / Redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
+| Cut / Copy / Paste | `Ctrl+X` / `Ctrl+C` / `Ctrl+V` |
+| Free Transform / Transform Selection | `Ctrl+Alt+T` / `Ctrl+Alt+Shift+T` |
+| Image Size / Canvas Size | `Ctrl+Alt+I` / `Ctrl+Alt+C` |
+| Crop / Trim | `Ctrl+Alt+R` / `Ctrl+Alt+M` |
+| Select All / Deselect / Reselect / Inverse | `Ctrl+A` / `Ctrl+D` / `Ctrl+Shift+D` / `Ctrl+Shift+I` |
+| Feather | `Shift+F6` |
+| New Layer / Group / Merge Down | `Ctrl+Shift+N` / `Ctrl+G` / `Ctrl+E` |
+| **Clipping Mask (create/release)** | **`Ctrl+Alt+G`** |
+| Cycle marquee shape · constrain 1:1 | `Shift+M` · hold `Shift` |
+| Fit / 100% / Pixel Grid | `Ctrl+0` / `Ctrl+1` / `Ctrl+'` |
+| Preferences | `Ctrl+K` |
+| Tools | `V M L W C I B N E S G R O T P U H Z` |
+
+*Snapshot of the current implementation; the [limitations](#part-3--known-limitations--not-yet-implemented) above are the authoritative list of what is partial or absent.*

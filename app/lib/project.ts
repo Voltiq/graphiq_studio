@@ -1,12 +1,17 @@
-import type { LayerGroup, LayerLeaf, LayerNode } from "./layers";
+import type { LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers";
 import type { Rect } from "./view";
 
 /** Graphiq project file extension (keeps layers, groups & settings; lossless). */
 export const PROJECT_EXT = "aproj";
 
-type SerializedLeaf = LayerLeaf & { data: string | null };
-type SerializedGroup = Omit<LayerGroup, "children"> & { children: SerializedNode[] };
-export type SerializedNode = SerializedLeaf | SerializedGroup;
+type SerializedLeaf = LayerLeaf & { data: string | null; maskImage?: string | null };
+type SerializedGroup = Omit<LayerGroup, "children"> & {
+  children: SerializedNode[];
+  maskImage?: string | null;
+};
+/** Adjustment nodes carry no pixel image — just their spec + clip + (Spec 01) mask. */
+type SerializedAdjustment = LayerAdjustment & { maskImage?: string | null };
+export type SerializedNode = SerializedLeaf | SerializedGroup | SerializedAdjustment;
 
 export interface ProjectFile {
   format: "graphiq-project";
@@ -32,6 +37,8 @@ export interface ProjectFile {
 export interface PendingLoad {
   docId: string;
   images: { id: string; data?: string; source?: CanvasImageSource }[];
+  /** Grayscale layer masks to restore (PNG data URL or decoded source). */
+  masks?: { id: string; data?: string; source?: CanvasImageSource }[];
 }
 
 export interface ProjectInput {
@@ -44,11 +51,19 @@ export interface ProjectInput {
   selection: Rect[];
 }
 
-function serializeNode(node: LayerNode, getImage: (id: string) => string | null): SerializedNode {
+function serializeNode(
+  node: LayerNode,
+  getImage: (id: string) => string | null,
+  getMask: (id: string) => string | null,
+): SerializedNode {
+  // A mask (when present) is serialized as a grayscale PNG data URL alongside the
+  // node; node.mask metadata rides along through the spread.
+  const maskImage = node.mask ? getMask(node.id) : null;
   if (node.type === "group") {
-    return { ...node, children: node.children.map((c) => serializeNode(c, getImage)) };
+    return { ...node, maskImage, children: node.children.map((c) => serializeNode(c, getImage, getMask)) };
   }
-  return { ...node, data: getImage(node.id) };
+  if (node.type === "adjustment") return { ...node, maskImage }; // no pixel image
+  return { ...node, data: getImage(node.id), maskImage };
 }
 
 /** Build the full, self-describing project document (layers + pixels + state). */
@@ -57,10 +72,11 @@ export function serializeProject(
   colors: { foreground: string; background: string },
   history: { labels: string[]; index: number },
   getImage: (id: string) => string | null,
+  getMask: (id: string) => string | null,
 ): ProjectFile {
   return {
     format: "graphiq-project",
-    version: 1,
+    version: 6,
     name: doc.name,
     width: doc.width,
     height: doc.height,
@@ -69,7 +85,7 @@ export function serializeProject(
     activeLayerId: doc.activeLayerId,
     selectedLayerIds: doc.selectedLayerIds,
     selection: doc.selection,
-    layers: doc.layers.map((n) => serializeNode(n, getImage)),
+    layers: doc.layers.map((n) => serializeNode(n, getImage, getMask)),
     history,
     savedAt: new Date().toISOString(),
   };

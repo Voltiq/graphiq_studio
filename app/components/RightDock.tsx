@@ -123,6 +123,12 @@ interface Props {
   onApplyPreset: (adjust: Adjustments, name: string) => void;
   onAdjustReset: () => void;
   adjustActive: boolean;
+  editingAdjustment: boolean;
+  adjustEditName?: string;
+  onCreateAdjustment: () => void;
+  onDeleteAdjustment: () => void;
+  onAddCurves: () => void;
+  onAddLevels: () => void;
   /** Imperative engine handle, for the live channels histogram. */
   engineRef: RefObject<EngineHandle | null>;
   /** Active document facts for the Metadata panel. */
@@ -164,6 +170,12 @@ export default function RightDock({
   onApplyPreset,
   onAdjustReset,
   adjustActive,
+  editingAdjustment,
+  adjustEditName,
+  onCreateAdjustment,
+  onDeleteAdjustment,
+  onAddCurves,
+  onAddLevels,
   panels,
   engineRef,
   docName,
@@ -273,6 +285,12 @@ export default function RightDock({
               onApplyPreset={onApplyPreset}
               onReset={onAdjustReset}
               active={adjustActive}
+              editing={editingAdjustment}
+              editName={adjustEditName}
+              onCreate={onCreateAdjustment}
+              onDelete={onDeleteAdjustment}
+              onAddCurves={onAddCurves}
+              onAddLevels={onAddLevels}
             />
           </Panel>
         ) : null;

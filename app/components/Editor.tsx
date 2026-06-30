@@ -57,22 +57,30 @@ import {
   topLevelSelected,
   ungroupNode,
   updateNode,
+  type ActiveSurface,
   type Layer,
+  type LayerAdjustment,
   type LayerGroup,
   type LayerNode,
   type LayersApi,
+  type MaskMeta,
 } from "../lib/layers";
 import type {
   BrushSettings,
+  ChannelHistogram,
   EngineHandle,
   HistorySummary,
   ImageTransform,
+  LeafSnapshot,
   PendingPaste,
   TextRenderSpec,
 } from "../lib/paint";
 import BlurGalleryDialog from "./BlurGalleryDialog";
 import TrimDialog, { type TrimMode, type TrimSides } from "./TrimDialog";
 import SelectModifyDialog from "./SelectModifyDialog";
+import LayerStyleDialog from "./LayerStyleDialog";
+import CurvesDialog from "./CurvesDialog";
+import LevelsDialog, { type EyedropKind } from "./LevelsDialog";
 import Toast from "./Toast";
 import SaveAsDialog from "./SaveAsDialog";
 import RecentsDialog from "./RecentsDialog";
@@ -98,7 +106,23 @@ import {
   type ExportOptions,
 } from "../lib/imageio";
 import { addRecent } from "../lib/recents";
-import { DEFAULT_ADJUST, filterToAdjust, isDefaultAdjust, type Adjustments } from "../lib/adjust";
+import {
+  DEFAULT_ADJUST,
+  filterToAdjust,
+  isDefaultAdjust,
+  type AdjustmentSpec,
+  type Adjustments,
+} from "../lib/adjust";
+import { ADJUSTMENT_TYPES, specFromPreset, specFromType, specLabel } from "../lib/adjustment-types";
+import { DEFAULT_FX, type FxKey, type LayerEffects } from "../lib/effects";
+import {
+  autoLevels,
+  defaultCurves,
+  defaultLevels,
+  solveGrayPoint,
+  type ChannelParams,
+  type ToneAdjustment,
+} from "../lib/tone";
 import { extractMetadata, type ImageMetadata } from "../lib/metadata";
 
 interface PasteSrc {
@@ -880,18 +904,19 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const afterIds = new Set(collectLeafIds(treeAfter));
     const deletedIds = [...beforeIds].filter((id) => !afterIds.has(id));
     const createdIds = [...afterIds].filter((id) => !beforeIds.has(id));
-    const beforeSnaps = eng ? eng.captureLeaves(deletedIds) : new Map<string, ImageData | null>();
+    const beforeSnaps = eng ? eng.captureLeaves(deletedIds) : new Map<string, LeafSnapshot>();
     forward();
     if (eng) deletedIds.forEach((id) => eng.removeLayer(id));
-    const afterSnaps = eng ? eng.captureLeaves(createdIds) : new Map<string, ImageData | null>();
+    const afterSnaps = eng ? eng.captureLeaves(createdIds) : new Map<string, LeafSnapshot>();
     setDocSel(docId, treeAfter, selAfter);
     if (!eng) return;
-    const undoSnaps = new Map<string, ImageData | null>();
-    deletedIds.forEach((id) => undoSnaps.set(id, beforeSnaps.get(id) ?? null));
-    createdIds.forEach((id) => undoSnaps.set(id, null));
-    const redoSnaps = new Map<string, ImageData | null>();
-    createdIds.forEach((id) => redoSnaps.set(id, afterSnaps.get(id) ?? null));
-    deletedIds.forEach((id) => redoSnaps.set(id, null));
+    const empty: LeafSnapshot = { layer: null, mask: null };
+    const undoSnaps = new Map<string, LeafSnapshot>();
+    deletedIds.forEach((id) => undoSnaps.set(id, beforeSnaps.get(id) ?? empty));
+    createdIds.forEach((id) => undoSnaps.set(id, empty));
+    const redoSnaps = new Map<string, LeafSnapshot>();
+    createdIds.forEach((id) => redoSnaps.set(id, afterSnaps.get(id) ?? empty));
+    deletedIds.forEach((id) => redoSnaps.set(id, empty));
     eng.pushStructural(
       label,
       () => {
@@ -921,6 +946,477 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (node) after = insertRelative(before, leaf, node.id, true);
     else after = [leaf, ...before];
     commitLayerChange("New Layer", before, selNow(), after, single(leaf.id));
+  };
+
+  // ---- Layer masks ---------------------------------------------------------
+  // Which surface paint tools target on the active layer (mirrors engine state,
+  // for the Layers panel ring + the options-bar indicator).
+  const [paintSurface, setPaintSurface] = useState<ActiveSurface>("pixels");
+  // Re-sync the displayed surface whenever the active layer (or doc) changes.
+  useEffect(() => {
+    const id = active.activeLayerId;
+    setPaintSurface(id ? (paintRef.current?.getActiveSurface(id) ?? "pixels") : "pixels");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active.activeLayerId, activeId]);
+
+  const chooseSurface = (layerId: string, surface: ActiveSurface) => {
+    paintRef.current?.setActiveSurface(layerId, surface);
+    setPaintSurface(paintRef.current?.getActiveSurface(layerId) ?? "pixels");
+  };
+
+  const addMaskOp = (init: "reveal" | "hide" | "selection") => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    const layerId = d.activeLayerId;
+    if (!eng || !layerId) return;
+    const node = findNode(d.layers, layerId);
+    if (!node || node.mask) return; // one mask per layer; never stack
+    if (init === "selection" && !d.selection.length) {
+      showToast("Make a selection first to create a mask from it.");
+      return;
+    }
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const after = updateNode(before, layerId, { mask: { enabled: true, linked: true } });
+    eng.allocMask(layerId, init, init === "selection" ? d.selection : null, d.selectionAngle, d.selectionPivot);
+    const snap = eng.captureMask(layerId);
+    setDocSel(docId, after, sel);
+    eng.setActiveSurface(layerId, "mask");
+    setPaintSurface("mask");
+    eng.pushStructural(
+      "Add Layer Mask",
+      () => {
+        eng.freeMask(layerId);
+        setDocSel(docId, before, sel);
+        setPaintSurface("pixels");
+      },
+      () => {
+        if (snap) eng.restoreMask(layerId, snap);
+        setDocSel(docId, after, sel);
+      },
+    );
+  };
+
+  const removeMaskOp = () => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    const layerId = d.activeLayerId;
+    if (!eng || !layerId) return;
+    const node = findNode(d.layers, layerId);
+    if (!node?.mask) return;
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const after = updateNode(before, layerId, { mask: undefined });
+    const snap = eng.captureMask(layerId);
+    eng.freeMask(layerId);
+    setDocSel(docId, after, sel);
+    setPaintSurface("pixels");
+    eng.pushStructural(
+      "Delete Layer Mask",
+      () => {
+        if (snap) eng.restoreMask(layerId, snap);
+        setDocSel(docId, before, sel);
+      },
+      () => {
+        eng.freeMask(layerId);
+        setDocSel(docId, after, sel);
+      },
+    );
+  };
+
+  const applyMaskOp = () => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    const layerId = d.activeLayerId;
+    if (!eng || !layerId) return;
+    const node = findNode(d.layers, layerId);
+    if (!node?.mask) return;
+    if (!node.mask.enabled) {
+      showToast("Enable the mask before applying.");
+      return;
+    }
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const after = updateNode(before, layerId, { mask: undefined });
+    const layerBefore = eng.captureLeaves([layerId]); // pixels + mask grayscale
+    eng.applyMaskToLayer(layerId); // bake mask into the layer, then free it
+    const layerAfter = eng.captureLeaves([layerId]); // baked pixels, no mask
+    setDocSel(docId, after, sel);
+    setPaintSurface("pixels");
+    eng.pushStructural(
+      "Apply Layer Mask",
+      () => {
+        eng.restoreLeaves(layerBefore);
+        setDocSel(docId, before, sel);
+      },
+      () => {
+        eng.restoreLeaves(layerAfter);
+        setDocSel(docId, after, sel);
+      },
+    );
+  };
+
+  const toggleMaskMeta = (layerId: string, patch: Partial<MaskMeta>, label: string) => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    const node = findNode(d.layers, layerId);
+    if (!eng || !node?.mask) return;
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const after = updateNode(before, layerId, { mask: { ...node.mask, ...patch } });
+    setDocSel(docId, after, sel);
+    eng.pushStructural(
+      label,
+      () => setDocSel(docId, before, sel),
+      () => setDocSel(docId, after, sel),
+    );
+  };
+
+  const loadMaskAsSelectionOp = () => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    const layerId = d.activeLayerId;
+    if (!eng || !layerId) return;
+    if (!findNode(d.layers, layerId)?.mask) return;
+    commitSelection("Load Mask as Selection", eng.maskSelectionRects(layerId), 0, null);
+  };
+
+  // ---- Adjustment layers (non-destructive) ---------------------------------
+  const adjSeqRef = useRef(0);
+  // Live param-edit session: one undoable step per drag gesture (debounced).
+  const adjEditRef = useRef<{ layerId: string; beforeTree: LayerNode[]; selBefore: Sel } | null>(null);
+  const adjEditTimer = useRef(0);
+
+  const commitAdjustEdit = () => {
+    const sess = adjEditRef.current;
+    adjEditRef.current = null;
+    if (adjEditTimer.current) {
+      window.clearTimeout(adjEditTimer.current);
+      adjEditTimer.current = 0;
+    }
+    if (!sess) return;
+    const docId = activeIdRef.current;
+    const afterTree = activeDocRef.current.layers;
+    const after = selNow();
+    paintRef.current?.pushStructural(
+      "Edit Adjustment",
+      () => setDocSel(docId, sess.beforeTree, sess.selBefore),
+      () => setDocSel(docId, afterTree, after),
+    );
+  };
+
+  // Insert an adjustment layer above the active layer (same parent); mask it from
+  // the current selection if one exists, then select it so the panel binds live.
+  const addAdjustmentOp = (
+    typeId: string,
+    fromPreset?: string,
+    params?: Adjustments,
+    explicitSpec?: AdjustmentSpec,
+  ): string | null => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    if (!eng) return null;
+    commitAdjustEdit();
+    const docId = d.id;
+    const selBefore = selNow();
+    const before = d.layers;
+    const id = `adj-${(adjSeqRef.current += 1)}`;
+    const spec: AdjustmentSpec = explicitSpec
+      ? explicitSpec
+      : params
+        ? { type: "sliders", params }
+        : fromPreset
+          ? specFromPreset(fromPreset)
+          : specFromType(typeId);
+    const node: LayerAdjustment = {
+      id,
+      type: "adjustment",
+      name: fromPreset ?? specLabel(spec),
+      visible: true,
+      opacity: 100,
+      blend: "Normal",
+      adjustment: spec,
+      clipped: false,
+    };
+    const anchor = d.activeLayerId ? findNode(before, d.activeLayerId) : null;
+    let after: LayerNode[];
+    if (anchor && anchor.type === "group") after = insertInGroup(before, node, anchor.id);
+    else if (anchor) after = insertRelative(before, node, anchor.id, true);
+    else after = [node, ...before];
+    const hasSel = d.selection.length > 0;
+    if (hasSel) {
+      after = updateNode(after, id, { mask: { enabled: true, linked: true } });
+      eng.allocMask(id, "selection", d.selection, d.selectionAngle, d.selectionPivot);
+    }
+    const maskSnap = hasSel ? eng.captureMask(id) : null;
+    setDocSel(docId, after, single(id));
+    eng.pushStructural(
+      "New Adjustment Layer",
+      () => {
+        if (hasSel) eng.freeMask(id);
+        setDocSel(docId, before, selBefore);
+      },
+      () => {
+        if (maskSnap) eng.restoreMask(id, maskSnap);
+        setDocSel(docId, after, single(id));
+      },
+    );
+    return id;
+  };
+
+  // Live param edit from the panel (no per-tick history; one step per gesture).
+  const editAdjustmentParams = (patch: Partial<Adjustments>) => {
+    const d = activeDocRef.current;
+    const id = d.activeLayerId;
+    if (!id) return;
+    const node = findNode(d.layers, id);
+    if (!node || node.type !== "adjustment" || node.adjustment.type !== "sliders") return;
+    if (!adjEditRef.current || adjEditRef.current.layerId !== id) {
+      commitAdjustEdit();
+      adjEditRef.current = { layerId: id, beforeTree: d.layers, selBefore: selNow() };
+    }
+    const spec: AdjustmentSpec = {
+      type: "sliders",
+      params: { ...node.adjustment.params, ...patch },
+    };
+    setDocSel(d.id, updateNode(d.layers, id, { adjustment: spec }), selNow());
+    if (adjEditTimer.current) window.clearTimeout(adjEditTimer.current);
+    adjEditTimer.current = window.setTimeout(commitAdjustEdit, 500); // gesture-end commit
+  };
+
+  // Clip / release a layer (any kind) to the layer directly below it — a cheap,
+  // pixel-free structural step.
+  const setClippedOp = (id: string, clipped: boolean) => {
+    const d = activeDocRef.current;
+    const node = findNode(d.layers, id);
+    if (!node || !!node.clipped === clipped) return;
+    commitAdjustEdit();
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const after = updateNode(before, id, { clipped });
+    setDocSel(docId, after, sel);
+    paintRef.current?.pushStructural(
+      clipped ? "Create Clipping Mask" : "Release Clipping Mask",
+      () => setDocSel(docId, before, sel),
+      () => setDocSel(docId, after, sel),
+    );
+  };
+  // Toggle the active layer's clip (menu / Ctrl+Alt+G).
+  const toggleClippingMask = () => {
+    const d = activeDocRef.current;
+    const id = d.activeLayerId;
+    if (!id) return;
+    const node = findNode(d.layers, id);
+    if (node) setClippedOp(id, !node.clipped);
+  };
+
+  /** Active node if it's an adjustment layer (drives the panel's edit mode). */
+  const activeAdjustment = activeLeafNode?.type === "adjustment" ? activeLeafNode : null;
+  // The slider-bundle spec of the active adjustment (Curves/Levels are edited in
+  // their own dialogs, not the slider panel).
+  const sliderSpec =
+    activeAdjustment && activeAdjustment.adjustment.type === "sliders" ? activeAdjustment.adjustment : null;
+
+  // ---- Curves & Levels (tone) ----------------------------------------------
+  type ToneEdit =
+    | { mode: "node"; tool: "curves" | "levels"; layerId: string }
+    | { mode: "dest"; tool: "curves" | "levels"; layerId: string; spec: ToneAdjustment };
+  const [toneEdit, setToneEdit] = useState<ToneEdit | null>(null);
+  const [toneHist, setToneHist] = useState<ChannelHistogram | null>(null);
+  const [tonePick, setTonePick] = useState<EyedropKind | null>(null);
+  const toneEditRef = useRef<ToneEdit | null>(null);
+  toneEditRef.current = toneEdit;
+  const tonePickRef = useRef<EyedropKind | null>(null);
+  tonePickRef.current = tonePick;
+  const toneKey = toneEdit ? `${toneEdit.mode}:${toneEdit.tool}:${toneEdit.layerId}` : "";
+
+  // Refresh the histogram backdrop when the editor opens; clear any pick on close.
+  useEffect(() => {
+    if (toneEdit) setToneHist(paintRef.current?.histogram(activeDocRef.current.layers) ?? null);
+    else setTonePick(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toneKey]);
+
+  // The spec currently being edited (from the node, or the destructive session).
+  const toneSpec: ToneAdjustment | null = (() => {
+    if (!toneEdit) return null;
+    if (toneEdit.mode === "dest") return toneEdit.spec;
+    const n = findNode(active.layers, toneEdit.layerId);
+    return n?.type === "adjustment" && n.adjustment.type !== "sliders" ? n.adjustment : null;
+  })();
+
+  // Live-edit a tone adjustment NODE's spec (debounced one-step structural history).
+  const setToneNodeSpec = (layerId: string, spec: ToneAdjustment) => {
+    const d = activeDocRef.current;
+    if (!findNode(d.layers, layerId)) return;
+    if (!adjEditRef.current || adjEditRef.current.layerId !== layerId) {
+      commitAdjustEdit();
+      adjEditRef.current = { layerId, beforeTree: d.layers, selBefore: selNow() };
+    }
+    setDocSel(d.id, updateNode(d.layers, layerId, { adjustment: spec }), selNow());
+    if (adjEditTimer.current) window.clearTimeout(adjEditTimer.current);
+    adjEditTimer.current = window.setTimeout(commitAdjustEdit, 500);
+  };
+
+  const addToneAdjustment = (tool: "curves" | "levels") => {
+    const spec = tool === "curves" ? defaultCurves() : defaultLevels();
+    const id = addAdjustmentOp("", undefined, undefined, spec);
+    if (id) setToneEdit({ mode: "node", tool, layerId: id });
+  };
+  const editToneNode = (id: string) => {
+    const n = findNode(activeDocRef.current.layers, id);
+    if (n?.type !== "adjustment") return;
+    const t = n.adjustment.type;
+    if (t === "curves" || t === "levels") setToneEdit({ mode: "node", tool: t, layerId: id });
+  };
+  const openDestructiveTone = (tool: "curves" | "levels") => {
+    if (!activeLeafId) {
+      showToast("Select a pixel layer first.");
+      return;
+    }
+    setToneEdit({ mode: "dest", tool, layerId: activeLeafId, spec: tool === "curves" ? defaultCurves() : defaultLevels() });
+  };
+
+  const onToneChange = (spec: ToneAdjustment) => {
+    const te = toneEditRef.current;
+    if (!te) return;
+    if (te.mode === "node") setToneNodeSpec(te.layerId, spec);
+    else {
+      setToneEdit({ ...te, spec });
+      const d = activeDocRef.current;
+      paintRef.current?.previewTone(te.layerId, spec, d.selection, d.selectionAngle, d.selectionPivot);
+    }
+  };
+  const onToneDone = () => {
+    const te = toneEditRef.current;
+    if (te?.mode === "dest") paintRef.current?.endAdjust(); // bake one pixel step
+    else commitAdjustEdit();
+    setToneEdit(null);
+  };
+  const onToneCancel = () => {
+    const te = toneEditRef.current;
+    if (te?.mode === "dest") paintRef.current?.revertAdjust(); // drop the destructive preview
+    else commitAdjustEdit(); // node: keep the (undoable) edits — a safe outside-click close
+    setToneEdit(null);
+  };
+  const onToneAuto = () => {
+    if (!toneSpec || toneSpec.type !== "levels" || !toneHist) return;
+    const a = autoLevels(toneHist, 0.5);
+    onToneChange({ type: "levels", channels: { rgb: toneSpec.channels.rgb, r: a.r, g: a.g, b: a.b } });
+  };
+  // The Levels eyedroppers sample a pixel on the canvas (pick mode), then set the
+  // black / white input point per channel, or solve a neutral grey.
+  const onTonePicked = (rgb: { r: number; g: number; b: number }) => {
+    const kind = tonePickRef.current;
+    setTonePick(null);
+    if (!kind || !toneSpec || toneSpec.type !== "levels") return;
+    const c = toneSpec.channels;
+    let channels = c;
+    if (kind === "gray") {
+      const g = solveGrayPoint(rgb);
+      channels = { rgb: c.rgb, r: g.r, g: g.g, b: g.b };
+    } else {
+      const v: [number, number, number] = [rgb.r, rgb.g, rgb.b];
+      const set = (p: ChannelParams, i: number): ChannelParams =>
+        kind === "black"
+          ? { ...p, inBlack: Math.min(255, Math.max(0, Math.round(v[i]))) }
+          : { ...p, inWhite: Math.min(255, Math.max(1, Math.round(v[i]))) };
+      channels = { rgb: c.rgb, r: set(c.r, 0), g: set(c.g, 1), b: set(c.b, 2) };
+    }
+    onToneChange({ type: "levels", channels });
+  };
+
+  // ---- Layer effects (styles) ----------------------------------------------
+  const [layerStyleTarget, setLayerStyleTarget] = useState<string | null>(null);
+  const [fxClipboard, setFxClipboard] = useState<LayerEffects | null>(null);
+  // Live FX-edit session: one undoable step per drag gesture (debounced).
+  const fxEditRef = useRef<{ layerId: string; beforeTree: LayerNode[]; selBefore: Sel } | null>(null);
+  const fxEditTimer = useRef(0);
+
+  const commitFxEdit = () => {
+    const sess = fxEditRef.current;
+    fxEditRef.current = null;
+    if (fxEditTimer.current) {
+      window.clearTimeout(fxEditTimer.current);
+      fxEditTimer.current = 0;
+    }
+    if (!sess) return;
+    const docId = activeIdRef.current;
+    const afterTree = activeDocRef.current.layers;
+    const after = selNow();
+    paintRef.current?.pushStructural(
+      "Edit Layer Style",
+      () => setDocSel(docId, sess.beforeTree, sess.selBefore),
+      () => setDocSel(docId, afterTree, after),
+    );
+  };
+
+  // Live FX edit from the dialog (no per-tick history; one step per gesture).
+  const setLayerEffectsOp = (id: string, effects: LayerEffects) => {
+    const d = activeDocRef.current;
+    if (!findNode(d.layers, id)) return;
+    if (!fxEditRef.current || fxEditRef.current.layerId !== id) {
+      commitFxEdit();
+      fxEditRef.current = { layerId: id, beforeTree: d.layers, selBefore: selNow() };
+    }
+    setDocSel(d.id, updateNode(d.layers, id, { effects }), selNow());
+    if (fxEditTimer.current) window.clearTimeout(fxEditTimer.current);
+    fxEditTimer.current = window.setTimeout(commitFxEdit, 500);
+  };
+
+  // Discrete structural FX op (toggle / paste / clear / open) — one history step.
+  const fxStructural = (id: string, effects: LayerEffects | undefined, label: string) => {
+    commitFxEdit();
+    const d = activeDocRef.current;
+    if (!findNode(d.layers, id)) return;
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const after = updateNode(before, id, { effects });
+    setDocSel(docId, after, sel);
+    paintRef.current?.pushStructural(
+      label,
+      () => setDocSel(docId, before, sel),
+      () => setDocSel(docId, after, sel),
+    );
+  };
+
+  const toggleEffectOp = (id: string, key: FxKey, enabled: boolean) => {
+    const node = findNode(activeDocRef.current.layers, id);
+    if (!node) return;
+    const cur = node.effects ?? {};
+    const existing = cur[key];
+    const eff = existing ? { ...existing, enabled } : { ...DEFAULT_FX[key](), enabled };
+    fxStructural(id, { ...cur, [key]: eff } as LayerEffects, enabled ? "Enable Effect" : "Disable Effect");
+  };
+
+  const copyLayerStyleOp = (id: string) => {
+    const fx = findNode(activeDocRef.current.layers, id)?.effects;
+    setFxClipboard(fx ? structuredClone(fx) : null);
+  };
+  const pasteLayerStyleOp = (id: string) => {
+    if (!fxClipboard) return;
+    fxStructural(id, structuredClone(fxClipboard), "Paste Layer Style");
+  };
+  const clearLayerStyleOp = (id: string) => fxStructural(id, undefined, "Clear Layer Style");
+  const openLayerStyleOp = (id: string) => {
+    selectLayer(id, "replace");
+    setLayerStyleTarget(id);
+  };
+  // Add an effect (default params) and open the dialog to it.
+  const addEffectOp = (key: FxKey) => {
+    const id = activeDocRef.current.activeLayerId;
+    if (!id) return;
+    const node = findNode(activeDocRef.current.layers, id);
+    if (!node || node.type === "adjustment") return; // adjustments carry no fill to style
+    const cur = node.effects ?? {};
+    fxStructural(id, { ...cur, [key]: DEFAULT_FX[key]() } as LayerEffects, "Add Layer Effect");
+    setLayerStyleTarget(id);
   };
 
   type TextGeom = { x: number; y: number; boxW: number | null; value: string };
@@ -1198,6 +1694,38 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     ungroup: ungroupLayerOp,
     merge: mergeSelected,
     flatten: flattenImage,
+    maskSurface: paintSurface,
+    chooseSurface,
+    addMask: addMaskOp,
+    removeMask: removeMaskOp,
+    applyMask: applyMaskOp,
+    toggleMaskEnabled: (id) => {
+      const n = findNode(active.layers, id);
+      if (n?.mask) toggleMaskMeta(id, { enabled: !n.mask.enabled }, n.mask.enabled ? "Disable Layer Mask" : "Enable Layer Mask");
+    },
+    toggleMaskLinked: (id) => {
+      const n = findNode(active.layers, id);
+      if (n?.mask) toggleMaskMeta(id, { linked: !n.mask.linked }, n.mask.linked ? "Unlink Layer Mask" : "Link Layer Mask");
+    },
+    loadMaskAsSelection: loadMaskAsSelectionOp,
+    addAdjustment: (typeId) => addAdjustmentOp(typeId),
+    setAdjustmentClipped: setClippedOp,
+    toggleClip: (id) => {
+      const n = findNode(active.layers, id);
+      if (n) setClippedOp(id, !n.clipped);
+    },
+    editAdjustment: (id) => {
+      const n = findNode(active.layers, id);
+      if (n?.type !== "adjustment") return;
+      if (n.adjustment.type === "curves" || n.adjustment.type === "levels") editToneNode(id);
+      else selectLayer(id, "replace");
+    },
+    openLayerStyle: openLayerStyleOp,
+    toggleEffect: toggleEffectOp,
+    copyLayerStyle: copyLayerStyleOp,
+    pasteLayerStyle: pasteLayerStyleOp,
+    clearLayerStyle: clearLayerStyleOp,
+    canPasteStyle: !!fxClipboard,
   };
 
   // Return a paintable leaf id: the active layer if it's a pixel layer, otherwise
@@ -1465,6 +1993,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       { foreground: fgRef.current, background: bgRef.current },
       { labels: historyRef.current.items.map((i) => i.label), index: historyRef.current.index },
       (id) => paintRef.current?.getLayerImage(id) ?? null,
+      (id) => paintRef.current?.getMaskImage(id) ?? null,
     );
     return new Blob([JSON.stringify(project)], { type: "application/json" });
   };
@@ -1524,11 +2053,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     commitFloatIfAny(); // merge any floating paste on the current doc first
     const idMap = new Map<string, string>();
     const images: { id: string; data: string }[] = [];
+    const masks: { id: string; data: string }[] = [];
     const remap = (list: SerializedNode[]): LayerNode[] =>
       list.map((n) => {
+        const mask = n.mask ? { mask: { enabled: n.mask.enabled, linked: n.mask.linked } } : {};
+        const fx = n.effects ? { effects: n.effects } : {};
+        const clip = n.clipped ? { clipped: true } : {};
         if (n.type === "group") {
           const id = `grp-${(layerSeqRef.current += 1)}`;
           idMap.set(n.id, id);
+          if (n.maskImage) masks.push({ id, data: n.maskImage });
           return {
             id,
             type: "group",
@@ -1537,12 +2071,33 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             opacity: n.opacity,
             blend: n.blend,
             expanded: n.expanded,
+            ...mask,
+            ...fx,
+            ...clip,
             children: remap(n.children),
+          };
+        }
+        if (n.type === "adjustment") {
+          const id = `adj-${(adjSeqRef.current += 1)}`;
+          idMap.set(n.id, id);
+          if (n.maskImage) masks.push({ id, data: n.maskImage });
+          return {
+            id,
+            type: "adjustment",
+            name: n.name,
+            visible: n.visible,
+            opacity: n.opacity,
+            blend: n.blend,
+            adjustment: n.adjustment,
+            clipped: !!n.clipped,
+            ...mask,
+            ...fx,
           };
         }
         const id = nextLeafId();
         idMap.set(n.id, id);
         if (n.data) images.push({ id, data: n.data });
+        if (n.maskImage) masks.push({ id, data: n.maskImage });
         return {
           id,
           type: "layer",
@@ -1551,6 +2106,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           opacity: n.opacity,
           blend: n.blend,
           ...(n.vector ? { vector: n.vector } : {}),
+          ...mask,
+          ...fx,
+          ...clip,
         };
       });
 
@@ -1577,7 +2135,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setActiveId(docId);
     if (p.foreground) setForeground(p.foreground);
     if (p.background) setBackground(p.background);
-    setPendingLoads((ls) => [...ls, { docId, images }]);
+    setPendingLoads((ls) => [...ls, { docId, images, masks }]);
   };
 
   // Parse + validate .aproj text and load it. Returns whether it succeeded.
@@ -1893,10 +2451,23 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setAdjust(DEFAULT_ADJUST);
     setAdjustFilter("Original");
   };
+  // Convert the destructive live preview into a non-destructive adjustment layer.
+  const convertPreviewToAdjustment = () => {
+    const params = { ...adjust };
+    paintRef.current?.revertAdjust(); // discard the preview baked on the active leaf
+    setAdjust(DEFAULT_ADJUST);
+    setAdjustFilter("Original");
+    addAdjustmentOp("", undefined, params);
+  };
+  // Reset an adjustment-layer node's params to neutral (edit-mode "Reset").
+  const resetAdjustmentParams = () => editAdjustmentParams(DEFAULT_ADJUST);
 
-  // Finalize a live adjustment when switching layer or document.
+  // Finalize a live adjustment (destructive session + adjustment-layer param edit)
+  // when switching layer or document.
   useEffect(() => {
     paintRef.current?.endAdjust();
+    commitAdjustEdit();
+    commitFxEdit();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active.activeLayerId, activeId]);
 
@@ -2032,6 +2603,25 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       if (al) ungroupLayerOp(al);
     } else if (actionId === "layer-merge-down") mergeSelected();
     else if (actionId === "layer-flatten") flattenImage();
+    else if (actionId === "mask-add") addMaskOp("reveal");
+    else if (actionId === "mask-add-hide") addMaskOp("hide");
+    else if (actionId === "mask-from-sel") addMaskOp("selection");
+    else if (actionId === "mask-delete") removeMaskOp();
+    else if (actionId === "mask-apply") applyMaskOp();
+    else if (actionId === "mask-to-sel") loadMaskAsSelectionOp();
+    else if (actionId === "adj-tone-curves") addToneAdjustment("curves");
+    else if (actionId === "adj-tone-levels") addToneAdjustment("levels");
+    else if (actionId === "tone-dest-curves") openDestructiveTone("curves");
+    else if (actionId === "tone-dest-levels") openDestructiveTone("levels");
+    else if (actionId.startsWith("adj-")) addAdjustmentOp(actionId.slice(4));
+    else if (actionId === "fx-open") {
+      const id = activeDocRef.current.activeLayerId;
+      if (id) openLayerStyleOp(id);
+    } else if (actionId === "fx-clear") {
+      const id = activeDocRef.current.activeLayerId;
+      if (id) clearLayerStyleOp(id);
+    } else if (actionId.startsWith("fx-add-")) addEffectOp(actionId.slice(7) as FxKey);
+    else if (actionId === "layer-clip") toggleClippingMask();
   };
 
   const swapColors = () => {
@@ -2262,7 +2852,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         setTrimOpen(true);
       } else if (e.ctrlKey && e.altKey && key === "g") {
         e.preventDefault();
-        setSelectModify("grow");
+        toggleClippingMask(); // Ctrl+Alt+G — Photoshop's Create/Release Clipping Mask
       } else if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "F6") {
         e.preventDefault();
         setSelectModify("feather");
@@ -2438,6 +3028,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           "view-rulers": showRulers,
           "view-grid": showGrid,
           "view-snap": snap,
+          "layer-clip": !!activeLeafNode?.clipped,
         }}
       />
       <OptionsBar
@@ -2579,6 +3170,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           sampleSize={SAMPLE_SIZE_PX[sampleSizeLabel] ?? 1}
           sampleAllLayers={sampleScopeLabel === "All layers"}
           onPick={setPaintColor}
+          tonePick={!!tonePick}
+          onTonePick={onTonePicked}
           pendingPaste={pendingPaste}
           onPasteDone={() => setPendingPaste(null)}
           pendingLoads={pendingLoads}
@@ -2613,13 +3206,23 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             docW: active.width,
             docH: active.height,
           }}
-          adjust={adjust}
-          onAdjust={onAdjust}
-          adjustFilter={adjustFilter}
-          onAdjustFilter={onAdjustFilter}
-          onApplyPreset={onApplyPreset}
-          onAdjustReset={onAdjustReset}
+          adjust={sliderSpec ? sliderSpec.params : adjust}
+          onAdjust={sliderSpec ? editAdjustmentParams : onAdjust}
+          adjustFilter={sliderSpec ? (sliderSpec.preset ?? "") : adjustFilter}
+          onAdjustFilter={
+            sliderSpec ? (name) => editAdjustmentParams(filterToAdjust(name)) : onAdjustFilter
+          }
+          onApplyPreset={
+            sliderSpec ? (next) => editAdjustmentParams(next) : onApplyPreset
+          }
+          onAdjustReset={sliderSpec ? resetAdjustmentParams : onAdjustReset}
           adjustActive={!!activeLeafId}
+          editingAdjustment={!!sliderSpec}
+          adjustEditName={activeAdjustment?.name}
+          onCreateAdjustment={convertPreviewToAdjustment}
+          onDeleteAdjustment={removeSelected}
+          onAddCurves={() => addToneAdjustment("curves")}
+          onAddLevels={() => addToneAdjustment("levels")}
           panels={panels}
           engineRef={paintRef}
           docName={active.name}
@@ -2698,6 +3301,54 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             setSelectModify(null);
           }}
           onClose={() => setSelectModify(null)}
+        />
+      )}
+
+      {layerStyleTarget &&
+        (() => {
+          const node = findNode(active.layers, layerStyleTarget);
+          if (!node || node.type === "adjustment") return null;
+          return (
+            <LayerStyleDialog
+              effects={node.effects ?? {}}
+              layerName={node.name}
+              onChange={(eff) => setLayerEffectsOp(layerStyleTarget, eff)}
+              onToggle={(key, enabled) => toggleEffectOp(layerStyleTarget, key, enabled)}
+              onClear={() => {
+                clearLayerStyleOp(layerStyleTarget);
+                setLayerStyleTarget(null);
+              }}
+              onClose={() => setLayerStyleTarget(null)}
+            />
+          );
+        })()}
+
+      {toneEdit && toneSpec && toneEdit.tool === "curves" && toneSpec.type === "curves" && (
+        <CurvesDialog
+          spec={toneSpec}
+          histogram={toneHist}
+          onChange={onToneChange}
+          onDone={onToneDone}
+          onCancel={onToneCancel}
+          doneLabel={toneEdit.mode === "dest" ? "Apply" : "Done"}
+          cancelLabel={toneEdit.mode === "dest" ? "Cancel" : "Close"}
+        />
+      )}
+      {toneEdit && toneSpec && toneEdit.tool === "levels" && toneSpec.type === "levels" && (
+        <LevelsDialog
+          spec={toneSpec}
+          histogram={toneHist}
+          onChange={onToneChange}
+          onDone={onToneDone}
+          onCancel={onToneCancel}
+          onAuto={onToneAuto}
+          onEyedrop={(k) => {
+            setTonePick(k);
+            showToast(`Click the image to set the ${k} point (Esc to cancel).`);
+          }}
+          picking={!!tonePick}
+          doneLabel={toneEdit.mode === "dest" ? "Apply" : "Done"}
+          cancelLabel={toneEdit.mode === "dest" ? "Cancel" : "Close"}
         />
       )}
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
-import { Check, Download, FolderInput, Plus, RotateCcw, Upload, X } from "lucide-react";
+import { Check, Download, FolderInput, Layers, Plus, RotateCcw, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import { Slider } from "../Controls";
 import FilterExportDialog from "../FilterExportDialog";
 import styles from "../RightDock.module.scss";
@@ -38,6 +38,12 @@ export default function AdjustmentsPanel({
   onReset,
   active,
   onApplyPreset,
+  editing = false,
+  editName,
+  onCreate,
+  onDelete,
+  onAddCurves,
+  onAddLevels,
 }: {
   adjust: Adjustments;
   onChange: (patch: Partial<Adjustments>) => void;
@@ -47,6 +53,16 @@ export default function AdjustmentsPanel({
   active: boolean;
   /** Apply a full set of adjustment values under a label (built-in or custom). */
   onApplyPreset: (adjust: Adjustments, name: string) => void;
+  /** True when bound to an adjustment-layer node (live, no Apply; offers Delete). */
+  editing?: boolean;
+  editName?: string;
+  /** Apply-mode: convert the current preview into a non-destructive adjustment layer. */
+  onCreate?: () => void;
+  /** Edit-mode: delete the bound adjustment layer. */
+  onDelete?: () => void;
+  /** Create a Curves / Levels adjustment layer (opens its editor). */
+  onAddCurves?: () => void;
+  onAddLevels?: () => void;
 }) {
   const dirty = !isDefaultAdjust(adjust);
   const [presets, setPresets] = useState<AdjustPreset[]>([]);
@@ -248,11 +264,25 @@ export default function AdjustmentsPanel({
         </div>
       </div>
 
-      {!active && (
-        <p style={{ fontSize: 11.5, color: "var(--text-3)", margin: "2px 0" }}>
-          Select a pixel layer to adjust.
+      {editing ? (
+        <p
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 11.5,
+            color: "var(--accent)",
+            margin: "2px 0",
+          }}
+        >
+          <SlidersHorizontal size={13} />
+          Editing <strong>{editName ?? "Adjustment"}</strong> — changes are live (no Apply).
         </p>
-      )}
+      ) : !active ? (
+        <p style={{ fontSize: 11.5, color: "var(--text-3)", margin: "2px 0" }}>
+          Select a pixel layer to adjust, or create an adjustment layer below.
+        </p>
+      ) : null}
 
       <div className={styles.adjGroup}>
         <span className={styles.groupLabel}>Light</span>
@@ -286,8 +316,40 @@ export default function AdjustmentsPanel({
         onClick={onReset}
       >
         <RotateCcw size={14} />
-        Reset Adjustments
+        {editing ? "Reset This Layer" : "Reset Adjustments"}
       </button>
+
+      {editing ? (
+        <button type="button" className={styles.resetAdjust} onClick={onDelete}>
+          <Trash2 size={14} />
+          Delete Adjustment Layer
+        </button>
+      ) : (
+        <>
+          <button
+            type="button"
+            className={styles.resetAdjust}
+            disabled={!dirty || !active}
+            onClick={onCreate}
+            title={
+              active
+                ? "Add these adjustments as a non-destructive layer"
+                : "Select a layer first"
+            }
+          >
+            <Layers size={14} />
+            Create Adjustment Layer
+          </button>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button type="button" className={styles.resetAdjust} style={{ flex: 1 }} onClick={onAddCurves}>
+              <SlidersHorizontal size={14} /> Curves
+            </button>
+            <button type="button" className={styles.resetAdjust} style={{ flex: 1 }} onClick={onAddLevels}>
+              <SlidersHorizontal size={14} /> Levels
+            </button>
+          </div>
+        </>
+      )}
 
       <input
         ref={filesInputRef}

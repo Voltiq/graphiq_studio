@@ -1,3 +1,5 @@
+import type { ToneAdjustment } from "./tone";
+
 export interface Adjustments {
   // Light
   exposure: number;
@@ -16,6 +18,13 @@ export interface Adjustments {
   clarity: number;
   noise: number;
 }
+
+/** What a non-destructive adjustment layer carries. A discriminated union: the
+ *  slider/preset bundle (routed through `applyAdjustments`) plus the tone tools
+ *  (Curves / Levels, routed through precompiled LUTs in `tone.ts`). */
+export type AdjustmentSpec =
+  | { type: "sliders"; preset?: string; params: Adjustments }
+  | ToneAdjustment;
 
 export const DEFAULT_ADJUST: Adjustments = {
   exposure: 0,
