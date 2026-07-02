@@ -34,7 +34,7 @@ import {
   type PendingPaste,
   type WandSelection,
 } from "../lib/paint";
-import { collectLeafIds, type LayerNode } from "../lib/layers";
+import { collectLeafIds, findNode, type LayerNode } from "../lib/layers";
 import type { PendingLoad } from "../lib/project";
 
 const ZOOM_STEPS = [
@@ -429,7 +429,18 @@ function textSpecOf(v: VectorText) {
 // Blue node colour for shapes' draggable geometry handles (trapezoid sides,
 // triangle apex) — distinct from the white resize handles. Plus the default
 // symmetric trapezoid top-edge insets.
-const SHAPE_NODE_COLOR = "#3b82f6";
+/* Shape/pen node handles follow the UI accent (`--accent`). Reading a computed
+   style is not free, so the value is cached per theme × accent combination. */
+let shapeNodeCache = { key: "", color: "#f5a04c" };
+function shapeNodeColor(): string {
+  const el = document.documentElement;
+  const key = `${el.getAttribute("data-theme")}|${el.getAttribute("data-accent")}`;
+  if (key !== shapeNodeCache.key) {
+    const v = getComputedStyle(el).getPropertyValue("--accent").trim();
+    shapeNodeCache = { key, color: v || "#f5a04c" };
+  }
+  return shapeNodeCache.color;
+}
 const TRAP_DEFAULT: TrapInsets = { l: 0.25, r: 0.25 };
 
 /** A fresh pen anchor as a "corner" (both bezier handles sit on the point). */
@@ -777,6 +788,12 @@ export default function CanvasArea({
   const penGrabRef = useRef<{ px: number; py: number; anchor: PenAnchor } | null>(null);
   const penOptsRef = useRef(pen);
   penOptsRef.current = pen;
+  // Brush / pencil / eraser: latest settings (the prop is already the active
+  // tool's) + hover point — the same overlay brush-ring cursor as blur/dodge,
+  // so it scales with zoom and shows the hardness falloff.
+  const paintBrushRef = useRef(brush);
+  paintBrushRef.current = brush;
+  const paintHoverRef = useRef<{ x: number; y: number } | null>(null);
   // Blur (focus) brush: latest settings + the hover point for the brush-ring
   // cursor that's drawn on the overlay (so it scales with zoom + shows hardness).
   const blurRef = useRef(blur);
@@ -1042,6 +1059,21 @@ export default function CanvasArea({
   const engineRef = useRef<PaintEngine | null>(null);
   if (!engineRef.current) engineRef.current = new PaintEngine();
   const engine = engineRef.current;
+
+  // Dev-only console hook for render-cache A/B verification (Spec 06):
+  // __gqRenderCache.disable() must produce pixel-identical output, just slower.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const w = window as unknown as { __gqRenderCache?: object };
+    w.__gqRenderCache = {
+      enable: () => engine.setRenderCacheEnabled(true),
+      disable: () => engine.setRenderCacheEnabled(false),
+      stats: () => engine.renderCacheStats(),
+    };
+    return () => {
+      delete w.__gqRenderCache;
+    };
+  }, [engine]);
 
   const layersRef = useRef(layers);
   layersRef.current = layers;
@@ -1577,7 +1609,7 @@ export default function CanvasArea({
         trace();
         ctx.stroke();
         ctx.lineWidth = 1;
-        ctx.strokeStyle = SHAPE_NODE_COLOR;
+        ctx.strokeStyle = shapeNodeColor();
         trace();
         ctx.stroke();
       }
@@ -1625,7 +1657,7 @@ export default function CanvasArea({
         ctx.fillStyle = "#fff";
         ctx.fill();
         ctx.lineWidth = 1.5;
-        ctx.strokeStyle = SHAPE_NODE_COLOR;
+        ctx.strokeStyle = shapeNodeColor();
         ctx.stroke();
       });
     }
@@ -1722,7 +1754,7 @@ export default function CanvasArea({
               const [x2, y2] = rot(p.x + gx * s, p.y + (nb.y + nb.h + ext) * s);
               for (const [w, col] of [
                 [3, "rgba(0,0,0,0.35)"],
-                [1, SHAPE_NODE_COLOR],
+                [1, shapeNodeColor()],
               ] as const) {
                 ctx.lineWidth = w;
                 ctx.strokeStyle = col;
@@ -1737,7 +1769,7 @@ export default function CanvasArea({
             const [hx, hy] = rot(p.x + gx * s, p.y + nb.y * s);
             ctx.beginPath();
             ctx.arc(Math.round(hx), Math.round(hy), 5, 0, Math.PI * 2);
-            ctx.fillStyle = SHAPE_NODE_COLOR;
+            ctx.fillStyle = shapeNodeColor();
             ctx.fill();
             ctx.lineWidth = 1.5;
             ctx.strokeStyle = "#fff";
@@ -1789,6 +1821,17 @@ export default function CanvasArea({
         ctx.setLineDash([]);
       }
     };
+
+    if (
+      (toolRef.current === "brush" || toolRef.current === "pencil" || toolRef.current === "eraser") &&
+      paintHoverRef.current
+    ) {
+      const b = paintBrushRef.current;
+      const hx = p.x + paintHoverRef.current.x * s;
+      const hy = p.y + paintHoverRef.current.y * s;
+      drawRing(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
+      drawCross(hx, hy, 4);
+    }
 
     if (toolRef.current === "blur" && blurHoverRef.current) {
       const b = blurRef.current;
@@ -1890,6 +1933,8 @@ export default function CanvasArea({
       gradientRef.current ||
       penPathRef.current ||
       (toolRef.current === "crop" && cropBoxRef.current) ||
+      ((toolRef.current === "brush" || toolRef.current === "pencil" || toolRef.current === "eraser") &&
+        paintHoverRef.current) ||
       (toolRef.current === "blur" && blurHoverRef.current) ||
       (toolRef.current === "dodge" && dodgeHoverRef.current) ||
       (toolRef.current === "clone" && cloneHoverRef.current) ||
@@ -2153,8 +2198,13 @@ export default function CanvasArea({
 
   const prevZoomRef = useRef(zoom);
   const focalRef = useRef<{ ax: number; ay: number } | null>(null);
-  const pendingPanRef = useRef<Pan | null>(null);
+  /** A pan queued for a specific target zoom (fit / view restore). Tagging it
+   *  with the zoom stops the zoom effect's mount run from consuming it early
+   *  at the not-yet-updated scale — which left the canvas off-centre on load. */
+  const pendingPanRef = useRef<{ pan: Pan; zoom: number } | null>(null);
   const sizeInitRef = useRef(true);
+  const panRef = useRef(pan);
+  panRef.current = pan;
 
   const clampHere = (x: number, y: number, scale: number, vp: HTMLElement) =>
     clampPan(x, y, scale, widthRef.current, heightRef.current, vp.clientWidth, vp.clientHeight);
@@ -2173,7 +2223,7 @@ export default function CanvasArea({
     if (z === zoomRef.current) {
       setPanRef.current(clampPan(px, py, s, w, h, vp.clientWidth, vp.clientHeight));
     } else {
-      pendingPanRef.current = { x: px, y: py };
+      pendingPanRef.current = { pan: { x: px, y: py }, zoom: z };
       onZoomChangeRef.current(z);
     }
   }, []);
@@ -2208,10 +2258,37 @@ export default function CanvasArea({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fit the document to the viewport once, on mount.
+  // Per-document view: each tab keeps its own zoom/pan. The outgoing doc's
+  // view is saved on switch; the incoming doc's is restored — and a document
+  // that has never been active (including the first one, on mount) defaults to
+  // the Fit-on-Screen view, so it always starts correctly centred.
+  const viewMemRef = useRef(new Map<string, { zoom: number; pan: Pan }>());
+  const prevDocRef = useRef<string | null>(null);
   useLayoutEffect(() => {
-    fit();
-  }, [fit]);
+    const prev = prevDocRef.current;
+    if (prev === activeId) return;
+    prevDocRef.current = activeId;
+    if (prev !== null) {
+      viewMemRef.current.set(prev, { zoom: zoomRef.current, pan: panRef.current });
+      // Drop views of closed documents.
+      const alive = new Set(docs.map((d) => d.id));
+      for (const id of [...viewMemRef.current.keys()]) if (!alive.has(id)) viewMemRef.current.delete(id);
+    }
+    const mem = prev === null ? undefined : viewMemRef.current.get(activeId);
+    if (!mem) {
+      fit();
+      return;
+    }
+    const vp = viewportRef.current;
+    if (!vp) return;
+    if (mem.zoom === zoomRef.current) {
+      setPanRef.current(clampHere(mem.pan.x, mem.pan.y, mem.zoom / 100, vp));
+    } else {
+      pendingPanRef.current = { pan: mem.pan, zoom: mem.zoom }; // applied by the zoom effect below
+      onZoomChangeRef.current(mem.zoom);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, fit]);
 
   // When zoom changes, pivot around the focal point (cursor or viewport centre),
   // or apply an explicit pan queued by fit().
@@ -2222,13 +2299,14 @@ export default function CanvasArea({
     const prevScale = prevZoomRef.current / 100;
     prevZoomRef.current = zoom;
 
-    if (pendingPanRef.current) {
+    if (pendingPanRef.current?.zoom === zoom) {
       const p = pendingPanRef.current;
       pendingPanRef.current = null;
-      setPanRef.current(clampHere(p.x, p.y, newScale, vp));
+      setPanRef.current(clampHere(p.pan.x, p.pan.y, newScale, vp));
       return;
     }
     if (prevScale === newScale) return;
+    pendingPanRef.current = null; // a different zoom arrived first — the queued pan is obsolete
 
     const f = focalRef.current;
     focalRef.current = null;
@@ -2242,18 +2320,24 @@ export default function CanvasArea({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoom]);
 
-  // Re-centre when the canvas is resized (but not on the first mount).
+  // Re-centre when the canvas is resized (Image/Canvas Size, crop, rotate) —
+  // but not on the first mount, and not when the size change comes from
+  // switching documents: the per-document view effect above owns the view then.
+  const sizeDocRef = useRef(activeId);
   useEffect(() => {
+    const switched = sizeDocRef.current !== activeId;
+    sizeDocRef.current = activeId;
     if (sizeInitRef.current) {
       sizeInitRef.current = false;
       return;
     }
+    if (switched) return;
     const vp = viewportRef.current;
     if (!vp) return;
     const s = zoomRef.current / 100;
     setPanRef.current(clampHere((vp.clientWidth - width * s) / 2, (vp.clientHeight - height * s) / 2, s, vp));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [width, height]);
+  }, [width, height, activeId]);
 
   // Report the viewport size up, and re-clamp the pan, on resize.
   useEffect(() => {
@@ -2331,8 +2415,8 @@ export default function CanvasArea({
         engine.rasterizeShape(id, box, angle, kind, fill, stroke, sw, radius, geom),
       beginBlurFx: (ids, sel, selAngle, selPivot) =>
         engine.beginBlurFx(ids, sel, selAngle, selPivot),
-      previewBlurFx: (kind, amount, angle, anchorX, anchorY) =>
-        engine.previewBlurFx(kind, amount, angle, anchorX, anchorY),
+      previewBlurFx: (kind, amount, angle, anchorX, anchorY, extra) =>
+        engine.previewBlurFx(kind, amount, angle, anchorX, anchorY, extra),
       commitBlurFx: (label) => engine.commitBlurFx(label),
       cancelBlurFx: () => engine.cancelBlurFx(),
       beginBlur: (layerId, blur, x, y, clip, clipAngle, clipPivot) =>
@@ -2362,6 +2446,9 @@ export default function CanvasArea({
       maskSelectionRects: (id) => engine.maskSelectionRects(id),
       setActiveSurface: (id, surface) => engine.setActiveSurface(id, surface),
       getActiveSurface: (id) => engine.getActiveSurface(id),
+      applySmartFilters: (layerId, filters, side) => engine.applySmartFilters(layerId, filters, side),
+      setRenderCacheEnabled: (on) => engine.setRenderCacheEnabled(on),
+      renderCacheStats: () => engine.renderCacheStats(),
     };
     engine.syncHistory();
     scheduleComposite();
@@ -2973,7 +3060,127 @@ export default function CanvasArea({
     return null;
   };
 
+  // ---- Arrow-key nudge -------------------------------------------------------
+  // Arrows move the selection OUTLINE (selection tools) or the selected pixels /
+  // whole layer / float (Move tool) by 1px — 10px with Ctrl. Pixel nudges keep
+  // one engine move-session open across rapid presses and commit 350ms after the
+  // last one, so holding a key is smooth and a burst lands as ONE undo step.
+  const activeLayerIdRef = useRef(activeLayerId);
+  activeLayerIdRef.current = activeLayerId;
+  const selHandlersRef = useRef({ onSelectionChange, onSelectionRects, onSelectionPivot });
+  selHandlersRef.current = { onSelectionChange, onSelectionRects, onSelectionPivot };
+  const nudgeRef = useRef<{
+    active: boolean;
+    float: boolean;
+    baseOff: { x: number; y: number } | null;
+    dx: number;
+    dy: number;
+    timer: number;
+  }>({ active: false, float: false, baseOff: null, dx: 0, dy: 0, timer: 0 });
+
+  const commitNudge = useCallback(() => {
+    const n = nudgeRef.current;
+    if (!n.active) return;
+    window.clearTimeout(n.timer);
+    const d = { x: n.dx, y: n.dy };
+    const wasFloat = n.float;
+    nudgeRef.current = { active: false, float: false, baseOff: null, dx: 0, dy: 0, timer: 0 };
+    if (!wasFloat) engine.endMove(); // bake + one history entry (a float commits later)
+    // The outline follows the moved pixels, exactly like a pointer move-drag.
+    const sel = selectionRef.current;
+    if (sel.length && (d.x !== 0 || d.y !== 0)) {
+      const moved = sel.map((r) => ({ ...r, x: r.x + d.x, y: r.y + d.y }));
+      const h = selHandlersRef.current;
+      if (selAngleRef.current !== 0) {
+        h.onSelectionRects(moved);
+        const piv = selPivotRef.current;
+        if (piv) h.onSelectionPivot({ x: piv.x + d.x, y: piv.y + d.y });
+      } else {
+        h.onSelectionChange(moved);
+      }
+    }
+  }, [engine]);
+
+  // Finalize a pending pixel nudge when the tool changes.
+  useEffect(() => {
+    commitNudge();
+  }, [tool, commitNudge]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "ArrowUp" && e.key !== "ArrowDown")
+        return;
+      if (e.altKey || e.metaKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable ||
+          t.closest?.('[role="dialog"]'))
+      )
+        return; // typing / dialog-local arrow handling wins
+      const curTool = toolRef.current;
+      const sel = selectionRef.current;
+      const selTool = curTool === "select" || curTool === "lasso" || curTool === "wand";
+      if (!(curTool === "move" || (selTool && sel.length))) return;
+      e.preventDefault();
+      const step = e.ctrlKey ? 10 : 1;
+      const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+      const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+
+      if (selTool) {
+        // Selection tools nudge the OUTLINE only — immediate, per press.
+        const moved = sel.map((r) => ({ ...r, x: r.x + dx, y: r.y + dy }));
+        const h = selHandlersRef.current;
+        if (selAngleRef.current !== 0) {
+          h.onSelectionRects(moved);
+          const piv = selPivotRef.current;
+          if (piv) h.onSelectionPivot({ x: piv.x + dx, y: piv.y + dy });
+        } else {
+          h.onSelectionChange(moved);
+        }
+        return;
+      }
+
+      // Move tool → nudge pixels (the float, selection content, or whole layer).
+      const n = nudgeRef.current;
+      const layerId = activeLayerIdRef.current;
+      if (!n.active) {
+        if (engine.isFloating && engine.floatLayerId === layerId) {
+          n.float = true;
+          n.baseOff = engine.getFloatOffset();
+        } else {
+          if (!layerId) return;
+          const node = findNode(layersRef.current, layerId);
+          if (!node || node.type !== "layer") return; // pixel leaves only
+          n.float = false;
+          n.baseOff = null;
+          engine.beginMove(
+            layerId,
+            sel.length ? sel : null,
+            !!node.mask && node.mask.linked !== false && !sel.length,
+          );
+        }
+        n.active = true;
+        n.dx = 0;
+        n.dy = 0;
+      }
+      n.dx += dx;
+      n.dy += dy;
+      if (n.float && n.baseOff) engine.setFloatOffset(n.baseOff.x + n.dx, n.baseOff.y + n.dy);
+      else engine.moveTo(n.dx, n.dy);
+      window.clearTimeout(n.timer);
+      n.timer = window.setTimeout(commitNudge, 350);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, commitNudge]);
+
   const onCanvasPointerDown = (e: React.PointerEvent) => {
+    commitNudge(); // a pointer gesture finalizes any pending arrow-key nudge
     // Levels eyedropper: sample the composite under the cursor, then hand back the
     // RGB (the active tool's normal action is suppressed for this one click).
     if (tonePick) {
@@ -3057,7 +3264,9 @@ export default function CanvasArea({
           e.preventDefault();
           viewRef.current?.setPointerCapture(e.pointerId);
           moveRef.current = { sx: p.x, sy: p.y, mode: "pixels" };
-          engine.beginMove(activeLayerId, null); // no selection → move the whole layer
+          // No selection → move the whole layer; a linked mask travels with it.
+          const moveNode = findNode(layers, activeLayerId);
+          engine.beginMove(activeLayerId, null, !!moveNode?.mask && moveNode.mask.linked !== false);
         }
       }
       moveDeltaRef.current = { x: 0, y: 0 };
@@ -3245,6 +3454,7 @@ export default function CanvasArea({
       viewRef.current?.setPointerCapture(e.pointerId);
       paintingRef.current = true;
       const p = toDoc(e);
+      paintHoverRef.current = { x: p.x, y: p.y }; // ring tracks the stroke
       // Left button paints with the primary colour, right button with the secondary.
       const paintCol = e.button === 2 ? background : foreground;
       engine.beginStroke(
@@ -3380,6 +3590,11 @@ export default function CanvasArea({
       return;
     }
 
+    // Brush / pencil / eraser: track the pointer for the brush-ring cursor.
+    if (toolRef.current === "brush" || toolRef.current === "pencil" || toolRef.current === "eraser") {
+      paintHoverRef.current = { x: cur.x, y: cur.y };
+      ensureAnts();
+    }
     // Blur: track the pointer so the brush-ring cursor follows it (drawn on the overlay).
     if (toolRef.current === "blur") {
       blurHoverRef.current = { x: cur.x, y: cur.y };
@@ -4260,16 +4475,18 @@ export default function CanvasArea({
                       ? "grab"
                       : tool === "zoom"
                         ? "zoom-in"
-                        : tool === "blur" || tool === "clone" || tool === "dodge"
+                        : tool === "blur" ||
+                            tool === "clone" ||
+                            tool === "dodge" ||
+                            tool === "brush" ||
+                            tool === "pencil" ||
+                            tool === "eraser"
                           ? "none" // brush ring is drawn on the overlay instead
                           : tool === "text"
                             ? "text"
                             : tool === "eyedropper"
                             ? EYEDROPPER_CURSOR
-                            : tool === "brush" ||
-                                tool === "pencil" ||
-                                tool === "eraser" ||
-                                tool === "select" ||
+                            : tool === "select" ||
                                 tool === "lasso" ||
                                 tool === "wand" ||
                                 tool === "shape" ||
@@ -4307,8 +4524,12 @@ export default function CanvasArea({
                 if (handRef.current) return; // keep the grab cursor while panning
                 setHoverCursor(null);
                 onCursor(null);
-                // Hide the blur / clone brush-ring when the pointer leaves the
+                // Hide the brush-ring cursors when the pointer leaves the
                 // canvas (unless mid-stroke, so the ring stays while dragging out).
+                if (!paintingRef.current) {
+                  paintHoverRef.current = null;
+                  ensureAnts();
+                }
                 if (!blurringRef.current) {
                   blurHoverRef.current = null;
                   ensureAnts();

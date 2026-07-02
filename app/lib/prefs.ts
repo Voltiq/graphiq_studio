@@ -3,18 +3,28 @@
 /** Where a clipboard paste goes by default. "ask" shows the paste dialog. */
 export type PasteDefault = "ask" | "new-layer" | "current-layer" | "new-canvas";
 
+/** What to do when a pasted image is larger than the canvas (and the paste
+    destination keeps the current canvas). "ask" shows the size question. */
+export type PasteOversize = "ask" | "keep" | "expand";
+
 export interface Preferences {
   /** Default destination for pasted clipboard images. */
   defaultPaste: PasteDefault;
+  /** Default canvas-size behaviour for oversized pastes. */
+  pasteOversize: PasteOversize;
   /** Snap the gradient midpoint to the centre when it's dragged close. */
   gradientSnap: boolean;
+  /** Layer styles share the Gradient tool's saved/imported gradient presets. */
+  sharedGradients: boolean;
   /** Max history rows shown before the History panel becomes scrollable. */
   maxHistory: number;
 }
 
 export const DEFAULT_PREFS: Preferences = {
   defaultPaste: "ask",
+  pasteOversize: "ask",
   gradientSnap: true,
+  sharedGradients: true,
   maxHistory: 25,
 };
 

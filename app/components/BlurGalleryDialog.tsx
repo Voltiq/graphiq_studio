@@ -6,22 +6,35 @@ import styles from "./BlurGalleryDialog.module.scss";
 import { Slider } from "./Controls";
 import { BLUR_FX_LABELS, type BlurFxKind, type BlurFxScope, type BlurFxSettings } from "../lib/tools";
 
-const TYPES: BlurFxKind[] = ["gaussian", "box", "motion", "zoom", "spin", "bokeh"];
+const TYPES: BlurFxKind[] = [
+  "gaussian",
+  "box",
+  "bokeh",
+  "motion",
+  "zoom",
+  "spin",
+  "tiltshift",
+  "surface",
+  "spread",
+];
 const TYPE_DESC: Record<BlurFxKind, string> = {
-  gaussian: "Smooth, natural softening",
-  box: "Uniform square average",
-  motion: "Directional streak along an angle",
-  zoom: "Radial streaks from the centre",
-  spin: "Circular streaks around the centre",
-  bokeh: "Soft, round lens-like blur",
+  gaussian: "Smooth, natural softening.",
+  box: "Uniform square average — fast and flat.",
+  motion: "Directional streaks along an angle.",
+  zoom: "Radial streaks away from a centre point.",
+  spin: "Circular streaks around a centre point.",
+  bokeh: "Soft, round lens-like blur.",
+  tiltshift: "A sharp focus band fading to blur — the miniature look.",
+  surface: "Smooths texture while keeping edges crisp.",
+  spread: "Frosted-glass scatter — pixels trade places with neighbours.",
 };
 const SCOPES: { value: BlurFxScope; label: string }[] = [
   { value: "layer", label: "Active layer" },
   { value: "canvas", label: "Whole canvas" },
 ];
 
-const PW = 460;
-const PH = 340;
+const PW = 500;
+const PH = 380;
 
 /** Primary slider's label + range for each blur kind. */
 function amountMeta(kind: BlurFxKind): { label: string; min: number; max: number; unit: string } {
@@ -34,10 +47,24 @@ function amountMeta(kind: BlurFxKind): { label: string; min: number; max: number
       return { label: "Angle", min: 1, max: 180, unit: "°" };
     case "bokeh":
       return { label: "Radius", min: 1, max: 60, unit: "px" };
+    case "tiltshift":
+      return { label: "Radius", min: 1, max: 100, unit: "px" };
+    case "surface":
+      return { label: "Radius", min: 1, max: 50, unit: "px" };
+    case "spread":
+      return { label: "Amount", min: 1, max: 60, unit: "px" };
     default:
       return { label: "Radius", min: 1, max: 200, unit: "px" };
   }
 }
+
+/** Kinds whose geometry is set by dragging the preview. */
+const dragKind = (k: BlurFxKind) => k === "zoom" || k === "spin" || k === "tiltshift";
+const DRAG_HINT: Partial<Record<BlurFxKind, string>> = {
+  zoom: "Drag the preview to set the blur centre.",
+  spin: "Drag the preview to set the rotation centre.",
+  tiltshift: "Drag the preview to move the focus band.",
+};
 
 export default function BlurGalleryDialog({
   settings,
@@ -55,7 +82,7 @@ export default function BlurGalleryDialog({
   preview: HTMLCanvasElement | null;
 }) {
   const meta = amountMeta(settings.kind);
-  const radial = settings.kind === "zoom" || settings.kind === "spin";
+  const draggable = dragKind(settings.kind);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // How the document is letterboxed into the fixed preview pane.
@@ -64,10 +91,10 @@ export default function BlurGalleryDialog({
     const s = Math.min(PW / preview.width, PH / preview.height);
     const dw = preview.width * s;
     const dh = preview.height * s;
-    return { dw, dh, ox: (PW - dw) / 2, oy: (PH - dh) / 2 };
+    return { s, dw, dh, ox: (PW - dw) / 2, oy: (PH - dh) / 2 };
   };
 
-  // Drag on the preview to set the zoom/spin centre (normalized doc coords).
+  // Drag on the preview to set the zoom/spin/tilt-shift anchor (normalized).
   const setAnchorFromPointer = (e: React.PointerEvent) => {
     const lay = layout();
     const cnv = canvasRef.current;
@@ -98,7 +125,8 @@ export default function BlurGalleryDialog({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [onClose, onApply]);
 
-  // Draw the previewed composite letterboxed into the preview pane (checker behind).
+  // Draw the previewed composite letterboxed into the pane, plus the geometry
+  // guides: a centre reticle for zoom/spin, the focus-band lines for tilt-shift.
   useEffect(() => {
     const cnv = canvasRef.current;
     const ctx = cnv?.getContext("2d");
@@ -123,13 +151,21 @@ export default function BlurGalleryDialog({
       ctx.imageSmoothingQuality = "high";
       ctx.drawImage(preview, lay.ox, lay.oy, lay.dw, lay.dh);
     }
-    // Zoom/spin centre marker (a ringed cross-hair the user can drag).
-    if (radial && lay) {
-      const mx = lay.ox + settings.anchor.x * lay.dw;
-      const my = lay.oy + settings.anchor.y * lay.dh;
+    if (!lay) return;
+    const mx = lay.ox + settings.anchor.x * lay.dw;
+    const my = lay.oy + settings.anchor.y * lay.dh;
+    // dark-under-white double stroke, clipped to the artwork
+    const dual = (draw: () => void) => {
       ctx.lineWidth = 3;
       ctx.strokeStyle = "rgba(0,0,0,0.5)";
-      const ring = () => {
+      draw();
+      ctx.lineWidth = 1.25;
+      ctx.strokeStyle = "rgba(255,255,255,0.95)";
+      draw();
+    };
+
+    if (settings.kind === "zoom" || settings.kind === "spin") {
+      dual(() => {
         ctx.beginPath();
         ctx.arc(mx, my, 8, 0, Math.PI * 2);
         ctx.moveTo(mx - 12, my);
@@ -137,17 +173,64 @@ export default function BlurGalleryDialog({
         ctx.moveTo(mx, my - 12);
         ctx.lineTo(mx, my + 12);
         ctx.stroke();
+      });
+    }
+
+    if (settings.kind === "tiltshift" && preview) {
+      // Focus-band guides: centre line + band edges (solid) + feather edges
+      // (dashed), through the anchor at the configured angle.
+      const rad = (settings.angle * Math.PI) / 180;
+      const dx = Math.cos(rad);
+      const dy = Math.sin(rad);
+      const nx = -dy;
+      const ny = dx;
+      const base = Math.min(preview.width, preview.height) * lay.s;
+      const bandPx = (settings.band / 100) * base * 0.5;
+      const featherPx = Math.max(1, (settings.feather / 100) * base * 0.5);
+      const L = PW + PH; // long enough to cross the pane at any angle
+      const line = (off: number) => {
+        const cx = mx + nx * off;
+        const cy = my + ny * off;
+        ctx.beginPath();
+        ctx.moveTo(cx - dx * L, cy - dy * L);
+        ctx.lineTo(cx + dx * L, cy + dy * L);
+        ctx.stroke();
       };
-      ring();
-      ctx.lineWidth = 1.25;
-      ctx.strokeStyle = "rgba(255,255,255,0.95)";
-      ring();
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(lay.ox, lay.oy, lay.dw, lay.dh);
+      ctx.clip();
+      dual(() => line(0));
+      dual(() => {
+        line(bandPx);
+        line(-bandPx);
+      });
+      ctx.setLineDash([5, 5]);
+      dual(() => {
+        line(bandPx + featherPx);
+        line(-bandPx - featherPx);
+      });
+      ctx.setLineDash([]);
+      ctx.restore();
+      // centre grab dot
+      dual(() => {
+        ctx.beginPath();
+        ctx.arc(mx, my, 5, 0, Math.PI * 2);
+        ctx.stroke();
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preview, radial, settings.anchor.x, settings.anchor.y]);
+  }, [
+    preview,
+    settings.kind,
+    settings.anchor.x,
+    settings.anchor.y,
+    settings.angle,
+    settings.band,
+    settings.feather,
+  ]);
 
   return (
-    // Dimmed, centred modal — the preview lives inside the dialog now.
     <div className={styles.overlay} onMouseDown={onClose}>
       <div
         className={styles.dialog}
@@ -158,6 +241,7 @@ export default function BlurGalleryDialog({
       >
         <header className={styles.head}>
           <h2>Blur Gallery</h2>
+          <span className={styles.kindChip}>{BLUR_FX_LABELS[settings.kind]}</span>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>
@@ -168,9 +252,9 @@ export default function BlurGalleryDialog({
             {!preview && <span className={styles.loading}>Rendering preview…</span>}
             <canvas
               ref={canvasRef}
-              style={{ width: PW, height: PH, cursor: radial ? "crosshair" : "default" }}
+              style={{ width: PW, height: PH, cursor: draggable ? "crosshair" : "default" }}
               onPointerDown={
-                radial
+                draggable
                   ? (e) => {
                       e.currentTarget.setPointerCapture(e.pointerId);
                       setAnchorFromPointer(e);
@@ -178,7 +262,7 @@ export default function BlurGalleryDialog({
                   : undefined
               }
               onPointerMove={
-                radial
+                draggable
                   ? (e) => {
                       if (e.buttons) setAnchorFromPointer(e);
                     }
@@ -189,7 +273,7 @@ export default function BlurGalleryDialog({
 
           <div className={styles.controls}>
             <section className={styles.section}>
-              <span className={styles.groupLabel}>Blur type</span>
+              <span className={styles.sectionTitle}>Blur type</span>
               <div className={styles.typeGrid}>
                 {TYPES.map((k) => (
                   <button
@@ -197,6 +281,7 @@ export default function BlurGalleryDialog({
                     type="button"
                     className={styles.typeBtn}
                     data-active={settings.kind === k}
+                    title={TYPE_DESC[k]}
                     onClick={() =>
                       onChange({
                         kind: k,
@@ -215,7 +300,7 @@ export default function BlurGalleryDialog({
             </section>
 
             <section className={styles.section}>
-              <span className={styles.groupLabel}>Settings</span>
+              <span className={styles.sectionTitle}>Settings</span>
               <Slider
                 label={meta.label}
                 min={meta.min}
@@ -224,7 +309,7 @@ export default function BlurGalleryDialog({
                 value={settings.amount}
                 onChange={(n) => onChange({ amount: n })}
               />
-              {settings.kind === "motion" && (
+              {(settings.kind === "motion" || settings.kind === "tiltshift") && (
                 <Slider
                   label="Angle"
                   min={0}
@@ -234,13 +319,41 @@ export default function BlurGalleryDialog({
                   onChange={(n) => onChange({ angle: n })}
                 />
               )}
-              {radial && (
-                <span className={styles.desc}>Drag the preview to set the blur centre.</span>
+              {settings.kind === "tiltshift" && (
+                <>
+                  <Slider
+                    label="Focus size"
+                    min={0}
+                    max={100}
+                    unit="%"
+                    value={settings.band}
+                    onChange={(n) => onChange({ band: n })}
+                  />
+                  <Slider
+                    label="Feather"
+                    min={2}
+                    max={100}
+                    unit="%"
+                    value={settings.feather}
+                    onChange={(n) => onChange({ feather: n })}
+                  />
+                </>
               )}
+              {settings.kind === "surface" && (
+                <Slider
+                  label="Threshold"
+                  min={1}
+                  max={100}
+                  unit="%"
+                  value={settings.threshold}
+                  onChange={(n) => onChange({ threshold: n })}
+                />
+              )}
+              {draggable && <span className={styles.desc}>{DRAG_HINT[settings.kind]}</span>}
             </section>
 
             <section className={styles.section}>
-              <span className={styles.groupLabel}>Apply to</span>
+              <span className={styles.sectionTitle}>Apply to</span>
               <div className={styles.segRow}>
                 {SCOPES.map((s) => (
                   <button
@@ -255,13 +368,15 @@ export default function BlurGalleryDialog({
                 ))}
               </div>
               {hasSelection && (
-                <span className={styles.desc}>A selection is active — limited to it.</span>
+                <span className={styles.desc}>A selection is active — the blur is limited to it.</span>
               )}
             </section>
           </div>
         </div>
 
         <footer className={styles.foot}>
+          <span className={styles.footNote}>Enter applies · Esc cancels</span>
+          <div className={styles.footSpacer} />
           <button type="button" className={styles.btn} onClick={onClose}>
             Cancel
           </button>

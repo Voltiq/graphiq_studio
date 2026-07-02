@@ -32,30 +32,32 @@
   padding-bottom: var(--sp-3);
   position: relative;
 
+  /* separator hairline fades at both ends */
   &:not(:last-child)::after {
     content: "";
     position: absolute;
     bottom: 0;
-    left: 8px;
-    right: 8px;
+    left: 6px;
+    right: 6px;
     height: 1px;
-    background: var(--border);
+    background: linear-gradient(to right, transparent, var(--border-strong), transparent);
   }
 }
 
 .tool {
   position: relative;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   margin: 0 auto;
   display: grid;
   place-items: center;
   border-radius: var(--r-lg);
   color: var(--text-2);
-  transition: background 0.12s ease, color 0.12s ease, transform 0.12s ease;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 
   &:hover {
-    background: var(--surface-hover);
+    background: var(--wash);
     color: var(--text);
 
     .kbd {
@@ -64,17 +66,31 @@
   }
 
   &:active {
-    transform: scale(0.94);
+    transform: scale(0.92);
   }
 
+  /* Active tool: amber-tinted well + amber glyph + a notch on the rail edge —
+     the "state is amber" signature. */
   &[data-active="true"] {
-    color: var(--accent-contrast);
-    background: var(--accent);
-    box-shadow: var(--shadow-sm);
+    color: var(--accent);
+    background: rgba(var(--accent-rgb), 0.14);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.32);
+
+    &::before {
+      content: "";
+      position: absolute;
+      left: -7px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 2.5px;
+      height: 16px;
+      border-radius: var(--r-pill);
+      background: var(--accent);
+    }
 
     .kbd {
-      opacity: 0.8;
-      color: var(--accent-contrast);
+      opacity: 0.9;
+      color: var(--accent);
     }
   }
 }
@@ -89,7 +105,7 @@
   line-height: 1;
   color: var(--text-3);
   opacity: 0;
-  transition: opacity 0.12s ease;
+  transition: opacity var(--t-fast) var(--ease);
   pointer-events: none;
 }
 
@@ -102,9 +118,9 @@
   justify-content: center;
 }
 
-/* Reference: two size-6 swatches overlapping diagonally in a size-9 box,
-   with a tiny round swap in the top-right corner. The wrap rules are nested so
-   they outrank ColorPopover's own `.wrap { position: relative }`. */
+/* Two swatches overlapping diagonally in a 36px box, with a tiny round swap
+   in the top-right corner. The wrap rules are nested so they outrank
+   ColorPopover's own `.wrap { position: relative }`. */
 .swatchStack {
   position: relative;
   width: 36px;
@@ -121,7 +137,7 @@
     left: 0;
     z-index: 2;
 
-    /* primary sits on top → stronger (shadow-md) lift, like the reference */
+    /* primary sits on top → stronger lift */
     .swatch {
       box-shadow: var(--shadow-md);
     }
@@ -138,9 +154,15 @@
   width: 24px;
   height: 24px;
   border-radius: var(--r-md);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-sm);
   cursor: pointer;
+  transition: transform var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+
+  &:hover {
+    transform: scale(1.06);
+    border-color: rgba(var(--accent-rgb), 0.6);
+  }
 }
 
 .swap {
@@ -150,14 +172,16 @@
   z-index: 3;
   display: grid;
   place-items: center;
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   border-radius: 50%;
   background: var(--surface-3);
+  border: 1px solid var(--border);
   color: var(--text-2);
-  transition: color 0.12s ease;
+  transition: color var(--t-fast) var(--ease), transform var(--t-slow) var(--ease-pop);
 
   &:hover {
     color: var(--text);
+    transform: rotate(180deg); /* the X↔ swap gesture, previewed */
   }
 }

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { getServerTheme } from "./lib/theme.server";
+import { getServerAccent, getServerTheme } from "./lib/theme.server";
 import "./globals.scss";
 
 // Self-hosted Geist (variable TTFs in app/fonts) — avoids the Google Fonts
@@ -56,11 +56,13 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const theme = await getServerTheme();
+  const accent = await getServerAccent();
 
   return (
     <html
       lang="en"
       data-theme={theme}
+      data-accent={accent}
       className={`${geistSans.variable} ${geistMono.variable}`}
       suppressHydrationWarning
     >

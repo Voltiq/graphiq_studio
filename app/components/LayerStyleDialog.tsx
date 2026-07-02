@@ -1,10 +1,24 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X } from "lucide-react";
-import styles from "./PreferencesDialog.module.scss";
-import { ColorChip, Segmented, Select, Slider } from "./Controls";
+import {
+  Blend as BlendIcon,
+  Gem,
+  Layers2,
+  PaintBucket,
+  RotateCcw,
+  Square,
+  SquareDot,
+  Sun,
+  SunDim,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import styles from "./LayerStyleDialog.module.scss";
+import { ColorChip, Segmented, Select, Slider, Toggle } from "./Controls";
+import { GradientEditor } from "./GradientControl";
 import { parseColor, toHex6 } from "../lib/color";
+import { GRADIENT_PRESETS_KEY } from "../lib/gradientio";
 import { BLEND_MODES } from "../lib/layers";
 import {
   DEFAULT_FX,
@@ -20,32 +34,66 @@ import {
   type BevelFX,
 } from "../lib/effects";
 
-const col: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 8 };
-const rowS: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" };
+const FX_ICONS: Record<FxKey, LucideIcon> = {
+  dropShadow: Layers2,
+  innerShadow: SquareDot,
+  outerGlow: Sun,
+  innerGlow: SunDim,
+  stroke: Square,
+  colorOverlay: PaintBucket,
+  gradientOverlay: BlendIcon,
+  bevel: Gem,
+};
 
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  // Reuse the app's custom swatch + colour picker; effect colours stay opaque
-  // (the effect's own opacity slider controls strength), so drop any picked alpha.
+const FX_DESC: Record<FxKey, string> = {
+  dropShadow: "A soft shadow cast behind the layer.",
+  innerShadow: "A shadow inside the edges, for a recessed look.",
+  outerGlow: "Light radiating outward from the edges.",
+  innerGlow: "Light along the inside of the edges.",
+  stroke: "An outline traced around the layer's silhouette.",
+  colorOverlay: "Fills the layer's pixels with a solid colour.",
+  gradientOverlay: "Fills the layer's pixels with a gradient.",
+  bevel: "Chiselled highlight-and-shadow relief from the edges.",
+};
+
+/* ----------------------------- Field helpers ------------------------------ */
+
+/** Label-above colour swatch — matches the Slider's stacked anatomy in grids. */
+function ColorStack({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  // Effect colours stay opaque (the effect's own opacity slider is the strength).
   return (
-    <div style={rowS}>
-      <span style={{ fontSize: 12, color: "var(--text-2)" }}>{label}</span>
+    <div className={styles.stackField}>
+      <span className={styles.stackLabel}>{label}</span>
       <ColorChip color={value} label={label} onChange={(v) => onChange(toHex6(parseColor(v)))} />
     </div>
   );
 }
 
-const BlendField = ({ value, onChange }: { value: string; onChange: (v: string) => void }) => (
-  <label style={rowS}>
-    <span style={{ fontSize: 12, color: "var(--text-2)" }}>Blend</span>
-    <div style={{ width: 150 }}>
+/** Label-above blend-mode dropdown. */
+function BlendStack({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className={styles.stackField}>
+      <span className={styles.stackLabel}>Blend</span>
       <Select block options={BLEND_MODES} value={value} onChange={onChange} />
     </div>
-  </label>
-);
+  );
+}
+
+function Group({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className={styles.group}>
+      <span className={styles.groupTitle}>{title}</span>
+      {children}
+    </div>
+  );
+}
+
+const Grid = ({ children }: { children: React.ReactNode }) => <div className={styles.grid2}>{children}</div>;
 
 export default function LayerStyleDialog({
   effects,
   layerName,
+  gradientStorageKey = GRADIENT_PRESETS_KEY,
   onChange,
   onToggle,
   onClear,
@@ -53,6 +101,9 @@ export default function LayerStyleDialog({
 }: {
   effects: LayerEffects;
   layerName: string;
+  /** Preset bucket for the gradient overlay's editor (shared with the
+      Gradient tool unless the "share saved gradients" preference is off). */
+  gradientStorageKey?: string;
   onChange: (effects: LayerEffects) => void;
   onToggle: (key: FxKey, enabled: boolean) => void;
   onClear: () => void;
@@ -61,6 +112,8 @@ export default function LayerStyleDialog({
   const fx = effects ?? {};
   const firstOn = FX_ORDER.find((k) => fx[k]?.enabled) ?? "dropShadow";
   const [sel, setSel] = useState<FxKey>(firstOn);
+  const selOn = !!fx[sel]?.enabled;
+  const onCount = FX_ORDER.filter((k) => fx[k]?.enabled).length;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -75,10 +128,17 @@ export default function LayerStyleDialog({
   }, [onClose]);
 
   // Patch one effect's params (creating it with defaults if absent) — live.
+  // Editing a disabled effect enables it, so a drag always shows something.
   function set<K extends FxKey>(key: K, patch: Partial<NonNullable<LayerEffects[K]>>) {
     const base = (fx[key] ?? DEFAULT_FX[key]()) as NonNullable<LayerEffects[K]>;
-    onChange({ ...fx, [key]: { ...base, ...patch } });
+    onChange({ ...fx, [key]: { ...base, ...patch, enabled: true } });
   }
+
+  // Reset the selected effect's parameters to defaults (keeping its on/off state).
+  const resetSel = () => {
+    const def = DEFAULT_FX[sel]();
+    onChange({ ...fx, [sel]: { ...def, enabled: selOn } });
+  };
 
   const renderControls = () => {
     switch (sel) {
@@ -86,113 +146,177 @@ export default function LayerStyleDialog({
       case "innerShadow": {
         const s = (fx[sel] ?? DEFAULT_FX[sel]()) as ShadowFX;
         return (
-          <div style={col}>
-            <BlendField value={s.blendMode} onChange={(v) => set(sel, { blendMode: v })} />
-            <ColorField label="Color" value={s.color} onChange={(v) => set(sel, { color: v })} />
-            <Slider label="Opacity" min={0} max={100} unit="%" value={s.opacity} onChange={(v) => set(sel, { opacity: v })} />
-            <Slider label="Angle" min={0} max={360} unit="°" value={s.angle} onChange={(v) => set(sel, { angle: v })} />
-            <Slider label="Distance" min={0} max={250} unit="px" value={s.distance} onChange={(v) => set(sel, { distance: v })} />
-            <Slider label="Spread" min={0} max={100} unit="%" value={s.spread} onChange={(v) => set(sel, { spread: v })} />
-            <Slider label="Size" min={0} max={250} unit="px" value={s.size} onChange={(v) => set(sel, { size: v })} />
-          </div>
+          <>
+            <Group title="Appearance">
+              <Grid>
+                <BlendStack value={s.blendMode} onChange={(v) => set(sel, { blendMode: v })} />
+                <Slider label="Opacity" min={0} max={100} unit="%" value={s.opacity} onChange={(v) => set(sel, { opacity: v })} />
+                <ColorStack label="Colour" value={s.color} onChange={(v) => set(sel, { color: v })} />
+              </Grid>
+            </Group>
+            <Group title="Geometry">
+              <Grid>
+                <Slider label="Angle" min={0} max={360} unit="°" value={s.angle} onChange={(v) => set(sel, { angle: v })} />
+                <Slider label="Distance" min={0} max={250} unit="px" value={s.distance} onChange={(v) => set(sel, { distance: v })} />
+                <Slider label="Spread" min={0} max={100} unit="%" value={s.spread} onChange={(v) => set(sel, { spread: v })} />
+                <Slider label="Size" min={0} max={250} unit="px" value={s.size} onChange={(v) => set(sel, { size: v })} />
+              </Grid>
+            </Group>
+          </>
         );
       }
       case "outerGlow":
       case "innerGlow": {
         const g = (fx[sel] ?? DEFAULT_FX[sel]()) as GlowFX;
         return (
-          <div style={col}>
-            <BlendField value={g.blendMode} onChange={(v) => set(sel, { blendMode: v })} />
-            <ColorField label="Color" value={g.color} onChange={(v) => set(sel, { color: v })} />
-            <Slider label="Opacity" min={0} max={100} unit="%" value={g.opacity} onChange={(v) => set(sel, { opacity: v })} />
-            <Slider label="Spread" min={0} max={100} unit="%" value={g.spread} onChange={(v) => set(sel, { spread: v })} />
-            <Slider label="Size" min={0} max={250} unit="px" value={g.size} onChange={(v) => set(sel, { size: v })} />
-            {sel === "innerGlow" && (
-              <Segmented
-                label="Source"
-                value={g.source ?? "edge"}
-                onChange={(v) => set("innerGlow", { source: v as "edge" | "center" })}
-                options={[
-                  { value: "edge", text: "Edge" },
-                  { value: "center", text: "Center" },
-                ]}
-              />
-            )}
-          </div>
+          <>
+            <Group title="Appearance">
+              <Grid>
+                <BlendStack value={g.blendMode} onChange={(v) => set(sel, { blendMode: v })} />
+                <Slider label="Opacity" min={0} max={100} unit="%" value={g.opacity} onChange={(v) => set(sel, { opacity: v })} />
+                <ColorStack label="Colour" value={g.color} onChange={(v) => set(sel, { color: v })} />
+              </Grid>
+            </Group>
+            <Group title="Shape">
+              <Grid>
+                <Slider label="Spread" min={0} max={100} unit="%" value={g.spread} onChange={(v) => set(sel, { spread: v })} />
+                <Slider label="Size" min={0} max={250} unit="px" value={g.size} onChange={(v) => set(sel, { size: v })} />
+              </Grid>
+              {sel === "innerGlow" && (
+                <Segmented
+                  label="Source"
+                  value={g.source ?? "edge"}
+                  onChange={(v) => set("innerGlow", { source: v as "edge" | "center" })}
+                  options={[
+                    { value: "edge", text: "Edge" },
+                    { value: "center", text: "Center" },
+                  ]}
+                />
+              )}
+            </Group>
+          </>
         );
       }
       case "stroke": {
         const st = (fx.stroke ?? DEFAULT_FX.stroke()) as StrokeFX;
         return (
-          <div style={col}>
-            <BlendField value={st.blendMode} onChange={(v) => set("stroke", { blendMode: v })} />
-            <Slider label="Size" min={1} max={100} unit="px" value={st.size} onChange={(v) => set("stroke", { size: v })} />
-            <Segmented
-              label="Position"
-              value={st.position}
-              onChange={(v) => set("stroke", { position: v as StrokeFX["position"] })}
-              options={[
-                { value: "outside", text: "Outside" },
-                { value: "center", text: "Center" },
-                { value: "inside", text: "Inside" },
-              ]}
-            />
-            <ColorField label="Color" value={st.color ?? "#ffffff"} onChange={(v) => set("stroke", { fillType: "color", color: v })} />
-            <Slider label="Opacity" min={0} max={100} unit="%" value={st.opacity} onChange={(v) => set("stroke", { opacity: v })} />
-          </div>
+          <>
+            <Group title="Appearance">
+              <Grid>
+                <BlendStack value={st.blendMode} onChange={(v) => set("stroke", { blendMode: v })} />
+                <Slider label="Opacity" min={0} max={100} unit="%" value={st.opacity} onChange={(v) => set("stroke", { opacity: v })} />
+                <ColorStack label="Colour" value={st.color ?? "#ffffff"} onChange={(v) => set("stroke", { fillType: "color", color: v })} />
+              </Grid>
+            </Group>
+            <Group title="Geometry">
+              <Grid>
+                <Slider label="Size" min={1} max={100} unit="px" value={st.size} onChange={(v) => set("stroke", { size: v })} />
+              </Grid>
+              <Segmented
+                label="Position"
+                value={st.position}
+                onChange={(v) => set("stroke", { position: v as StrokeFX["position"] })}
+                options={[
+                  { value: "outside", text: "Outside" },
+                  { value: "center", text: "Center" },
+                  { value: "inside", text: "Inside" },
+                ]}
+              />
+            </Group>
+          </>
         );
       }
       case "colorOverlay": {
         const o = (fx.colorOverlay ?? DEFAULT_FX.colorOverlay()) as OverlayColorFX;
         return (
-          <div style={col}>
-            <BlendField value={o.blendMode} onChange={(v) => set("colorOverlay", { blendMode: v })} />
-            <ColorField label="Color" value={o.color} onChange={(v) => set("colorOverlay", { color: v })} />
-            <Slider label="Opacity" min={0} max={100} unit="%" value={o.opacity} onChange={(v) => set("colorOverlay", { opacity: v })} />
-          </div>
+          <Group title="Appearance">
+            <Grid>
+              <BlendStack value={o.blendMode} onChange={(v) => set("colorOverlay", { blendMode: v })} />
+              <Slider label="Opacity" min={0} max={100} unit="%" value={o.opacity} onChange={(v) => set("colorOverlay", { opacity: v })} />
+              <ColorStack label="Colour" value={o.color} onChange={(v) => set("colorOverlay", { color: v })} />
+            </Grid>
+          </Group>
         );
       }
       case "gradientOverlay": {
         const o = (fx.gradientOverlay ?? DEFAULT_FX.gradientOverlay()) as OverlayGradientFX;
-        const stops = o.gradient;
-        const setStop = (i: number, color: string) => {
-          const g = stops.map((s, k) => (k === i ? { ...s, color } : s));
-          set("gradientOverlay", { gradient: g });
-        };
         return (
-          <div style={col}>
-            <BlendField value={o.blendMode} onChange={(v) => set("gradientOverlay", { blendMode: v })} />
-            <ColorField label="Start" value={stops[0]?.color ?? "#000000"} onChange={(v) => setStop(0, v)} />
-            <ColorField label="End" value={stops[stops.length - 1]?.color ?? "#ffffff"} onChange={(v) => setStop(stops.length - 1, v)} />
-            <Segmented
-              label="Style"
-              value={o.style}
-              onChange={(v) => set("gradientOverlay", { style: v as "linear" | "radial" })}
-              options={[
-                { value: "linear", text: "Linear" },
-                { value: "radial", text: "Radial" },
-              ]}
-            />
-            <Slider label="Angle" min={0} max={360} unit="°" value={o.angle} onChange={(v) => set("gradientOverlay", { angle: v })} />
-            <Slider label="Scale" min={10} max={300} unit="%" value={o.scale} onChange={(v) => set("gradientOverlay", { scale: v })} />
-            <Slider label="Opacity" min={0} max={100} unit="%" value={o.opacity} onChange={(v) => set("gradientOverlay", { opacity: v })} />
-          </div>
+          <>
+            <Group title="Appearance">
+              <Grid>
+                <BlendStack value={o.blendMode} onChange={(v) => set("gradientOverlay", { blendMode: v })} />
+                <Slider label="Opacity" min={0} max={100} unit="%" value={o.opacity} onChange={(v) => set("gradientOverlay", { opacity: v })} />
+              </Grid>
+            </Group>
+            <Group title="Gradient">
+              {/* The Gradient tool's full editor: draggable multi-stops, presets,
+                  save / import / export — same preset library as the tool. */}
+              <GradientEditor
+                stops={o.gradient}
+                onStops={(g) => set("gradientOverlay", { gradient: g })}
+                storageKey={gradientStorageKey}
+              />
+              <div className={styles.fieldRow}>
+                <span className={styles.fieldLabel}>Reverse</span>
+                <Toggle label="" checked={!!o.reverse} onChange={(v) => set("gradientOverlay", { reverse: v })} />
+              </div>
+            </Group>
+            <Group title="Geometry">
+              <Segmented
+                label="Style"
+                value={o.style ?? "linear"}
+                onChange={(v) => set("gradientOverlay", { style: v as OverlayGradientFX["style"] })}
+                options={[
+                  { value: "linear", text: "Linear" },
+                  { value: "radial", text: "Radial" },
+                  { value: "angle", text: "Angle" },
+                  { value: "reflected", text: "Reflected" },
+                ]}
+              />
+              {o.style === "angle" && (
+                <div className={styles.fieldRow}>
+                  <span className={styles.fieldLabel}>Smooth seam</span>
+                  <Toggle label="" checked={o.smooth ?? true} onChange={(v) => set("gradientOverlay", { smooth: v })} />
+                </div>
+              )}
+              <Grid>
+                <Slider label="Angle" min={0} max={360} unit="°" value={o.angle} onChange={(v) => set("gradientOverlay", { angle: v })} />
+                <Slider label="Scale" min={10} max={300} unit="%" value={o.scale} onChange={(v) => set("gradientOverlay", { scale: v })} />
+              </Grid>
+            </Group>
+          </>
         );
       }
       case "bevel": {
         const b = (fx.bevel ?? DEFAULT_FX.bevel()) as BevelFX;
         return (
-          <div style={col}>
-            <Slider label="Depth" min={0} max={300} unit="%" value={b.depth} onChange={(v) => set("bevel", { depth: v })} />
-            <Slider label="Size" min={0} max={100} unit="px" value={b.size} onChange={(v) => set("bevel", { size: v })} />
-            <Slider label="Soften" min={0} max={40} unit="px" value={b.soften} onChange={(v) => set("bevel", { soften: v })} />
-            <Slider label="Angle" min={0} max={360} unit="°" value={b.angle} onChange={(v) => set("bevel", { angle: v })} />
-            <Slider label="Altitude" min={0} max={90} unit="°" value={b.altitude} onChange={(v) => set("bevel", { altitude: v })} />
-            <ColorField label="Highlight" value={b.highlightColor} onChange={(v) => set("bevel", { highlightColor: v })} />
-            <Slider label="Highlight Opacity" min={0} max={100} unit="%" value={b.highlightOpacity} onChange={(v) => set("bevel", { highlightOpacity: v })} />
-            <ColorField label="Shadow" value={b.shadowColor} onChange={(v) => set("bevel", { shadowColor: v })} />
-            <Slider label="Shadow Opacity" min={0} max={100} unit="%" value={b.shadowOpacity} onChange={(v) => set("bevel", { shadowOpacity: v })} />
-          </div>
+          <>
+            <Group title="Structure">
+              <Grid>
+                <Slider label="Depth" min={0} max={300} unit="%" value={b.depth} onChange={(v) => set("bevel", { depth: v })} />
+                <Slider label="Size" min={0} max={100} unit="px" value={b.size} onChange={(v) => set("bevel", { size: v })} />
+                <Slider label="Soften" min={0} max={40} unit="px" value={b.soften} onChange={(v) => set("bevel", { soften: v })} />
+              </Grid>
+            </Group>
+            <Group title="Light">
+              <Grid>
+                <Slider label="Angle" min={0} max={360} unit="°" value={b.angle} onChange={(v) => set("bevel", { angle: v })} />
+                <Slider label="Altitude" min={0} max={90} unit="°" value={b.altitude} onChange={(v) => set("bevel", { altitude: v })} />
+              </Grid>
+            </Group>
+            <Group title="Highlight">
+              <Grid>
+                <ColorStack label="Colour" value={b.highlightColor} onChange={(v) => set("bevel", { highlightColor: v })} />
+                <Slider label="Opacity" min={0} max={100} unit="%" value={b.highlightOpacity} onChange={(v) => set("bevel", { highlightOpacity: v })} />
+              </Grid>
+            </Group>
+            <Group title="Shadow">
+              <Grid>
+                <ColorStack label="Colour" value={b.shadowColor} onChange={(v) => set("bevel", { shadowColor: v })} />
+                <Slider label="Opacity" min={0} max={100} unit="%" value={b.shadowOpacity} onChange={(v) => set("bevel", { shadowOpacity: v })} />
+              </Grid>
+            </Group>
+          </>
         );
       }
       default:
@@ -208,56 +332,92 @@ export default function LayerStyleDialog({
         aria-modal="true"
         aria-label="Layer style"
         onMouseDown={(e) => e.stopPropagation()}
-        style={{ width: 560 }}
       >
         <header className={styles.head}>
-          <h2>Layer Style — {layerName}</h2>
+          <h2>Layer Style</h2>
+          <span className={styles.nameChip} title={layerName}>
+            {layerName}
+          </span>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>
         </header>
 
-        <div className={styles.body} style={{ display: "flex", gap: 14 }}>
-          <div style={{ width: 190, flexShrink: 0, display: "flex", flexDirection: "column", gap: 2 }}>
-            <span className={styles.groupLabel}>Effects</span>
+        <div className={styles.layout}>
+          <div className={styles.list} role="listbox" aria-label="Effects">
+            <span className={styles.listLabel}>Effects</span>
             {FX_ORDER.map((k) => {
               const on = !!fx[k]?.enabled;
+              const Icon = FX_ICONS[k];
               return (
                 <div
                   key={k}
-                  className={styles.row}
-                  data-active={sel === k}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "5px 8px",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                    background: sel === k ? "var(--surface-hover)" : "transparent",
-                  }}
+                  className={styles.fxRow}
+                  data-sel={sel === k}
+                  data-on={on}
+                  role="option"
+                  aria-selected={sel === k}
+                  tabIndex={0}
                   onClick={() => setSel(k)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setSel(k);
+                    }
+                  }}
                 >
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => onToggle(k, e.target.checked)}
-                  />
-                  <span style={{ fontSize: 12.5, color: on ? "var(--text)" : "var(--text-3)" }}>{FX_LABELS[k]}</span>
+                  <button
+                    type="button"
+                    className={styles.fxCheck}
+                    data-on={on}
+                    aria-label={`${FX_LABELS[k]} ${on ? "on" : "off"}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggle(k, !on);
+                    }}
+                  >
+                    {on && (
+                      <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden>
+                        <path d="M1.5 5.5 4 8l4.5-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                  </button>
+                  <Icon size={14} className={styles.fxIcon} />
+                  <span className={styles.fxName}>{FX_LABELS[k]}</span>
                 </div>
               );
             })}
           </div>
 
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <span className={styles.groupLabel}>{FX_LABELS[sel]}</span>
-            <div style={{ marginTop: 8 }}>{renderControls()}</div>
+          <div className={styles.pane}>
+            <div className={styles.paneHead}>
+              <span className={styles.paneTitle}>{FX_LABELS[sel]}</span>
+              <div className={styles.paneActions}>
+                <button type="button" className={styles.resetBtn} onClick={resetSel}>
+                  <RotateCcw size={11} /> Reset
+                </button>
+                <button
+                  type="button"
+                  className={styles.switch}
+                  data-on={selOn}
+                  role="switch"
+                  aria-checked={selOn}
+                  aria-label={`${FX_LABELS[sel]} enabled`}
+                  onClick={() => onToggle(sel, !selOn)}
+                />
+              </div>
+            </div>
+            <p className={styles.paneDesc}>{FX_DESC[sel]}</p>
+            <div className={styles.paneBody}>{renderControls()}</div>
           </div>
         </div>
 
         <footer className={styles.foot}>
-          <button type="button" className={styles.btn} onClick={onClear}>
+          <span className={styles.countNote}>
+            {onCount === 0 ? "No effects on" : `${onCount} of ${FX_ORDER.length} effects on`}
+          </span>
+          <div className={styles.footSpacer} />
+          <button type="button" className={`${styles.btn} ${styles.clearBtn}`} onClick={onClear}>
             Clear All
           </button>
           <button type="button" className={`${styles.btn} ${styles.primary}`} onClick={onClose}>

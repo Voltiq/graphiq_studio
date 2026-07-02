@@ -76,7 +76,7 @@ export function serializeProject(
 ): ProjectFile {
   return {
     format: "graphiq-project",
-    version: 6,
+    version: 7,
     name: doc.name,
     width: doc.width,
     height: doc.height,

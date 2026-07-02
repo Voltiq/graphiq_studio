@@ -8,7 +8,7 @@
   /* No backdrop-filter here: it would become a "backdrop root" and stop the
      descendant dropdown menus from blurring the canvas behind them. Nothing
      renders behind the top bar anyway, so a translucent fill is enough. */
-  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
   border-bottom: 1px solid var(--border);
   box-shadow: var(--glow);
   z-index: 60;
@@ -23,11 +23,12 @@
 }
 
 .logo {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
   overflow: hidden;
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--r-md);
+  box-shadow: 0 0 0 1px var(--border), var(--shadow-sm);
 
   img {
     display: block;
@@ -38,24 +39,40 @@
 }
 
 .brandName {
-  font-weight: 600;
-  font-size: 14px;
-  letter-spacing: -0.025em;
+  font-weight: 650;
+  font-size: 13.5px;
+  letter-spacing: -0.02em;
+
+  /* the safelight dot — the one place the brand carries the accent */
+  &::after {
+    content: "";
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    margin-left: 3px;
+    border-radius: 50%;
+    background: var(--accent);
+    vertical-align: 1px;
+  }
 }
 
 .brandTag {
-  font-size: 10px;
-  color: var(--text-2);
-  font-weight: 500;
-  padding: 2px 6px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 2.5px 6px;
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-pill);
+  background: var(--wash);
 }
 
 /* ------------------------------- Menu bar --------------------------------- */
 .menubar {
   display: flex;
   align-items: center;
+  gap: 1px;
 }
 
 .menuRoot {
@@ -64,46 +81,48 @@
 
 .menuButton {
   font-size: 13px;
-  /* reference: text-foreground/80 (brighter than --text-2) */
-  color: color-mix(in srgb, var(--text) 80%, transparent);
-  padding: 4px 10px;
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+  padding: 5px 10px;
   border-radius: var(--r-md);
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 
   &:hover {
     color: var(--text);
-    background: var(--surface-hover);
+    background: var(--wash);
   }
 
   &[data-active="true"] {
     color: var(--text);
-    background: var(--surface-hover);
+    background: var(--wash-2);
   }
 }
 
+/* Frosted transient surface: translucent fill + backdrop blur. */
 .dropdown {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  min-width: 224px;
-  padding: 6px;
-  /* solid elevation-3 */
-  background: var(--surface-2);
+  min-width: 236px;
+  padding: 5px;
+  background: var(--frost);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
   border: 1px solid var(--border);
-  border-radius: var(--r-2xl);
+  border-radius: var(--r-xl);
   box-shadow: var(--shadow), var(--glow);
   z-index: 80;
-  animation: dropIn 0.12s ease;
+  animation: dropIn var(--t-med) var(--ease-pop);
+  transform-origin: top left;
 }
 
 @keyframes dropIn {
   from {
     opacity: 0;
-    transform: translateY(-4px);
+    transform: translateY(-4px) scale(0.985);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
   }
 }
 
@@ -114,22 +133,18 @@
   justify-content: space-between;
   gap: var(--sp-5);
   font-size: 13px;
-  padding: 6px 10px;
-  border-radius: var(--r-lg);
-  color: color-mix(in srgb, var(--text) 90%, transparent);
-  transition: background 0.1s ease, color 0.1s ease;
+  padding: 6px 9px 6px 7px;
+  border-radius: var(--r-md);
+  color: color-mix(in srgb, var(--text) 92%, transparent);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 
   &:hover:not(:disabled) {
-    background: var(--accent);
-    color: var(--accent-contrast);
+    background: var(--wash-2);
+    color: var(--text);
+  }
 
-    .shortcut {
-      color: var(--accent-contrast);
-    }
-
-    .menuCheck {
-      color: var(--accent-contrast);
-    }
+  &:active:not(:disabled) {
+    background: color-mix(in srgb, var(--wash-2) 60%, var(--wash));
   }
 
   &:disabled {
@@ -145,24 +160,32 @@
 
 .menuCheck {
   display: inline-flex;
-  width: 16px;
-  margin-left: -2px;
-  color: var(--accent);
+  width: 18px;
+  flex-shrink: 0;
+  color: var(--accent); /* checked = state = amber */
 
   &[data-on="false"] {
     visibility: hidden;
   }
 }
 
+/* Shortcut as a quiet key chip */
 .shortcut {
-  font-size: 11px;
-  color: var(--text-2);
+  flex-shrink: 0;
+  font-size: 10.5px;
+  line-height: 1;
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  padding: 3.5px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--wash);
 }
 
 .menuSep {
   height: 1px;
-  margin: 4px 6px;
+  margin: 4px 8px;
   background: var(--border);
 }
 
@@ -181,11 +204,16 @@
   height: 32px;
   border-radius: var(--r-lg);
   color: var(--text-2);
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
 
   &:hover:not(:disabled) {
-    background: var(--surface-hover);
+    background: var(--wash);
     color: var(--text);
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.93);
   }
 
   &:disabled {
@@ -194,31 +222,38 @@
   }
 }
 
+/* Search widens when it has focus — space is given when it's wanted. */
 .search {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   height: 32px;
   padding: 0 var(--sp-3);
-  border-radius: var(--r-lg);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--r-pill);
+  background: var(--wash);
   border: 1px solid var(--border);
   color: var(--text-2);
-  transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
 
   &:focus-within {
-    border-color: var(--accent);
-    background: rgba(255, 255, 255, 0.06);
-    box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.25);
+    border-color: rgba(var(--accent-rgb), 0.55);
+    background: var(--wash-2);
+    box-shadow: var(--focus-ring);
   }
 
   input {
-    width: 170px;
+    width: 150px;
     background: none;
     border: none;
     outline: none;
     font-size: 12.5px;
     color: var(--text);
+    transition: width var(--t-slow) var(--ease);
+
+    &:focus {
+      width: 210px;
+    }
 
     &::placeholder {
       color: var(--text-3);
@@ -231,6 +266,7 @@
   display: grid;
   place-items: center;
   padding: 2px;
+  border-radius: var(--r-pill);
 }
 
 .themeTrack {
@@ -238,11 +274,16 @@
   width: 46px;
   height: 26px;
   border-radius: var(--r-pill);
-  background: var(--surface-3);
+  background: var(--wash-2);
   border: 1px solid var(--border);
-  transition: background 0.2s ease;
+  transition: background var(--t-med) var(--ease), border-color var(--t-med) var(--ease);
+
+  &:hover {
+    border-color: var(--border-strong);
+  }
 }
 
+/* The thumb is the safelight: amber in the dark, paper in the light. */
 .themeThumb {
   position: absolute;
   top: 2px;
@@ -254,7 +295,8 @@
   border-radius: 50%;
   color: var(--accent-contrast);
   background: var(--accent);
-  transition: transform 0.22s cubic-bezier(0.3, 1.4, 0.5, 1);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--t-slow) var(--ease-pop);
 }
 
 .themeTrack[data-dark="true"] .themeThumb {

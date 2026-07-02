@@ -94,27 +94,22 @@ export function levelsLUT(p: ChannelParams): Uint8ClampedArray {
 }
 
 /**
- * Curves → 256-entry monotone-cubic LUT. Uses the Fritsch–Carlson method
+ * Continuous monotone-cubic curve evaluator. Uses the Fritsch–Carlson method
  * (Fritsch & Carlson 1980): compute secant slopes between sorted points, then
- * limit the tangents so the interpolant is monotone (no overshoot). Sampled at
- * x = 0..255 and clamped to [0,255]; extends linearly past the end points.
+ * limit the tangents so the interpolant is monotone (no overshoot). Returns
+ * the UNROUNDED value (clamped to [0,255]) at any real x — the graph plots
+ * this directly so the drawn curve is smooth; the pixel LUT samples it at the
+ * 256 integers. Extends linearly past the end points.
  */
-export function curveLUT(points: CurvePoint[]): Uint8ClampedArray {
-  const lut = new Uint8ClampedArray(256);
+export function curveSampler(points: CurvePoint[]): (x: number) => number {
   // Sort + dedupe by x (a later point at the same x replaces the earlier one).
   const pts = [...points]
     .map((p) => ({ x: clamp(Math.round(p.x), 0, 255), y: clamp(p.y, 0, 255) }))
     .sort((a, b) => a.x - b.x)
     .filter((p, i, a) => i === 0 || p.x !== a[i - 1].x);
   const n = pts.length;
-  if (n === 0) {
-    for (let v = 0; v < 256; v++) lut[v] = v;
-    return lut;
-  }
-  if (n === 1) {
-    lut.fill(pts[0].y);
-    return lut;
-  }
+  if (n === 0) return (x) => clamp(x, 0, 255);
+  if (n === 1) return () => pts[0].y;
   // Secant slopes.
   const dx = new Float64Array(n - 1);
   const dy = new Float64Array(n - 1);
@@ -147,20 +142,13 @@ export function curveLUT(points: CurvePoint[]): Uint8ClampedArray {
       m[i + 1] = tau * b * slope[i];
     }
   }
-  // Sample.
-  let seg = 0;
-  for (let v = 0; v < 256; v++) {
-    if (v <= pts[0].x) {
-      lut[v] = pts[0].y + m[0] * (v - pts[0].x); // linear extension left
-      continue;
-    }
-    if (v >= pts[n - 1].x) {
-      lut[v] = pts[n - 1].y + m[n - 1] * (v - pts[n - 1].x); // linear extension right
-      continue;
-    }
-    while (seg < n - 2 && v > pts[seg + 1].x) seg++;
+  return (x: number): number => {
+    if (x <= pts[0].x) return clamp(pts[0].y + m[0] * (x - pts[0].x), 0, 255); // linear extension left
+    if (x >= pts[n - 1].x) return clamp(pts[n - 1].y + m[n - 1] * (x - pts[n - 1].x), 0, 255); // right
+    let seg = 0;
+    while (seg < n - 2 && x > pts[seg + 1].x) seg++;
     const h = dx[seg];
-    const t = (v - pts[seg].x) / h;
+    const t = (x - pts[seg].x) / h;
     const t2 = t * t;
     const t3 = t2 * t;
     // Hermite basis.
@@ -168,8 +156,16 @@ export function curveLUT(points: CurvePoint[]): Uint8ClampedArray {
     const h10 = t3 - 2 * t2 + t;
     const h01 = -2 * t3 + 3 * t2;
     const h11 = t3 - t2;
-    lut[v] = h00 * pts[seg].y + h10 * h * m[seg] + h01 * pts[seg + 1].y + h11 * h * m[seg + 1];
-  }
+    return clamp(h00 * pts[seg].y + h10 * h * m[seg] + h01 * pts[seg + 1].y + h11 * h * m[seg + 1], 0, 255);
+  };
+}
+
+/** Curves → 256-entry LUT: the continuous curve sampled at x = 0..255
+ *  (Uint8ClampedArray rounds + clamps, matching what's applied to pixels). */
+export function curveLUT(points: CurvePoint[]): Uint8ClampedArray {
+  const lut = new Uint8ClampedArray(256);
+  const f = curveSampler(points);
+  for (let v = 0; v < 256; v++) lut[v] = f(v);
   return lut;
 }
 

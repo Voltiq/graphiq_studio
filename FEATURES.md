@@ -50,6 +50,7 @@ All Options-Bar settings, the foreground/background colours, and the marquee sha
 - **Select menu:** All `Ctrl+A`, Deselect `Ctrl+D`, Reselect `Ctrl+Shift+D`, Inverse `Ctrl+Shift+I`, **Feather…** `Shift+F6`, **Grow…** (Feather blurs the selection mask for fills/deletes/moves; Grow expands the region by N px).
 - **Free Transform** `Ctrl+Alt+T` and **Transform Selection** `Ctrl+Alt+Shift+T` — scale/rotate either the pixels or just the outline, with corner/edge handles, a rotation ring, and a movable pivot.
 - Fill with foreground/background (`Backspace`/`Delete`), Cut/Copy/Paste of selected pixels.
+- **Arrow-key nudge:** with a selection tool, arrows move the **outline** by 1 px (`Ctrl` = 10 px); with the Move tool, arrows move the **pixels** (selection content, the whole layer — linked mask included — or a floating paste), and a rapid burst of presses lands as a single undo step.
 
 ## Layers
 
@@ -65,7 +66,8 @@ These five systems are the heart of the editor. They are all **composite-time**:
 ### 1. Layer masks
 - Any pixel layer **or group** can carry one **grayscale raster mask** (white = visible, black = hidden, grey = partial). It modulates the layer's alpha at composite time; the layer's own pixels are never altered.
 - **Create** reveal-all / hide-all / from-selection; **Delete**; **Apply** (bake into the layer, destructive); **Enable/Disable**; **Link/Unlink**; **Load Mask as Selection**.
-- **Active-surface switch:** click a layer's mask thumbnail to make the mask the paint target; click the pixel thumbnail to switch back. **Every paint tool that uses the brush/fill/gradient pipeline then paints the mask with no per-tool code** — brush, pencil, eraser, clone, paint bucket, gradient, plus Backspace-fill and Delete.
+- **Active-surface switch:** click a layer's mask thumbnail to make the mask the paint target; click the pixel thumbnail to switch back. **Every paint tool then edits the mask** — brush, pencil, eraser, clone, paint bucket, gradient, **blur and dodge/burn**, plus Backspace-fill and Delete.
+- **Linked move:** with the chain (link) toggle on, moving the whole layer moves its mask with it — one undo step restores both.
 - Layers panel: mask thumbnail beside the pixel thumbnail, an **active-surface ring**, a chain (link) toggle, Shift-click to disable; Layer menu has the full submenu; the **Channels** panel and the masking interact correctly (mask multiplies the *final* styled result, so a mask also hides a layer's effects).
 
 ### 2. Adjustment layers
@@ -226,24 +228,24 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 Honest list of what is **partial, deferred, or absent**:
 
 **Non-destructive stack gaps**
-- **Linked-mask move:** the mask **link/unlink** flag is stored, serialised, and shown in the UI, and the engine has an `offsetMask` method, but the **Move tool does not yet translate a linked mask with its layer** — moving a masked layer's pixels currently leaves the mask in place.
-- **Blur / Dodge-Burn on a mask:** these two brushes are **not** routed to the active mask surface (brush/pencil/eraser/clone/gradient/bucket are). Painting a mask uses those instead.
+- **Smart-filter stack mask** is not yet implemented (a second per-layer mask surface confining the filter stack — planned as its own task in TODO.md §1).
 - **Curves "targeted on-canvas adjustment"** (click-drag the image to move the curve node at the sampled tone) is **not** implemented (it was optional in the spec).
 - **Gradient stroke effect:** the engine can render a gradient-filled stroke, but the Layer Style dialog exposes Stroke as **colour-only** (the Gradient *Overlay* has a 2-stop editor).
 - **Clip edge case:** a clipped layer sitting directly above a **non-clipped adjustment layer** is treated as **inert** rather than clipping to the pixel base *below* the adjustment (a rare configuration; the spec permitted "inert" as a fallback).
 - **Channels-panel mask channel** and an **options-bar "Mask" pill** were deferred (the Layers-panel active-surface ring is the indicator instead).
 
-**Performance not yet optimised (correctness-first)**
-- Adjustment layers and layer effects render at **full document size** each recomposite (no viewport/dirty-region scoping or persistent output cache). On a 4000×3000 document with large blurs or stacked adjustments this can drop below the 60 fps target while dragging — this is exactly what the **render-graph cache (Spec 06)** is meant to add and is **not yet built**.
+**Performance (render graph — Spec 06 built)**
+- The compositor now runs through a **key-validated per-node render cache**: unchanged subtrees are never recomputed (a cached group/effect/adjustment product is one `drawImage`), opacity/blend/visibility changes reuse the layer's intrinsic render, and adjustment layers only re-run their read-back when something *below* them actually changed. A byte-budgeted LRU bounds memory, live brush strokes bypass the cache, and a dev toggle (`__gqRenderCache.disable()`) A/B-verifies pixel identity against the uncached path.
+- Remaining ceiling: recomputation itself (a *missed* effect or adjustment) still processes at full document size — per-region partial recompute inside a node was deliberately not attempted (correctness first).
 
 **Engine ceiling (deliberate, "v2-engine" territory)**
 - **8-bit only.** All processing is Canvas 2D `ImageData` (8-bit per channel); there is **no 16/32-bit pipeline** and **no WebGL/WebGPU** path. High-bit-depth, a GPU renderer, and RAW development are future research tracks, not built.
 
-**Placeholder UI (present but inert)**
-- Effects menu: **Sharpen, Distort, Noise, Pixelate, Stylize, Liquify** are menu stubs (the **Blur Gallery** is the only wired Effects entry). **Smart Filters (Spec 07)** would implement these.
-- A few **Settings/Help** menu items (Keyboard Shortcuts, Performance, Scratch Disks, the Help pages) are stubs.
+**Smart Filters (Spec 07 built)**
+- Every layer/group can carry a non-destructive, re-editable **smart-filter stack** (Effects menu / Layers panel ▸ Smart Filters…): **Blur** (all nine Blur Gallery types, sharing the same kernel), **Sharpen** (Unsharp Mask), **Noise**, **Pixelate** (Mosaic), **Distort** (Twirl/Pinch/Wave), **Stylize** (Find Edges/Emboss/Posterize/Threshold) — each with enable/reorder/remove, per-filter blend mode + opacity, one-step undo per edit, live document preview, cached via the render graph, serialized in `.aproj` v7, and bakeable via "Apply". The old placeholder menu items are now wired. Not included: a stack-wide filter mask, and Liquify (still a stub — it's a warp-mesh tool, out of scope).
+- A few **Settings/Help** menu items (Performance, Scratch Disks, the Help pages) are stubs. **Keyboard Shortcuts** is implemented: a searchable window (Settings ▸ Keyboard Shortcuts… / Help ▸ Keyboard Shortcuts) generated from the tool and menu registries plus the canvas/panel gestures.
 
-**Roadmap status:** Specs **01 (Masks), 02 (Adjustment Layers), 03 (Layer Effects), 04 (Curves & Levels), 05 (Clipping Masks)** are implemented. Spec **06 (Render Graph / caching)** and **07 (Smart Filters)** remain.
+**Roadmap status:** all specs **01–07** (Masks, Adjustment Layers, Layer Effects, Curves & Levels, Clipping Masks, Render Graph, Smart Filters) are implemented.
 
 ---
 

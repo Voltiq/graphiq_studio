@@ -20,6 +20,7 @@ import {
   Link2,
   Pencil,
   Plus,
+  FlaskConical,
   Sparkles,
   Trash2,
   Unlink2,
@@ -28,6 +29,7 @@ import styles from "../RightDock.module.scss";
 import { Select } from "../Controls";
 import { BLEND_MODES, clipGroupsOf, findNode, type LayerNode, type LayersApi } from "../../lib/layers";
 import { hasEnabledFx } from "../../lib/effects";
+import { hasEnabledFilters } from "../../lib/filters";
 
 type ClipRole = "none" | "base" | "member";
 interface Row {
@@ -314,6 +316,20 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                     {isAdjustment ? "Adjustment" : isGroup ? "Group" : "Layer"} · {l.opacity}%
                   </span>
                 </div>
+                {!isAdjustment && hasEnabledFilters(l.filters) && (
+                  <button
+                    type="button"
+                    className={styles.maskLink}
+                    data-on={true}
+                    title="Smart filters — click to edit"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      api.openFilters(l.id);
+                    }}
+                  >
+                    <FlaskConical size={13} />
+                  </button>
+                )}
                 {!isAdjustment && hasEnabledFx(l.effects) && (
                   <button
                     type="button"
@@ -447,6 +463,9 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                     <Trash2 size={13} /> Clear Layer Style
                   </button>
                 )}
+                <button type="button" onClick={() => run(() => api.openFilters(menu.node.id))}>
+                  <FlaskConical size={13} /> Smart Filters…
+                </button>
               </>
             )}
             <div className={styles.menuSep} />

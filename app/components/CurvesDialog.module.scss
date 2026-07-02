@@ -1,0 +1,465 @@
+/* Curves — tone-curve graph over a histogram, flanked by black→white axis
+   bars whose pointer handles track (and drag) the selected point. Matches the
+   Levels dialog's design language. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: rgba(12, 9, 6, 0.55);
+  backdrop-filter: blur(6px);
+  animation: fade var(--t-med) var(--ease);
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dialog {
+  width: 480px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2xl);
+  box-shadow: var(--shadow), var(--glow);
+  animation: pop var(--t-med) var(--ease-pop);
+  overflow: hidden;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+
+  h2 {
+    font-size: 13.5px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-left: auto;
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    color: var(--text);
+  }
+
+  &:active {
+    transform: scale(0.9);
+  }
+}
+
+.body {
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ------------------------- Channel row + actions -------------------------- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.chips {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background: var(--wash);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+
+  &:hover {
+    color: var(--text);
+  }
+
+  &[data-active="true"] {
+    color: var(--text);
+    background: color-mix(in srgb, var(--ch, var(--accent)) 15%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ch, var(--accent)) 38%, transparent);
+  }
+
+  &[data-channel="r"] {
+    --ch: #f87171;
+  }
+  &[data-channel="g"] {
+    --ch: #4ade80;
+  }
+  &[data-channel="b"] {
+    --ch: #60a5fa;
+  }
+}
+
+.chipDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ch, var(--text-3));
+  opacity: 0.55;
+  transition: opacity var(--t-fast) var(--ease);
+
+  .chip[data-active="true"] & {
+    opacity: 1;
+  }
+}
+
+.chipMark {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.ghostBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
+
+  &:active {
+    transform: scale(0.96);
+  }
+}
+
+/* Preset picker — its own full-width row under the channel toolbar. */
+.presetRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.presetLabel {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-2);
+  user-select: none;
+}
+
+.presetSelect {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---------------------- Graph + black→white axis bars ---------------------- */
+.graphGrid {
+  display: grid;
+  grid-template-columns: 13px 1fr;
+  grid-template-rows: 1fr 13px;
+  gap: 6px;
+}
+
+.graphWrap {
+  grid-area: 1 / 2;
+  position: relative;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--canvas-void);
+  overflow: hidden;
+  box-shadow: var(--inset);
+}
+
+.graph {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  touch-action: none;
+  cursor: crosshair;
+  outline: none; /* keyboard focus shown by the frame instead */
+
+  &[data-hover="true"] {
+    cursor: pointer;
+  }
+}
+
+.graphWrap:focus-within {
+  border-color: rgba(var(--accent-rgb), 0.5);
+}
+
+/* Output axis (left): black at the bottom → white at the top. */
+.axisY {
+  grid-area: 1 / 1;
+  position: relative;
+  border-radius: var(--r-sm);
+  background: linear-gradient(0deg, #000, #fff);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  touch-action: none;
+  cursor: ns-resize;
+}
+
+/* Input axis (bottom): black → white. */
+.axisX {
+  grid-area: 2 / 2;
+  position: relative;
+  border-radius: var(--r-sm);
+  background: linear-gradient(90deg, #000, #fff);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  touch-action: none;
+  cursor: ew-resize;
+}
+
+/* Axis pointer handles — same SVG pointer family as the Levels dialog; they
+   track the selected point and can be dragged along their axis. */
+.axisHandleX,
+.axisHandleY {
+  position: absolute;
+  line-height: 0;
+  pointer-events: none;
+
+  svg {
+    display: block;
+    overflow: visible;
+  }
+
+  path {
+    stroke: color-mix(in srgb, var(--text-3) 85%, transparent);
+    stroke-width: 1;
+    transition: stroke var(--t-fast) var(--ease);
+  }
+
+  &[data-drag="true"] path {
+    stroke: var(--accent);
+    stroke-width: 1.4;
+  }
+}
+
+.axisHandleX {
+  top: 0;
+  transform: translateX(-50%);
+
+  &[data-drag="true"] {
+    transform: translateX(-50%) scale(1.18);
+  }
+}
+
+.axisHandleY {
+  left: 0;
+  transform: translateY(-50%) rotate(90deg);
+
+  &[data-drag="true"] {
+    transform: translateY(-50%) rotate(90deg) scale(1.18);
+  }
+}
+
+/* --------------------------- Selected point row ---------------------------- */
+.pointRow {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: var(--sp-3);
+}
+
+.pointBadge {
+  align-self: center;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--wash);
+  white-space: nowrap;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.fieldLabel {
+  font-size: 10.5px;
+  color: var(--text-3);
+  user-select: none;
+}
+
+.fieldInput {
+  width: 58px;
+  height: 27px;
+  padding: 0 6px;
+  text-align: center;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  outline: none;
+  -moz-appearance: textfield;
+  appearance: textfield;
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+
+  &::-webkit-outer-spin-button,
+  &::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  &:hover:not(:disabled) {
+    border-color: var(--border-strong);
+  }
+
+  &:focus {
+    border-color: rgba(var(--accent-rgb), 0.6);
+    box-shadow: var(--focus-ring);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+}
+
+/* Remove the selected point (endpoints can't be removed). */
+.removeBtn {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 27px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+
+  &:hover:not(:disabled) {
+    color: var(--danger);
+    border-color: rgba(var(--danger-rgb), 0.4);
+    background: rgba(var(--danger-rgb), 0.09);
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+}
+
+.hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+  text-align: center;
+}
+
+/* -------------------------------- Footer ---------------------------------- */
+.foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.btn {
+  height: 34px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--r-lg);
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    border-color: var(--border-strong);
+  }
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+.primary {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+
+  &:hover {
+    background: color-mix(in srgb, var(--accent) 90%, #fff);
+    border-color: transparent;
+  }
+}

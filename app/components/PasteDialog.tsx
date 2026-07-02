@@ -12,12 +12,22 @@ const DESTS: { value: PasteDest; title: string; desc: string }[] = [
   { value: "new-canvas", title: "New canvas", desc: "Open the image as its own document" },
 ];
 
+/**
+ * Paste dialog. Two modes:
+ * - full (default): choose the destination, plus — when the image is larger
+ *   than the canvas — the keep/expand canvas-size question.
+ * - `sizeOnly`: the destination is already decided (a Preferences default);
+ *   only the canvas-size question is asked.
+ */
 export default function PasteDialog({
   width,
   height,
   docWidth,
   docHeight,
   source,
+  sizeOnly = false,
+  initialDest = "current-layer",
+  initialExpand = false,
   onApply,
   onClose,
 }: {
@@ -26,11 +36,14 @@ export default function PasteDialog({
   docWidth: number;
   docHeight: number;
   source: CanvasImageSource;
+  sizeOnly?: boolean;
+  initialDest?: PasteDest;
+  initialExpand?: boolean;
   onApply: (opts: { dest: PasteDest; expand: boolean }) => void;
   onClose: () => void;
 }) {
-  const [dest, setDest] = useState<PasteDest>("current-layer");
-  const [expand, setExpand] = useState(false);
+  const [dest, setDest] = useState<PasteDest>(initialDest);
+  const [expand, setExpand] = useState(initialExpand);
   const previewRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -47,7 +60,7 @@ export default function PasteDialog({
 
   // Keep / Expand only make sense when the image is bigger than the canvas.
   const biggerThanCanvas = width > docWidth || height > docHeight;
-  const showCanvasSize = dest !== "new-canvas" && biggerThanCanvas;
+  const showCanvasSize = sizeOnly || (dest !== "new-canvas" && biggerThanCanvas);
 
   return (
     <div className={styles.overlay} onMouseDown={onClose}>
@@ -76,28 +89,36 @@ export default function PasteDialog({
               <div className={styles.dim}>
                 {width} × {height} px
               </div>
-              <div className={styles.sub}>Clipboard image</div>
+              <div className={styles.sub}>
+                {sizeOnly
+                  ? `Larger than the ${docWidth} × ${docHeight} px canvas`
+                  : "Clipboard image"}
+              </div>
             </div>
           </div>
 
-          <span className={styles.groupLabel}>Paste into</span>
-          <div className={styles.options}>
-            {DESTS.map((o) => (
-              <button
-                key={o.value}
-                type="button"
-                className={styles.option}
-                data-active={dest === o.value}
-                onClick={() => setDest(o.value)}
-              >
-                <span className={styles.radio} />
-                <span className={styles.optText}>
-                  <strong>{o.title}</strong>
-                  <em>{o.desc}</em>
-                </span>
-              </button>
-            ))}
-          </div>
+          {!sizeOnly && (
+            <>
+              <span className={styles.groupLabel}>Paste into</span>
+              <div className={styles.options}>
+                {DESTS.map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    className={styles.option}
+                    data-active={dest === o.value}
+                    onClick={() => setDest(o.value)}
+                  >
+                    <span className={styles.radio} />
+                    <span className={styles.optText}>
+                      <strong>{o.title}</strong>
+                      <em>{o.desc}</em>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
 
           {showCanvasSize && (
             <>
@@ -128,6 +149,9 @@ export default function PasteDialog({
                   </span>
                 </button>
               </div>
+              <span className={styles.note}>
+                Set a default under Settings ▸ Preferences ▸ Pasting to skip this question.
+              </span>
             </>
           )}
         </div>

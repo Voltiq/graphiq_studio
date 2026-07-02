@@ -5,7 +5,7 @@
   align-items: center;
   gap: var(--sp-3);
   padding: 0 var(--sp-3);
-  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  background: color-mix(in srgb, var(--surface) 65%, transparent);
   border-bottom: 1px solid var(--border);
   overflow: hidden;
   z-index: 40;
@@ -17,20 +17,20 @@
   white-space: nowrap;
 }
 
+/* Current tool: an amber-tinted identity chip anchoring the bar. */
 .toolBadge {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   flex-shrink: 0;
   height: 28px;
-  padding: 0 10px;
+  padding: 0 11px;
   line-height: 1;
-  border-radius: var(--r-xl);
-  background: rgba(var(--accent-rgb), 0.15);
-  /* reference uses ring-1 (an outset ring), not an inset border */
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.25);
-  font-size: 13px;
-  font-weight: 500;
+  border-radius: var(--r-pill);
+  background: rgba(var(--accent-rgb), 0.13);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.28);
+  font-size: 12.5px;
+  font-weight: 550;
   color: var(--text);
 
   svg {
@@ -38,15 +38,20 @@
   }
 }
 
+/* Controls scroll horizontally; the edges fade so a cut-off control reads as
+   "there's more", not as a glitch. */
 .controls {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
   overflow-x: auto;
   overflow-y: hidden;
-  padding: var(--sp-2) 2px;
+  padding: var(--sp-2) var(--sp-3);
+  margin: 0 calc(-1 * var(--sp-2));
   flex: 1;
   min-width: 0;
+  mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 12px, #000 calc(100% - 12px), transparent);
 
   &::-webkit-scrollbar {
     height: 0;
@@ -57,20 +62,26 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
+  height: 30px;
   padding: 0 12px;
-  font-size: 13px;
+  font-size: 12.5px;
+  font-weight: 500;
   color: var(--text-2);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--wash);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   white-space: nowrap;
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
 
   &:hover {
     color: var(--text);
-    background: rgba(255, 255, 255, 0.07);
+    background: var(--wash-2);
     border-color: var(--border-strong);
+  }
+
+  &:active {
+    transform: scale(0.97);
   }
 }
 
@@ -83,25 +94,31 @@
 .iconBtn {
   display: inline-grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   flex-shrink: 0;
   color: var(--text-2);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--wash);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
 
   &:hover {
     color: var(--text);
-    background: rgba(255, 255, 255, 0.07);
+    background: var(--wash-2);
     border-color: var(--border-strong);
   }
 
+  &:active {
+    transform: scale(0.93);
+  }
+
+  /* toggled-on = amber state, matching the tool rail */
   &[data-active="true"] {
-    color: var(--accent-contrast);
-    background: var(--accent);
-    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(var(--accent-rgb), 0.14);
+    border-color: rgba(var(--accent-rgb), 0.38);
   }
 }
 
@@ -116,12 +133,16 @@
 .apply {
   color: var(--accent-contrast);
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
 
   &:hover {
     color: var(--accent-contrast);
-    background: var(--accent);
-    border-color: var(--accent);
-    filter: brightness(1.08);
+    background: color-mix(in srgb, var(--accent) 90%, #fff);
+    border-color: transparent;
+  }
+
+  &:active {
+    transform: scale(0.97);
   }
 }

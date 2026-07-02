@@ -1,4 +1,4 @@
-import { parseColor, toHex8 } from "./color";
+﻿import { parseColor, toHex8 } from "./color";
 import type { Rect } from "./view";
 import { clipGroupsOf } from "./layers";
 import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerNode } from "./layers";
@@ -6,6 +6,14 @@ import { applyAdjustments, isDefaultAdjust, type Adjustments } from "./adjust";
 import { renderShape, type ShapeGeom } from "./shapes";
 import { boxBlurPass, clampi } from "./blur";
 import { fxHash, hasEnabledFx, renderStyled } from "./effects";
+import { clampRect, fnv, selectEvictions, unionRect, type RenderNodeCache } from "./render-graph";
+import {
+  applyFilter,
+  computeBlurFx,
+  filterStackHash,
+  hasEnabledFilters,
+  type SmartFilter,
+} from "./filters";
 import { buildCanvasGradient } from "./gradient";
 import {
   applyToneLUTs,
@@ -242,6 +250,7 @@ export interface EngineHandle {
     angle: number,
     anchorX?: number,
     anchorY?: number,
+    extra?: { band: number; feather: number; threshold: number },
   ) => void;
   commitBlurFx: (label: string) => void;
   cancelBlurFx: () => void;
@@ -291,6 +300,11 @@ export interface EngineHandle {
   maskSelectionRects: (id: string) => Rect[];
   setActiveSurface: (id: string, surface: ActiveSurface) => void;
   getActiveSurface: (id: string) => ActiveSurface;
+  /** Spec 07: bake a smart-filter stack into pixels (one combined step). */
+  applySmartFilters: (layerId: string, filters: SmartFilter[], side?: HistorySide) => void;
+  /** Spec 06 debug: toggle the render cache for A/B pixel-identity checks. */
+  setRenderCacheEnabled: (on: boolean) => void;
+  renderCacheStats: () => { enabled: boolean; entries: number; bytes: number };
 }
 
 export interface CopyResult {
@@ -417,200 +431,8 @@ interface Entry {
   surface?: "layer" | "mask";
 }
 
-/** Premultiply an RGBA8 region into per-channel float arrays (alpha kept 0–255). */
-function premultChannels(d: Uint8ClampedArray, n: number) {
-  const R = new Float32Array(n);
-  const G = new Float32Array(n);
-  const B = new Float32Array(n);
-  const A = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    const a = d[i * 4 + 3];
-    const af = a / 255;
-    R[i] = d[i * 4] * af;
-    G[i] = d[i * 4 + 1] * af;
-    B[i] = d[i * 4 + 2] * af;
-    A[i] = a;
-  }
-  return { R, G, B, A };
-}
-
-/**
- * Apply a Blur Gallery effect to a whole-layer RGBA region (premultiplied so
- * alpha edges don't darken). When `mask` is given the blurred result is blended
- * back only inside it (a selection), reading neighbours from the full image so
- * the selection edge isn't darkened. `cx,cy` is the centre for zoom/spin.
- */
-function computeBlurFx(
-  orig: ImageData,
-  kind: string,
-  amount: number,
-  angle: number,
-  mask: Uint8ClampedArray | null,
-  cx: number,
-  cy: number,
-  cs: PredefinedColorSpace,
-): ImageData {
-  const w = orig.width;
-  const h = orig.height;
-  const n = w * h;
-  const sd = orig.data;
-  const { R: sR, G: sG, B: sB, A: sA } = premultChannels(sd, n);
-  let dR: Float32Array;
-  let dG: Float32Array;
-  let dB: Float32Array;
-  let dA: Float32Array;
-
-  if (kind === "box" || kind === "gaussian") {
-    dR = sR.slice();
-    dG = sG.slice();
-    dB = sB.slice();
-    dA = sA.slice();
-    const r = Math.max(1, Math.round(amount));
-    const passes = kind === "gaussian" ? 3 : 1;
-    const br = kind === "gaussian" ? Math.max(1, Math.round(r / 2)) : r;
-    for (let p = 0; p < passes; p++) {
-      for (const ch of [dR, dG, dB, dA]) {
-        boxBlurPass(ch, w, h, br, true);
-        boxBlurPass(ch, w, h, br, false);
-      }
-    }
-  } else {
-    dR = new Float32Array(n);
-    dG = new Float32Array(n);
-    dB = new Float32Array(n);
-    dA = new Float32Array(n);
-    // Per-pixel offset list: where to read N samples for the pixel at (px,py).
-    // Box/gaussian don't reach here. Each branch fills dst as the sample average.
-    if (kind === "motion") {
-      const rad = (angle * Math.PI) / 180;
-      const ux = Math.cos(rad);
-      const uy = Math.sin(rad);
-      const len = Math.max(1, amount);
-      const N = clampi(Math.round(len), 3, 48);
-      const half = (N - 1) / 2 || 1;
-      for (let py = 0; py < h; py++) {
-        for (let px = 0; px < w; px++) {
-          let r = 0;
-          let g = 0;
-          let b = 0;
-          let a = 0;
-          for (let k = 0; k < N; k++) {
-            const t = ((k - half) / half) * (len / 2);
-            const si =
-              clampi(Math.round(py + uy * t), 0, h - 1) * w + clampi(Math.round(px + ux * t), 0, w - 1);
-            r += sR[si];
-            g += sG[si];
-            b += sB[si];
-            a += sA[si];
-          }
-          const di = py * w + px;
-          dR[di] = r / N;
-          dG[di] = g / N;
-          dB[di] = b / N;
-          dA[di] = a / N;
-        }
-      }
-    } else if (kind === "zoom" || kind === "spin") {
-      const zoom = kind === "zoom";
-      const strength = amount / 100; // zoom: scale span
-      const arc = (amount * Math.PI) / 180; // spin: angle span
-      const N = clampi(zoom ? Math.round(12 + strength * 36) : Math.round(8 + amount), 8, 44);
-      const half = (N - 1) / 2 || 1;
-      for (let py = 0; py < h; py++) {
-        for (let px = 0; px < w; px++) {
-          const ox = px - cx;
-          const oy = py - cy;
-          let r = 0;
-          let g = 0;
-          let b = 0;
-          let a = 0;
-          for (let k = 0; k < N; k++) {
-            const f = (k - half) / half; // -1..1
-            let sx: number;
-            let sy: number;
-            if (zoom) {
-              const s = 1 + f * strength;
-              sx = cx + ox * s;
-              sy = cy + oy * s;
-            } else {
-              const phi = f * arc * 0.5;
-              const c = Math.cos(phi);
-              const sn = Math.sin(phi);
-              sx = cx + ox * c - oy * sn;
-              sy = cy + ox * sn + oy * c;
-            }
-            const si = clampi(Math.round(sy), 0, h - 1) * w + clampi(Math.round(sx), 0, w - 1);
-            r += sR[si];
-            g += sG[si];
-            b += sB[si];
-            a += sA[si];
-          }
-          const di = py * w + px;
-          dR[di] = r / N;
-          dG[di] = g / N;
-          dB[di] = b / N;
-          dA[di] = a / N;
-        }
-      }
-    } else {
-      // Bokeh: average over a disc of `amount` radius (golden-angle sample points).
-      const radius = Math.max(1, amount);
-      const N = 36;
-      const offs = new Float32Array(N * 2);
-      for (let k = 0; k < N; k++) {
-        const rr = radius * Math.sqrt((k + 0.5) / N);
-        const aa = k * 2.399963229728653;
-        offs[k * 2] = rr * Math.cos(aa);
-        offs[k * 2 + 1] = rr * Math.sin(aa);
-      }
-      for (let py = 0; py < h; py++) {
-        for (let px = 0; px < w; px++) {
-          let r = 0;
-          let g = 0;
-          let b = 0;
-          let a = 0;
-          for (let k = 0; k < N; k++) {
-            const si =
-              clampi(Math.round(py + offs[k * 2 + 1]), 0, h - 1) * w +
-              clampi(Math.round(px + offs[k * 2]), 0, w - 1);
-            r += sR[si];
-            g += sG[si];
-            b += sB[si];
-            a += sA[si];
-          }
-          const di = py * w + px;
-          dR[di] = r / N;
-          dG[di] = g / N;
-          dB[di] = b / N;
-          dA[di] = a / N;
-        }
-      }
-    }
-  }
-
-  const out = new Uint8ClampedArray(n * 4);
-  for (let i = 0; i < n; i++) {
-    const a = dA[i];
-    const inv = a > 0 ? 255 / a : 0;
-    let r = dR[i] * inv;
-    let g = dG[i] * inv;
-    let b = dB[i] * inv;
-    let al = a;
-    const o = i * 4;
-    if (mask) {
-      const m = mask[i] / 255;
-      r = sd[o] + (r - sd[o]) * m;
-      g = sd[o + 1] + (g - sd[o + 1]) * m;
-      b = sd[o + 2] + (b - sd[o + 2]) * m;
-      al = sd[o + 3] + (al - sd[o + 3]) * m;
-    }
-    out[o] = r;
-    out[o + 1] = g;
-    out[o + 2] = b;
-    out[o + 3] = al;
-  }
-  return new ImageData(out, w, h, { colorSpace: cs });
-}
+// (premultChannels + computeBlurFx moved to filters.ts — shared by the Blur
+// Gallery and the blur smart-filter type.)
 
 /**
  * Imperative raster paint engine. Holds one offscreen canvas per layer plus a
@@ -655,26 +477,93 @@ export class PaintEngine {
   // adjustment nodes read back, plus the adjusted/modulation/clip-base scratch).
   private adjBufs: { [k: string]: Layer | undefined } = {};
 
-  // --- Layer effects (styles) ------------------------------------------------
-  // Cached styled buffer per leaf id, keyed by (pixelVersion, fxHash, space, epoch).
-  private effectsCache = new Map<string, { c: HTMLCanvasElement; key: string }>();
-  // Monotonic per-layer pixel version (bumped on any committed pixel write) and a
-  // document epoch (bumped on resize/crop/transform/colour-space) — together they
-  // invalidate styled buffers precisely.
+  // --- Render graph (Spec 06) -------------------------------------------------
+  // ONE per-node cache of intrinsic renders (a node's own composited pixels —
+  // mask/effects folded in, opacity/blend NOT). Every entry is keyed by a hash
+  // of exactly what it depends on (see nodeKey/effectiveKey); an entry is valid
+  // iff its stored key still matches, so invalidation is automatic: bumping a
+  // version changes the keys of the node and every dependent (parents via
+  // childrenSig, adjustments above via belowSig) and they simply miss.
+  // Caches are an optimization, never truth — dropping any entry only costs time.
+  private renderCache = new Map<string, RenderNodeCache>();
+  private renderCacheOn = true; // debug A/B toggle (disabled ⇒ full recompute)
+  private renderTick = 0; // LRU clock
+  private renderBytes = 0; // owned bytes currently cached
+  private renderBudget = 256 * 1024 * 1024; // LRU eviction beyond this
+  private frameProtect = new Set<string>(); // entries used by the current frame
+  private keyMemo = new Map<string, string>(); // per-composite effectiveKey memo
+  private liveBypass = new Set<string>(); // live layer ids + their ancestor path
+  // Pending dirty region (document space) + whether the next view blit must be
+  // full. Partial blits are only taken when the tree reference is unchanged
+  // (same immutable tree ⇒ no structural/props change slipped past the rects).
+  private pendingDirty: Rect | null = null;
+  private lastTree: LayerNode[] | null = null;
+  // Monotonic per-layer pixel version (bumped on any committed pixel write), a
+  // per-id mask version (bumped on any mask mutation), and a document epoch
+  // (bumped on resize/crop/transform/colour-space) — the key ingredients.
   private pixelVersion = new Map<string, number>();
+  private maskVersion = new Map<string, number>();
   private docEpoch = 0;
   // Compiled Curves/Levels LUTs per adjustment-node id, keyed by the spec JSON.
+  // (Param→LUT math memo, not a pixel cache — stays separate from renderCache.)
   private toneCache = new Map<string, { key: string; luts: ToneLUTs }>();
 
-  /** Mark a layer's pixels changed → its styled buffer re-renders next composite. */
-  private bumpPixel(id: string) {
+  /** Mark a layer's pixels changed: its key (and every dependent's) changes, so
+   *  caches miss next composite. `rect` bounds the change for the view blit. */
+  private bumpPixel(id: string, rect?: Rect) {
     this.pixelVersion.set(id, (this.pixelVersion.get(id) ?? 0) + 1);
+    this.dropCache(id);
+    this.pendingDirty = unionRect(this.pendingDirty, rect ?? null);
+    if (!rect) this.lastTree = null; // unbounded change → next blit is full
   }
 
-  /** Drop all styled-buffer caches (document geometry or colour space changed). */
+  /** Mark a node's mask changed (same key mechanics as bumpPixel). */
+  private bumpMask(id: string, rect?: Rect) {
+    this.maskVersion.set(id, (this.maskVersion.get(id) ?? 0) + 1);
+    this.dropCache(id);
+    this.pendingDirty = unionRect(this.pendingDirty, rect ?? null);
+    if (!rect) this.lastTree = null;
+  }
+
+  /** Free a node's cached render (also used by LRU eviction + deletion). */
+  private dropCache(id: string) {
+    const e = this.renderCache.get(id);
+    if (e) {
+      this.renderBytes -= e.bytes;
+      this.renderCache.delete(id);
+    }
+    // A clip group led by this node caches under a prefixed id.
+    const clip = this.renderCache.get(`clip:${id}`);
+    if (clip) {
+      this.renderBytes -= clip.bytes;
+      this.renderCache.delete(`clip:${id}`);
+    }
+  }
+
+  /** Invalidate every intrinsic render (geometry or colour space changed):
+   *  the epoch keys every entry, and the buffers are freed eagerly. */
   private invalidateStyled() {
-    this.effectsCache.clear();
     this.docEpoch++;
+    this.renderCache.clear();
+    this.renderBytes = 0;
+    this.lastTree = null;
+  }
+
+  /** Debug A/B toggle: with the cache off, every composite fully recomputes —
+   *  output must be pixel-identical to the cached path. */
+  setRenderCacheEnabled(on: boolean) {
+    this.renderCacheOn = on;
+    if (!on) {
+      this.renderCache.clear();
+      this.renderBytes = 0;
+    }
+    this.lastTree = null;
+    this.emitChange();
+  }
+
+  /** Cache occupancy (dev overlay / console). */
+  renderCacheStats(): { enabled: boolean; entries: number; bytes: number } {
+    return { enabled: this.renderCacheOn, entries: this.renderCache.size, bytes: this.renderBytes };
   }
 
   /** Make a canvas in the working colour space (for layer-content buffers). */
@@ -710,6 +599,7 @@ export class PaintEngine {
   // new stroke re-reads the layer, i.e. the previous result).
   private blurring = false;
   private blurLayer: string | null = null;
+  private blurOnMask = false;
   private blurOrig: ImageData | null = null; // layer pixels at stroke start
   private blurSrc: ImageData | null = null; // blur source (orig, or composite for sampleAll)
   private blurCov: Float32Array | null = null; // per-pixel coverage 0–1, doc-sized
@@ -728,6 +618,7 @@ export class PaintEngine {
   // stays even and compounds across strokes. `bakeDodge` applies the tonal curve.
   private dodging = false;
   private dodgeLayer: string | null = null;
+  private dodgeOnMask = false;
   private dodgeOrig: ImageData | null = null;
   private dodgeCov: Float32Array | null = null;
   private dodgeTip: { data: Float32Array; size: number; r: number } | null = null;
@@ -764,6 +655,8 @@ export class PaintEngine {
   private moveOrig: Layer | null = null;
   private moveSrc: Rect | null = null;
   private moveOff = { x: 0, y: 0 };
+  /** Whole-layer move with a linked mask: shift the mask with the pixels. */
+  private moveMaskLinked = false;
 
   // Floating content sitting above a layer, not yet merged (paste, or a moved selection).
   private floatActive = false;
@@ -1183,6 +1076,7 @@ export class PaintEngine {
   private deriveMaskAlpha(id: string, rect?: Rect): void {
     const mask = this.masks.get(id);
     if (!mask) return;
+    this.bumpMask(id, rect); // every mask mutation funnels through here
     let cache = this.maskAlpha.get(id);
     if (!cache || cache.c.width !== this.w || cache.c.height !== this.h) {
       cache = this.mkMask(false);
@@ -1282,6 +1176,7 @@ export class PaintEngine {
   freeMask(id: string): void {
     this.masks.delete(id);
     this.maskAlpha.delete(id);
+    this.bumpMask(id); // the node's masked render changed
     if (this.surfaces.get(id) === "mask") this.surfaces.set(id, "pixels");
     this.emitChange();
   }
@@ -2080,21 +1975,40 @@ export class PaintEngine {
     for (const id of deleteIds) {
       this.layers.delete(id);
       this.freeMask(id);
-      this.effectsCache.delete(id);
+      this.dropCache(id);
     }
     this.freeMask(targetId); // the merged result is flat — no mask
-    this.effectsCache.delete(targetId);
+    this.dropCache(targetId);
     this.layers.set(targetId, { c, ctx });
     this.bumpPixel(targetId);
     this.emitChange();
   }
 
-  /** Forget a layer's offscreen canvas + mask + styled cache (after removal). */
+  /** Bake a layer's smart-filter stack into its stored pixels (the explicit
+   *  destructive "Apply Smart Filters"): one combined history step — the pixel
+   *  patch plus the structural stack-removal passed in as `side`. */
+  applySmartFilters(layerId: string, filters: SmartFilter[], side?: HistorySide) {
+    const l = this.layers.get(layerId);
+    if (!l || !filters.length) return;
+    const before = l.ctx.getImageData(0, 0, this.w, this.h);
+    const filtered = this.renderFiltered(l.c, filters);
+    l.ctx.globalAlpha = 1;
+    l.ctx.globalCompositeOperation = "source-over";
+    l.ctx.clearRect(0, 0, this.w, this.h);
+    l.ctx.drawImage(filtered, 0, 0);
+    const after = l.ctx.getImageData(0, 0, this.w, this.h);
+    this.pushEntry(layerId, { x: 0, y: 0, w: this.w, h: this.h }, before, after, "Apply Smart Filters", side);
+    this.bumpPixel(layerId);
+    this.emitChange();
+  }
+
+  /** Forget a layer's offscreen canvas + mask + cached render (after removal). */
   removeLayer(id: string) {
     this.layers.delete(id);
     this.freeMask(id);
-    this.effectsCache.delete(id);
+    this.dropCache(id);
     this.pixelVersion.delete(id);
+    this.maskVersion.delete(id);
     this.toneCache.delete(id);
   }
 
@@ -2338,7 +2252,7 @@ export class PaintEngine {
         this.bumpPixel(id);
       } else {
         this.layers.delete(id);
-        this.effectsCache.delete(id);
+        this.dropCache(id);
       }
       if (snap.mask) this.restoreMask(id, snap.mask);
       else this.freeMask(id);
@@ -2436,6 +2350,164 @@ export class PaintEngine {
     return t.c;
   }
 
+  // ---- render-graph keys (Spec 06) ------------------------------------------
+  // The one rule: does a change alter the node's own composited pixels?
+  // Yes (pixels / mask / effects / adjustment params / lower-sibling content)
+  // → it is part of nodeKey (intrinsic). No (opacity / blend / visible /
+  // clipped / position) → it only affects HOW the buffer is drawn, so it lives
+  // in effectiveKey, which parents fold into childrenSig — the parent's merge
+  // invalidates, the child's intrinsic render is reused.
+
+  /** Intrinsic dependency key of a leaf/group (pre-opacity/blend render). */
+  private nodeKey(node: LayerNode): string {
+    const mv = node.mask?.enabled ? (this.maskVersion.get(node.id) ?? 0) : "x";
+    const fx = hasEnabledFx(node.effects) ? fnv(fxHash(node.effects)) : "0";
+    const flt = hasEnabledFilters(node.filters) ? fnv(filterStackHash(node.filters)) : "0";
+    if (node.type === "group") {
+      let sig = "";
+      for (const c of node.children) sig += this.effectiveKey(c) + ";";
+      return `G${fnv(sig)}|${flt}|${fx}|${mv}|${this.cs}|${this.docEpoch}`;
+    }
+    const pv = this.pixelVersion.get(node.id) ?? 0;
+    return `L${pv}|${flt}|${fx}|${mv}|${this.cs}|${this.docEpoch}`;
+  }
+
+  /** What a parent's merge depends on for one child: the child's intrinsic key
+   *  plus its draw-time props. Memoized per composite pass. */
+  private effectiveKey(node: LayerNode): string {
+    const memo = this.keyMemo.get(node.id);
+    if (memo !== undefined) return memo;
+    let base: string;
+    if (node.type === "adjustment") {
+      // An adjustment member/child contributes its params + its own mask.
+      const mv = node.mask?.enabled ? (this.maskVersion.get(node.id) ?? 0) : "x";
+      base = `A${fnv(JSON.stringify(node.adjustment))}|${mv}`;
+    } else {
+      base = this.nodeKey(node);
+    }
+    const key = fnv(`${base}|${node.opacity}|${node.blend}|${node.visible ? 1 : 0}|${node.clipped ? 1 : 0}`);
+    this.keyMemo.set(node.id, key);
+    return key;
+  }
+
+  /** Key of everything an adjustment node reads: the ordered effective keys of
+   *  its lower siblings (the composite beneath it) — plus its own params, mask
+   *  and draw-time modulation, which are baked into its cached product. */
+  private adjustmentKey(node: LayerAdjustment, siblings: LayerNode[]): string {
+    const idx = siblings.indexOf(node);
+    let below = "";
+    for (let i = idx + 1; i < siblings.length; i++) below += this.effectiveKey(siblings[i]) + ";";
+    const mv = node.mask?.enabled ? (this.maskVersion.get(node.id) ?? 0) : "x";
+    return `ADJ${fnv(JSON.stringify(node.adjustment))}|${fnv(below)}|${mv}|${node.opacity}|${node.blend}|${this.cs}|${this.docEpoch}`;
+  }
+
+  /** Ids that must bypass the cache this frame: layers with a live session
+   *  (scratch-previewed or directly mutated without version bumps) plus every
+   *  ancestor group on their path — their merges must recompute each frame. */
+  private computeLiveBypass(tree: LayerNode[]): Set<string> {
+    const live = new Set<string>();
+    if (this.painting && this.strokeLayer) live.add(this.strokeLayer);
+    if (this.moving && this.moveLayer) live.add(this.moveLayer);
+    if (this.floatActive && this.floatLayer) live.add(this.floatLayer);
+    if (this.blurring && this.blurLayer) live.add(this.blurLayer);
+    if (this.dodging && this.dodgeLayer) live.add(this.dodgeLayer);
+    if (this.adjLayer) live.add(this.adjLayer);
+    if (this.shapeLayer) live.add(this.shapeLayer);
+    if (this.gradLayer) live.add(this.gradLayer);
+    if (this.pathLayer) live.add(this.pathLayer);
+    if (this.fillLayer) live.add(this.fillLayer);
+    if (this.blurFx) for (const id of this.blurFx.ids) live.add(id);
+    const out = new Set<string>();
+    if (!live.size) return out;
+    const walk = (nodes: LayerNode[], path: string[]): void => {
+      for (const n of nodes) {
+        if (live.has(n.id)) {
+          out.add(n.id);
+          for (const p of path) out.add(p);
+        }
+        if (n.type === "group") {
+          path.push(n.id);
+          walk(n.children, path);
+          path.pop();
+        }
+      }
+    };
+    walk(tree, []);
+    return out;
+  }
+
+  /** Store an intrinsic render (owned unless `bytes` is 0 for an alias). */
+  private cacheStore(id: string, key: string, c: HTMLCanvasElement, owned: boolean) {
+    const prev = this.renderCache.get(id);
+    if (prev) this.renderBytes -= prev.bytes;
+    const bytes = owned ? c.width * c.height * 4 : 0;
+    this.renderBytes += bytes;
+    this.renderCache.set(id, { c, key, bytes, tick: ++this.renderTick });
+    this.frameProtect.add(id);
+  }
+
+  /** LRU-evict past the byte budget (never entries used by this frame). */
+  private evictOverBudget() {
+    if (this.renderBytes <= this.renderBudget) return;
+    for (const id of selectEvictions(this.renderCache, this.renderBytes, this.renderBudget, this.frameProtect)) {
+      const e = this.renderCache.get(id);
+      if (e) {
+        this.renderBytes -= e.bytes;
+        this.renderCache.delete(id);
+      }
+    }
+  }
+
+  /**
+   * The intrinsic render of a leaf/group — pixels ⊗ effects ⊗ mask, WITHOUT
+   * opacity/blend (those are applied by the caller at draw time) — through the
+   * render cache. Live-session layers (and their ancestors) bypass the cache
+   * entirely so in-progress edits render fresh every frame, exactly as before.
+   */
+  private renderNode(node: LayerNode): HTMLCanvasElement | null {
+    if (node.type === "adjustment") return null; // handled by drawStack
+    // Plain leaf (no mask, no effects, no smart filters): its layer canvas IS
+    // the intrinsic render — alias it, no copy, no cache entry needed.
+    if (
+      node.type === "layer" &&
+      !node.mask?.enabled &&
+      !hasEnabledFx(node.effects) &&
+      !hasEnabledFilters(node.filters)
+    ) {
+      return this.leafDisplay(node.id);
+    }
+    const bypass = !this.renderCacheOn || this.liveBypass.has(node.id);
+    const key = bypass ? "" : this.nodeKey(node);
+    if (!bypass) {
+      const hit = this.renderCache.get(node.id);
+      if (hit && hit.key === key) {
+        hit.tick = ++this.renderTick;
+        this.frameProtect.add(node.id);
+        return hit.c;
+      }
+    }
+    // Miss → recompute with the SAME ops as the uncached path.
+    const styled = this.styledSource(node);
+    if (!styled) return null;
+    let result: HTMLCanvasElement;
+    let owned: boolean;
+    if (node.mask?.enabled) {
+      // maskedSource writes into a shared temp — copy into an owned buffer.
+      const src = this.maskedSource(node, styled);
+      const own = this.mk(this.w, this.h);
+      own.ctx.drawImage(src, 0, 0);
+      result = own.c;
+      owned = true;
+    } else {
+      // styledSource allocated this buffer fresh (fx render / group merge) —
+      // own it directly, no copy. (The plain-leaf alias returned above.)
+      result = styled;
+      owned = true;
+    }
+    if (!bypass) this.cacheStore(node.id, key, result, owned);
+    return result;
+  }
+
   /** Composite a group's children + its own effects into a fresh buffer — the
    *  merged group result BEFORE the group's mask / opacity / blend. Reused by the
    *  normal group draw and by clip groups (a group base/member). */
@@ -2445,7 +2517,10 @@ export class PaintEngine {
     const styled = hasEnabledFx(node.effects);
     const { c: bc, ctx: bctx } = this.mk(this.w, this.h, hasAdj || styled);
     this.drawStack(bctx, node.children); // sub-stack: clip groups / adjustments stay group-isolated
-    return styled ? renderStyled(bc, node.effects!, this.cs).canvas : bc;
+    // Group smart filters run on the merged children (group isolation), below
+    // the group's own effects — same order as a leaf: pixels → filters → fx.
+    const filtered = hasEnabledFilters(node.filters) ? this.renderFiltered(bc, node.filters!) : bc;
+    return styled ? renderStyled(filtered, node.effects!, this.cs).canvas : filtered;
   }
 
   /** The display source for a single leaf/group node WITH its effects (but without
@@ -2454,16 +2529,20 @@ export class PaintEngine {
     if (node.type === "group") return node.children.length ? this.groupMerged(node) : null;
     const disp = this.leafDisplay(node.id);
     if (!disp) return null;
-    return hasEnabledFx(node.effects) ? this.styledLeaf(node, disp) : disp;
+    // Order within a layer: raw pixels → smart filters → layer effects.
+    // (Effects derive their silhouette from the FILTERED display — Spec 07 §5.3.)
+    const filtered = hasEnabledFilters(node.filters) ? this.renderFiltered(disp, node.filters!) : disp;
+    return hasEnabledFx(node.effects) ? this.styledLeaf(node, filtered) : filtered;
   }
 
-  /** Draw one (non-clipped, non-adjustment) layer node onto `ctx` with its mask,
-   *  opacity and blend mode. Clip groups + adjustments are handled by drawStack. */
+  /** Draw one (non-clipped, non-adjustment) layer node onto `ctx`: the cached
+   *  intrinsic render, with opacity/blend applied HERE (draw time) — so those
+   *  props never invalidate the node's own render. Clip groups + adjustments
+   *  are handled by drawStack. */
   private drawNode(ctx: CanvasRenderingContext2D, node: LayerNode) {
     if (!node.visible || node.type === "adjustment") return;
-    const styled = this.styledSource(node);
-    if (!styled) return;
-    const src = this.maskedSource(node, styled);
+    const src = this.renderNode(node);
+    if (!src) return;
     ctx.globalAlpha = Math.max(0, Math.min(1, node.opacity / 100));
     ctx.globalCompositeOperation = blendOp(node.blend);
     ctx.drawImage(src, 0, 0);
@@ -2471,26 +2550,44 @@ export class PaintEngine {
     ctx.globalCompositeOperation = "source-over";
   }
 
-  /** The styled buffer for a leaf with effects: a cached render keyed by
-   *  (pixelVersion, fxHash, space, epoch), bypassed (re-rendered each frame) while
-   *  the layer is being edited live so the in-progress edit shows. */
+  /** The styled buffer for a leaf with effects. Only reached on a render-cache
+   *  miss (renderNode caches the product, keyed by pixelVersion/fxHash/space/
+   *  epoch — the old standalone effectsCache is folded into that node cache). */
   private styledLeaf(node: LayerNode, src: HTMLCanvasElement): HTMLCanvasElement {
-    const fx = node.effects!;
-    const id = node.id;
-    const live =
-      (this.painting && this.strokeLayer === id) ||
-      (this.moving && this.moveLayer === id) ||
-      (this.floatActive && this.floatLayer === id) ||
-      (this.blurring && this.blurLayer === id) ||
-      (this.dodging && this.dodgeLayer === id);
-    const key = `${this.pixelVersion.get(id) ?? 0}|${this.cs}|${this.docEpoch}|${fxHash(fx)}`;
-    if (!live) {
-      const hit = this.effectsCache.get(id);
-      if (hit && hit.key === key) return hit.c;
+    return renderStyled(src, node.effects!, this.cs).canvas;
+  }
+
+  /** Smart filters (Spec 07): run a node's enabled filter stack over `src`
+   *  (its raw pixels / merged group buffer), each filter blended back over the
+   *  pre-filter result with its own blend mode + opacity. Returns a fresh
+   *  layer-sized canvas; the node's stored pixels are never touched. Only
+   *  reached on a render-cache miss — the product is cached by renderNode. */
+  private renderFiltered(src: HTMLCanvasElement, filters: SmartFilter[]): HTMLCanvasElement {
+    const out = this.mk(this.w, this.h, true);
+    out.ctx.drawImage(src, 0, 0);
+    let cur = out.ctx.getImageData(0, 0, this.w, this.h);
+    for (const f of filters) {
+      if (!f.enabled) continue;
+      const applied = applyFilter(cur, f, this.cs);
+      const op = blendOp(f.blendMode);
+      const alpha = Math.max(0, Math.min(1, f.opacity / 100));
+      if (op === "source-over" && alpha >= 1) {
+        cur = applied; // the common case: full replace
+        continue;
+      }
+      // Blend the filtered result back over the pre-filter pixels.
+      out.ctx.putImageData(cur, 0, 0);
+      const tmp = this.mk(this.w, this.h);
+      tmp.ctx.putImageData(applied, 0, 0);
+      out.ctx.globalAlpha = alpha;
+      out.ctx.globalCompositeOperation = op;
+      out.ctx.drawImage(tmp.c, 0, 0);
+      out.ctx.globalAlpha = 1;
+      out.ctx.globalCompositeOperation = "source-over";
+      cur = out.ctx.getImageData(0, 0, this.w, this.h);
     }
-    const styled = renderStyled(src, fx, this.cs).canvas;
-    if (!live) this.effectsCache.set(id, { c: styled, key });
-    return styled;
+    out.ctx.putImageData(cur, 0, 0);
+    return out.c;
   }
 
   /** Borrow a reusable doc-sized buffer (lazily (re)allocated on size change). */
@@ -2506,34 +2603,104 @@ export class PaintEngine {
   /** Composite a sibling list bottom→top into `ctx`. The list is first partitioned
    *  into clip groups (`clipGroupsOf`): a plain node draws on its own; a base with
    *  clipped members above it is assembled and clipped to the base's silhouette.
-   *  Adjustment nodes (solo) read what is already beneath them in `ctx`. */
+   *  Adjustment nodes (solo) read what is already beneath them in `ctx`.
+   *  Every product routes through the render cache (Spec 06). */
   private drawStack(ctx: CanvasRenderingContext2D, nodes: LayerNode[]) {
     for (const unit of clipGroupsOf(nodes)) {
       if (unit.members.length) {
-        this.renderClipGroup(ctx, unit.base, unit.members);
+        this.drawClipGroup(ctx, unit.base, unit.members);
         continue;
       }
       const node = unit.base;
       if (!node.visible) continue;
-      if (node.type === "adjustment") this.applyAdjustmentNode(ctx, node);
+      if (node.type === "adjustment") this.drawAdjustment(ctx, node, nodes);
       else this.drawNode(ctx, node);
     }
   }
 
-  /** Assemble a clip group — the base plus its clipped members (bottom→top) — and
-   *  composite it onto `ctx`. Members blend within the group, the whole group is
-   *  clipped to the base's masked silhouette, then drawn with the base's opacity +
-   *  blend. Fresh buffers (not pooled) so nested clip groups never clobber. */
-  private renderClipGroup(ctx: CanvasRenderingContext2D, base: LayerNode, members: LayerNode[]) {
+  /** Cache-backed adjustment step. The cached product is the WHOLE accumulator
+   *  after the adjustment applied — keyed by the adjustment's params/mask/blend
+   *  and the effective keys of every lower sibling (belowSig), so editing below
+   *  invalidates it while editing the adjustment alone never re-renders its
+   *  lower siblings. Bypassed while any lower sibling hosts a live session. */
+  private drawAdjustment(ctx: CanvasRenderingContext2D, node: LayerAdjustment, siblings: LayerNode[]) {
+    let bypass = !this.renderCacheOn || this.liveBypass.has(node.id);
+    if (!bypass) {
+      const idx = siblings.indexOf(node);
+      for (let i = idx + 1; i < siblings.length && !bypass; i++) {
+        if (this.liveBypass.has(siblings[i].id)) bypass = true;
+      }
+    }
+    // Only cache against the document-level accumulator geometry (doc-sized).
+    if (ctx.canvas.width !== this.w || ctx.canvas.height !== this.h) bypass = true;
+    const key = bypass ? "" : this.adjustmentKey(node, siblings);
+    if (!bypass) {
+      const hit = this.renderCache.get(node.id);
+      if (hit && hit.key === key) {
+        hit.tick = ++this.renderTick;
+        this.frameProtect.add(node.id);
+        ctx.globalCompositeOperation = "copy"; // replace the accumulator wholesale
+        ctx.drawImage(hit.c, 0, 0);
+        ctx.globalCompositeOperation = "source-over";
+        return;
+      }
+    }
+    this.applyAdjustmentNode(ctx, node); // the existing (expensive) read-back path
+    if (!bypass) {
+      const own = this.mk(this.w, this.h);
+      own.ctx.drawImage(ctx.canvas, 0, 0);
+      this.cacheStore(node.id, key, own.c, true);
+    }
+  }
+
+  /** Cache-backed clip-group step: the assembled group (pre base opacity/blend)
+   *  is cached under `clip:<base id>`, keyed by the base's intrinsic key plus
+   *  every member's effective key. */
+  private drawClipGroup(ctx: CanvasRenderingContext2D, base: LayerNode, members: LayerNode[]) {
     if (!base.visible) return; // hidden base ⇒ the whole group shows nothing
+    let bypass = !this.renderCacheOn || this.liveBypass.has(base.id);
+    for (const m of members) if (this.liveBypass.has(m.id)) bypass = true;
+    let key = "";
+    if (!bypass) {
+      let sig = base.type === "adjustment" ? "" : this.nodeKey(base);
+      for (const m of members) sig += "|" + this.effectiveKey(m);
+      key = `CLIP${fnv(sig)}|${this.cs}|${this.docEpoch}`;
+    }
+    const cacheId = `clip:${base.id}`;
+    let cg: HTMLCanvasElement | null = null;
+    if (!bypass) {
+      const hit = this.renderCache.get(cacheId);
+      if (hit && hit.key === key) {
+        hit.tick = ++this.renderTick;
+        this.frameProtect.add(cacheId);
+        cg = hit.c;
+      }
+    }
+    if (!cg) {
+      cg = this.buildClipGroup(base, members);
+      if (!cg) return;
+      if (!bypass) this.cacheStore(cacheId, key, cg, true);
+    }
+    ctx.globalAlpha = Math.max(0, Math.min(1, base.opacity / 100));
+    ctx.globalCompositeOperation = blendOp(base.blend);
+    ctx.drawImage(cg, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  /** Assemble a clip group — the base plus its clipped members (bottom→top) —
+   *  into a fresh buffer (pre base opacity/blend; drawClipGroup applies those).
+   *  Members blend within the group; the whole group is clipped to the base's
+   *  masked silhouette. Fresh buffers so nested clip groups never clobber. */
+  private buildClipGroup(base: LayerNode, members: LayerNode[]): HTMLCanvasElement | null {
     const w = this.w;
     const h = this.h;
-    const baseStyled = this.styledSource(base);
-    if (!baseStyled) return;
-    // 1. base pixels (masked) into the clip-group buffer.
+    // 1. base pixels (styled ⊗ masked — the base's own cached intrinsic render).
+    const baseIntrinsic = this.renderNode(base);
+    if (!baseIntrinsic) return null;
     const hasAdj = members.some((m) => m.type === "adjustment");
     const { c: cgC, ctx: cg } = this.mk(w, h, hasAdj);
-    cg.drawImage(this.maskedSource(base, baseStyled), 0, 0);
+    cg.drawImage(baseIntrinsic, 0, 0);
     // 2. snapshot the clip silhouette (base alpha, post-mask) before members grow it.
     const { c: clipC, ctx: clipCtx } = this.mk(w, h);
     clipCtx.drawImage(cgC, 0, 0);
@@ -2545,11 +2712,11 @@ export class PaintEngine {
         this.applyAdjustmentNode(cg, m);
         continue;
       }
-      const ms = this.styledSource(m);
+      const ms = this.renderNode(m);
       if (!ms) continue;
       cg.globalAlpha = Math.max(0, Math.min(1, m.opacity / 100));
       cg.globalCompositeOperation = blendOp(m.blend);
-      cg.drawImage(this.maskedSource(m, ms), 0, 0);
+      cg.drawImage(ms, 0, 0);
       cg.globalAlpha = 1;
       cg.globalCompositeOperation = "source-over";
     }
@@ -2557,12 +2724,7 @@ export class PaintEngine {
     cg.globalCompositeOperation = "destination-in";
     cg.drawImage(clipC, 0, 0);
     cg.globalCompositeOperation = "source-over";
-    // 5. composite the clipped group onto the accumulator with the base's opacity/blend.
-    ctx.globalAlpha = Math.max(0, Math.min(1, base.opacity / 100));
-    ctx.globalCompositeOperation = blendOp(base.blend);
-    ctx.drawImage(cgC, 0, 0);
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = "source-over";
+    return cgC;
   }
 
   /** Build (and cache per spec) the LUTs for a Curves/Levels node. */
@@ -2625,12 +2787,21 @@ export class PaintEngine {
     ctx.globalCompositeOperation = "source-over";
   }
 
-  /** Flatten the layer tree into a new doc-sized canvas (for image export). */
-  exportComposite(tree: LayerNode[]): HTMLCanvasElement {
+  /** Flatten the layer tree into a new doc-sized canvas (for image export).
+   *  Always composes the ENTIRE document (never region-scoped). It may reuse
+   *  valid caches; pass `clean` to force a full recompute for byte-certain
+   *  output regardless of cache state. */
+  exportComposite(tree: LayerNode[], clean = false): HTMLCanvasElement {
+    const wasOn = this.renderCacheOn;
+    if (clean) this.renderCacheOn = false;
+    this.keyMemo.clear();
+    this.frameProtect.clear();
+    this.liveBypass = this.computeLiveBypass(tree);
     const { c, ctx } = this.mk(this.w, this.h, true); // readback for adjustment nodes
     this.drawStack(ctx, tree);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
+    this.renderCacheOn = wasOn;
     return c;
   }
 
@@ -2679,6 +2850,11 @@ export class PaintEngine {
   composite(tree: LayerNode[]) {
     const ctx = this.vctx;
     if (!ctx) return;
+    // Frame setup for the render graph: fresh key memo + used-entry protection,
+    // and the set of live-session layers (+ ancestors) that bypass the cache.
+    this.keyMemo.clear();
+    this.frameProtect.clear();
+    this.liveBypass = this.computeLiveBypass(tree);
     const acc = this.adjBuf("comp", true);
     acc.ctx.globalAlpha = 1;
     acc.ctx.globalCompositeOperation = "source-over";
@@ -2686,14 +2862,33 @@ export class PaintEngine {
     this.drawStack(acc.ctx, tree);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
-    ctx.clearRect(0, 0, this.w, this.h);
-    ctx.drawImage(acc.c, 0, 0);
+    // Dirty-region view blit: taken only when every change since the last
+    // composite was rect-bounded AND the tree reference is unchanged (the same
+    // immutable tree ⇒ no structural / props change slipped past the rects).
+    // Anything else — including cache-disabled A/B mode — blits the full doc.
+    const d =
+      this.renderCacheOn && this.lastTree === tree && this.pendingDirty
+        ? clampRect(this.pendingDirty, this.w, this.h)
+        : null;
+    if (d) {
+      ctx.clearRect(d.x, d.y, d.w, d.h);
+      ctx.drawImage(acc.c, d.x, d.y, d.w, d.h, d.x, d.y, d.w, d.h);
+    } else {
+      ctx.clearRect(0, 0, this.w, this.h);
+      ctx.drawImage(acc.c, 0, 0);
+    }
+    this.pendingDirty = null;
+    this.lastTree = tree;
+    this.evictOverBudget();
   }
 
-  /** Begin moving pixels: lift the selection (or whole layer) into a float buffer. */
-  beginMove(layerId: string, rects: Rect[] | null) {
+  /** Begin moving pixels: lift the selection (or whole layer) into a float buffer.
+   *  `linkedMask` (whole-layer moves only): shift the layer's mask along with the
+   *  pixels on commit — the Layers-panel chain toggle. */
+  beginMove(layerId: string, rects: Rect[] | null, linkedMask = false) {
     if (!this.stroke) return;
     this.moving = true;
+    this.moveMaskLinked = linkedMask && !rects;
     this.moveLayer = layerId;
     this.moveOff = { x: 0, y: 0 };
     const l = this.layer(layerId);
@@ -3491,13 +3686,46 @@ export class PaintEngine {
       } else {
         region = { x: 0, y: 0, w: this.w, h: this.h };
       }
+      // Linked mask (whole-layer move): shift the mask by the same delta and
+      // fold its patch into the SAME history step via side callbacks, so one
+      // undo restores pixels and mask together.
+      let side: HistorySide | undefined;
+      const mask = this.moveMaskLinked ? this.masks.get(this.moveLayer) : undefined;
+      if (mask) {
+        const id = this.moveLayer;
+        const maskBefore = mask.ctx.getImageData(0, 0, this.w, this.h);
+        mask.ctx.globalAlpha = 1;
+        mask.ctx.globalCompositeOperation = "source-over";
+        mask.ctx.fillStyle = "#000"; // vacated area = hidden (matches offsetMask)
+        mask.ctx.fillRect(0, 0, this.w, this.h);
+        mask.ctx.putImageData(maskBefore, Math.round(this.moveOff.x), Math.round(this.moveOff.y));
+        this.deriveMaskAlpha(id);
+        const maskAfter = mask.ctx.getImageData(0, 0, this.w, this.h);
+        side = {
+          undo: () => {
+            const m = this.masks.get(id);
+            if (m) {
+              m.ctx.putImageData(maskBefore, 0, 0);
+              this.deriveMaskAlpha(id);
+            }
+          },
+          redo: () => {
+            const m = this.masks.get(id);
+            if (m) {
+              m.ctx.putImageData(maskAfter, 0, 0);
+              this.deriveMaskAlpha(id);
+            }
+          },
+        };
+      }
       if (region.w > 0 && region.h > 0) {
         const before = this.moveOrig.ctx.getImageData(region.x, region.y, region.w, region.h);
         const after = l.ctx.getImageData(region.x, region.y, region.w, region.h);
-        this.pushEntry(this.moveLayer, region, before, after, "Move");
+        this.pushEntry(this.moveLayer, region, before, after, "Move", side);
       }
     }
     this.moving = false;
+    this.moveMaskLinked = false;
     this.moveLayer = null;
     this.moveFloat = null;
     this.moveOrig = null;
@@ -3876,12 +4104,15 @@ export class PaintEngine {
   ) {
     if (this.w < 1 || this.h < 1) return;
     this.endAdjust();
-    const l = this.layer(layerId);
+    // Mask surface active → the blur brush softens the MASK's pixels instead
+    // (same session; grayscale target, history lands on the mask surface).
+    this.blurOnMask = this.activeSurface(layerId) === "mask" && this.masks.has(layerId);
+    const l = this.blurOnMask ? this.masks.get(layerId)! : this.layer(layerId);
     this.blurring = true;
     this.blurLayer = layerId;
     this.blurOpts = { ...blur };
     this.blurOrig = l.ctx.getImageData(0, 0, this.w, this.h);
-    if (blur.sampleAll && this.vctx) {
+    if (blur.sampleAll && !this.blurOnMask && this.vctx) {
       try {
         this.blurSrc = this.vctx.getImageData(0, 0, this.w, this.h);
       } catch {
@@ -4058,7 +4289,14 @@ export class PaintEngine {
         out[doI + 3] = od[oi + 3] + (a - od[oi + 3]) * m;
       }
     }
-    this.layer(this.blurLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
+    if (this.blurOnMask) {
+      // Masks are colour-agnostic (sRGB) — untagged ImageData, then refresh the
+      // alpha cache for the baked rect so the softened mask previews live.
+      this.masks.get(this.blurLayer)!.ctx.putImageData(new ImageData(out, iw, ih), ix, iy);
+      this.deriveMaskAlpha(this.blurLayer, { x: ix, y: iy, w: iw, h: ih });
+    } else {
+      this.layer(this.blurLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
+    }
   }
 
   endBlur() {
@@ -4072,12 +4310,14 @@ export class PaintEngine {
       const w = Math.min(this.w - 1, D.x1) - x + 1;
       const h = Math.min(this.h - 1, D.y1) - y + 1;
       if (w > 0 && h > 0) {
+        const target = this.blurOnMask ? this.masks.get(layerId)! : this.layer(layerId);
         const before = this.subImage(this.blurOrig, x, y, w, h);
-        const after = this.layer(layerId).ctx.getImageData(x, y, w, h);
-        this.pushEntry(layerId, { x, y, w, h }, before, after, "Blur");
+        const after = target.ctx.getImageData(x, y, w, h);
+        this.pushEntry(layerId, { x, y, w, h }, before, after, "Blur", undefined, this.blurOnMask ? "mask" : "layer");
       }
     }
     this.blurring = false;
+    this.blurOnMask = false;
     this.blurLayer = null;
     this.blurOrig = null;
     this.blurSrc = null;
@@ -4102,7 +4342,9 @@ export class PaintEngine {
   ) {
     if (this.w < 1 || this.h < 1) return;
     this.endAdjust();
-    const l = this.layer(layerId);
+    // Mask surface active → dodge/burn lightens/darkens the MASK (reveal/hide).
+    this.dodgeOnMask = this.activeSurface(layerId) === "mask" && this.masks.has(layerId);
+    const l = this.dodgeOnMask ? this.masks.get(layerId)! : this.layer(layerId);
     this.dodging = true;
     this.dodgeLayer = layerId;
     this.dodgeOpts = { ...opts };
@@ -4267,7 +4509,12 @@ export class PaintEngine {
         out[doI + 3] = od[oi + 3];
       }
     }
-    this.layer(this.dodgeLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
+    if (this.dodgeOnMask) {
+      this.masks.get(this.dodgeLayer)!.ctx.putImageData(new ImageData(out, iw, ih), ix, iy);
+      this.deriveMaskAlpha(this.dodgeLayer, { x: ix, y: iy, w: iw, h: ih });
+    } else {
+      this.layer(this.dodgeLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
+    }
   }
 
   endDodge() {
@@ -4281,13 +4528,15 @@ export class PaintEngine {
       const w = Math.min(this.w - 1, D.x1) - x + 1;
       const h = Math.min(this.h - 1, D.y1) - y + 1;
       if (w > 0 && h > 0) {
+        const target = this.dodgeOnMask ? this.masks.get(layerId)! : this.layer(layerId);
         const before = this.subImage(this.dodgeOrig, x, y, w, h);
-        const after = this.layer(layerId).ctx.getImageData(x, y, w, h);
+        const after = target.ctx.getImageData(x, y, w, h);
         const label = this.dodgeOpts?.mode === "burn" ? "Burn" : "Dodge";
-        this.pushEntry(layerId, { x, y, w, h }, before, after, label);
+        this.pushEntry(layerId, { x, y, w, h }, before, after, label, undefined, this.dodgeOnMask ? "mask" : "layer");
       }
     }
     this.dodging = false;
+    this.dodgeOnMask = false;
     this.dodgeLayer = null;
     this.dodgeOrig = null;
     this.dodgeCov = null;
@@ -4329,7 +4578,14 @@ export class PaintEngine {
    * Re-render the preview from the originals. `anchorX/anchorY` (0–1 of the doc)
    * is the centre for zoom/spin blur; ignored by the other kinds.
    */
-  previewBlurFx(kind: string, amount: number, angle: number, anchorX = 0.5, anchorY = 0.5) {
+  previewBlurFx(
+    kind: string,
+    amount: number,
+    angle: number,
+    anchorX = 0.5,
+    anchorY = 0.5,
+    extra?: { band: number; feather: number; threshold: number },
+  ) {
     const fx = this.blurFx;
     if (!fx) return;
     const cx = anchorX * this.w;
@@ -4337,8 +4593,9 @@ export class PaintEngine {
     for (const id of fx.ids) {
       const o = fx.orig.get(id);
       if (!o) continue;
-      const out = computeBlurFx(o, kind, amount, angle, fx.mask, cx, cy, this.cs);
+      const out = computeBlurFx(o, kind, amount, angle, fx.mask, cx, cy, this.cs, extra);
       this.layer(id).ctx.putImageData(out, 0, 0);
+      this.bumpPixel(id); // direct pixel write — keep render/styled caches honest
     }
     this.emitChange();
   }
@@ -4520,7 +4777,7 @@ export class PaintEngine {
       this.deriveMaskAlpha(e.layerId, e.rect);
     } else {
       this.layer(e.layerId).ctx.putImageData(img, e.rect.x, e.rect.y);
-      this.bumpPixel(e.layerId); // restyle on undo/redo of a pixel patch
+      this.bumpPixel(e.layerId, e.rect); // invalidate + bound the repaint region
     }
   }
   private apply(e: Entry) {

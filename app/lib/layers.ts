@@ -1,5 +1,6 @@
 import type { AdjustmentSpec } from "./adjust";
 import type { FxKey, LayerEffects } from "./effects";
+import type { SmartFilter } from "./filters";
 import type { VectorData } from "./tools";
 
 /** Per-layer mask metadata. The mask *pixels* live in the paint engine (keyed by
@@ -31,6 +32,10 @@ export interface LayerBase {
    *  the same parent (a clipping mask). Absent ⇒ not clipped. Positional: moving
    *  the layer changes what it clips to; inert when there is no valid base below. */
   clipped?: boolean;
+  /** Smart filters (Spec 07): an ordered (bottom→top) non-destructive filter
+   *  stack rendered on this node's OWN pixels at composite time — below layer
+   *  effects, above raw pixels. Params only; never baked unless applied. */
+  filters?: SmartFilter[];
 }
 
 /** A pixel layer (has its own canvas in the paint engine, keyed by id). */
@@ -72,6 +77,7 @@ export type LayerPatch = Partial<
   adjustment?: AdjustmentSpec;
   clipped?: boolean;
   effects?: LayerEffects | undefined;
+  filters?: SmartFilter[] | undefined;
 };
 
 export const BLEND_MODES = [
@@ -213,16 +219,17 @@ export function cloneSubtree(
   gen: () => string,
 ): { node: LayerNode; leafPairs: [string, string][] } {
   const id = gen();
-  // Deep-copy effects so the clone's style edits never alias the original's.
+  // Deep-copy effects + smart filters so the clone's edits never alias the original's.
   const fx = node.effects ? { effects: structuredClone(node.effects) } : {};
+  const flt = node.filters ? { filters: structuredClone(node.filters) } : {};
   if (node.type === "group") {
     const results = node.children.map((c) => cloneSubtree(c, gen));
     return {
-      node: { ...node, id, ...fx, children: results.map((r) => r.node) },
+      node: { ...node, id, ...fx, ...flt, children: results.map((r) => r.node) },
       leafPairs: results.flatMap((r) => r.leafPairs),
     };
   }
-  return { node: { ...node, id, ...fx }, leafPairs: [[node.id, id]] };
+  return { node: { ...node, id, ...fx, ...flt }, leafPairs: [[node.id, id]] };
 }
 
 /** Replace the node `id` with `replacement`, in place. */
@@ -389,6 +396,8 @@ export interface LayersApi {
   // ---- Layer effects (styles) ----
   /** Open the Layer Style dialog bound to `id` (also selects it). */
   openLayerStyle: (id: string) => void;
+  /** Open the Smart Filters stack dialog for a layer/group. */
+  openFilters: (id: string) => void;
   /** Enable/disable one effect on a layer (the eye toggle in the sub-list). */
   toggleEffect: (id: string, key: FxKey, enabled: boolean) => void;
   copyLayerStyle: (id: string) => void;

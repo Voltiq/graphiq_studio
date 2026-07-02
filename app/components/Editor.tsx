@@ -13,8 +13,10 @@ import PasteDialog, { type PasteDest } from "./PasteDialog";
 import PreferencesDialog from "./PreferencesDialog";
 import TooltipHost from "./Tooltip";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
+import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
 import {
+  BLUR_FX_LABELS,
   DEFAULT_BLUR,
   DEFAULT_BLUR_FX,
   DEFAULT_CLONE,
@@ -115,6 +117,9 @@ import {
 } from "../lib/adjust";
 import { ADJUSTMENT_TYPES, specFromPreset, specFromType, specLabel } from "../lib/adjustment-types";
 import { DEFAULT_FX, type FxKey, type LayerEffects } from "../lib/effects";
+import { defaultFilter, filterLabel, type FilterType, type SmartFilter } from "../lib/filters";
+import SmartFilterDialog from "./SmartFilterDialog";
+import ShortcutsDialog from "./ShortcutsDialog";
 import {
   autoLevels,
   defaultCurves,
@@ -129,6 +134,9 @@ interface PasteSrc {
   source: ImageBitmap | HTMLCanvasElement;
   w: number;
   h: number;
+  /** Destination already decided (Preferences default) — the dialog only asks
+      the oversized-image canvas-size question. */
+  dest?: PasteDest;
 }
 
 interface Doc {
@@ -1404,6 +1412,96 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     fxStructural(id, structuredClone(fxClipboard), "Paste Layer Style");
   };
   const clearLayerStyleOp = (id: string) => fxStructural(id, undefined, "Clear Layer Style");
+
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // ---- Smart filters (Spec 07) ---------------------------------------------
+  const [filterTarget, setFilterTarget] = useState<string | null>(null);
+  // Live filter-edit session: one undoable step per drag gesture (debounced).
+  const filterEditRef = useRef<{ layerId: string; beforeTree: LayerNode[]; selBefore: Sel } | null>(null);
+  const filterEditTimer = useRef(0);
+
+  const commitFilterEdit = () => {
+    const sess = filterEditRef.current;
+    filterEditRef.current = null;
+    if (filterEditTimer.current) {
+      window.clearTimeout(filterEditTimer.current);
+      filterEditTimer.current = 0;
+    }
+    if (!sess) return;
+    const docId = activeIdRef.current;
+    const afterTree = activeDocRef.current.layers;
+    const after = selNow();
+    paintRef.current?.pushStructural(
+      "Edit Smart Filter",
+      () => setDocSel(docId, sess.beforeTree, sess.selBefore),
+      () => setDocSel(docId, afterTree, after),
+    );
+  };
+
+  // Live param edit from the dialog (no per-tick history; one step per gesture).
+  const setFiltersLive = (id: string, filters: SmartFilter[]) => {
+    const d = activeDocRef.current;
+    if (!findNode(d.layers, id)) return;
+    if (!filterEditRef.current || filterEditRef.current.layerId !== id) {
+      commitFilterEdit();
+      filterEditRef.current = { layerId: id, beforeTree: d.layers, selBefore: selNow() };
+    }
+    setDocSel(d.id, updateNode(d.layers, id, { filters }), selNow());
+    if (filterEditTimer.current) window.clearTimeout(filterEditTimer.current);
+    filterEditTimer.current = window.setTimeout(commitFilterEdit, 500);
+  };
+
+  // Discrete structural filter op (add / toggle / reorder / remove / clear).
+  const setFiltersOp = (id: string, filters: SmartFilter[] | undefined, label: string) => {
+    commitFilterEdit();
+    const d = activeDocRef.current;
+    if (!findNode(d.layers, id)) return;
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const after = updateNode(before, id, { filters });
+    setDocSel(docId, after, sel);
+    paintRef.current?.pushStructural(
+      label,
+      () => setDocSel(docId, before, sel),
+      () => setDocSel(docId, after, sel),
+    );
+  };
+
+  const openFiltersOp = (id: string) => {
+    selectLayer(id, "replace");
+    setFilterTarget(id);
+  };
+
+  // Menu entry: append a default filter of `type` and open the stack dialog.
+  const addFilterOp = (type: FilterType) => {
+    const id = activeDocRef.current.activeLayerId;
+    if (!id) return;
+    const node = findNode(activeDocRef.current.layers, id);
+    if (!node || node.type === "adjustment") return;
+    const f = defaultFilter(type);
+    setFiltersOp(id, [...(node.filters ?? []), f], `Add ${filterLabel(f)}`);
+    openFiltersOp(id);
+  };
+
+  // Bake the stack into the layer's pixels: one combined pixel+structural step.
+  const applyFiltersOp = (id: string) => {
+    commitFilterEdit();
+    const d = activeDocRef.current;
+    const node = findNode(d.layers, id);
+    if (!node || node.type !== "layer" || !node.filters?.length) return;
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const after = updateNode(before, id, { filters: undefined });
+    setDocSel(docId, after, sel);
+    paintRef.current?.applySmartFilters(id, node.filters, {
+      undo: () => setDocSel(docId, before, sel),
+      redo: () => setDocSel(docId, after, sel),
+    });
+    setFilterTarget(null);
+  };
   const openLayerStyleOp = (id: string) => {
     selectLayer(id, "replace");
     setLayerStyleTarget(id);
@@ -1721,6 +1819,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       else selectLayer(id, "replace");
     },
     openLayerStyle: openLayerStyleOp,
+    openFilters: openFiltersOp,
     toggleEffect: toggleEffectOp,
     copyLayerStyle: copyLayerStyleOp,
     pasteLayerStyle: pasteLayerStyleOp,
@@ -2059,6 +2158,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         const mask = n.mask ? { mask: { enabled: n.mask.enabled, linked: n.mask.linked } } : {};
         const fx = n.effects ? { effects: n.effects } : {};
         const clip = n.clipped ? { clipped: true } : {};
+        const flt = n.filters?.length ? { filters: n.filters } : {};
         if (n.type === "group") {
           const id = `grp-${(layerSeqRef.current += 1)}`;
           idMap.set(n.id, id);
@@ -2074,6 +2174,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             ...mask,
             ...fx,
             ...clip,
+            ...flt,
             children: remap(n.children),
           };
         }
@@ -2109,6 +2210,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           ...mask,
           ...fx,
           ...clip,
+          ...flt,
         };
       });
 
@@ -2262,7 +2364,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     ensureBlurSession(s.scope);
     window.clearTimeout(blurFxTimerRef.current);
     const run = () => {
-      paintRef.current?.previewBlurFx(s.kind, s.amount, s.angle, s.anchor.x, s.anchor.y);
+      paintRef.current?.previewBlurFx(s.kind, s.amount, s.angle, s.anchor.x, s.anchor.y, {
+        band: s.band,
+        feather: s.feather,
+        threshold: s.threshold,
+      });
       // Snapshot the composited result for the dialog's preview pane.
       setBlurPreview(paintRef.current?.exportComposite(activeDocRef.current.layers) ?? null);
     };
@@ -2314,8 +2420,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       blurFx.angle,
       blurFx.anchor.x,
       blurFx.anchor.y,
+      { band: blurFx.band, feather: blurFx.feather, threshold: blurFx.threshold },
     ); // flush latest
-    paintRef.current?.commitBlurFx("Blur");
+    paintRef.current?.commitBlurFx(`${BLUR_FX_LABELS[blurFx.kind]} Blur`);
     blurFxSessionRef.current = null;
     setBlurPreview(null);
     setBlurFxOpen(false);
@@ -2468,6 +2575,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     paintRef.current?.endAdjust();
     commitAdjustEdit();
     commitFxEdit();
+    commitFilterEdit();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active.activeLayerId, activeId]);
 
@@ -2622,6 +2730,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       if (id) clearLayerStyleOp(id);
     } else if (actionId.startsWith("fx-add-")) addEffectOp(actionId.slice(7) as FxKey);
     else if (actionId === "layer-clip") toggleClippingMask();
+    else if (actionId.startsWith("filter-add-")) addFilterOp(actionId.slice(11) as FilterType);
+    else if (actionId === "filter-open") {
+      const id = activeDocRef.current.activeLayerId;
+      if (id) openFiltersOp(id);
+    } else if (actionId === "shortcuts") setShortcutsOpen(true);
   };
 
   const swapColors = () => {
@@ -2647,8 +2760,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     } else {
       // Honour the user's default-paste preference, else ask via the dialog.
       const def = prefsRef.current.defaultPaste;
-      if (def !== "ask") doPaste(source, w, h, def, false);
-      else setPasteSrc({ source, w, h });
+      if (def === "ask") {
+        setPasteSrc({ source, w, h });
+        return;
+      }
+      // Destination is defaulted. If the image is larger than the canvas the
+      // oversize preference decides: keep (crop), expand, or ask just that.
+      const d = activeDocRef.current;
+      const oversize = def !== "new-canvas" && (w > d.width || h > d.height);
+      if (!oversize) {
+        doPaste(source, w, h, def, false);
+        return;
+      }
+      const ov = prefsRef.current.pasteOversize;
+      if (ov === "ask") setPasteSrc({ source, w, h, dest: def });
+      else doPaste(source, w, h, def, ov === "expand");
     }
   };
 
@@ -3257,10 +3383,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           docWidth={active.width}
           docHeight={active.height}
           source={pasteSrc.source}
+          sizeOnly={!!pasteSrc.dest}
+          initialDest={pasteSrc.dest ?? "current-layer"}
+          initialExpand={prefs.pasteOversize === "expand"}
           onApply={applyPaste}
           onClose={() => setPasteSrc(null)}
         />
       )}
+
+      {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
 
       {prefsOpen && (
         <PreferencesDialog
@@ -3312,6 +3443,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             <LayerStyleDialog
               effects={node.effects ?? {}}
               layerName={node.name}
+              gradientStorageKey={prefs.sharedGradients ? GRADIENT_PRESETS_KEY : FX_GRADIENT_PRESETS_KEY}
               onChange={(eff) => setLayerEffectsOp(layerStyleTarget, eff)}
               onToggle={(key, enabled) => toggleEffectOp(layerStyleTarget, key, enabled)}
               onClear={() => {
@@ -3319,6 +3451,26 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
                 setLayerStyleTarget(null);
               }}
               onClose={() => setLayerStyleTarget(null)}
+            />
+          );
+        })()}
+
+      {filterTarget &&
+        (() => {
+          const node = findNode(active.layers, filterTarget);
+          if (!node || node.type === "adjustment") {
+            return null;
+          }
+          return (
+            <SmartFilterDialog
+              node={node}
+              onLive={(filters) => setFiltersLive(filterTarget, filters)}
+              onCommit={(filters, label) => setFiltersOp(filterTarget, filters, label)}
+              onApplyAll={() => applyFiltersOp(filterTarget)}
+              onClose={() => {
+                commitFilterEdit();
+                setFilterTarget(null);
+              }}
             />
           );
         })()}

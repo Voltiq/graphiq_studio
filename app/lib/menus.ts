@@ -107,12 +107,15 @@ export const MENUS: Menu[] = [
   {
     label: "Effects",
     items: [
-      { label: "Blur Gallery…", action: "effect-blur" },
-      { label: "Sharpen" },
-      { label: "Distort", separatorAfter: true },
-      { label: "Noise" },
-      { label: "Pixelate" },
-      { label: "Stylize", separatorAfter: true },
+      { label: "Blur Gallery…", action: "effect-blur", separatorAfter: true },
+      // Smart filters (non-destructive, re-editable; Effects ▸ Smart Filters…)
+      { label: "Blur (Smart Filter)", action: "filter-add-blur" },
+      { label: "Sharpen…", action: "filter-add-sharpen" },
+      { label: "Noise…", action: "filter-add-noise" },
+      { label: "Pixelate…", action: "filter-add-pixelate" },
+      { label: "Distort…", action: "filter-add-distort" },
+      { label: "Stylize…", action: "filter-add-stylize", separatorAfter: true },
+      { label: "Smart Filters…", action: "filter-open" },
       { label: "Liquify…", shortcut: "Ctrl+Shift+X" },
     ],
   },
@@ -147,7 +150,7 @@ export const MENUS: Menu[] = [
     items: [
       { label: "Preferences…", shortcut: "Ctrl+K", action: "preferences" },
       { label: "Color Management…", action: "color-manage", separatorAfter: true },
-      { label: "Keyboard Shortcuts…", separatorAfter: true },
+      { label: "Keyboard Shortcuts…", action: "shortcuts", separatorAfter: true },
       { label: "Performance" },
       { label: "Scratch Disks" },
     ],
@@ -157,7 +160,7 @@ export const MENUS: Menu[] = [
     items: [
       { label: "Getting Started" },
       { label: "Documentation" },
-      { label: "Keyboard Shortcuts", separatorAfter: true },
+      { label: "Keyboard Shortcuts", action: "shortcuts", separatorAfter: true },
       { label: "About Graphiq Studio" },
     ],
   },

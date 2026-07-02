@@ -10,9 +10,11 @@
   border: 1px solid var(--border-strong);
   background-clip: padding-box; /* keep the gradient inside the translucent border */
   cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 
   &:hover {
-    border-color: var(--accent);
+    border-color: rgba(var(--accent-rgb), 0.6);
+    box-shadow: var(--shadow-sm);
   }
 }
 
@@ -20,24 +22,27 @@
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
-  /* below the (shared) colour picker's z-index 120 so the nested picker shows on top */
+  /* below the (shared) colour picker's z-index so the nested picker shows on top */
   z-index: 115;
   width: 252px;
   padding: var(--sp-3);
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
-  background: var(--surface-2);
+  background: var(--frost);
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
   box-shadow: var(--shadow), var(--glow);
-  animation: pop 0.12s ease;
+  animation: pop var(--t-med) var(--ease-pop);
+  transform-origin: top left;
 }
 
 @keyframes pop {
   from {
     opacity: 0;
-    transform: translateY(-4px);
+    transform: translateY(-4px) scale(0.985);
   }
   to {
     opacity: 1;
@@ -54,16 +59,19 @@
   color: var(--text-2);
   border-radius: var(--r-md);
   border: 1px solid var(--border);
+  transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
 
   &:hover {
     color: var(--text);
     border-color: var(--border-strong);
+    background: var(--wash);
   }
 
   &[data-on="true"] {
     color: var(--text);
-    border-color: var(--accent);
-    background: rgba(var(--accent-rgb), 0.1);
+    border-color: rgba(var(--accent-rgb), 0.45);
+    background: rgba(var(--accent-rgb), 0.11);
   }
 }
 
@@ -71,9 +79,41 @@
   width: 28px;
   height: 14px;
   flex-shrink: 0;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-xs);
   border: 1px solid var(--border);
   background-clip: padding-box;
+}
+
+/* The whole editor (bar + actions + presets) as one vertical stack — used
+   inside the popover AND inline (Layer Style dialog). */
+.editorStack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+/* Preset-library header: label + save / import / export actions. */
+.presetsHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-bottom: -6px;
+}
+
+.presetsLabel {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.presetsActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* Editable gradient bar + draggable stops */
@@ -85,7 +125,7 @@
 .bar {
   height: 22px;
   border-radius: var(--r-sm);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   /* checker behind for transparent stops */
   background-color: var(--checker-a);
   background-clip: padding-box;
@@ -112,6 +152,11 @@
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
   cursor: grab;
   touch-action: none;
+  transition: box-shadow var(--t-fast) var(--ease);
+
+  &:active {
+    cursor: grabbing;
+  }
 
   &[data-sel="true"] {
     border-color: var(--accent);
@@ -148,13 +193,15 @@
   padding: 0 8px;
   font-size: 12px;
   color: var(--text);
-  background: var(--surface-1);
+  background: var(--surface-2);
   border: 1px solid var(--input);
   border-radius: var(--r-md);
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 
   &:focus {
     outline: none;
-    border-color: var(--accent);
+    border-color: rgba(var(--accent-rgb), 0.6);
+    box-shadow: var(--focus-ring);
   }
 
   &::placeholder {
@@ -166,13 +213,14 @@
   width: 30px;
   height: 26px;
   flex-shrink: 0;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-md);
   background-clip: padding-box;
   cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease);
 
   &:hover {
-    border-color: var(--accent);
+    border-color: rgba(var(--accent-rgb), 0.6);
   }
 }
 
@@ -190,10 +238,13 @@
   border-radius: var(--r-md);
   border: 1px solid var(--border);
   color: var(--text-2);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
 
   &:hover:not(:disabled) {
-    background: var(--surface-hover);
+    background: var(--wash);
     color: var(--text);
+    border-color: var(--border-strong);
   }
 
   &:disabled {
@@ -219,9 +270,11 @@
   border: 1px solid var(--border);
   background-clip: padding-box;
   cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
 
   &:hover {
-    border-color: var(--accent);
+    border-color: rgba(var(--accent-rgb), 0.6);
+    transform: translateY(-1px);
   }
 }
 
@@ -238,7 +291,7 @@
   color: #fff;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.12s ease;
+  transition: opacity var(--t-fast) var(--ease);
 }
 
 .presetCell:hover .presetDel {
@@ -252,9 +305,10 @@
   border-radius: var(--r-sm);
   border: 1px dashed var(--border-strong);
   color: var(--text-3);
+  transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 
   &:hover {
-    color: var(--text);
-    border-color: var(--accent);
+    color: var(--accent);
+    border-color: rgba(var(--accent-rgb), 0.55);
   }
 }

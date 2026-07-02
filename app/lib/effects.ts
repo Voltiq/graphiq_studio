@@ -52,8 +52,11 @@ export interface OverlayGradientFX {
   gradient: GradientStop[];
   angle: number; // degrees
   scale: number; // %
-  style: "linear" | "radial";
+  /** Full Gradient-tool style set: linear | radial | angle (conic) | reflected. */
+  style: GradientType;
   reverse?: boolean;
+  /** Angle style only: blend across the wrap seam (default true). */
+  smooth?: boolean;
 }
 export interface BevelFX {
   enabled: boolean;
@@ -334,9 +337,12 @@ export function renderStyled(src: HTMLCanvasElement, fx: LayerEffects, space: Pr
     const cy = h / 2;
     const start = { x: cx - Math.cos(rad) * half, y: cy - Math.sin(rad) * half };
     const end = { x: cx + Math.cos(rad) * half, y: cy + Math.sin(rad) * half };
-    const type: GradientType = go.style === "radial" ? "radial" : "linear";
-    const rstart = go.style === "radial" ? { x: cx, y: cy } : start;
-    g.ctx.fillStyle = buildCanvasGradient(g.ctx, type, rstart, end, 0.5, stops, true);
+    // Radial / angle / reflected all emanate from the centre; linear spans
+    // edge-to-edge along the angle. (Same geometry model as the Gradient tool,
+    // with the layer's centre + angle/scale standing in for the drag points.)
+    const type: GradientType = go.style ?? "linear";
+    const rstart = type === "linear" ? start : { x: cx, y: cy };
+    g.ctx.fillStyle = buildCanvasGradient(g.ctx, type, rstart, end, 0.5, stops, go.smooth ?? true);
     g.ctx.fillRect(0, 0, w, h);
     g.ctx.globalCompositeOperation = "destination-in";
     g.ctx.drawImage(layerMask, 0, 0);

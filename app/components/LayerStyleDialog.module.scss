@@ -1,0 +1,443 @@
+/* Layer Style — an effects rail on the left (toggle + select), a grouped,
+   two-column control pane on the right. Fixed height so switching effects
+   never resizes the dialog; the pane scrolls. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: rgba(12, 9, 6, 0.55);
+  backdrop-filter: blur(6px);
+  animation: fade var(--t-med) var(--ease);
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dialog {
+  width: 640px;
+  max-width: calc(100vw - 32px);
+  height: min(560px, calc(100vh - 64px));
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2xl);
+  box-shadow: var(--shadow), var(--glow);
+  animation: pop var(--t-med) var(--ease-pop);
+  overflow: hidden;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+
+  h2 {
+    font-size: 13.5px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+}
+
+/* The layer being styled, as a quiet identity chip beside the title. */
+.nameChip {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  padding: 2.5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--wash);
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-left: auto;
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    color: var(--text);
+  }
+
+  &:active {
+    transform: scale(0.9);
+  }
+}
+
+.layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* ------------------------------ Effects rail ------------------------------ */
+.list {
+  width: 200px;
+  flex-shrink: 0;
+  padding: var(--sp-3) var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 45%, transparent);
+  overflow-y: auto;
+}
+
+.listLabel {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 0 8px 6px;
+}
+
+.fxRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: var(--r-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+
+    .fxIcon {
+      color: var(--text-2);
+    }
+  }
+
+  /* Selected effect: accent tint + the notch — the app's "this one" motif. */
+  &[data-sel="true"] {
+    background: rgba(var(--accent-rgb), 0.12);
+    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.28);
+
+    &::before {
+      content: "";
+      position: absolute;
+      left: -8px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 2.5px;
+      height: 16px;
+      border-radius: var(--r-pill);
+      background: var(--accent);
+    }
+
+    .fxIcon {
+      color: var(--accent);
+    }
+
+    .fxName {
+      color: var(--text);
+    }
+  }
+}
+
+/* Enable/disable — a compact custom check, amber when on. */
+.fxCheck {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--accent-contrast);
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+
+  &:hover {
+    border-color: var(--text-3);
+  }
+
+  &:active {
+    transform: scale(0.88);
+  }
+
+  &[data-on="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+}
+
+.fxIcon {
+  flex-shrink: 0;
+  color: var(--text-3);
+  transition: color var(--t-fast) var(--ease);
+}
+
+.fxName {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color var(--t-fast) var(--ease);
+}
+
+.fxRow[data-on="false"] .fxName {
+  color: var(--text-3);
+}
+
+/* ------------------------------ Control pane ------------------------------ */
+.pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.paneHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--sp-3) var(--sp-4) 0;
+}
+
+.paneTitle {
+  font-size: 13.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.paneDesc {
+  padding: 3px var(--sp-4) 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.paneActions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+/* Reset the selected effect's parameters to defaults. */
+.resetBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 25px;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
+}
+
+/* Pane switch mirrors the rail check — a modern track/thumb toggle. */
+.switch {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: var(--r-pill);
+  background: var(--wash-2);
+  border: 1px solid var(--border-strong);
+  transition: background var(--t-med) var(--ease), border-color var(--t-med) var(--ease);
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--text-2);
+    transition: transform var(--t-med) var(--ease-pop), background var(--t-med) var(--ease);
+  }
+
+  &[data-on="true"] {
+    background: rgba(var(--accent-rgb), 0.25);
+    border-color: rgba(var(--accent-rgb), 0.55);
+
+    &::after {
+      transform: translateX(14px);
+      background: var(--accent);
+    }
+  }
+}
+
+.paneBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+/* A titled control group; the label runs into a hairline rule. */
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.groupTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+
+  &::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+}
+
+/* Two-up grid — sliders and stacked fields pack side by side. */
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3) var(--sp-4);
+  align-items: end;
+}
+
+/* A label-above field (matches the Slider's stacked anatomy). */
+.stackField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.stackLabel {
+  font-size: 12px;
+  color: var(--text-2);
+  user-select: none;
+}
+
+/* Label left, control right (colour chips, segmented rows). */
+.fieldRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.fieldLabel {
+  font-size: 12px;
+  color: var(--text-2);
+  user-select: none;
+}
+
+/* -------------------------------- Footer ---------------------------------- */
+.foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.countNote {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.footSpacer {
+  flex: 1;
+}
+
+.btn {
+  height: 34px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--r-lg);
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    border-color: var(--border-strong);
+  }
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+/* Clear All: quiet until hovered, then reads as destructive. */
+.clearBtn:hover {
+  color: var(--danger);
+  border-color: rgba(var(--danger-rgb), 0.4);
+  background: rgba(var(--danger-rgb), 0.09);
+}
+
+.primary {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+
+  &:hover {
+    background: color-mix(in srgb, var(--accent) 90%, #fff);
+    border-color: transparent;
+  }
+}

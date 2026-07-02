@@ -1,16 +1,24 @@
 /* ===========================================================================
-   Global styles & design tokens
-   Two themes driven by [data-theme] on <html>. The attribute is set on the
-   server from a cookie, so there is never a flash of the wrong theme.
+   Global styles & design tokens — "Darkroom"
+   Graphite surfaces + a safelight accent. The interaction grammar everywhere:
+   HOVER IS NEUTRAL (a faint foreground wash), ACCENT MEANS STATE (active tool,
+   selection, focus, checked, primary action). Persistent surfaces are solid;
+   transient surfaces (menus, popovers, tooltips) frost.
+
+   Theme = [data-theme] (dark/light) × [data-accent] (theme colour) on <html>,
+   both set on the server from cookies, so there is never a flash of the wrong
+   look. Each accent defines its hue variables; the theme blocks below derive
+   the accent AND slightly tint every neutral surface with it via color-mix.
    =========================================================================== */
 
 :root {
-  /* Radii (reference --radius: 0.625rem scale) */
+  /* Radii — tight for in-row controls, generous for floating surfaces */
+  --r-xs: 4px;
   --r-sm: 6px;
   --r-md: 8px;
   --r-lg: 10px;
   --r-xl: 14px;
-  --r-2xl: 18px;
+  --r-2xl: 16px;
   --r-pill: 999px;
 
   /* Spacing scale */
@@ -20,101 +28,199 @@
   --sp-4: 16px;
   --sp-5: 24px;
 
+  /* Motion — one vocabulary for the whole app */
+  --t-fast: 100ms;   /* hovers, presses */
+  --t-med: 160ms;    /* reveals, fades */
+  --t-slow: 240ms;   /* theme switch, layout-ish moves */
+  --ease: cubic-bezier(0.2, 0, 0, 1);          /* standard decel */
+  --ease-pop: cubic-bezier(0.25, 1.3, 0.4, 1); /* overshoot for popovers/thumbs */
+
   /* Typography */
   /* Fallback inside var() (e.g. "geistSans", the generated @font-face name) so an
      unresolved --font-geist-* can never poison the value into the serif default. */
   --font-sans: var(--font-geist-sans, "geistSans"), system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: var(--font-geist-mono, "geistMono"), "SFMono-Regular", ui-monospace, monospace;
 
-  /* Sizing of chrome (reference: h-12 bars, w-12 rail, w-80 dock) */
+  /* Sizing of chrome */
   --topbar-h: 48px;
   --optionsbar-h: 48px;
   --statusbar-h: 28px;
   --toolbar-w: 48px;
   --dock-w: 320px;
 
-  /* Status colors (shared) */
-  --danger: #ff6467;
-  --success: #a1a1a1;
-  --warning: #fbbf24;
+  /* ------------------------- Theme colour: Amber (default) -----------------
+     Each accent provides: the surface tint (--tint-rgb), a pale tinted white
+     for dark-theme hairlines/washes (--fg-tint-rgb), and the accent for each
+     base theme with its on-accent text colour. */
+  --tint-rgb: 245, 160, 76;
+  --fg-tint-rgb: 247, 236, 219;
+  --accent-dark: #f5a04c;
+  --accent-dark-rgb: 245, 160, 76;
+  --accent-dark-contrast: #221302;
+  --accent-light: #b8650d;
+  --accent-light-rgb: 184, 101, 13;
+  --accent-light-contrast: #fffdf9;
 
   color-scheme: dark;
 }
 
-/* ---------------------------- Dark theme ---------------------------------- */
-/* shadcn `.dark` — pure neutral greys (chroma 0) + near-white primary.
-   There is NO colour accent: "accent" is monochrome (#e5e5e5 on dark text). */
+/* ------------------------------ Theme colours ----------------------------- */
+[data-accent="ocean"] {
+  --tint-rgb: 92, 155, 245;
+  --fg-tint-rgb: 223, 234, 249;
+  --accent-dark: #5c9bf5;
+  --accent-dark-rgb: 92, 155, 245;
+  --accent-dark-contrast: #071a33;
+  --accent-light: #2563cf;
+  --accent-light-rgb: 37, 99, 207;
+  --accent-light-contrast: #f7faff;
+}
+
+[data-accent="violet"] {
+  --tint-rgb: 167, 139, 250;
+  --fg-tint-rgb: 233, 227, 249;
+  --accent-dark: #a78bfa;
+  --accent-dark-rgb: 167, 139, 250;
+  --accent-dark-contrast: #180d33;
+  --accent-light: #6d4fc9;
+  --accent-light-rgb: 109, 79, 201;
+  --accent-light-contrast: #faf8ff;
+}
+
+[data-accent="emerald"] {
+  --tint-rgb: 74, 222, 128;
+  --fg-tint-rgb: 223, 246, 231;
+  --accent-dark: #4ade80;
+  --accent-dark-rgb: 74, 222, 128;
+  --accent-dark-contrast: #05230f;
+  --accent-light: #15803d;
+  --accent-light-rgb: 21, 128, 61;
+  --accent-light-contrast: #f4fdf7;
+}
+
+[data-accent="rose"] {
+  --tint-rgb: 251, 113, 133;
+  --fg-tint-rgb: 250, 226, 231;
+  --accent-dark: #fb7185;
+  --accent-dark-rgb: 251, 113, 133;
+  --accent-dark-contrast: #33060d;
+  --accent-light: #be123c;
+  --accent-light-rgb: 190, 18, 60;
+  --accent-light-contrast: #fff7f8;
+}
+
+/* Mono: a pure-neutral interface; the "tint" is grey, so surfaces stay clean
+   and the accent is near-foreground (shadcn-style). */
+[data-accent="mono"] {
+  --tint-rgb: 128, 128, 128;
+  --fg-tint-rgb: 235, 235, 235;
+  --accent-dark: #e5e5e5;
+  --accent-dark-rgb: 229, 229, 229;
+  --accent-dark-contrast: #171717;
+  --accent-light: #262626;
+  --accent-light-rgb: 38, 38, 38;
+  --accent-light-contrast: #fafafa;
+}
+
+/* ---------------------------- Dark theme ----------------------------------
+   Layering, darkest → lightest: canvas void < bg < surface (panels/chrome)
+   < surface-2 (inputs, menus) < surface-3 (raised). The image always sits on
+   the darkest field so it dominates. Every neutral carries ~2-3% of the theme
+   colour so the accent feels native rather than pasted on. */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --bg: #0a0a0a;           /* background */
-  --bg-grad: #0a0a0a;
-  --surface: #171717;      /* card / popover / sidebar */
-  --surface-2: #1e1e1e;    /* raised inputs / dropdowns */
-  --surface-3: #262626;    /* secondary / muted / elevated */
-  --surface-hover: #262626;/* muted hover */
-  --sidebar: #171717;      /* chrome (= card) */
-  --canvas-void: #050505;
+  --accent: var(--accent-dark);
+  --accent-rgb: var(--accent-dark-rgb);
+  --accent-contrast: var(--accent-dark-contrast);
+  --accent-2: color-mix(in srgb, var(--accent) 72%, #777777);
+
+  --bg: color-mix(in srgb, #161616 97.5%, rgb(var(--tint-rgb)));
+  --bg-grad: var(--bg);
+  --surface: color-mix(in srgb, #1b1b1b 97.5%, rgb(var(--tint-rgb)));      /* panels / chrome */
+  --surface-2: color-mix(in srgb, #222222 97%, rgb(var(--tint-rgb)));      /* inputs / menus / cards */
+  --surface-3: color-mix(in srgb, #292929 96.5%, rgb(var(--tint-rgb)));    /* raised */
+  --surface-hover: var(--surface-3);
+  --sidebar: var(--surface);
+  --canvas-void: color-mix(in srgb, #111111 98%, rgb(var(--tint-rgb)));
   /* Transparency checkerboard */
-  --checker-a: #242424;
-  --checker-b: #161616;
+  --checker-a: color-mix(in srgb, #242424 97%, rgb(var(--tint-rgb)));
+  --checker-b: color-mix(in srgb, #191919 97.5%, rgb(var(--tint-rgb)));
 
-  --border: rgba(255, 255, 255, 0.1);
-  --border-strong: rgba(255, 255, 255, 0.16);
-  --input: rgba(255, 255, 255, 0.15);
+  /* Hairlines + washes are tinted-white alpha so they sit on any surface */
+  --border: rgba(var(--fg-tint-rgb), 0.09);
+  --border-strong: rgba(var(--fg-tint-rgb), 0.16);
+  --input: rgba(var(--fg-tint-rgb), 0.13);
+  --wash: rgba(var(--fg-tint-rgb), 0.05);    /* neutral hover fill */
+  --wash-2: rgba(var(--fg-tint-rgb), 0.09);  /* pressed / open fill */
 
-  --text: #fafafa;         /* foreground */
-  --text-2: #a1a1a1;       /* muted-foreground */
-  --text-3: #737373;       /* ring / tertiary */
+  --text: #f2f0ec;
+  --text-2: color-mix(in srgb, #a2a09c 94%, rgb(var(--tint-rgb)));
+  --text-3: color-mix(in srgb, #6e6c67 94%, rgb(var(--tint-rgb)));
 
-  /* Primary action colour — near-white with dark text (shadcn dark). */
-  --accent: #e5e5e5;
-  --accent-2: #6e6e6e;
-  --accent-rgb: 229, 229, 229;
-  --accent-contrast: #171717;
+  /* Status */
+  --danger: #f4564e;
+  --danger-rgb: 244, 86, 78;
+  --success: #4fc06d;
+  --warning: #eab308;
 
-  /* Elevation + glow */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 6px 16px -4px rgba(0, 0, 0, 0.5);
-  --shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.6);
-  --glow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
-  --inset: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* Elevation + top-edge highlight */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 8px 20px -6px rgba(0, 0, 0, 0.55);
+  --shadow: 0 20px 48px -12px rgba(0, 0, 0, 0.65);
+  --glow: inset 0 1px 0 0 rgba(var(--fg-tint-rgb), 0.05);
+  --inset: inset 0 1px 0 rgba(var(--fg-tint-rgb), 0.05);
+
+  /* Frosted (transient) surface fill — pair with backdrop-filter */
+  --frost: color-mix(in srgb, var(--surface-2) 88%, transparent);
+  --focus-ring: 0 0 0 3px rgba(var(--accent-rgb), 0.22);
 }
 
-/* ---------------------------- Light theme --------------------------------- */
-/* shadcn light — neutral, with a near-black primary. */
+/* ---------------------------- Light theme ---------------------------------
+   Paper, tinted the same way; the accent is darkened for contrast. */
 [data-theme="light"] {
   color-scheme: light;
 
-  --bg: #ffffff;
-  --bg-grad: #ffffff;
-  --surface: #ffffff;
-  --surface-2: #f5f5f5;
-  --surface-3: #ededed;
-  --surface-hover: #f0f0f0;
-  --sidebar: #fafafa;
-  --canvas-void: #cccccc;
-  --checker-a: #f0f0f0;
-  --checker-b: #d8d8d8;
+  --accent: var(--accent-light);
+  --accent-rgb: var(--accent-light-rgb);
+  --accent-contrast: var(--accent-light-contrast);
+  --accent-2: color-mix(in srgb, var(--accent) 72%, #8a8a8a);
 
-  --border: rgba(0, 0, 0, 0.1);
-  --border-strong: rgba(0, 0, 0, 0.16);
-  --input: rgba(0, 0, 0, 0.12);
+  --bg: color-mix(in srgb, #f2f1ef 97%, rgb(var(--tint-rgb)));
+  --bg-grad: var(--bg);
+  --surface: color-mix(in srgb, #fafaf9 98%, rgb(var(--tint-rgb)));
+  --surface-2: color-mix(in srgb, #efeeec 97%, rgb(var(--tint-rgb)));
+  --surface-3: color-mix(in srgb, #e6e4e1 96%, rgb(var(--tint-rgb)));
+  --surface-hover: color-mix(in srgb, #e8e6e2 96%, rgb(var(--tint-rgb)));
+  --sidebar: var(--surface);
+  --canvas-void: color-mix(in srgb, #d8d6d2 97%, rgb(var(--tint-rgb)));
+  --checker-a: color-mix(in srgb, #f0efec 97%, rgb(var(--tint-rgb)));
+  --checker-b: color-mix(in srgb, #dbd9d5 97%, rgb(var(--tint-rgb)));
 
-  --text: #171717;
-  --text-2: #737373;
-  --text-3: #8e8e8e;
+  /* Near-neutral ink hairlines: at these alphas a hue would be invisible. */
+  --border: rgba(45, 41, 35, 0.13);
+  --border-strong: rgba(45, 41, 35, 0.21);
+  --input: rgba(45, 41, 35, 0.17);
+  --wash: rgba(45, 41, 35, 0.05);
+  --wash-2: rgba(45, 41, 35, 0.09);
 
-  --accent: #171717;
-  --accent-2: #525252;
-  --accent-rgb: 23, 23, 23;
-  --accent-contrast: #fafafa;
+  --text: #211f1b;
+  --text-2: #6c6860;
+  --text-3: #918b82;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
-  --shadow-md: 0 6px 16px -4px rgba(0, 0, 0, 0.12);
-  --shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.18);
-  --glow: inset 0 1px 0 0 rgba(255, 255, 255, 0.8);
-  --inset: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --danger: #d33a2f;
+  --danger-rgb: 211, 58, 47;
+  --success: #1f9d4d;
+  --warning: #b98a06;
+
+  --shadow-sm: 0 1px 2px rgba(52, 44, 30, 0.09);
+  --shadow-md: 0 8px 20px -6px rgba(52, 44, 30, 0.14);
+  --shadow: 0 20px 48px -12px rgba(52, 44, 30, 0.2);
+  --glow: inset 0 1px 0 0 rgba(255, 255, 255, 0.85);
+  --inset: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+
+  --frost: color-mix(in srgb, var(--surface) 86%, transparent);
+  --focus-ring: 0 0 0 3px rgba(var(--accent-rgb), 0.2);
 }
 
 * {
@@ -135,7 +241,7 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;
-  transition: background-color 0.25s ease, color 0.25s ease;
+  transition: background-color var(--t-slow) var(--ease), color var(--t-slow) var(--ease);
 }
 
 button {
@@ -147,7 +253,8 @@ button {
 }
 
 input,
-select {
+select,
+textarea {
   font-family: inherit;
   color: inherit;
 }
@@ -156,7 +263,31 @@ select {
   background: rgba(var(--accent-rgb), 0.35);
 }
 
-/* Thin, theme-aware scrollbars */
+/* ------------------------- Keyboard focus ring ----------------------------
+   One ring for the whole app: only for keyboard focus, never for clicks.
+   Text inputs opt out here — their wrappers show a :focus-within ring, and the
+   canvas text editor draws its own dashed frame. */
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb), 0.65);
+  outline-offset: 1px;
+}
+
+input:focus-visible:not([type="range"]):not([type="checkbox"]):not([type="radio"]),
+textarea:focus-visible {
+  outline: none;
+}
+
+input[type="range"]:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--r-pill);
+}
+
+/* --------------------------- Thin scrollbars ------------------------------ */
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
@@ -174,4 +305,15 @@ select {
 *::-webkit-scrollbar-thumb:hover {
   background: var(--text-3);
   background-clip: content-box;
+}
+
+/* ------------------------- Reduced motion --------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

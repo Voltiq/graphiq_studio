@@ -393,20 +393,35 @@ export const DEFAULT_DODGE: DodgeSettings = {
 };
 
 /** Blur Gallery (Effects ▸ Blur Gallery): the available blur algorithms. */
-export type BlurFxKind = "box" | "gaussian" | "motion" | "zoom" | "spin" | "bokeh";
+export type BlurFxKind =
+  | "box"
+  | "gaussian"
+  | "motion"
+  | "zoom"
+  | "spin"
+  | "bokeh"
+  | "tiltshift"
+  | "surface"
+  | "spread";
 
 /** Where a blur effect is applied. */
 export type BlurFxScope = "layer" | "canvas";
 
 export interface BlurFxSettings {
   kind: BlurFxKind;
-  /** Primary strength — radius (px) for box/gaussian/bokeh, length for motion,
-   *  strength (%) for zoom, angle (°) for spin. */
+  /** Primary strength — radius (px) for box/gaussian/bokeh/tilt-shift/surface/
+   *  spread, length for motion, strength (%) for zoom, angle (°) for spin. */
   amount: number;
-  /** Direction in degrees (motion blur only). */
+  /** Direction in degrees (motion blur + the tilt-shift focus line). */
   angle: number;
-  /** Centre point for zoom / spin blur, normalized 0–1 of the document. */
+  /** Centre point for zoom / spin / tilt-shift, normalized 0–1 of the document. */
   anchor: { x: number; y: number };
+  /** Tilt-shift: sharp focus band half-size, % of the shorter document side. */
+  band: number;
+  /** Tilt-shift: sharp→blurred transition size, % of the shorter document side. */
+  feather: number;
+  /** Surface: edge threshold (%) — how different a neighbour may be and still blend. */
+  threshold: number;
   /** "layer" = active layer only; "canvas" = every layer (the whole document). */
   scope: BlurFxScope;
 }
@@ -418,6 +433,9 @@ export const BLUR_FX_LABELS: Record<BlurFxKind, string> = {
   zoom: "Zoom",
   spin: "Spin",
   bokeh: "Bokeh",
+  tiltshift: "Tilt-Shift",
+  surface: "Surface",
+  spread: "Spread",
 };
 
 export const DEFAULT_BLUR_FX: BlurFxSettings = {
@@ -425,6 +443,9 @@ export const DEFAULT_BLUR_FX: BlurFxSettings = {
   amount: 12,
   angle: 0,
   anchor: { x: 0.5, y: 0.5 },
+  band: 20,
+  feather: 30,
+  threshold: 40,
   scope: "layer",
 };
 

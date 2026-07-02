@@ -1,0 +1,512 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Droplets,
+  Focus,
+  Grid3x3,
+  Plus,
+  Sparkles,
+  Trash2,
+  Wand2,
+  Waves,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import styles from "./LayerStyleDialog.module.scss";
+import { Segmented, Select, Slider, Toggle } from "./Controls";
+import { BLEND_MODES, type LayerGroup, type LayerLeaf } from "../lib/layers";
+import { BLUR_FX_LABELS, type BlurFxKind } from "../lib/tools";
+import {
+  FILTER_LABELS,
+  defaultFilter,
+  filterLabel,
+  type FilterType,
+  type SmartFilter,
+} from "../lib/filters";
+
+const FILTER_ICONS: Record<FilterType, LucideIcon> = {
+  blur: Droplets,
+  sharpen: Focus,
+  noise: Sparkles,
+  pixelate: Grid3x3,
+  distort: Waves,
+  stylize: Wand2,
+};
+
+const TYPE_ORDER: FilterType[] = ["blur", "sharpen", "noise", "pixelate", "distort", "stylize"];
+
+const FILTER_DESC: Record<FilterType, string> = {
+  blur: "Any Blur Gallery blur, applied non-destructively.",
+  sharpen: "Unsharp Mask — boosts local contrast along edges.",
+  noise: "Adds film-like grain (uniform or gaussian).",
+  pixelate: "Mosaic — averages the layer into square cells.",
+  distort: "Twirl, pinch/bulge or wave displacement.",
+  stylize: "Find Edges, Emboss, Posterize or Threshold.",
+};
+
+const BLUR_KINDS: BlurFxKind[] = [
+  "gaussian",
+  "box",
+  "bokeh",
+  "motion",
+  "zoom",
+  "spin",
+  "tiltshift",
+  "surface",
+  "spread",
+];
+
+function blurAmountMeta(kind: BlurFxKind): { label: string; min: number; max: number; unit: string } {
+  switch (kind) {
+    case "motion":
+      return { label: "Length", min: 1, max: 200, unit: "px" };
+    case "zoom":
+      return { label: "Amount", min: 1, max: 100, unit: "%" };
+    case "spin":
+      return { label: "Angle", min: 1, max: 180, unit: "°" };
+    case "bokeh":
+      return { label: "Radius", min: 1, max: 60, unit: "px" };
+    case "tiltshift":
+      return { label: "Radius", min: 1, max: 100, unit: "px" };
+    case "surface":
+      return { label: "Radius", min: 1, max: 50, unit: "px" };
+    case "spread":
+      return { label: "Amount", min: 1, max: 60, unit: "px" };
+    default:
+      return { label: "Radius", min: 1, max: 200, unit: "px" };
+  }
+}
+
+/**
+ * Smart Filters — the per-layer non-destructive filter stack manager: an
+ * ordered list (top of the list renders last), per-filter enable/reorder/
+ * delete, per-type parameter editors with live document preview, per-filter
+ * blend + opacity, Clear All and destructive Apply (bake).
+ */
+export default function SmartFilterDialog({
+  node,
+  onLive,
+  onCommit,
+  onApplyAll,
+  onClose,
+}: {
+  node: LayerLeaf | LayerGroup;
+  /** Param-drag updates (debounced into one history step by the editor). */
+  onLive: (filters: SmartFilter[]) => void;
+  /** Discrete structural change (add/toggle/reorder/remove/clear). */
+  onCommit: (filters: SmartFilter[] | undefined, label: string) => void;
+  /** Bake the stack into the layer's pixels (leaf layers only). */
+  onApplyAll: () => void;
+  onClose: () => void;
+}) {
+  const filters = node.filters ?? [];
+  const [selId, setSelId] = useState<string | null>(filters.length ? filters[filters.length - 1].id : null);
+  const sel = filters.find((f) => f.id === selId) ?? (filters.length ? filters[filters.length - 1] : null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  const patchSel = (patch: Partial<SmartFilter["params"]>) => {
+    if (!sel) return;
+    onLive(
+      filters.map((f) =>
+        f.id === sel.id ? ({ ...f, params: { ...f.params, ...patch } } as SmartFilter) : f,
+      ),
+    );
+  };
+  const patchSelBase = (patch: Partial<Pick<SmartFilter, "blendMode" | "opacity">>, live: boolean) => {
+    if (!sel) return;
+    const next = filters.map((f) => (f.id === sel.id ? ({ ...f, ...patch } as SmartFilter) : f));
+    if (live) onLive(next);
+    else onCommit(next, "Edit Smart Filter");
+  };
+  const addFilter = (type: FilterType) => {
+    const f = defaultFilter(type);
+    onCommit([...filters, f], `Add ${filterLabel(f)}`);
+    setSelId(f.id);
+  };
+  const toggle = (f: SmartFilter, enabled: boolean) =>
+    onCommit(
+      filters.map((x) => (x.id === f.id ? { ...x, enabled } : x)),
+      enabled ? "Enable Smart Filter" : "Disable Smart Filter",
+    );
+  const removeSel = () => {
+    if (!sel) return;
+    const next = filters.filter((f) => f.id !== sel.id);
+    onCommit(next.length ? next : undefined, `Remove ${filterLabel(sel)}`);
+    setSelId(next.length ? next[next.length - 1].id : null);
+  };
+  /** dir +1 = toward the top of the stack (renders later). */
+  const moveSel = (dir: 1 | -1) => {
+    if (!sel) return;
+    const i = filters.findIndex((f) => f.id === sel.id);
+    const j = i + dir;
+    if (j < 0 || j >= filters.length) return;
+    const next = [...filters];
+    [next[i], next[j]] = [next[j], next[i]];
+    onCommit(next, "Reorder Smart Filters");
+  };
+
+  const onCount = filters.filter((f) => f.enabled).length;
+  const selIdx = sel ? filters.findIndex((f) => f.id === sel.id) : -1;
+
+  const renderParams = () => {
+    if (!sel) return <p className={styles.paneDesc}>Add a filter from the list on the left.</p>;
+    switch (sel.type) {
+      case "blur": {
+        const p = sel.params;
+        const meta = blurAmountMeta(p.kind);
+        const radial = p.kind === "zoom" || p.kind === "spin" || p.kind === "tiltshift";
+        return (
+          <>
+            <div className={styles.group}>
+              <span className={styles.groupTitle}>Blur</span>
+              <div className={styles.grid2}>
+                <div className={styles.stackField}>
+                  <span className={styles.stackLabel}>Type</span>
+                  <Select
+                    block
+                    options={BLUR_KINDS.map((k) => BLUR_FX_LABELS[k])}
+                    value={BLUR_FX_LABELS[p.kind]}
+                    onChange={(l) => {
+                      const kind = BLUR_KINDS.find((k) => BLUR_FX_LABELS[k] === l)!;
+                      const m = blurAmountMeta(kind);
+                      patchSel({ kind, amount: Math.max(m.min, Math.min(m.max, p.amount)) });
+                    }}
+                  />
+                </div>
+                <Slider label={meta.label} min={meta.min} max={meta.max} unit={meta.unit} value={p.amount} onChange={(v) => patchSel({ amount: v })} />
+                {(p.kind === "motion" || p.kind === "tiltshift") && (
+                  <Slider label="Angle" min={0} max={360} unit="°" value={p.angle} onChange={(v) => patchSel({ angle: v })} />
+                )}
+                {p.kind === "surface" && (
+                  <Slider label="Threshold" min={1} max={100} unit="%" value={p.threshold} onChange={(v) => patchSel({ threshold: v })} />
+                )}
+                {p.kind === "tiltshift" && (
+                  <>
+                    <Slider label="Focus size" min={0} max={100} unit="%" value={p.band} onChange={(v) => patchSel({ band: v })} />
+                    <Slider label="Feather" min={2} max={100} unit="%" value={p.feather} onChange={(v) => patchSel({ feather: v })} />
+                  </>
+                )}
+              </div>
+            </div>
+            {radial && (
+              <div className={styles.group}>
+                <span className={styles.groupTitle}>Centre</span>
+                <div className={styles.grid2}>
+                  <Slider label="X" min={0} max={100} unit="%" value={Math.round(p.anchor.x * 100)} onChange={(v) => patchSel({ anchor: { x: v / 100, y: p.anchor.y } })} />
+                  <Slider label="Y" min={0} max={100} unit="%" value={Math.round(p.anchor.y * 100)} onChange={(v) => patchSel({ anchor: { x: p.anchor.x, y: v / 100 } })} />
+                </div>
+              </div>
+            )}
+          </>
+        );
+      }
+      case "sharpen": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Unsharp Mask</span>
+            <div className={styles.grid2}>
+              <Slider label="Amount" min={1} max={500} unit="%" value={p.amount} onChange={(v) => patchSel({ amount: v })} />
+              <Slider label="Radius" min={1} max={100} unit="px" value={p.radius} onChange={(v) => patchSel({ radius: v })} />
+              <Slider label="Threshold" min={0} max={255} unit="" value={p.threshold} onChange={(v) => patchSel({ threshold: v })} />
+            </div>
+          </div>
+        );
+      }
+      case "noise": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Add Noise</span>
+            <div className={styles.grid2}>
+              <Slider label="Amount" min={1} max={100} unit="%" value={p.amount} onChange={(v) => patchSel({ amount: v })} />
+              <Slider label="Seed" min={1} max={100} unit="" value={p.seed} onChange={(v) => patchSel({ seed: v })} />
+            </div>
+            <Segmented
+              label="Distribution"
+              value={p.distribution}
+              onChange={(v) => patchSel({ distribution: v as "gaussian" | "uniform" })}
+              options={[
+                { value: "gaussian", text: "Gaussian" },
+                { value: "uniform", text: "Uniform" },
+              ]}
+            />
+            <div className={styles.fieldRow}>
+              <span className={styles.fieldLabel}>Monochromatic</span>
+              <Toggle label="" checked={p.monochromatic} onChange={(v) => patchSel({ monochromatic: v })} />
+            </div>
+          </div>
+        );
+      }
+      case "pixelate": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Mosaic</span>
+            <Slider label="Cell size" min={2} max={200} unit="px" value={p.cellSize} onChange={(v) => patchSel({ cellSize: v })} />
+          </div>
+        );
+      }
+      case "distort": {
+        const p = sel.params;
+        return (
+          <>
+            <div className={styles.group}>
+              <span className={styles.groupTitle}>Distort</span>
+              <Segmented
+                label="Mode"
+                value={p.mode}
+                onChange={(v) => patchSel({ mode: v as "twirl" | "pinch" | "wave" })}
+                options={[
+                  { value: "twirl", text: "Twirl" },
+                  { value: "pinch", text: "Pinch" },
+                  { value: "wave", text: "Wave" },
+                ]}
+              />
+              <div className={styles.grid2}>
+                {p.mode === "twirl" && (
+                  <>
+                    <Slider label="Angle" min={-360} max={360} unit="°" value={p.angle} onChange={(v) => patchSel({ angle: v })} />
+                    <Slider label="Radius" min={5} max={100} unit="%" value={p.radius} onChange={(v) => patchSel({ radius: v })} />
+                  </>
+                )}
+                {p.mode === "pinch" && (
+                  <>
+                    <Slider label="Amount" min={-100} max={100} unit="%" value={p.amount} onChange={(v) => patchSel({ amount: v })} />
+                    <Slider label="Radius" min={5} max={100} unit="%" value={p.radius} onChange={(v) => patchSel({ radius: v })} />
+                  </>
+                )}
+                {p.mode === "wave" && (
+                  <>
+                    <Slider label="Amplitude" min={1} max={100} unit="px" value={p.amplitude} onChange={(v) => patchSel({ amplitude: v })} />
+                    <Slider label="Wavelength" min={4} max={300} unit="px" value={p.wavelength} onChange={(v) => patchSel({ wavelength: v })} />
+                  </>
+                )}
+              </div>
+              {p.mode === "wave" && (
+                <Segmented
+                  label="Edges"
+                  value={p.edge}
+                  onChange={(v) => patchSel({ edge: v as "clamp" | "wrap" })}
+                  options={[
+                    { value: "clamp", text: "Clamp" },
+                    { value: "wrap", text: "Wrap" },
+                  ]}
+                />
+              )}
+            </div>
+          </>
+        );
+      }
+      case "stylize": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Stylize</span>
+            <Segmented
+              label="Mode"
+              value={p.mode}
+              onChange={(v) => patchSel({ mode: v as "findEdges" | "emboss" | "posterize" | "threshold" })}
+              options={[
+                { value: "findEdges", text: "Edges" },
+                { value: "emboss", text: "Emboss" },
+                { value: "posterize", text: "Posterize" },
+                { value: "threshold", text: "Threshold" },
+              ]}
+            />
+            <div className={styles.grid2}>
+              {p.mode === "emboss" && (
+                <>
+                  <Slider label="Angle" min={0} max={360} unit="°" value={p.angle} onChange={(v) => patchSel({ angle: v })} />
+                  <Slider label="Height" min={1} max={10} unit="px" value={p.height} onChange={(v) => patchSel({ height: v })} />
+                  <Slider label="Amount" min={10} max={500} unit="%" value={p.amount} onChange={(v) => patchSel({ amount: v })} />
+                </>
+              )}
+              {p.mode === "posterize" && (
+                <Slider label="Levels" min={2} max={32} unit="" value={p.levels} onChange={(v) => patchSel({ levels: v })} />
+              )}
+              {p.mode === "threshold" && (
+                <Slider label="Level" min={0} max={255} unit="" value={p.level} onChange={(v) => patchSel({ level: v })} />
+              )}
+            </div>
+          </div>
+        );
+      }
+    }
+  };
+
+  return (
+    <div className={styles.overlay} onMouseDown={onClose}>
+      <div
+        className={styles.dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Smart filters"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <header className={styles.head}>
+          <h2>Smart Filters</h2>
+          <span className={styles.nameChip} title={node.name}>
+            {node.name}
+          </span>
+          <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className={styles.layout}>
+          <div className={styles.list} role="listbox" aria-label="Smart filters">
+            <span className={styles.listLabel}>Stack (top renders last)</span>
+            {[...filters].reverse().map((f) => {
+              const Icon = FILTER_ICONS[f.type];
+              return (
+                <div
+                  key={f.id}
+                  className={styles.fxRow}
+                  data-sel={sel?.id === f.id}
+                  data-on={f.enabled}
+                  role="option"
+                  aria-selected={sel?.id === f.id}
+                  tabIndex={0}
+                  onClick={() => setSelId(f.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setSelId(f.id);
+                    }
+                  }}
+                >
+                  <button
+                    type="button"
+                    className={styles.fxCheck}
+                    data-on={f.enabled}
+                    aria-label={`${filterLabel(f)} ${f.enabled ? "on" : "off"}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggle(f, !f.enabled);
+                    }}
+                  >
+                    {f.enabled && (
+                      <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden>
+                        <path d="M1.5 5.5 4 8l4.5-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                  </button>
+                  <Icon size={14} className={styles.fxIcon} />
+                  <span className={styles.fxName}>{filterLabel(f)}</span>
+                </div>
+              );
+            })}
+            {!filters.length && <span className={styles.listLabel}>No filters yet</span>}
+            <span className={styles.listLabel} style={{ marginTop: 8 }}>
+              Add filter
+            </span>
+            {TYPE_ORDER.map((t) => {
+              const Icon = FILTER_ICONS[t];
+              return (
+                <button key={t} type="button" className={styles.fxRow} onClick={() => addFilter(t)} title={FILTER_DESC[t]}>
+                  <Plus size={12} className={styles.fxIcon} />
+                  <Icon size={14} className={styles.fxIcon} />
+                  <span className={styles.fxName}>{FILTER_LABELS[t]}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className={styles.pane}>
+            <div className={styles.paneHead}>
+              <span className={styles.paneTitle}>{sel ? filterLabel(sel) : "Smart Filters"}</span>
+              {sel && (
+                <div className={styles.paneActions}>
+                  <button
+                    type="button"
+                    className={styles.resetBtn}
+                    disabled={selIdx >= filters.length - 1}
+                    onClick={() => moveSel(1)}
+                    title="Move up the stack (renders later)"
+                  >
+                    <ArrowUp size={11} /> Up
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.resetBtn}
+                    disabled={selIdx <= 0}
+                    onClick={() => moveSel(-1)}
+                    title="Move down the stack (renders earlier)"
+                  >
+                    <ArrowDown size={11} /> Down
+                  </button>
+                  <button type="button" className={styles.resetBtn} onClick={removeSel} title="Remove this filter">
+                    <Trash2 size={11} /> Remove
+                  </button>
+                </div>
+              )}
+            </div>
+            <p className={styles.paneDesc}>
+              {sel ? FILTER_DESC[sel.type] : "Non-destructive filters, rendered on this layer's own pixels."}
+            </p>
+            <div className={styles.paneBody}>
+              {renderParams()}
+              {sel && (
+                <div className={styles.group}>
+                  <span className={styles.groupTitle}>Blending</span>
+                  <div className={styles.grid2}>
+                    <div className={styles.stackField}>
+                      <span className={styles.stackLabel}>Blend</span>
+                      <Select block options={BLEND_MODES} value={sel.blendMode} onChange={(v) => patchSelBase({ blendMode: v }, false)} />
+                    </div>
+                    <Slider label="Opacity" min={0} max={100} unit="%" value={sel.opacity} onChange={(v) => patchSelBase({ opacity: v }, true)} />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <footer className={styles.foot}>
+          <span className={styles.countNote}>
+            {onCount === 0 ? "No filters on" : `${onCount} of ${filters.length} filters on`}
+          </span>
+          <div className={styles.footSpacer} />
+          <button
+            type="button"
+            className={`${styles.btn} ${styles.clearBtn}`}
+            disabled={!filters.length}
+            onClick={() => {
+              onCommit(undefined, "Clear Smart Filters");
+              setSelId(null);
+            }}
+          >
+            Clear All
+          </button>
+          <button
+            type="button"
+            className={styles.btn}
+            disabled={node.type !== "layer" || !filters.length}
+            title={node.type !== "layer" ? "Only pixel layers can bake filters" : "Bake the stack into the layer's pixels"}
+            onClick={onApplyAll}
+          >
+            Apply (Bake)
+          </button>
+          <button type="button" className={`${styles.btn} ${styles.primary}`} onClick={onClose}>
+            Done
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,469 @@
+/* Levels — histogram + custom black→white level tracks with draggable pointer
+   handles, per-channel chips, and sample-from-image eyedroppers. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: rgba(12, 9, 6, 0.55);
+  backdrop-filter: blur(6px);
+  animation: fade var(--t-med) var(--ease);
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dialog {
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2xl);
+  box-shadow: var(--shadow), var(--glow);
+  animation: pop var(--t-med) var(--ease-pop);
+  overflow: hidden;
+  pointer-events: auto; /* stays interactive while the overlay lets picks through */
+
+  /* While sampling a point in the image, the dialog recedes but stays usable. */
+  &[data-picking="true"] {
+    opacity: 0.88;
+  }
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+
+  h2 {
+    font-size: 13.5px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-left: auto;
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    color: var(--text);
+  }
+
+  &:active {
+    transform: scale(0.9);
+  }
+}
+
+.body {
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  overflow-y: auto;
+}
+
+/* ------------------------- Channel row + actions -------------------------- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.chips {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background: var(--wash);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+
+  &:hover {
+    color: var(--text);
+  }
+
+  /* Active channel: tinted with the channel's own colour (RGB = accent). */
+  &[data-active="true"] {
+    color: var(--text);
+    background: color-mix(in srgb, var(--ch, var(--accent)) 15%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ch, var(--accent)) 38%, transparent);
+  }
+
+  &[data-channel="r"] {
+    --ch: #f87171;
+  }
+  &[data-channel="g"] {
+    --ch: #4ade80;
+  }
+  &[data-channel="b"] {
+    --ch: #60a5fa;
+  }
+}
+
+.chipDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ch, var(--text-3));
+  opacity: 0.55;
+  transition: opacity var(--t-fast) var(--ease);
+
+  .chip[data-active="true"] & {
+    opacity: 1;
+  }
+}
+
+/* Tiny "this channel is modified" tick in the chip's corner. */
+.chipMark {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.spacer {
+  flex: 1;
+}
+
+/* Auto / Reset — quiet pill actions. */
+.ghostBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
+
+  &:active {
+    transform: scale(0.96);
+  }
+}
+
+/* ------------------------------- Sections --------------------------------- */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.sectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+
+  &::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+}
+
+/* ------------------------------- Histogram -------------------------------- */
+.histWrap {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--canvas-void);
+  overflow: hidden;
+  box-shadow: var(--inset);
+}
+
+.hist {
+  display: block;
+  width: 100%;
+}
+
+/* ------------------------- Level tracks + handles -------------------------
+   The wrapper is the pointer surface (bar + the handle strip under it), so
+   grabbing works on the handles themselves as well as the bar. */
+.trackWrap {
+  position: relative;
+  padding-bottom: 17px; /* room for the handles below the bar */
+  touch-action: none;
+  cursor: ew-resize;
+}
+
+.bar {
+  position: relative;
+  height: 13px;
+  border-radius: var(--r-sm);
+  background: linear-gradient(90deg, #000, #fff);
+  box-shadow: inset 0 0 0 1px var(--border-strong), var(--inset);
+  overflow: hidden;
+}
+
+/* Clipped input range (outside black/white points): dual-tone stripes read on
+   both the dark and the light end of the gradient. */
+.clip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    -55deg,
+    rgba(255, 255, 255, 0.22) 0 3px,
+    rgba(0, 0, 0, 0.28) 3px 6px
+  );
+  pointer-events: none;
+}
+
+.handles {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 13px;
+  height: 17px;
+  pointer-events: none; /* the wrapper handles all pointer logic */
+}
+
+.handle {
+  position: absolute;
+  top: 1px;
+  transform: translateX(-50%);
+  line-height: 0;
+  transition: transform var(--t-fast) var(--ease);
+
+  svg {
+    display: block;
+    overflow: visible;
+  }
+
+  path {
+    stroke: color-mix(in srgb, var(--text-3) 85%, transparent);
+    stroke-width: 1;
+    transition: stroke var(--t-fast) var(--ease);
+  }
+
+  /* While dragging: lift + accent ring. */
+  &[data-drag="true"] {
+    transform: translateX(-50%) scale(1.18);
+
+    path {
+      stroke: var(--accent);
+      stroke-width: 1.4;
+    }
+  }
+}
+
+/* --------------------------- Numeric value fields -------------------------- */
+.fields {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.fieldLabel {
+  font-size: 10.5px;
+  color: var(--text-3);
+  user-select: none;
+}
+
+.fieldInput {
+  width: 58px;
+  height: 27px;
+  padding: 0 6px;
+  text-align: center;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  outline: none;
+  -moz-appearance: textfield;
+  appearance: textfield;
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+
+  &::-webkit-outer-spin-button,
+  &::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  &:hover {
+    border-color: var(--border-strong);
+  }
+
+  &:focus {
+    border-color: rgba(var(--accent-rgb), 0.6);
+    box-shadow: var(--focus-ring);
+  }
+}
+
+/* ----------------------------- Eyedropper row ------------------------------ */
+.pickRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.pickChip {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 30px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+
+  &:hover {
+    color: var(--text);
+    background: var(--surface-3);
+    border-color: var(--border-strong);
+  }
+
+  &:active {
+    transform: scale(0.97);
+  }
+
+  /* The eyedropper currently sampling = amber state. */
+  &[data-active="true"] {
+    color: var(--text);
+    border-color: rgba(var(--accent-rgb), 0.55);
+    background: rgba(var(--accent-rgb), 0.1);
+    box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.25);
+  }
+}
+
+.pickDot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  flex-shrink: 0;
+}
+
+.pickHint {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--accent);
+  text-align: center;
+  animation: fade var(--t-med) var(--ease);
+}
+
+/* -------------------------------- Footer ---------------------------------- */
+.foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.btn {
+  height: 34px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--r-lg);
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    border-color: var(--border-strong);
+  }
+
+  &:active {
+    transform: scale(0.98);
+  }
+}
+
+.primary {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+
+  &:hover {
+    background: color-mix(in srgb, var(--accent) 90%, #fff);
+    border-color: transparent;
+  }
+}
