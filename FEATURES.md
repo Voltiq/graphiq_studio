@@ -1,10 +1,10 @@
-# Graphiq Studio — Features & Architecture
+﻿# Graphiq Studio — Features & Architecture
 
 A browser-based, **fully client-side** raster photo editor with a non-destructive layer stack. There is no server, database, or upload — images never leave the machine; everything is computed in the browser on HTML `<canvas>` elements.
 
 **Stack:** Next.js 16 (App Router) · React 19 (with the React Compiler) · TypeScript (strict) · SCSS modules · `lucide-react` icons. **No image-processing libraries** — every pixel operation (compositing, blending, blurs, filters, tone curves, selections, layer effects, history) is hand-written against the Canvas 2D API and `ImageData`.
 
-**Status:** the destructive editor (18 tools, 19 blend modes, selections, live sessions, colour management) plus the **full non-destructive stack** — layer **masks**, **adjustment layers**, **layer effects**, **Curves & Levels**, and **clipping masks**. Project files (`.aproj`) are at **format version 6**. The render-graph cache (Spec 06) and smart filters (Spec 07) are not yet built; see [Part 3 — Known limitations](#part-3--known-limitations--not-yet-implemented).
+**Status:** the destructive editor (19 tools, 19 blend modes, selections, live sessions, colour management) plus the **full non-destructive stack** — layer **masks**, **adjustment layers**, **layer effects**, **Curves & Levels**, **clipping masks**, **smart filters**, and the **render-graph cache**. Project files (`.gproj`, formerly `.aproj` — old files still open) are at **format version 7**. See [Part 3 — Known limitations](#part-3--known-limitations--not-yet-implemented) for what's partial or absent.
 
 This document is written so someone **without the code** understands exactly what exists, what works, **how** it works, and what does not.
 
@@ -15,7 +15,7 @@ This document is written so someone **without the code** understands exactly wha
 ## Documents & canvas
 
 - **Multiple documents** open as renamable tabs. Each tab is fully independent: its own layer tree, undo history, selection, view (zoom/pan), working colour space, and metadata.
-- **New / Open (.aproj) / Import (image)**; arbitrary canvas sizes.
+- **New / Open (.gproj) / Import (image)**; arbitrary canvas sizes.
 - **Image Size** (resample — content scales) vs **Canvas Size** (reframe — content stays, the frame grows/shrinks).
 - **Rotate 90° CW/CCW**, **Flip Horizontal/Vertical** (whole image).
 - **Crop** (interactive box: aspect presets, rule-of-thirds/grid overlay, straighten, shield) and **Trim** (auto-remove uniform border pixels).
@@ -32,6 +32,7 @@ This document is written so someone **without the code** understands exactly wha
 | Eyedropper | `I` | Sample colour; configurable sample radius. |
 | Brush / Pencil / Eraser | `B` / `N` / `E` | Independent size, hardness, opacity, flow, smoothing. |
 | Clone Stamp | `S` | Alt-set source, paint sampled pixels. |
+| Spot Heal | `J` | Paint a blob over a blemish; on release it heals in one pass — texture from the best-matching surroundings, tone-matched seamlessly (respects an active selection). |
 | Paint Bucket | `G` | Flood fill: tolerance, contiguity, anti-alias, opacity. |
 | Gradient | `G` | Linear/radial, draggable re-editable on-canvas control + multi-stop editor; `Esc` keeps the fill and hides the controls. |
 | Blur | `R` | Blur brush with an on-canvas brush-ring cursor (coverage-mask model). |
@@ -51,6 +52,7 @@ All Options-Bar settings, the foreground/background colours, and the marquee sha
 - **Free Transform** `Ctrl+Alt+T` and **Transform Selection** `Ctrl+Alt+Shift+T` — scale/rotate either the pixels or just the outline, with corner/edge handles, a rotation ring, and a movable pivot.
 - Fill with foreground/background (`Backspace`/`Delete`), Cut/Copy/Paste of selected pixels.
 - **Arrow-key nudge:** with a selection tool, arrows move the **outline** by 1 px (`Ctrl` = 10 px); with the Move tool, arrows move the **pixels** (selection content, the whole layer — linked mask included — or a floating paste), and a rapid burst of presses lands as a single undo step.
+- **Content-Aware Fill** (`Shift+F5`, Edit menu): fills the selection with content synthesized from its surroundings — overlapping source blocks blended with a seamless tone-matching pass — as one undoable step.
 
 ## Layers
 
@@ -93,7 +95,7 @@ These five systems are the heart of the editor. They are all **composite-time**:
 ## Adjustments & filters (destructive panel)
 
 - **Adjustments panel** previews live on the active layer (no Apply button — it auto-bakes on session end; Reset discards): **Light** (exposure, contrast, highlights, shadows, whites, blacks) · **Colour** (temperature, tint, vibrance, saturation) · **Detail** (sharpen, clarity, noise).
-- **Filter presets** (Original, Vivid, Mono, Noir, Warm, Cool, Vintage, Fade) and **custom presets** that **import/export** to `.aifp`/`.aifpack` files.
+- **Filter presets** (Original, Vivid, Mono, Noir, Warm, Cool, Vintage, Fade) and **custom presets** that **import/export** to `.gifp`/`.gifpack` files.
 
 ## Effects (Blur Gallery)
 
@@ -102,7 +104,7 @@ These five systems are the heart of the editor. They are all **composite-time**:
 ## Colour, file, panels, view, UI
 
 - **Colour:** primary/secondary swatches (remembered), swap & reset, alpha-aware over a checkerboard; a custom **colour picker** + popover used everywhere (options bar, gradient, layer styles); **Compare Colour Profiles** dialog; colour-management dialog.
-- **File/export:** Save/Open **`.aproj`**; **Export As** PNG · JPEG · WebP · AVIF (quality + alpha, feature-detected); **Print** `Ctrl+P`; **Recents** list; EXIF **Metadata** panel.
+- **File/export:** Save/Open **`.gproj`**; **Export As** PNG · JPEG · WebP · AVIF (quality + alpha, feature-detected); **Print** `Ctrl+P`; **Recents** list; EXIF **Metadata** panel.
 - **Panels (Window menu):** Color · Adjustments · Layers · History · Navigator · Channels · Metadata, in a right dock; Reset Workspace.
 - **View:** Zoom In/Out, **Fit** `Ctrl+0`, **100%** `Ctrl+1`, Rulers, **Pixel Grid** `Ctrl+'`, Snap, Navigator overview.
 - **UI/UX:** token-driven neutral-dark theme + blue accent, light/dark toggle; **Preferences** `Ctrl+K`; non-blocking toasts; tooltips; full menu bar.
@@ -124,7 +126,7 @@ These five systems are the heart of the editor. They are all **composite-time**:
 | `blur.ts` | Shared separable box/Gaussian blur (used by Blur Gallery **and** effects). |
 | `gradient.ts` | Multi-stop gradient model + canvas-gradient builder. |
 | `color.ts` | Colour parsing + RGBA/HSV/HSL conversions + swatch helpers. |
-| `project.ts` | `.aproj` (de)serialisation. |
+| `project.ts` | `.gproj` (de)serialisation. |
 | `view.ts`, `tools.ts`, `menus.ts`, `metadata.ts`, `imageio.ts`, `filterio.ts`, `pen.ts`, `shapes.ts`, `recents.ts`, `prefs.ts`, `toolPrefs.ts`, `swatches.ts`, `theme.ts` | View math, tool/type defs, menus, EXIF, export/import, filter files, pen/shape geometry, recents, preferences, persistence, theme tokens. |
 
 React talks to the engine through a curated **`EngineHandle`** interface; it never touches pixels directly.
@@ -214,11 +216,12 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Effects** composite as a single `drawImage` of the cached styled buffer when idle. **Tone** LUTs are built once per spec change and applied as one typed-array pass. **Clip groups** add one buffer + one composite pass per group (the `destination-in` clip is GPU, no per-pixel JS).
 - Group and clip-group buffers are **fresh per composite** (nesting-safe) — consistent with the existing group compositing; pooled buffers are used only where re-entrancy can't occur.
 
-## Persistence (`.aproj`, format v6)
+## Persistence (`.gproj`, format v6)
 
 - A self-describing JSON: doc name/size, foreground/background, active/selected layers, selection, and the layer tree. **Pixel layers** serialise as PNG data-URLs; **masks** as grayscale PNG data-URLs + `{enabled, linked}`; **adjustment specs**, **layer effects**, and **clipped** flags as plain JSON. Adjustment/effect/clip nodes carry **no raster** — they re-render from params on load.
 - **Backward-compatible:** older files (any earlier version, missing mask/effects/adjustment/clipped fields) open unchanged with those features simply absent.
 - Tool options, colours, marquee shape/apex, view toggles, and theme persist separately in `localStorage`.
+- **Autosave & crash recovery:** the active document snapshots to IndexedDB on a Preferences interval (default every 2 min, only when something changed); a heartbeat flag detects unclean exits and offers **Restore / Discard** on the next start. The status bar shows the real save state ("Unsaved changes" / "Saved" / "Autosaved HH:MM") along with the true document colour space and a Photoshop-style flattened/all-layers size estimate.
 - *Saved history is labels + index only* — the live undo stack (in-memory callbacks) is not replayable from a file.
 
 ---
@@ -242,7 +245,7 @@ Honest list of what is **partial, deferred, or absent**:
 - **8-bit only.** All processing is Canvas 2D `ImageData` (8-bit per channel); there is **no 16/32-bit pipeline** and **no WebGL/WebGPU** path. High-bit-depth, a GPU renderer, and RAW development are future research tracks, not built.
 
 **Smart Filters (Spec 07 built)**
-- Every layer/group can carry a non-destructive, re-editable **smart-filter stack** (Effects menu / Layers panel ▸ Smart Filters…): **Blur** (all nine Blur Gallery types, sharing the same kernel), **Sharpen** (Unsharp Mask), **Noise**, **Pixelate** (Mosaic), **Distort** (Twirl/Pinch/Wave), **Stylize** (Find Edges/Emboss/Posterize/Threshold) — each with enable/reorder/remove, per-filter blend mode + opacity, one-step undo per edit, live document preview, cached via the render graph, serialized in `.aproj` v7, and bakeable via "Apply". The old placeholder menu items are now wired. Not included: a stack-wide filter mask, and Liquify (still a stub — it's a warp-mesh tool, out of scope).
+- Every layer/group can carry a non-destructive, re-editable **smart-filter stack** (Effects menu / Layers panel ▸ Smart Filters…): **Blur** (all nine Blur Gallery types, sharing the same kernel), **Sharpen** (Unsharp Mask), **Noise**, **Pixelate** (Mosaic), **Distort** (Twirl/Pinch/Wave), **Stylize** (Find Edges/Emboss/Posterize/Threshold) — each with enable/reorder/remove, per-filter blend mode + opacity, one-step undo per edit, live document preview, cached via the render graph, serialized in `.gproj` v7, and bakeable via "Apply". The old placeholder menu items are now wired. Not included: a stack-wide filter mask, and Liquify (still a stub — it's a warp-mesh tool, out of scope).
 - A few **Settings/Help** menu items (Performance, Scratch Disks, the Help pages) are stubs. **Keyboard Shortcuts** is implemented: a searchable window (Settings ▸ Keyboard Shortcuts… / Help ▸ Keyboard Shortcuts) generated from the tool and menu registries plus the canvas/panel gestures.
 
 **Roadmap status:** all specs **01–07** (Masks, Adjustment Layers, Layer Effects, Curves & Levels, Clipping Masks, Render Graph, Smart Filters) are implemented.

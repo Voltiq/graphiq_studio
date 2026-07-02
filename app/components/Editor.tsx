@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import styles from "./Editor.module.scss";
@@ -14,10 +14,20 @@ import PreferencesDialog from "./PreferencesDialog";
 import TooltipHost from "./Tooltip";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
+import {
+  clearAutosave,
+  markSessionAlive,
+  markSessionClean,
+  readAutosave,
+  wasUncleanExit,
+  writeAutosave,
+  type AutosaveSnapshot,
+} from "../lib/autosave";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
 import {
   BLUR_FX_LABELS,
   DEFAULT_BLUR,
+  DEFAULT_HEAL,
   DEFAULT_BLUR_FX,
   DEFAULT_CLONE,
   DEFAULT_CROP,
@@ -30,6 +40,7 @@ import {
   type BlurFxScope,
   type BlurFxSettings,
   type BlurSettings,
+  type HealSettings,
   type CloneSettings,
   type CropSettings,
   type DodgeSettings,
@@ -87,10 +98,11 @@ import Toast from "./Toast";
 import SaveAsDialog from "./SaveAsDialog";
 import RecentsDialog from "./RecentsDialog";
 import ExportDialog from "./ExportDialog";
-import ImportDialog, { type ImportItem, type ImportMode } from "./ImportDialog";
+import ImportDialog, { type ImportItem, type ImportMode, type ImportOptions } from "./ImportDialog";
 import ColorDialog from "./ColorDialog";
 import ProfileCompareDialog from "./ProfileCompareDialog";
 import {
+  LEGACY_PROJECT_EXT,
   PROJECT_EXT,
   downloadBlob,
   saveProjectFile,
@@ -121,6 +133,7 @@ import { defaultFilter, filterLabel, type FilterType, type SmartFilter } from ".
 import SmartFilterDialog from "./SmartFilterDialog";
 import ShortcutsDialog from "./ShortcutsDialog";
 import NewDocDialog from "./NewDocDialog";
+import RestoreDialog from "./RestoreDialog";
 import {
   autoLevels,
   defaultCurves,
@@ -246,6 +259,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   });
   const [pen, setPen] = useState<PenSettings>({ width: 8, taper: 0, bend: 0 });
   const [blur, setBlur] = useState<BlurSettings>(DEFAULT_BLUR);
+  const [heal, setHeal] = useState<HealSettings>(DEFAULT_HEAL);
   const [clone, setClone] = useState<CloneSettings>(DEFAULT_CLONE);
   const [dodge, setDodge] = useState<DodgeSettings>(DEFAULT_DODGE);
   const [textSettings, setTextSettings] = useState<TextSettings>(DEFAULT_TEXT);
@@ -288,6 +302,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       return next;
     });
   const [history, setHistory] = useState<HistorySummary>({ items: [{ label: "New" }], index: 0 });
+  // Any history movement means unsaved work (autosave + status-bar indicator).
+  const historyInitRef = useRef(true);
+  useEffect(() => {
+    if (historyInitRef.current) {
+      historyInitRef.current = false;
+      return;
+    }
+    autosaveDirtyRef.current = true;
+    setSaveState((s) => (s.label === "Unsaved changes" ? s : { label: "Unsaved changes", ok: false }));
+  }, [history]);
   const [saveAsOpen, setSaveAsOpen] = useState(false);
   const [recentsOpen, setRecentsOpen] = useState(false);
   const [panels, setPanelsState] = useState<PanelVisibility>(ALL_PANELS);
@@ -332,6 +356,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (p.gradient) setGradient((s) => ({ ...s, ...p.gradient }));
     if (p.pen) setPen((s) => ({ ...s, ...p.pen }));
     if (p.blur) setBlur((s) => ({ ...s, ...p.blur }));
+    if (p.heal) setHeal((s) => ({ ...s, ...p.heal }));
     if (p.clone) setClone((s) => ({ ...s, ...p.clone }));
     if (p.dodge) setDodge((s) => ({ ...s, ...p.dodge }));
     if (p.text) setTextSettings((s) => ({ ...s, ...p.text }));
@@ -364,6 +389,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           gradient,
           pen,
           blur,
+          heal,
           clone,
           dodge,
           text: textSettings,
@@ -391,6 +417,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     gradient,
     pen,
     blur,
+    heal,
     clone,
     dodge,
     textSettings,
@@ -478,8 +505,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const copyOriginRef = useRef({ x: 0, y: 0 });
   const copyDocIdRef = useRef<string | null>(null);
 
-  const setActiveSize = (s: CanvasSize) =>
-    setDocs((ds) => ds.map((d) => (d.id === activeId ? { ...d, ...s } : d)));
+  const setActiveSize = (s: CanvasSize) => {
+    const d = activeDocRef.current;
+    if (s.anchor !== undefined && (s.width !== d.width || s.height !== d.height)) {
+      // Reframe with the chosen anchor BEFORE patching dims (the reactive
+      // setDoc then no-ops) — this is what makes the anchor grid take effect.
+      const col = s.anchor % 3;
+      const row = Math.floor(s.anchor / 3);
+      const dx = col === 0 ? 0 : col === 1 ? Math.round((s.width - d.width) / 2) : s.width - d.width;
+      const dy = row === 0 ? 0 : row === 1 ? Math.round((s.height - d.height) / 2) : s.height - d.height;
+      paintRef.current?.resizeCanvasAnchored(s.width, s.height, dx, dy, collectLeafIds(d.layers));
+    }
+    setDocs((ds) =>
+      ds.map((doc) => (doc.id === activeId ? { ...doc, width: s.width, height: s.height } : doc)),
+    );
+  };
 
   const openSizeDialog = (mode: "canvas" | "image") => {
     setSizeDialogMode(mode);
@@ -906,8 +946,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     treeAfter: LayerNode[],
     selAfter: Sel,
     forward: () => void = () => {},
+    /** Canvas-size change folded into the same step (import-expand). */
+    dims?: { bw: number; bh: number; aw: number; ah: number },
   ) => {
     const docId = activeIdRef.current;
+    const patchDims = (w: number, h: number) =>
+      setDocs((ds) => ds.map((d) => (d.id === docId ? { ...d, width: w, height: h } : d)));
+    if (dims) patchDims(dims.aw, dims.ah);
     const eng = paintRef.current;
     const beforeIds = new Set(collectLeafIds(treeBefore));
     const afterIds = new Set(collectLeafIds(treeAfter));
@@ -929,10 +974,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     eng.pushStructural(
       label,
       () => {
+        if (dims) patchDims(dims.bw, dims.bh);
         eng.restoreLeaves(undoSnaps);
         setDocSel(docId, treeBefore, selBefore);
       },
       () => {
+        if (dims) patchDims(dims.aw, dims.ah);
         eng.restoreLeaves(redoSnaps);
         setDocSel(docId, treeAfter, selAfter);
       },
@@ -1486,6 +1533,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     openFiltersOp(id);
   };
 
+  // Edit ▸ Content-Aware Fill: synthesize the selection from its surroundings.
+  const contentAwareFillOp = () => {
+    const d = activeDocRef.current;
+    const id = d.activeLayerId;
+    if (!id || !d.selection.length) return;
+    const node = findNode(d.layers, id);
+    if (!node || node.type !== "layer") return;
+    paintRef.current?.contentAwareFill(id, d.selection, d.selectionAngle, d.selectionPivot);
+  };
+
   // Bake the stack into the layer's pixels: one combined pixel+structural step.
   const applyFiltersOp = (id: string) => {
     commitFilterEdit();
@@ -2020,29 +2077,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setPasteSrc(null);
   };
 
-  // Dimensions of the image currently in the clipboard, if any — the OS
-  // clipboard first (most current), falling back to the last in-app copy/cut.
-  const clipboardImageSize = async (): Promise<{ w: number; h: number } | null> => {
-    try {
-      if (navigator.clipboard?.read) {
-        for (const item of await navigator.clipboard.read()) {
-          const type = item.types.find((t) => t.startsWith("image/"));
-          if (type) {
-            const bmp = await createImageBitmap(await item.getType(type));
-            const size = { w: bmp.width, h: bmp.height };
-            bmp.close();
-            return size;
-          }
-        }
-      }
-    } catch {
-      /* clipboard unreadable (permission / focus) — fall back to the internal one */
-    }
-    const c = clipboardRef.current;
-    return c ? { w: c.width, h: c.height } : null;
-  };
-
-  // New canvas — sized to the clipboard image when there is one, else the default.
+  // New canvas — the New Document dialog, or the stored default size.
   const createDoc = (opts?: { name?: string; width?: number; height?: number }) => {
     const seq = (seqRef.current += 1);
     const p = prefsRef.current;
@@ -2085,7 +2120,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
   const doRedo = () => paintRef.current?.redo();
 
-  // ---- Project save (.aproj — layers, groups & full state) ----
+  // ---- Project save (.gproj — layers, groups & full state) ----
   // Reads from refs so it also works from the one-time keydown listener.
   const buildProjectBlob = (): Blob => {
     const d = activeDocRef.current;
@@ -2107,17 +2142,65 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     return new Blob([JSON.stringify(project)], { type: "application/json" });
   };
 
+  // ---- Autosave / crash recovery + the status bar's save indicator ----------
+  const [saveState, setSaveState] = useState<{ label: string; ok: boolean }>({
+    label: "Not saved",
+    ok: false,
+  });
+  const autosaveDirtyRef = useRef(false); // history moved since the last write
+  const [restoreSnap, setRestoreSnap] = useState<AutosaveSnapshot | null>(null);
+
+  // Heartbeat: detect an unclean exit and offer the last snapshot for restore.
+  useEffect(() => {
+    const unclean = wasUncleanExit();
+    markSessionAlive();
+    const onHide = () => markSessionClean();
+    window.addEventListener("pagehide", onHide);
+    if (unclean) void readAutosave().then((s) => s && setRestoreSnap(s));
+    return () => window.removeEventListener("pagehide", onHide);
+  }, []);
+
+  // Periodic snapshot (only when something changed since the last one).
+  useEffect(() => {
+    const mins = prefs.autosaveMinutes;
+    if (!mins) return;
+    const id = window.setInterval(async () => {
+      if (!autosaveDirtyRef.current) return;
+      try {
+        const json = await buildProjectBlob().text();
+        await writeAutosave({ json, name: activeDocRef.current.name, savedAt: Date.now() });
+        autosaveDirtyRef.current = false;
+        setSaveState({
+          label: `Autosaved ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+          ok: true,
+        });
+      } catch {
+        /* serialization/storage hiccup — try again next tick */
+      }
+    }, mins * 60_000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefs.autosaveMinutes]);
+
+  const markSaved = (label: string) => {
+    autosaveDirtyRef.current = false;
+    setSaveState({ label, ok: true });
+  };
+
   // Simple Save: download the project under the canvas's current name.
   const saveProject = () => {
     const filename = `${activeDocRef.current.name}.${PROJECT_EXT}`;
     const blob = buildProjectBlob();
     downloadBlob(blob, filename);
     addRecent(filename, { blob }); // remember a re-openable cached copy
+    markSaved("Saved");
   };
 
   // Save As: pick a name (dialog) then choose folder/path via the native picker.
   const saveProjectAs = async (filename: string) => {
-    const base = filename.replace(new RegExp(`\\.${PROJECT_EXT}$`, "i"), "").trim() || activeDocRef.current.name;
+    const base =
+      filename.replace(new RegExp(`\\.(${PROJECT_EXT}|${LEGACY_PROJECT_EXT})$`, "i"), "").trim() ||
+      activeDocRef.current.name;
     const docId = activeIdRef.current;
     const blob = buildProjectBlob();
     const fname = `${base}.${PROJECT_EXT}`;
@@ -2126,6 +2209,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       renameDoc(docId, base); // reflect the saved name on the tab
       addRecent(fname, handle ? { handle } : { blob });
       setSaveAsOpen(false);
+      markSaved("Saved");
     }
   };
 
@@ -2147,7 +2231,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     try {
       const [handle] = await picker({
         multiple: false,
-        types: [{ description: "Graphiq Project", accept: { "application/json": [`.${PROJECT_EXT}`] } }],
+        types: [
+          {
+            description: "Graphiq Project",
+            accept: { "application/json": [`.${PROJECT_EXT}`, `.${LEGACY_PROJECT_EXT}`] },
+          },
+        ],
       });
       const file = await handle.getFile();
       if (loadProjectText(await file.text())) addRecent(file.name, { handle });
@@ -2156,7 +2245,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     }
   };
 
-  // Rebuild a document from a parsed .aproj file. Layer ids are remapped to fresh
+  // Rebuild a document from a parsed .gproj file. Layer ids are remapped to fresh
   // ones so a loaded project never collides with already-open documents.
   const loadProject = (p: ProjectFile) => {
     commitFloatIfAny(); // merge any floating paste on the current doc first
@@ -2250,14 +2339,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setPendingLoads((ls) => [...ls, { docId, images, masks }]);
   };
 
-  // Parse + validate .aproj text and load it. Returns whether it succeeded.
+  // Parse + validate .gproj text and load it. Returns whether it succeeded.
   const loadProjectText = (text: string): boolean => {
     try {
       const parsed = JSON.parse(text);
       // Accept the current id plus the legacy "aperture-project" so older files open.
       const fmt = parsed?.format;
       if ((fmt !== "graphiq-project" && fmt !== "aperture-project") || !Array.isArray(parsed.layers)) {
-        window.alert("This file isn't a valid Graphiq project (.aproj).");
+        window.alert("This file isn't a valid Graphiq project (.gproj).");
         return false;
       }
       loadProject(parsed as ProjectFile);
@@ -2373,12 +2462,18 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const renderBlurPreview = (s: BlurFxSettings, immediate = false) => {
     ensureBlurSession(s.scope);
     window.clearTimeout(blurFxTimerRef.current);
-    const run = () => {
-      paintRef.current?.previewBlurFx(s.kind, s.amount, s.angle, s.anchor.x, s.anchor.y, {
-        band: s.band,
-        feather: s.feather,
-        threshold: s.threshold,
-      });
+    const run = async () => {
+      // Off the UI thread (worker); superseded renders resolve false and skip
+      // the (also non-trivial) composite snapshot — only the newest one lands.
+      const applied = await paintRef.current?.previewBlurFxAsync(
+        s.kind,
+        s.amount,
+        s.angle,
+        s.anchor.x,
+        s.anchor.y,
+        { band: s.band, feather: s.feather, threshold: s.threshold },
+      );
+      if (!applied || !blurFxOpenRef.current) return;
       // Snapshot the composited result for the dialog's preview pane.
       setBlurPreview(paintRef.current?.exportComposite(activeDocRef.current.layers) ?? null);
     };
@@ -2421,17 +2516,18 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setBlurFx(next);
     renderBlurPreview(next);
   };
-  const applyBlurFx = () => {
+  const applyBlurFx = async () => {
     window.clearTimeout(blurFxTimerRef.current);
     ensureBlurSession(blurFx.scope);
-    paintRef.current?.previewBlurFx(
+    // Flush the newest parameters (worker or sync) before committing.
+    await paintRef.current?.previewBlurFxAsync(
       blurFx.kind,
       blurFx.amount,
       blurFx.angle,
       blurFx.anchor.x,
       blurFx.anchor.y,
       { band: blurFx.band, feather: blurFx.feather, threshold: blurFx.threshold },
-    ); // flush latest
+    );
     paintRef.current?.commitBlurFx(`${BLUR_FX_LABELS[blurFx.kind]} Blur`);
     blurFxSessionRef.current = null;
     setBlurPreview(null);
@@ -2471,27 +2567,67 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   // Import images onto new layers of the current canvas (one undoable step).
-  const importAsLayers = (items: ImportItem[]) => {
-    const before = active.layers;
-    const leaves: Layer[] = items.map((it) => ({
-      id: nextLeafId(),
-      type: "layer",
-      name: stripExt(it.name),
-      visible: true,
-      opacity: 100,
-      blend: "Normal",
-    }));
-    const after = [...leaves, ...before]; // first image on top
-    commitLayerChange(
-      items.length > 1 ? "Import Layers" : "Import Layer",
-      before,
-      selNow(),
-      after,
-      { active: leaves[0].id, selected: leaves.map((l) => l.id) },
-      () => leaves.forEach((leaf, i) => paintRef.current?.setLayerImage(leaf.id, items[i].bitmap)),
-    );
-    // Surface the (first) imported image's metadata for the Metadata panel.
-    if (items[0]?.meta) patchActiveDoc((d) => ({ ...d, metadata: items[0].meta }));
+  const importAsLayers = (items: ImportItem[], opts: ImportOptions) => {
+    const d0 = activeDocRef.current;
+    let maxW = 0;
+    let maxH = 0;
+    for (const it of items) {
+      maxW = Math.max(maxW, it.bitmap.width);
+      maxH = Math.max(maxH, it.bitmap.height);
+    }
+    const grew = opts.expand && (maxW > d0.width || maxH > d0.height);
+    const finalW = grew ? Math.max(d0.width, maxW) : d0.width;
+    const finalH = grew ? Math.max(d0.height, maxH) : d0.height;
+    // Anchor (3×3 grid index) → per-image position on the (possibly grown) canvas.
+    const pos = (iw: number, ih: number) => {
+      const col = opts.anchor % 3;
+      const row = Math.floor(opts.anchor / 3);
+      return {
+        x: col === 0 ? 0 : col === 1 ? Math.floor((finalW - iw) / 2) : finalW - iw,
+        y: row === 0 ? 0 : row === 1 ? Math.floor((finalH - ih) / 2) : finalH - ih,
+      };
+    };
+    const place = () => {
+      const before = activeDocRef.current.layers;
+      const leaves: Layer[] = items.map((it) => ({
+        id: nextLeafId(),
+        type: "layer",
+        name: stripExt(it.name),
+        visible: true,
+        opacity: 100,
+        blend: "Normal",
+      }));
+      const after = [...leaves, ...before]; // first image on top
+      commitLayerChange(
+        items.length > 1 ? "Import Layers" : "Import Layer",
+        before,
+        selNow(),
+        after,
+        { active: leaves[0].id, selected: leaves.map((l) => l.id) },
+        () =>
+          leaves.forEach((leaf, i) => {
+            const p = pos(items[i].bitmap.width, items[i].bitmap.height);
+            paintRef.current?.setLayerImage(leaf.id, items[i].bitmap, p.x, p.y);
+          }),
+      );
+      // Surface the (first) imported image's metadata for the Metadata panel.
+      if (items[0]?.meta) patchActiveDoc((d) => ({ ...d, metadata: items[0].meta }));
+    };
+    if (grew) {
+      // Grow the canvas first (same undo-less semantics as Canvas Size), then
+      // place once the engine has resized (a double rAF spans the re-render).
+      // Bail if the user switched documents in the gap — never import into
+      // the wrong canvas.
+      const docId = d0.id;
+      setActiveSize({ width: finalW, height: finalH });
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (activeIdRef.current === docId) place();
+        }),
+      );
+    } else {
+      place();
+    }
   };
 
   // Import each image as its own new canvas/tab.
@@ -2523,11 +2659,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setPendingLoads((ls) => [...ls, ...entries]);
   };
 
-  const applyImport = (mode: ImportMode) => {
+  const applyImport = (mode: ImportMode, opts: ImportOptions) => {
     const items = importItems;
     setImportItems(null);
     if (!items?.length) return;
-    if (mode === "layers") importAsLayers(items);
+    if (mode === "layers") importAsLayers(items, opts);
     else importAsCanvases(items);
   };
 
@@ -2745,6 +2881,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       const id = activeDocRef.current.activeLayerId;
       if (id) openFiltersOp(id);
     } else if (actionId === "shortcuts") setShortcutsOpen(true);
+    else if (actionId === "edit-caf") contentAwareFillOp();
   };
 
   const swapColors = () => {
@@ -2992,6 +3129,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       } else if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "F6") {
         e.preventDefault();
         setSelectModify("feather");
+      } else if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "F5") {
+        e.preventDefault();
+        contentAwareFillOp();
       } else if (e.ctrlKey && !e.altKey && !e.shiftKey && key === "k") {
         e.preventDefault();
         setPrefsOpen(true);
@@ -3149,6 +3289,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     <div className={styles.app}>
       <TopBar
         onMenuAction={handleMenuAction}
+        onSelectTool={setTool}
         onUndo={doUndo}
         onRedo={doRedo}
         canUndo={history.index > 0}
@@ -3200,6 +3341,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onShape={(patch) => setShape((s) => ({ ...s, ...patch }))}
         blur={blur}
         onBlur={(patch) => setBlur((b) => ({ ...b, ...patch }))}
+        heal={heal}
+        onHeal={(patch) => setHeal((h) => ({ ...h, ...patch }))}
         clone={clone}
         onClone={(patch) => setClone((c) => ({ ...c, ...patch }))}
         dodge={dodge}
@@ -3273,6 +3416,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             stroke: background,
           }}
           blur={blur}
+          heal={heal}
           clone={clone}
           dodge={dodge}
           text={textSettings}
@@ -3373,6 +3517,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         foreground={paintColor}
         width={active.width}
         height={active.height}
+        colorSpace={colorSpace}
+        layerCount={collectLeafIds(active.layers).length}
+        saveState={saveState}
         selection={active.selection}
         subscribeCursor={subscribeCursor}
       />
@@ -3402,6 +3549,22 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       )}
 
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+
+      {restoreSnap && (
+        <RestoreDialog
+          snap={restoreSnap}
+          onRestore={() => {
+            const ok = loadProjectText(restoreSnap.json);
+            setRestoreSnap(null);
+            void clearAutosave();
+            if (!ok) showToast("Couldn't restore the autosaved session.");
+          }}
+          onDiscard={() => {
+            setRestoreSnap(null);
+            void clearAutosave();
+          }}
+        />
+      )}
 
       {newDocOpen && (
         <NewDocDialog
@@ -3563,13 +3726,19 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       )}
 
       {importItems && (
-        <ImportDialog items={importItems} onImport={applyImport} onClose={() => setImportItems(null)} />
+        <ImportDialog
+          items={importItems}
+          docWidth={active.width}
+          docHeight={active.height}
+          onImport={applyImport}
+          onClose={() => setImportItems(null)}
+        />
       )}
 
       <input
         ref={fileInputRef}
         type="file"
-        accept={`.${PROJECT_EXT},application/json`}
+        accept={`.${PROJECT_EXT},.${LEGACY_PROJECT_EXT},application/json`}
         onChange={onFilePicked}
         hidden
       />

@@ -463,7 +463,16 @@ export function hasEnabledFx(fx: LayerEffects | undefined): boolean {
   );
 }
 
-/** Stable hash of the effect params (cache key). */
+/** Stable hash of the effect params (cache key). The tree is immutable, so the
+ *  serialization is memoized per object — this runs every composite frame for
+ *  every styled node and must not re-stringify each time. */
+const fxHashMemo = new WeakMap<LayerEffects, string>();
 export function fxHash(fx: LayerEffects | undefined): string {
-  return fx ? JSON.stringify(fx) : "";
+  if (!fx) return "";
+  let h = fxHashMemo.get(fx);
+  if (h === undefined) {
+    h = JSON.stringify(fx);
+    fxHashMemo.set(fx, h);
+  }
+  return h;
 }

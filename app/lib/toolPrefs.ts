@@ -7,6 +7,7 @@ import type {
   CropSettings,
   DodgeSettings,
   GradientSettings,
+  HealSettings,
   MarqueeShape,
   MoveMode,
   PenSettings,
@@ -42,6 +43,7 @@ export interface ToolPrefs {
   gradient: GradientSettings;
   pen: PenSettings;
   blur: BlurSettings;
+  heal: HealSettings;
   clone: CloneSettings;
   dodge: DodgeSettings;
   text: TextSettings;

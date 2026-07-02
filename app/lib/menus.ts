@@ -36,6 +36,7 @@ export const MENUS: Menu[] = [
       { label: "Cut", shortcut: "Ctrl+X", action: "edit-cut" },
       { label: "Copy", shortcut: "Ctrl+C", action: "edit-copy" },
       { label: "Paste", shortcut: "Ctrl+V", separatorAfter: true, action: "edit-paste" },
+      { label: "Content-Aware Fill", shortcut: "Shift+F5", separatorAfter: true, action: "edit-caf" },
       { label: "Free Transform", shortcut: "Ctrl+Alt+T", action: "free-transform" },
       { label: "Transform Selection", shortcut: "Ctrl+Alt+Shift+T", action: "transform" },
     ],

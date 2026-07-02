@@ -29,6 +29,7 @@ import {
   SAMPLE_SCOPE_OPTIONS,
   SAMPLE_SIZE_OPTIONS,
   type BlurSettings,
+  type HealSettings,
   type CloneSettings,
   type CropSettings,
   type DodgeMode,
@@ -76,6 +77,11 @@ interface ShapeProps {
 interface BlurProps {
   blur: BlurSettings;
   onBlur: (patch: Partial<BlurSettings>) => void;
+}
+
+interface HealProps {
+  heal: HealSettings;
+  onHeal: (patch: Partial<HealSettings>) => void;
 }
 
 interface CloneProps {
@@ -134,6 +140,8 @@ export default function OptionsBar({
   onShape,
   blur,
   onBlur,
+  heal,
+  onHeal,
   clone,
   onClone,
   text,
@@ -180,6 +188,7 @@ export default function OptionsBar({
   onEyedropper: (patch: { size?: string; scope?: string }) => void;
 } & ShapeProps &
   BlurProps &
+  HealProps &
   CloneProps &
   TextProps &
   DodgeProps &
@@ -224,6 +233,7 @@ export default function OptionsBar({
           { shape, onShape, fill, onFill, stroke, onStroke },
           { crop, onCrop, cropBox, onCropBox, onCropApply, onCropReset, docWidth, docHeight },
           { blur, onBlur },
+          { heal, onHeal },
           { clone, onClone },
           { text, onText },
           { dodge, onDodge },
@@ -262,6 +272,7 @@ function renderOptions(
   shapeProps: ShapeProps,
   cropProps: CropProps,
   blurProps: BlurProps,
+  healProps: HealProps,
   cloneProps: CloneProps,
   textProps: TextProps,
   dodgeProps: DodgeProps,
@@ -952,6 +963,30 @@ function renderOptions(
             value={clone.smoothing}
             onChange={(n) => onClone({ smoothing: n })}
           />
+        </>
+      );
+    }
+
+    case "heal": {
+      const { heal, onHeal } = healProps;
+      return (
+        <>
+          <Slider
+            label="Size"
+            min={4}
+            max={300}
+            unit="px"
+            value={heal.size}
+            onChange={(n) => onHeal({ size: n })}
+          />
+          <Slider
+            label="Hardness"
+            unit="%"
+            value={heal.hardness}
+            onChange={(n) => onHeal({ hardness: n })}
+          />
+          <Divider />
+          <span className={styles.muted}>Paint over a blemish — it heals when you release.</span>
         </>
       );
     }

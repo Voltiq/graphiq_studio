@@ -464,9 +464,17 @@ export function hasEnabledFilters(filters: SmartFilter[] | undefined): boolean {
   return !!filters && filters.some((f) => f.enabled);
 }
 
-/** Cache-key ingredient: the whole stack's identity (params + order + blend). */
+/** Cache-key ingredient: the whole stack's identity (params + order + blend).
+ *  Memoized per (immutable) array — evaluated every composite frame. */
+const stackHashMemo = new WeakMap<SmartFilter[], string>();
 export function filterStackHash(filters: SmartFilter[] | undefined): string {
-  return filters && filters.length ? JSON.stringify(filters) : "";
+  if (!filters || !filters.length) return "";
+  let h = stackHashMemo.get(filters);
+  if (h === undefined) {
+    h = JSON.stringify(filters);
+    stackHashMemo.set(filters, h);
+  }
+  return h;
 }
 
 // ---------------------------------------------------------------------------

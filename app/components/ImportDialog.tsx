@@ -3,9 +3,30 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import styles from "./PasteDialog.module.scss";
+import sizeStyles from "./CanvasSizeDialog.module.scss";
 import type { ImageMetadata } from "../lib/metadata";
 
 export type ImportMode = "layers" | "canvas";
+
+/** Layer-import placement + oversize handling. */
+export interface ImportOptions {
+  /** 3×3 grid index (0 = top-left … 4 = centre … 8 = bottom-right). */
+  anchor: number;
+  /** Grow the canvas to fit images larger than it (else they crop). */
+  expand: boolean;
+}
+
+const ANCHOR_NAMES = [
+  "Top left",
+  "Top center",
+  "Top right",
+  "Middle left",
+  "Center",
+  "Middle right",
+  "Bottom left",
+  "Bottom center",
+  "Bottom right",
+];
 
 export interface ImportItem {
   name: string;
@@ -37,15 +58,25 @@ function Thumb({ bitmap }: { bitmap: ImageBitmap }) {
 
 export default function ImportDialog({
   items,
+  docWidth,
+  docHeight,
   onImport,
   onClose,
 }: {
   items: ImportItem[];
-  onImport: (mode: ImportMode) => void;
+  docWidth: number;
+  docHeight: number;
+  onImport: (mode: ImportMode, opts: ImportOptions) => void;
   onClose: () => void;
 }) {
   const [mode, setMode] = useState<ImportMode>("layers");
+  const [anchor, setAnchor] = useState(4); // centre
+  const [expand, setExpand] = useState(true);
   const many = items.length > 1;
+  const oversized = items.some((it) => it.bitmap.width > docWidth || it.bitmap.height > docHeight);
+  const grownW = Math.max(docWidth, ...items.map((it) => it.bitmap.width));
+  const grownH = Math.max(docHeight, ...items.map((it) => it.bitmap.height));
+  const opts: ImportOptions = { anchor, expand };
 
   const OPTIONS: { value: ImportMode; title: string; desc: string }[] = [
     {
@@ -70,7 +101,7 @@ export default function ImportDialog({
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === "Escape") onClose();
-          if (e.key === "Enter") onImport(mode);
+          if (e.key === "Enter") onImport(mode, opts);
         }}
       >
         <header className={styles.head}>
@@ -120,6 +151,65 @@ export default function ImportDialog({
               </button>
             ))}
           </div>
+
+          {mode === "layers" && (
+            <>
+              <span className={styles.groupLabel}>Placement</span>
+              <div className={sizeStyles.anchorWrap}>
+                <div className={sizeStyles.anchor} role="group" aria-label="Placement">
+                  {ANCHOR_NAMES.map((name, i) => (
+                    <button
+                      key={name}
+                      type="button"
+                      data-active={anchor === i}
+                      title={name}
+                      aria-label={name}
+                      onClick={() => setAnchor(i)}
+                    />
+                  ))}
+                </div>
+                <span className={sizeStyles.hint}>
+                  Where {many ? "the images land" : "the image lands"} on the canvas —{" "}
+                  {ANCHOR_NAMES[anchor].toLowerCase()}.
+                </span>
+              </div>
+
+              {oversized && (
+                <>
+                  <span className={styles.groupLabel}>Canvas size</span>
+                  <div className={styles.options}>
+                    <button
+                      type="button"
+                      className={styles.option}
+                      data-active={expand}
+                      onClick={() => setExpand(true)}
+                    >
+                      <span className={styles.radio} />
+                      <span className={styles.optText}>
+                        <strong>Expand to fit</strong>
+                        <em>
+                          Grow the canvas to {grownW} × {grownH} px so{" "}
+                          {many ? "the largest image fits" : "the image fits"}
+                        </em>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.option}
+                      data-active={!expand}
+                      onClick={() => setExpand(false)}
+                    >
+                      <span className={styles.radio} />
+                      <span className={styles.optText}>
+                        <strong>Keep canvas size</strong>
+                        <em>Anything outside the {docWidth} × {docHeight} px canvas is cropped</em>
+                      </span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
         </div>
 
         <footer className={styles.foot}>
@@ -129,7 +219,7 @@ export default function ImportDialog({
           <button
             type="button"
             className={`${styles.btn} ${styles.primary}`}
-            onClick={() => onImport(mode)}
+            onClick={() => onImport(mode, opts)}
           >
             Import
           </button>

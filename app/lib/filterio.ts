@@ -1,4 +1,4 @@
-import { downloadBlob } from "./project";
+﻿import { downloadBlob } from "./project";
 import {
   FILTER_EXT,
   FILTER_PACK_EXT,
@@ -32,9 +32,9 @@ interface FsDirHandle {
 type DirPicker = (opts?: { mode?: string }) => Promise<FsDirHandle>;
 
 /**
- * Export presets to disk. One preset downloads as a single `.aifp` file; several
- * are written as individual `.aifp` files into a chosen folder via the File
- * System Access API, falling back to a single `.aifpack` bundle download where
+ * Export presets to disk. One preset downloads as a single `.gifp` file; several
+ * are written as individual `.gifp` files into a chosen folder via the File
+ * System Access API, falling back to a single `.gifpack` bundle download where
  * that API is unavailable. Returns false if the user cancelled.
  */
 export async function exportPresets(presets: AdjustPreset[]): Promise<boolean> {

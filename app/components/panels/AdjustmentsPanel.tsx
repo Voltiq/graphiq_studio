@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Check, Download, FolderInput, Layers, Plus, RotateCcw, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
@@ -103,9 +103,9 @@ export default function AdjustmentsPanel({
     persist([...presets, ...added]);
   };
 
-  // Read .aifp / .aifpack files (from a multi-select or a picked folder) → presets.
+  // Read .gifp / .gifpack files (from a multi-select or a picked folder) → presets.
   const importFromFiles = async (files: File[]) => {
-    const valid = files.filter((f) => /\.(aifp|aifpack|json)$/i.test(f.name));
+    const valid = files.filter((f) => /\.(gifp|gifpack|aifp|aifpack|json)$/i.test(f.name));
     if (!valid.length) return;
     const parsed: ParsedPreset[] = [];
     for (const f of valid) {
@@ -355,7 +355,7 @@ export default function AdjustmentsPanel({
         ref={filesInputRef}
         type="file"
         multiple
-        accept=".aifp,.aifpack,.json,application/json"
+        accept=".gifp,.gifpack,.aifp,.aifpack,.json,application/json"
         hidden
         onChange={onInputChange}
       />

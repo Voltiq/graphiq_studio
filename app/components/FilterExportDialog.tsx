@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState } from "react";
 import { Check, X } from "lucide-react";
@@ -90,8 +90,8 @@ export default function FilterExportDialog({
 
           <p className={styles.sub}>
             {sel.size > 1
-              ? "Saved as a folder of .aifp files (or a single .aifpack bundle)."
-              : "Saved as a single .aifp file."}
+              ? "Saved as a folder of .gifp files (or a single .gifpack bundle)."
+              : "Saved as a single .gifp file."}
           </p>
         </div>
 

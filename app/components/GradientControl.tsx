@@ -195,7 +195,7 @@ export function GradientEditor({
           <button type="button" className={styles.iconBtn} onClick={startSave} title="Save current gradient">
             <Save size={13} />
           </button>
-          <button type="button" className={styles.iconBtn} onClick={doImport} title="Import gradients (.agrad)">
+          <button type="button" className={styles.iconBtn} onClick={doImport} title="Import gradients (.ggrad)">
             <Upload size={13} />
           </button>
           <button
@@ -203,7 +203,7 @@ export function GradientEditor({
             className={styles.iconBtn}
             disabled={!saved.length}
             onClick={doExport}
-            title={saved.length ? "Export saved gradients (.agrad)" : "No saved gradients to export"}
+            title={saved.length ? "Export saved gradients (.ggrad)" : "No saved gradients to export"}
           >
             <Download size={13} />
           </button>

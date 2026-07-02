@@ -8,6 +8,8 @@ import { Select } from "./Select";
 export interface CanvasSize {
   width: number;
   height: number;
+  /** Canvas mode: 3×3 anchor index for where existing content sits (4 = centre). */
+  anchor?: number;
 }
 
 const MIN = 1;
@@ -74,6 +76,8 @@ export default function CanvasSizeDialog({
     onApply({
       width: clampDim(parseInt(w, 10) || size.width),
       height: clampDim(parseInt(h, 10) || size.height),
+      // Canvas mode: where existing content sits in the new frame.
+      ...(mode === "canvas" ? { anchor } : {}),
     });
     onClose();
   };

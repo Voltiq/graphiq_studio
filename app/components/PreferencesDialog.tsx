@@ -232,6 +232,20 @@ export default function PreferencesDialog({
                   </div>
                 </section>
                 <section className={styles.section}>
+                  <span className={styles.groupLabel}>Autosave</span>
+                  <p className={styles.sectionHint}>
+                    Snapshots the project so an unexpected exit can be restored. 0 turns it off.
+                  </p>
+                  <Slider
+                    label="Interval"
+                    min={0}
+                    max={10}
+                    unit=" min"
+                    value={prefs.autosaveMinutes}
+                    onChange={(n) => onChange({ autosaveMinutes: n })}
+                  />
+                </section>
+                <section className={styles.section}>
                   <span className={styles.groupLabel}>History</span>
                   <p className={styles.sectionHint}>
                     Max actions shown before the History panel starts scrolling.

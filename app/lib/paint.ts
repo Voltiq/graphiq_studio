@@ -14,6 +14,7 @@ import {
   hasEnabledFilters,
   type SmartFilter,
 } from "./filters";
+import { healPadding, healRegion } from "./heal";
 import { buildCanvasGradient } from "./gradient";
 import {
   applyToneLUTs,
@@ -198,7 +199,7 @@ export interface EngineHandle {
   getLayerImage: (id: string) => string | null;
   getMaskImage: (id: string) => string | null;
   setMaskImage: (id: string, source: CanvasImageSource) => void;
-  setLayerImage: (id: string, source: CanvasImageSource) => void;
+  setLayerImage: (id: string, source: CanvasImageSource, x?: number, y?: number) => void;
   exportComposite: (tree: LayerNode[]) => HTMLCanvasElement;
   /** Per-channel tonal distribution of the composited canvas. */
   histogram: (tree: LayerNode[]) => ChannelHistogram;
@@ -252,6 +253,15 @@ export interface EngineHandle {
     anchorY?: number,
     extra?: { band: number; feather: number; threshold: number },
   ) => void;
+  /** Off-thread preview (worker; sync fallback). Resolves false if superseded. */
+  previewBlurFxAsync: (
+    kind: string,
+    amount: number,
+    angle: number,
+    anchorX?: number,
+    anchorY?: number,
+    extra?: { band: number; feather: number; threshold: number },
+  ) => Promise<boolean>;
   commitBlurFx: (label: string) => void;
   cancelBlurFx: () => void;
   /** Snapshot owned layers + size for an undoable crop. */
@@ -302,6 +312,15 @@ export interface EngineHandle {
   getActiveSurface: (id: string) => ActiveSurface;
   /** Spec 07: bake a smart-filter stack into pixels (one combined step). */
   applySmartFilters: (layerId: string, filters: SmartFilter[], side?: HistorySide) => void;
+  /** Anchored canvas reframe (Canvas Size dialog) — call before the dims patch. */
+  resizeCanvasAnchored: (w: number, h: number, dx: number, dy: number, ownLayerIds?: string[]) => void;
+  /** Fill the selection with synthesized surrounding content (one entry). */
+  contentAwareFill: (
+    layerId: string,
+    sel: Rect[],
+    selAngle?: number,
+    selPivot?: { x: number; y: number } | null,
+  ) => void;
   /** Spec 06 debug: toggle the render cache for A/B pixel-identity checks. */
   setRenderCacheEnabled: (on: boolean) => void;
   renderCacheStats: () => { enabled: boolean; entries: number; bytes: number };
@@ -830,6 +849,46 @@ export class PaintEngine {
       ctx.clearRect(0, 0, src.width, src.height);
       ctx.drawImage(src, 0, 0);
     });
+  }
+
+  /**
+   * Canvas resize (reframe) with an anchor: existing content lands at (dx,dy)
+   * in the new frame — this is what makes the Canvas Size dialog's anchor grid
+   * real. Call BEFORE updating the doc's width/height so the follow-up setDoc
+   * is a no-op (same convention as resizeImage).
+   */
+  resizeCanvasAnchored(w: number, h: number, dx: number, dy: number, ownLayerIds?: string[]) {
+    if ((this.w === w && this.h === h && dx === 0 && dy === 0) || w < 1 || h < 1) return;
+    this.endAdjust();
+    if (this.floatActive) this.discardFloat();
+    this.wandSrc = null;
+    this.invalidateStyled();
+    this.w = w;
+    this.h = h;
+    this.stroke = makeCanvas(w, h);
+    this.scratch = this.mk(w, h);
+    for (const [id, l] of this.layers) {
+      if (ownLayerIds && !ownLayerIds.includes(id)) continue;
+      const next = this.mk(w, h, true);
+      next.ctx.drawImage(l.c, dx, dy);
+      this.layers.set(id, next);
+      this.bumpPixel(id);
+    }
+    // Masks track their layers; any extended area reveals (white).
+    this.transformMasks(ownLayerIds, (ctx, src) => {
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, this.w, this.h);
+      ctx.clearRect(dx, dy, src.width, src.height);
+      ctx.drawImage(src, dx, dy);
+    });
+    if (dx !== 0 || dy !== 0) {
+      // Shifted content invalidates history patch coordinates (same rule as
+      // resampling): clear rather than restore patches at wrong places.
+      this.entries.length = 0;
+      this.pos = 0;
+      this.emitHistory();
+    }
+    this.emitChange();
   }
 
   /**
@@ -2002,6 +2061,118 @@ export class PaintEngine {
     this.emitChange();
   }
 
+  // ---- Spot heal / content-aware fill ---------------------------------------
+  /** Shared tail: crop the padded region, heal `coverage`, bake + one entry. */
+  private healApply(
+    layerId: string,
+    coverage: Uint8ClampedArray,
+    rx: number,
+    ry: number,
+    rw: number,
+    rh: number,
+    label: string,
+  ) {
+    const l = this.layers.get(layerId);
+    if (!l) return;
+    const src = l.ctx.getImageData(rx, ry, rw, rh);
+    const healed = healRegion({ src, coverage });
+    l.ctx.putImageData(healed, rx, ry);
+    this.pushEntry(layerId, { x: rx, y: ry, w: rw, h: rh }, src, healed, label);
+    this.bumpPixel(layerId, { x: rx, y: ry, w: rw, h: rh });
+    this.emitChange();
+  }
+
+  /** Multiply a region-space coverage by the current selection's mask. */
+  private clipCoverageToSelection(
+    coverage: Uint8ClampedArray,
+    rx: number,
+    ry: number,
+    rw: number,
+    rh: number,
+    sel: Rect[],
+    selAngle: number,
+    selPivot: { x: number; y: number } | null,
+  ) {
+    const m = this.selectionMask(sel, selAngle, selPivot);
+    const md = m.getContext("2d")!.getImageData(rx, ry, rw, rh).data;
+    for (let i = 0; i < coverage.length; i++) coverage[i] = (coverage[i] * md[i * 4 + 3]) / 255;
+  }
+
+  /**
+   * Spot-heal the blob painted by the heal brush: `pts` (doc space) stamp soft
+   * discs into a coverage mask; the blob heals in one pass on release —
+   * texture from the best-matching surroundings, tone-matched seamlessly.
+   */
+  healSpots(
+    layerId: string,
+    pts: { x: number; y: number }[],
+    size: number,
+    hardness: number,
+    sel: Rect[] | null = null,
+    selAngle = 0,
+    selPivot: { x: number; y: number } | null = null,
+  ) {
+    if (!pts.length || !this.layers.has(layerId)) return;
+    const r = Math.max(1, size / 2);
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const p of pts) {
+      x0 = Math.min(x0, p.x - r);
+      y0 = Math.min(y0, p.y - r);
+      x1 = Math.max(x1, p.x + r);
+      y1 = Math.max(y1, p.y + r);
+    }
+    const pad = healPadding(x1 - x0, y1 - y0);
+    const rx = Math.max(0, Math.floor(x0 - pad));
+    const ry = Math.max(0, Math.floor(y0 - pad));
+    const rw = Math.min(this.w, Math.ceil(x1 + pad)) - rx;
+    const rh = Math.min(this.h, Math.ceil(y1 + pad)) - ry;
+    if (rw <= 0 || rh <= 0) return;
+    // Rasterize the blob (soft discs honouring hardness) into region space.
+    const cov = makeCanvas(rw, rh, true, "srgb");
+    const cctx = cov.ctx;
+    for (const p of pts) {
+      const cx = p.x - rx;
+      const cy = p.y - ry;
+      const g = cctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      g.addColorStop(Math.max(0, Math.min(1, hardness / 100)), "rgba(255,255,255,1)");
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      cctx.fillStyle = g;
+      cctx.beginPath();
+      cctx.arc(cx, cy, r, 0, Math.PI * 2);
+      cctx.fill();
+    }
+    const cd = cctx.getImageData(0, 0, rw, rh).data;
+    const coverage = new Uint8ClampedArray(rw * rh);
+    for (let i = 0; i < coverage.length; i++) coverage[i] = cd[i * 4 + 3];
+    if (sel && sel.length) this.clipCoverageToSelection(coverage, rx, ry, rw, rh, sel, selAngle, selPivot);
+    this.healApply(layerId, coverage, rx, ry, rw, rh, "Spot Heal");
+  }
+
+  /** Fill the selection with synthesized surrounding content (Edit menu). */
+  contentAwareFill(
+    layerId: string,
+    sel: Rect[],
+    selAngle = 0,
+    selPivot: { x: number; y: number } | null = null,
+  ) {
+    if (!sel.length || !this.layers.has(layerId)) return;
+    const b = this.boundsOf(sel);
+    if (!b) return;
+    const pad = healPadding(b.w, b.h);
+    const rx = Math.max(0, Math.floor(b.x - pad));
+    const ry = Math.max(0, Math.floor(b.y - pad));
+    const rw = Math.min(this.w, Math.ceil(b.x + b.w + pad)) - rx;
+    const rh = Math.min(this.h, Math.ceil(b.y + b.h + pad)) - ry;
+    if (rw <= 0 || rh <= 0) return;
+    const coverage = new Uint8ClampedArray(rw * rh);
+    coverage.fill(255);
+    this.clipCoverageToSelection(coverage, rx, ry, rw, rh, sel, selAngle, selPivot);
+    this.healApply(layerId, coverage, rx, ry, rw, rh, "Content-Aware Fill");
+  }
+
   /** Forget a layer's offscreen canvas + mask + cached render (after removal). */
   removeLayer(id: string) {
     this.layers.delete(id);
@@ -2215,13 +2386,13 @@ export class PaintEngine {
   }
 
   /** Replace a leaf layer's pixels with an image (used when loading a project). */
-  setLayerImage(id: string, source: CanvasImageSource) {
+  setLayerImage(id: string, source: CanvasImageSource, x = 0, y = 0) {
     this.wandSrc = null;
     const l = this.layer(id);
     l.ctx.globalAlpha = 1;
     l.ctx.globalCompositeOperation = "source-over";
     l.ctx.clearRect(0, 0, this.w, this.h);
-    l.ctx.drawImage(source, 0, 0);
+    l.ctx.drawImage(source, x, y);
     this.bumpPixel(id);
     this.emitChange();
   }
@@ -2358,6 +2529,18 @@ export class PaintEngine {
   // in effectiveKey, which parents fold into childrenSig — the parent's merge
   // invalidates, the child's intrinsic render is reused.
 
+  /** Memoized spec serialization — tree objects are immutable, and these are
+   *  hashed every composite frame (adjustment keys, tone LUT keys). */
+  private specHashMemo = new WeakMap<object, string>();
+  private specHash(spec: object): string {
+    let h = this.specHashMemo.get(spec);
+    if (h === undefined) {
+      h = JSON.stringify(spec);
+      this.specHashMemo.set(spec, h);
+    }
+    return h;
+  }
+
   /** Intrinsic dependency key of a leaf/group (pre-opacity/blend render). */
   private nodeKey(node: LayerNode): string {
     const mv = node.mask?.enabled ? (this.maskVersion.get(node.id) ?? 0) : "x";
@@ -2381,7 +2564,7 @@ export class PaintEngine {
     if (node.type === "adjustment") {
       // An adjustment member/child contributes its params + its own mask.
       const mv = node.mask?.enabled ? (this.maskVersion.get(node.id) ?? 0) : "x";
-      base = `A${fnv(JSON.stringify(node.adjustment))}|${mv}`;
+      base = `A${fnv(this.specHash(node.adjustment))}|${mv}`;
     } else {
       base = this.nodeKey(node);
     }
@@ -2398,7 +2581,7 @@ export class PaintEngine {
     let below = "";
     for (let i = idx + 1; i < siblings.length; i++) below += this.effectiveKey(siblings[i]) + ";";
     const mv = node.mask?.enabled ? (this.maskVersion.get(node.id) ?? 0) : "x";
-    return `ADJ${fnv(JSON.stringify(node.adjustment))}|${fnv(below)}|${mv}|${node.opacity}|${node.blend}|${this.cs}|${this.docEpoch}`;
+    return `ADJ${fnv(this.specHash(node.adjustment))}|${fnv(below)}|${mv}|${node.opacity}|${node.blend}|${this.cs}|${this.docEpoch}`;
   }
 
   /** Ids that must bypass the cache this frame: layers with a live session
@@ -2729,7 +2912,7 @@ export class PaintEngine {
 
   /** Build (and cache per spec) the LUTs for a Curves/Levels node. */
   private toneLUTs(id: string, spec: ToneAdjustment): ToneLUTs {
-    const key = JSON.stringify(spec);
+    const key = this.specHash(spec);
     const hit = this.toneCache.get(id);
     if (hit && hit.key === key) return hit.luts;
     const luts = spec.type === "levels" ? buildLevelsLUTs(spec) : buildCurvesLUTs(spec);
@@ -4549,6 +4732,142 @@ export class PaintEngine {
   }
 
   // ---- Blur Gallery (Effects) ----------------------------------------------
+  // Preview compute runs in a dedicated Worker when available (the kernel in
+  // filters.ts is pure), so slider drags never block the UI thread. Replies
+  // are session- and sequence-guarded: stale results are dropped, and nothing
+  // is ever applied after cancel/commit. Falls back to the sync path.
+  private blurWorker: Worker | null = null;
+  private blurWorkerBroken = false;
+  private blurSessionId = 0;
+  private blurRenderSeq = 0;
+  private blurPending = new Map<number, (applied: boolean) => void>();
+
+  private ensureBlurWorker(): Worker | null {
+    if (this.blurWorkerBroken) return null;
+    if (this.blurWorker) return this.blurWorker;
+    if (typeof Worker === "undefined") {
+      this.blurWorkerBroken = true;
+      return null;
+    }
+    try {
+      const w = new Worker(new URL("../workers/blurfx.worker.ts", import.meta.url), {
+        type: "module",
+      });
+      w.onmessage = (e) => this.onBlurWorkerMessage(e);
+      w.onerror = () => {
+        // Permanent sync fallback; release any awaiting previews.
+        this.blurWorkerBroken = true;
+        try {
+          w.terminate();
+        } catch {
+          /* ignore */
+        }
+        this.blurWorker = null;
+        for (const r of this.blurPending.values()) r(false);
+        this.blurPending.clear();
+      };
+      this.blurWorker = w;
+      return w;
+    } catch {
+      this.blurWorkerBroken = true;
+      return null;
+    }
+  }
+
+  private onBlurWorkerMessage(
+    e: MessageEvent<{
+      session: number;
+      seq: number;
+      results: { id: string; w: number; h: number; data: ArrayBuffer }[];
+    }>,
+  ) {
+    const { session, seq, results } = e.data;
+    const resolve = this.blurPending.get(seq);
+    this.blurPending.delete(seq);
+    // Stale session (cancelled/committed/new one) or superseded seq → drop.
+    if (session !== this.blurSessionId || !this.blurFx || seq !== this.blurRenderSeq) {
+      resolve?.(false);
+      return;
+    }
+    for (const r of results) {
+      if (!this.blurFx.ids.includes(r.id)) continue;
+      const bytes = new Uint8ClampedArray(r.data);
+      let img: ImageData;
+      try {
+        img = new ImageData(bytes, r.w, r.h, { colorSpace: this.cs });
+      } catch {
+        img = new ImageData(bytes, r.w, r.h);
+      }
+      this.layer(r.id).ctx.putImageData(img, 0, 0);
+      this.bumpPixel(r.id);
+    }
+    this.emitChange();
+    resolve?.(true);
+  }
+
+  /** Send the session's original pixels (+ selection mask) to the worker once. */
+  private blurWorkerInit() {
+    const fx = this.blurFx;
+    const w = fx ? this.ensureBlurWorker() : null;
+    if (!fx || !w) return;
+    this.blurSessionId++;
+    const layers: { id: string; w: number; h: number; data: ArrayBuffer }[] = [];
+    const transfers: ArrayBuffer[] = [];
+    for (const [id, img] of fx.orig) {
+      const copy = img.data.slice(); // keep the engine's own snapshot intact
+      layers.push({ id, w: img.width, h: img.height, data: copy.buffer });
+      transfers.push(copy.buffer);
+    }
+    let mask: ArrayBuffer | null = null;
+    if (fx.mask) {
+      const mc = fx.mask.slice();
+      mask = mc.buffer;
+      transfers.push(mc.buffer);
+    }
+    w.postMessage({ type: "init", session: this.blurSessionId, cs: this.cs, mask, layers }, transfers);
+  }
+
+  private blurWorkerEnd() {
+    this.blurWorker?.postMessage({ type: "end", session: this.blurSessionId });
+    this.blurSessionId++; // any in-flight replies become stale
+  }
+
+  /**
+   * Off-thread preview: resolves true when this render reached the layers,
+   * false when it was superseded/cancelled. Falls back to the synchronous
+   * path (and resolves true) when the worker is unavailable.
+   */
+  previewBlurFxAsync(
+    kind: string,
+    amount: number,
+    angle: number,
+    anchorX = 0.5,
+    anchorY = 0.5,
+    extra?: { band: number; feather: number; threshold: number },
+  ): Promise<boolean> {
+    if (!this.blurFx) return Promise.resolve(false);
+    const w = this.ensureBlurWorker();
+    if (!w) {
+      this.previewBlurFx(kind, amount, angle, anchorX, anchorY, extra);
+      return Promise.resolve(true);
+    }
+    const seq = ++this.blurRenderSeq;
+    return new Promise((resolve) => {
+      this.blurPending.set(seq, resolve);
+      w.postMessage({
+        type: "render",
+        session: this.blurSessionId,
+        seq,
+        kind,
+        amount,
+        angle,
+        ax: anchorX,
+        ay: anchorY,
+        extra: extra ?? { band: 20, feather: 30, threshold: 40 },
+      });
+    });
+  }
+
   /** Begin a blur-effect preview session over `ids` (clipped to `sel` if given). */
   beginBlurFx(
     ids: string[],
@@ -4572,6 +4891,7 @@ export class PaintEngine {
       mask = sa;
     }
     this.blurFx = { ids, orig, mask };
+    this.blurWorkerInit(); // ship the originals off-thread once per session
   }
 
   /**
@@ -4608,6 +4928,7 @@ export class PaintEngine {
     const after = new Map<string, ImageData>();
     for (const id of ids) after.set(id, this.layer(id).ctx.getImageData(0, 0, this.w, this.h));
     this.blurFx = null;
+    this.blurWorkerEnd();
     this.wandSrc = null;
     this.pushStructural(
       label,
@@ -4636,9 +4957,13 @@ export class PaintEngine {
     if (!fx) return;
     for (const id of fx.ids) {
       const o = fx.orig.get(id);
-      if (o) this.layer(id).ctx.putImageData(o, 0, 0);
+      if (o) {
+        this.layer(id).ctx.putImageData(o, 0, 0);
+        this.bumpPixel(id);
+      }
     }
     this.blurFx = null;
+    this.blurWorkerEnd();
     this.emitChange();
   }
 

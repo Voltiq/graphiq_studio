@@ -23,6 +23,9 @@ export interface Preferences {
   /** New-document default canvas size (px). */
   newDocWidth: number;
   newDocHeight: number;
+  /** Autosave interval in minutes (0 = off). Snapshots go to IndexedDB and are
+   *  offered for restore after an unclean exit. */
+  autosaveMinutes: number;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -34,6 +37,7 @@ export const DEFAULT_PREFS: Preferences = {
   newDocAsk: true,
   newDocWidth: 1920,
   newDocHeight: 1080,
+  autosaveMinutes: 2,
 };
 
 const KEY = "graphiq:preferences";

@@ -32,8 +32,8 @@ Legend: `[ ]` open · `[~]` partially exists (noted).
 - [ ] **Perspective crop** — crop with a quad, resampling to a rectangle.
 
 **P2**
-- [ ] **Healing brush / Spot heal / Patch** — texture-preserving repair (Poisson-ish blend or PatchMatch-lite). The single most-missed retouching family.
-- [ ] **Content-aware fill** for selections (same algorithm family as healing).
+- [x] **Spot heal brush** — done: paint a blob (`J`), it heals on release (auto source-patch search + diffusion membrane tone-match in `heal.ts`). Follow-ups: a sourced healing-brush variant (Alt-pick source like Clone) and a Patch tool (drag a selection to its source).
+- [x] **Content-aware fill** — done: Edit ▸ Content-Aware Fill (`Shift+F5`) synthesizes the selection from feather-blended source blocks + one membrane pass. Follow-up: PatchMatch-style iteration for very large/structured fills.
 - [ ] **Quick Selection / Object-ish select** — brush that grows a selection along edges (graph-cut/flood with edge cost; no ML needed for a solid v1).
 - [ ] **Mixer brush** (wet paint blending) with brush texture/dual-tip options.
 - [ ] **Custom shape tool** — user shape library (SVG path import → shape presets).
@@ -99,7 +99,7 @@ Legend: `[ ]` open · `[~]` partially exists (noted).
 
 ## 8. Engine & performance
 
-- [ ] **Web Worker / OffscreenCanvas offload** for heavy pure passes (smart filters, blur gallery, unsharp) — `filters.ts` is already pure/transferable; keep the UI thread at 60fps and show progress.
+- [~] **Web Worker offload** — **done for the Blur Gallery** (the heaviest interactive path): a dedicated module worker caches the session's originals once, per-tick param messages, sequence/session-guarded replies, sync fallback (`app/workers/blurfx.worker.ts` + `previewBlurFxAsync`). Remaining: smart-filter recompute inside `renderNode` (needs an async compositor step — pairs with the dirty-region item below) and one-shot ops (heal/content-aware fill).
 - [ ] **WebGL/WebGPU renderer** (P3) behind the render-graph seam: blend modes, effects and LUTs as shaders; Canvas2D stays as the always-correct fallback (A/B via `__gqRenderCache`-style toggle).
 - [ ] **Dirty-region recompute inside nodes** (Spec 06 deliberately stopped at full-node recompute; region-scoped adjustment read-backs are the next win).
 - [ ] **Tiled compositing** for very large documents (≥ 8k) so caches/evictions work per-tile.
@@ -177,6 +177,8 @@ Legend: `[ ]` open · `[~]` partially exists (noted).
 
 ### Suggested next three (highest value ÷ effort)
 
-1. ~~**§1 polish sweep**~~ — done 2026-07 (linked-mask move, blur/dodge on masks, Shortcuts window; the smart-filter mask graduated to its own task, see §1).
-2. **Healing brush + content-aware fill** (§2) — the biggest missing pro-retouching capability.
-3. **Worker offload for filters** (§8) — makes every existing heavy feature feel dramatically better on large documents, no visible UI change.
+Round 1 — all done 2026-07: ~~§1 polish sweep~~ · ~~healing brush + content-aware fill~~ · ~~worker offload (Blur Gallery)~~.
+
+1. ~~**Autosave & crash recovery**~~ — done 2026-07: IndexedDB snapshots on a Preferences interval (default 2 min, only when history moved), a `pagehide` heartbeat that detects unclean exits, a Restore/Discard prompt on boot after a crash, and a real save-state indicator in the status bar. Follow-up idea: multi-document snapshots (currently the active document).
+2. **Smart-filter stack mask** (§1) — the last non-destructive gap, now properly scoped as its own mini-spec: a second mask surface per layer (engine maps, `ActiveSurface` kind, history surface, serializer, panel thumbnail + paint routing).
+3. **Layer lock flags + panel search/filter** (§4) — transparency/pixels/position/all locks enforced in the engine's paint guards, plus a filter row (name/kind) in the Layers panel; the everyday-ergonomics gap that shows up on any document past ~40 layers. (Close runner-up if you'd rather have something flashier: the **command palette**, §11 — cheap to build over `menus.ts`.)

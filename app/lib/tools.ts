@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  Bandage,
   MousePointer2,
   Move,
   BoxSelect,
@@ -33,6 +34,7 @@ export type ToolId =
   | "pencil"
   | "eraser"
   | "clone"
+  | "heal"
   | "bucket"
   | "gradient"
   | "blur"
@@ -65,6 +67,7 @@ export const TOOL_GROUPS: Tool[][] = [
     { id: "pencil", name: "Pencil", icon: Pencil, shortcut: "N" },
     { id: "eraser", name: "Eraser", icon: Eraser, shortcut: "E" },
     { id: "clone", name: "Clone Stamp", icon: Stamp, shortcut: "S" },
+    { id: "heal", name: "Spot Heal", icon: Bandage, shortcut: "J" },
     { id: "bucket", name: "Paint Bucket", icon: PaintBucket, shortcut: "G" },
     { id: "gradient", name: "Gradient", icon: Blend, shortcut: "G" },
   ],
@@ -380,6 +383,20 @@ export interface DodgeSettings {
   /** Stroke stabilisation, 0–100. */
   smoothing: number;
 }
+
+/** Spot-heal brush settings. Paint a blob over a blemish; it heals on release
+ *  (texture from the best-matching surroundings, tone-matched seamlessly). */
+export interface HealSettings {
+  /** Brush diameter, px. */
+  size: number;
+  /** Brush edge softness, 0–100. */
+  hardness: number;
+}
+
+export const DEFAULT_HEAL: HealSettings = {
+  size: 40,
+  hardness: 65,
+};
 
 export const DEFAULT_DODGE: DodgeSettings = {
   size: 60,

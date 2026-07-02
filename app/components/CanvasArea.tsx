@@ -10,6 +10,7 @@ import type {
   CloneSettings,
   CropGrid,
   DodgeSettings,
+  HealSettings,
   MarqueeShape,
   TextSettings,
   GradientStop,
@@ -530,6 +531,7 @@ export default function CanvasArea({
   pen,
   shape,
   blur,
+  heal,
   clone,
   dodge,
   text,
@@ -616,6 +618,7 @@ export default function CanvasArea({
   shape: { kind: ShapeKind; strokeWidth: number; radius: number; fill: string; stroke: string };
   /** Blur (focus) brush settings. */
   blur: BlurSettings;
+  heal: HealSettings;
   /** Clone-stamp brush settings. */
   clone: CloneSettings;
   /** Dodge/Burn brush settings. */
@@ -799,6 +802,12 @@ export default function CanvasArea({
   const blurRef = useRef(blur);
   blurRef.current = blur;
   const blurHoverRef = useRef<{ x: number; y: number } | null>(null);
+  // Spot-heal brush: settings + hover ring + the blob's stroke points (doc
+  // space). The blob is shown as a veil while painting and heals on release.
+  const healRef = useRef(heal);
+  healRef.current = heal;
+  const healHoverRef = useRef<{ x: number; y: number } | null>(null);
+  const healPtsRef = useRef<{ x: number; y: number }[] | null>(null);
   // Dodge/Burn brush: latest settings + hover point (brush-ring cursor on overlay).
   const dodgeRef = useRef(dodge);
   dodgeRef.current = dodge;
@@ -948,6 +957,9 @@ export default function CanvasArea({
     baseOff?: { x: number; y: number };
   } | null>(null);
   const moveDeltaRef = useRef({ x: 0, y: 0 });
+  /** True while an arrow-key pixel nudge is in flight — the selection outline
+   *  then follows moveDeltaRef live, exactly like a pointer move-drag. */
+  const nudgeActiveRef = useRef(false);
   const resizeRef = useRef<{
     rects: Rect[];
     bbox: Rect;
@@ -1247,7 +1259,7 @@ export default function CanvasArea({
 
     // --- selection marching ants ---
     const m = marqueeRef.current;
-    const mv = moveRef.current;
+    const mv = moveRef.current || nudgeActiveRef.current;
     const rz = resizePreviewRef.current;
     let rects: Rect[];
     if (rz) {
@@ -1833,6 +1845,29 @@ export default function CanvasArea({
       drawCross(hx, hy, 4);
     }
 
+    if (toolRef.current === "heal") {
+      // The painted blob: a translucent veil so you see what will be healed.
+      const pts = healPtsRef.current;
+      const hr = Math.max(1, (healRef.current.size / 2) * s);
+      if (pts && pts.length) {
+        ctx.save();
+        ctx.beginPath();
+        for (const q of pts) {
+          ctx.moveTo(p.x + q.x * s + hr, p.y + q.y * s);
+          ctx.arc(p.x + q.x * s, p.y + q.y * s, hr, 0, Math.PI * 2);
+        }
+        ctx.fillStyle = "rgba(0,0,0,0.32)";
+        ctx.fill();
+        ctx.restore();
+      }
+      if (healHoverRef.current) {
+        const hx = p.x + healHoverRef.current.x * s;
+        const hy = p.y + healHoverRef.current.y * s;
+        drawRing(hx, hy, hr, healRef.current.hardness);
+        drawCross(hx, hy, 4);
+      }
+    }
+
     if (toolRef.current === "blur" && blurHoverRef.current) {
       const b = blurRef.current;
       const hx = p.x + blurHoverRef.current.x * s;
@@ -1935,6 +1970,7 @@ export default function CanvasArea({
       (toolRef.current === "crop" && cropBoxRef.current) ||
       ((toolRef.current === "brush" || toolRef.current === "pencil" || toolRef.current === "eraser") &&
         paintHoverRef.current) ||
+      (toolRef.current === "heal" && (healHoverRef.current || healPtsRef.current)) ||
       (toolRef.current === "blur" && blurHoverRef.current) ||
       (toolRef.current === "dodge" && dodgeHoverRef.current) ||
       (toolRef.current === "clone" && cloneHoverRef.current) ||
@@ -2417,6 +2453,8 @@ export default function CanvasArea({
         engine.beginBlurFx(ids, sel, selAngle, selPivot),
       previewBlurFx: (kind, amount, angle, anchorX, anchorY, extra) =>
         engine.previewBlurFx(kind, amount, angle, anchorX, anchorY, extra),
+      previewBlurFxAsync: (kind, amount, angle, anchorX, anchorY, extra) =>
+        engine.previewBlurFxAsync(kind, amount, angle, anchorX, anchorY, extra),
       commitBlurFx: (label) => engine.commitBlurFx(label),
       cancelBlurFx: () => engine.cancelBlurFx(),
       beginBlur: (layerId, blur, x, y, clip, clipAngle, clipPivot) =>
@@ -2447,6 +2485,9 @@ export default function CanvasArea({
       setActiveSurface: (id, surface) => engine.setActiveSurface(id, surface),
       getActiveSurface: (id) => engine.getActiveSurface(id),
       applySmartFilters: (layerId, filters, side) => engine.applySmartFilters(layerId, filters, side),
+      contentAwareFill: (layerId, sel, selAngle, selPivot) =>
+        engine.contentAwareFill(layerId, sel, selAngle, selPivot),
+      resizeCanvasAnchored: (w, h, dx, dy, ids) => engine.resizeCanvasAnchored(w, h, dx, dy, ids),
       setRenderCacheEnabled: (on) => engine.setRenderCacheEnabled(on),
       renderCacheStats: () => engine.renderCacheStats(),
     };
@@ -3067,6 +3108,8 @@ export default function CanvasArea({
   // last one, so holding a key is smooth and a burst lands as ONE undo step.
   const activeLayerIdRef = useRef(activeLayerId);
   activeLayerIdRef.current = activeLayerId;
+  const moveModeRef = useRef(moveMode);
+  moveModeRef.current = moveMode;
   const selHandlersRef = useRef({ onSelectionChange, onSelectionRects, onSelectionPivot });
   selHandlersRef.current = { onSelectionChange, onSelectionRects, onSelectionPivot };
   const nudgeRef = useRef<{
@@ -3085,6 +3128,8 @@ export default function CanvasArea({
     const d = { x: n.dx, y: n.dy };
     const wasFloat = n.float;
     nudgeRef.current = { active: false, float: false, baseOff: null, dx: 0, dy: 0, timer: 0 };
+    nudgeActiveRef.current = false;
+    moveDeltaRef.current = { x: 0, y: 0 }; // the real selection shift takes over below
     if (!wasFloat) engine.endMove(); // bake + one history entry (a float commits later)
     // The outline follows the moved pixels, exactly like a pointer move-drag.
     const sel = selectionRef.current;
@@ -3124,14 +3169,18 @@ export default function CanvasArea({
       const curTool = toolRef.current;
       const sel = selectionRef.current;
       const selTool = curTool === "select" || curTool === "lasso" || curTool === "wand";
+      // The Move tool honours its own "Move: pixels / selection" option — with
+      // "selection" the arrows move the outline only, exactly like dragging.
+      const outlineOnly = selTool || (curTool === "move" && moveModeRef.current === "selection");
       if (!(curTool === "move" || (selTool && sel.length))) return;
+      if (outlineOnly && !sel.length) return; // no outline to nudge
       e.preventDefault();
       const step = e.ctrlKey ? 10 : 1;
       const dx = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
       const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
 
-      if (selTool) {
-        // Selection tools nudge the OUTLINE only — immediate, per press.
+      if (outlineOnly) {
+        // Selection tools / Move-in-selection-mode nudge the OUTLINE only.
         const moved = sel.map((r) => ({ ...r, x: r.x + dx, y: r.y + dy }));
         const h = selHandlersRef.current;
         if (selAngleRef.current !== 0) {
@@ -3166,11 +3215,15 @@ export default function CanvasArea({
         n.active = true;
         n.dx = 0;
         n.dy = 0;
+        nudgeActiveRef.current = true;
       }
       n.dx += dx;
       n.dy += dy;
       if (n.float && n.baseOff) engine.setFloatOffset(n.baseOff.x + n.dx, n.baseOff.y + n.dy);
       else engine.moveTo(n.dx, n.dy);
+      // The ants outline follows the moving pixels live (same as a drag).
+      moveDeltaRef.current = { x: n.dx, y: n.dy };
+      ensureAnts();
       window.clearTimeout(n.timer);
       n.timer = window.setTimeout(commitNudge, 350);
     };
@@ -3470,6 +3523,19 @@ export default function CanvasArea({
         tool === "eraser" ? "Erase" : tool === "pencil" ? "Pencil" : "Brush",
       );
     }
+    if (tool === "heal") {
+      if (!activeLayerId) return; // nothing to heal on an empty doc
+      const healNode = findNode(layers, activeLayerId);
+      if (!healNode || healNode.type !== "layer") return; // pixel leaves only
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      const p = toDoc(e);
+      healPtsRef.current = [{ x: p.x, y: p.y }];
+      healHoverRef.current = { x: p.x, y: p.y };
+      ensureAnts();
+      return;
+    }
     if (tool === "blur") {
       if (!activeLayerId) return; // nothing to soften on an empty doc
       if (engine.isFloating) engine.commitFloat();
@@ -3593,6 +3659,18 @@ export default function CanvasArea({
     // Brush / pencil / eraser: track the pointer for the brush-ring cursor.
     if (toolRef.current === "brush" || toolRef.current === "pencil" || toolRef.current === "eraser") {
       paintHoverRef.current = { x: cur.x, y: cur.y };
+      ensureAnts();
+    }
+    // Spot heal: ring cursor + grow the blob while the pointer is down.
+    if (toolRef.current === "heal") {
+      healHoverRef.current = { x: cur.x, y: cur.y };
+      const pts = healPtsRef.current;
+      if (pts) {
+        const last = pts[pts.length - 1];
+        if (Math.hypot(cur.x - last.x, cur.y - last.y) >= Math.max(2, healRef.current.size / 6)) {
+          pts.push({ x: cur.x, y: cur.y });
+        }
+      }
       ensureAnts();
     }
     // Blur: track the pointer so the brush-ring cursor follows it (drawn on the overlay).
@@ -4282,6 +4360,23 @@ export default function CanvasArea({
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       return;
     }
+    if (healPtsRef.current) {
+      // Release heals the whole blob in one pass (one history entry).
+      const pts = healPtsRef.current;
+      healPtsRef.current = null;
+      if (activeLayerId && pts.length) {
+        engine.healSpots(
+          activeLayerId,
+          pts,
+          healRef.current.size,
+          healRef.current.hardness,
+          selection.length ? selection : null,
+          selAngleRef.current,
+          selPivotRef.current,
+        );
+      }
+      ensureAnts();
+    }
     if (blurringRef.current) {
       engine.endBlur();
       blurringRef.current = false;
@@ -4478,6 +4573,7 @@ export default function CanvasArea({
                         : tool === "blur" ||
                             tool === "clone" ||
                             tool === "dodge" ||
+                            tool === "heal" ||
                             tool === "brush" ||
                             tool === "pencil" ||
                             tool === "eraser"
@@ -4532,6 +4628,10 @@ export default function CanvasArea({
                 }
                 if (!blurringRef.current) {
                   blurHoverRef.current = null;
+                  ensureAnts();
+                }
+                if (!healPtsRef.current) {
+                  healHoverRef.current = null;
                   ensureAnts();
                 }
                 if (!dodgingRef.current) {

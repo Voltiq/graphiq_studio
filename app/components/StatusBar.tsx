@@ -1,11 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BoxSelect, Check, MousePointer2, Wifi } from "lucide-react";
+import { BoxSelect, Check, CircleDashed, MousePointer2 } from "lucide-react";
 import styles from "./StatusBar.module.scss";
 import { getTool, type ToolId } from "../lib/tools";
 import { parseColor, swatchBg, toHex6 } from "../lib/color";
 import type { Rect } from "../lib/view";
+
+/** Photoshop-style document sizes: flattened / all layers, from real dims. */
+function fmtBytes(n: number): string {
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))}K`;
+  return `${(n / (1024 * 1024)).toFixed(1)}M`;
+}
 
 type CursorPt = { x: number; y: number } | null;
 
@@ -41,6 +47,9 @@ export default function StatusBar({
   foreground,
   width,
   height,
+  colorSpace,
+  layerCount,
+  saveState,
   selection,
   subscribeCursor,
 }: {
@@ -50,6 +59,9 @@ export default function StatusBar({
   foreground: string;
   width: number;
   height: number;
+  colorSpace: PredefinedColorSpace;
+  layerCount: number;
+  saveState: { label: string; ok: boolean };
   selection: Rect[];
   subscribeCursor: (fn: (p: CursorPt) => void) => () => void;
 }) {
@@ -83,9 +95,7 @@ export default function StatusBar({
           {width} × {height} px
         </span>
         <span className={styles.sep}>|</span>
-        <span>RGB / 8-bit</span>
-        <span className={styles.sep}>|</span>
-        <span className={styles.muted}>240 DPI</span>
+        <span>{colorSpace === "display-p3" ? "Display P3" : "sRGB"} / 8-bit</span>
       </div>
 
       <div className={styles.center}>
@@ -110,11 +120,16 @@ export default function StatusBar({
       </div>
 
       <div className={styles.right}>
-        <span className={styles.saved}>
-          <Check size={12} /> Saved
+        <span className={saveState.ok ? styles.saved : styles.muted} title="Save state (autosave in Preferences)">
+          {saveState.ok ? <Check size={12} /> : <CircleDashed size={11} />} {saveState.label}
         </span>
         <span className={styles.sep}>|</span>
-        <span className={styles.muted}>Doc 8.2M / 24.6M</span>
+        <span
+          className={styles.muted}
+          title="Document size: flattened / all layers (uncompressed, in memory)"
+        >
+          Doc {fmtBytes(width * height * 4)} / {fmtBytes(Math.max(1, layerCount) * width * height * 4)}
+        </span>
         <span className={styles.sep}>|</span>
         <div className={styles.zoom}>
           <input
@@ -127,8 +142,6 @@ export default function StatusBar({
           />
           <span className={styles.mono}>{zoom}%</span>
         </div>
-        <span className={styles.sep}>|</span>
-        <Wifi size={13} className={styles.muted} />
       </div>
     </footer>
   );

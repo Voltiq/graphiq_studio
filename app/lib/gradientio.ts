@@ -13,7 +13,9 @@ const LEGACY_PRESETS_KEY = "aperture:gradient-presets"; // pre-rebrand fallback
 export const FX_GRADIENT_PRESETS_KEY = "graphiq:gradient-presets-fx";
 
 /** Gradient preset file extension. */
-export const GRADIENT_EXT = "agrad";
+export const GRADIENT_EXT = "ggrad";
+/** Pre-rename extension — old files still import. */
+export const LEGACY_GRADIENT_EXT = "agrad";
 
 export function loadSavedGradients(key: string = GRADIENT_PRESETS_KEY): GradientPreset[] {
   if (typeof window === "undefined") return [];
@@ -144,7 +146,7 @@ export async function importGradientFiles(): Promise<GradientPreset[]> {
         types: [
           {
             description: "Graphiq Gradients",
-            accept: { "application/json": [`.${GRADIENT_EXT}`, ".json"] },
+            accept: { "application/json": [`.${GRADIENT_EXT}`, `.${LEGACY_GRADIENT_EXT}`, ".json"] },
           },
         ],
       });
@@ -159,7 +161,7 @@ export async function importGradientFiles(): Promise<GradientPreset[]> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = `.${GRADIENT_EXT},.json,application/json`;
+    input.accept = `.${GRADIENT_EXT},.${LEGACY_GRADIENT_EXT},.json,application/json`;
     input.multiple = true;
     input.onchange = async () => {
       const out: GradientPreset[] = [];

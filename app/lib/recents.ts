@@ -1,4 +1,4 @@
-// Recent-files store. Saved/opened projects are remembered in IndexedDB either
+﻿// Recent-files store. Saved/opened projects are remembered in IndexedDB either
 // as a File System Access handle (re-openable from disk on supporting browsers)
 // or, as a fallback, the project content itself.
 
@@ -154,7 +154,7 @@ async function readFrom(name: string, id: string): Promise<string | null> {
   return await (payload as Blob).text();
 }
 
-/** Read a recent project's `.aproj` text, or null if unavailable / permission denied. */
+/** Read a recent project's `.gproj` text, or null if unavailable / permission denied. */
 export async function readRecent(id: string): Promise<string | null> {
   if (!supported()) return null;
   try {

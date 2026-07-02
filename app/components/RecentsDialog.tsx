@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState } from "react";
 import { Clock, FileText, X } from "lucide-react";
@@ -83,7 +83,7 @@ export default function RecentsDialog({
             <p style={{ fontSize: 12.5, color: "var(--text-3)", margin: 0 }}>Loading…</p>
           ) : items.length === 0 ? (
             <p style={{ fontSize: 12.5, color: "var(--text-3)", margin: 0 }}>
-              No recent projects yet. Saved and opened <strong>.aproj</strong> files show up here.
+              No recent projects yet. Saved and opened <strong>.gproj</strong> files show up here.
             </p>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

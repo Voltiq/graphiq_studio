@@ -2,7 +2,9 @@ import type { LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers
 import type { Rect } from "./view";
 
 /** Graphiq project file extension (keeps layers, groups & settings; lossless). */
-export const PROJECT_EXT = "aproj";
+export const PROJECT_EXT = "gproj";
+/** Pre-rename extension — old files still open everywhere. */
+export const LEGACY_PROJECT_EXT = "aproj";
 
 type SerializedLeaf = LayerLeaf & { data: string | null; maskImage?: string | null };
 type SerializedGroup = Omit<LayerGroup, "children"> & {

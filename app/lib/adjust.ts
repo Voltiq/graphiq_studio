@@ -71,9 +71,12 @@ export function filterToAdjust(name: string): Adjustments {
   return { ...DEFAULT_ADJUST, ...(FILTER_PRESETS[name] ?? {}) };
 }
 
-// ---- Filter preset files (.aifp = one preset, .aifpack = a bundle) ----
-export const FILTER_EXT = "aifp";
-export const FILTER_PACK_EXT = "aifpack";
+// ---- Filter preset files (.gifp = one preset, .gifpack = a bundle) ----
+export const FILTER_EXT = "gifp";
+export const FILTER_PACK_EXT = "gifpack";
+// Pre-rename extensions — old files still import.
+export const LEGACY_FILTER_EXT = "aifp";
+export const LEGACY_FILTER_PACK_EXT = "aifpack";
 const ADJUST_KEYS = Object.keys(DEFAULT_ADJUST) as (keyof Adjustments)[];
 
 /** Clamp arbitrary parsed data into a valid Adjustments (unknown keys dropped). */
