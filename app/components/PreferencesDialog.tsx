@@ -166,6 +166,47 @@ export default function PreferencesDialog({
             {tab === "editing" && (
               <>
                 <section className={styles.section}>
+                  <span className={styles.groupLabel}>New documents</span>
+                  <div className={styles.row}>
+                    <div className={styles.rowText}>
+                      <strong>Ask for a size</strong>
+                      <em>Show the New Document dialog; off = create with the defaults below</em>
+                    </div>
+                    <Toggle label="" checked={prefs.newDocAsk} onChange={(v) => onChange({ newDocAsk: v })} />
+                  </div>
+                  <div className={styles.row}>
+                    <div className={styles.rowText}>
+                      <strong>Default size</strong>
+                      <em>Width × height in pixels</em>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <div className={styles.searchBox} style={{ width: 76, padding: "0 8px" }}>
+                        <input
+                          type="number"
+                          min={1}
+                          max={8192}
+                          value={prefs.newDocWidth}
+                          onChange={(e) =>
+                            onChange({ newDocWidth: Math.max(1, Math.min(8192, Math.round(Number(e.target.value)) || 1)) })
+                          }
+                        />
+                      </div>
+                      <span style={{ color: "var(--text-3)", fontSize: 12 }}>×</span>
+                      <div className={styles.searchBox} style={{ width: 76, padding: "0 8px" }}>
+                        <input
+                          type="number"
+                          min={1}
+                          max={8192}
+                          value={prefs.newDocHeight}
+                          onChange={(e) =>
+                            onChange({ newDocHeight: Math.max(1, Math.min(8192, Math.round(Number(e.target.value)) || 1)) })
+                          }
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </section>
+                <section className={styles.section}>
                   <span className={styles.groupLabel}>Gradients</span>
                   <div className={styles.row}>
                     <div className={styles.rowText}>

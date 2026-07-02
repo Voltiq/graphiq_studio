@@ -18,6 +18,11 @@ export interface Preferences {
   sharedGradients: boolean;
   /** Max history rows shown before the History panel becomes scrollable. */
   maxHistory: number;
+  /** New document: show the size dialog (false ⇒ create with the defaults). */
+  newDocAsk: boolean;
+  /** New-document default canvas size (px). */
+  newDocWidth: number;
+  newDocHeight: number;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -26,6 +31,9 @@ export const DEFAULT_PREFS: Preferences = {
   gradientSnap: true,
   sharedGradients: true,
   maxHistory: 25,
+  newDocAsk: true,
+  newDocWidth: 1920,
+  newDocHeight: 1080,
 };
 
 const KEY = "graphiq:preferences";

@@ -120,6 +120,7 @@ import { DEFAULT_FX, type FxKey, type LayerEffects } from "../lib/effects";
 import { defaultFilter, filterLabel, type FilterType, type SmartFilter } from "../lib/filters";
 import SmartFilterDialog from "./SmartFilterDialog";
 import ShortcutsDialog from "./ShortcutsDialog";
+import NewDocDialog from "./NewDocDialog";
 import {
   autoLevels,
   defaultCurves,
@@ -2042,12 +2043,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   // New canvas — sized to the clipboard image when there is one, else the default.
-  const createDoc = async () => {
-    const size = await clipboardImageSize();
+  const createDoc = (opts?: { name?: string; width?: number; height?: number }) => {
     const seq = (seqRef.current += 1);
-    const d = makeDoc(seq, size ?? undefined);
+    const p = prefsRef.current;
+    const d = makeDoc(seq, { w: opts?.width ?? p.newDocWidth, h: opts?.height ?? p.newDocHeight });
+    if (opts?.name) d.name = opts.name;
     setDocs((ds) => [...ds, d]);
     setActiveId(d.id);
+    setNewDocOpen(false);
+  };
+  // File ▸ New / the tab-strip "+": dialog by default, instant with the stored
+  // defaults when the "ask" preference is off.
+  const [newDocOpen, setNewDocOpen] = useState(false);
+  const requestNewDoc = () => {
+    if (prefsRef.current.newDocAsk) setNewDocOpen(true);
+    else createDoc();
   };
 
   const closeDoc = (id: string) => {
@@ -2687,7 +2697,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "select-inverse") invertSelection();
     else if (actionId === "select-feather") setSelectModify("feather");
     else if (actionId === "select-grow") setSelectModify("grow");
-    else if (actionId === "new-doc") createDoc();
+    else if (actionId === "new-doc") requestNewDoc();
     else if (actionId === "open") openProject();
     else if (actionId === "open-recent") setRecentsOpen(true);
     else if (actionId === "save") saveProject();
@@ -2990,7 +3000,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         // preventDefault it, so Ctrl+Alt+N is the reliable "new canvas". The
         // plain Ctrl+N branch still works where it's allowed (e.g. PWA window).
         e.preventDefault();
-        createDoc();
+        requestNewDoc();
       } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === "s") {
         e.preventDefault();
         setSaveAsOpen(true);
@@ -3230,7 +3240,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             setActiveId(id);
           }}
           onCloseDoc={closeDoc}
-          onNewDoc={createDoc}
+          onNewDoc={requestNewDoc}
           onRenameDoc={renameDoc}
           zoom={zoom}
           onZoomChange={setZoom}
@@ -3392,6 +3402,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       )}
 
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+
+      {newDocOpen && (
+        <NewDocDialog
+          defaultName={`Untitled-${seqRef.current + 1}`}
+          defaultWidth={prefs.newDocWidth}
+          defaultHeight={prefs.newDocHeight}
+          onCreate={createDoc}
+          onClose={() => setNewDocOpen(false)}
+        />
+      )}
 
       {prefsOpen && (
         <PreferencesDialog
