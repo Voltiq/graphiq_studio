@@ -149,7 +149,7 @@ export const MENUS: Menu[] = [
   {
     label: "Settings",
     items: [
-      { label: "Preferences…", shortcut: "Ctrl+K", action: "preferences" },
+      { label: "Preferences…", shortcut: "Ctrl+,", action: "preferences" },
       { label: "Color management…", action: "color-manage", separatorAfter: true },
       { label: "Keyboard shortcuts…", action: "shortcuts", separatorAfter: true },
       { label: "Performance" },

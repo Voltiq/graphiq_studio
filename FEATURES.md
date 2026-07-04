@@ -107,7 +107,7 @@ These five systems are the heart of the editor. They are all **composite-time**:
 - **File/export:** Save/Open **`.gproj`**; **Export As** PNG · JPEG · WebP · AVIF (quality + alpha, feature-detected); **Print** `Ctrl+P`; **Recents** list; EXIF **Metadata** panel.
 - **Panels (Window menu):** Color · Adjustments · Layers · History · Navigator · Channels · Metadata, in a right dock; Reset Workspace.
 - **View:** Zoom In/Out, **Fit** `Ctrl+0`, **100%** `Ctrl+1`, Rulers, **Pixel Grid** `Ctrl+'`, Snap, Navigator overview.
-- **UI/UX:** Atlassian design language (DESIGN.md / DESIGN.dark.md): neutral surfaces on an 8px rhythm, brand-blue selected states, semantic status colours, four-plane elevation (no blur/glow), Atlassian Sans/Mono, sentence-case text, light + dark themes (no accent-colour options); **Preferences** `Ctrl+K`; non-blocking toasts; inverted tooltips; full menu bar.
+- **UI/UX:** Atlassian palette (DESIGN.md / DESIGN.dark.md) styled after the Magiq Studio reference UI: neutral surfaces on an 8px rhythm, SOLID-accent active states (tools, tabs, menu hover), container wells for inputs, white-thumb sliders, Atlassian Sans/Mono, sentence-case text; **light / dark / match-system** themes plus **six accent colours** (Preferences → Appearance: theme preview cards, accent swatches, a "Reduce motion" toggle); command search focused with `Ctrl+K`; **Preferences** `Ctrl+,`; non-blocking toasts; inverted tooltips; full menu bar.
 
 ---
 
@@ -270,7 +270,7 @@ Honest list of what is **partial, deferred, or absent**:
 | **Clipping Mask (create/release)** | **`Ctrl+Alt+G`** |
 | Cycle marquee shape · constrain 1:1 | `Shift+M` · hold `Shift` |
 | Fit / 100% / Pixel Grid | `Ctrl+0` / `Ctrl+1` / `Ctrl+'` |
-| Preferences | `Ctrl+K` |
+| Preferences | `Ctrl+,` |
 | Tools | `V M L W C I B N E S G R O T P U H Z` |
 
 *Snapshot of the current implementation; the [limitations](#part-3--known-limitations--not-yet-implemented) above are the authoritative list of what is partial or absent.*

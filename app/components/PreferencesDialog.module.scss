@@ -103,7 +103,7 @@
   flex-direction: column;
   gap: 2px;
   border-right: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-2) 45%, transparent);
+  background: var(--bg); /* sunken rail, as in Magiq */
   overflow-y: auto;
 }
 
@@ -457,5 +457,191 @@
   &:hover {
     background: var(--accent-2);
     border-color: transparent;
+  }
+}
+
+/* ------------------ Appearance (Magiq-style theme selection) --------------- */
+.paneIntro {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-2);
+  margin-bottom: var(--sp-2);
+}
+
+.themeCards {
+  display: flex;
+  gap: var(--sp-3);
+}
+
+/* One selectable theme card: a fixed-palette mini mock UI + radio + label.
+   The previews are intentionally hard-coded to the DESIGN.md light/dark
+   values — each card must show ITS theme, not the current one. */
+.themeCard {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.themePreview {
+  position: relative;
+  display: block;
+  height: 84px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  padding: 9px;
+  overflow: hidden;
+  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+
+  &[data-mode="light"] {
+    background: #ffffff;
+    .pBar { background: #ebecf0; }
+    .pDot { background: #1868db; }
+  }
+
+  &[data-mode="dark"] {
+    background: #1f1f21;
+    .pBar { background: #303134; }
+    .pDot { background: #669df1; }
+  }
+
+  &[data-mode="system"] {
+    background: linear-gradient(135deg, #ffffff 0 50%, #1f1f21 50% 100%);
+    .pBar { background: #88888833; }
+    .pDot { background: #669df1; }
+  }
+
+  .themeCard[data-selected="true"] & {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+
+  .themeCard:hover & {
+    border-color: var(--border-strong);
+  }
+
+  .themeCard[data-selected="true"]:hover & {
+    border-color: var(--accent);
+  }
+}
+
+.pBar {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  margin-bottom: 5px;
+}
+
+.pDot {
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  width: 22px;
+  height: 9px;
+  border-radius: var(--r-pill);
+}
+
+.themeMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: 9px;
+  font-size: 13px;
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.themeRadio {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--input);
+  display: grid;
+  place-items: center;
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+
+  &::after {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-contrast);
+    transform: scale(0);
+    transition: transform var(--t-fast) var(--ease);
+  }
+
+  &[data-on="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+
+    &::after {
+      transform: scale(1);
+    }
+  }
+}
+
+/* Accent swatch circles: selected = white check + a ring offset from the dot. */
+.accentRow {
+  display: flex;
+  gap: 15px;
+}
+
+.accentDot {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  box-shadow: 0 0 0 1px var(--border);
+  transition: box-shadow var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+
+  &:hover {
+    transform: scale(1.08);
+  }
+
+  &[data-selected="true"] {
+    box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+  }
+}
+
+/* Bordered "Reduce motion" row with a Magiq switch (32×16, white thumb). */
+.motionCard {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+
+.switch {
+  position: relative;
+  width: 32px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  transition: background var(--t-med) var(--ease);
+
+  &[data-on="true"] {
+    background: var(--success-bold);
+  }
+}
+
+.switchThumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  transition: left var(--t-med) var(--ease);
+
+  .switch[data-on="true"] & {
+    left: 18px;
   }
 }

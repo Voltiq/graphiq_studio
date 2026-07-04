@@ -50,6 +50,15 @@
   background: var(--wash);
 }
 
+/* The Magiq accent dot — the one place the brand carries the accent. */
+.brandDot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 /* ------------------------------- Menu bar --------------------------------- */
 .menubar {
   display: flex;
@@ -62,9 +71,10 @@
 }
 
 .menuButton {
-  font-size: 14px;
-  color: color-mix(in srgb, var(--text) 78%, transparent);
-  padding: 5px 10px;
+  font-size: 13px;
+  font-weight: var(--weight-medium);
+  color: var(--text-2);
+  padding: 6px 11px;
   border-radius: var(--r-md);
   transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 
@@ -79,16 +89,16 @@
   }
 }
 
-/* Transient overlay: surface-overlay + shadow-overlay, radius-large. */
+/* Magiq menu: overlay surface + shadow-overlay, tight radius, 6px padding. */
 .dropdown {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 8px);
   left: 0;
-  min-width: 236px;
-  padding: 5px;
+  min-width: 240px;
+  padding: 6px;
   background: var(--surface-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-lg);
+  border-radius: var(--r-md);
   box-shadow: var(--shadow);
   z-index: 80;
   animation: dropIn var(--t-short) var(--ease);
@@ -106,25 +116,38 @@
   }
 }
 
+/* Magiq menu rows: hovering paints the row SOLID accent with inverse text —
+   the check, label and shortcut all flip together. */
 .menuItem {
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-5);
-  font-size: 14px;
-  padding: 6px 9px 6px 7px;
+  font-size: 13px;
+  padding: 6px 11px 6px 7px;
   border-radius: var(--r-md);
-  color: color-mix(in srgb, var(--text) 92%, transparent);
+  color: var(--text);
   transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 
   &:hover:not(:disabled) {
-    background: var(--wash);
-    color: var(--text);
+    background: var(--accent);
+    color: var(--accent-contrast);
+
+    .menuCheck {
+      color: var(--accent-contrast);
+    }
+
+    .shortcut {
+      color: var(--accent-contrast);
+      border-color: transparent;
+      background: transparent;
+      opacity: 0.85;
+    }
   }
 
   &:active:not(:disabled) {
-    background: var(--wash-2);
+    background: var(--accent-2);
   }
 
   &:disabled {
@@ -149,18 +172,18 @@
   }
 }
 
-/* Shortcut as a quiet key chip */
+/* Shortcut in quiet mono, Magiq-style (no chip chrome in menu rows). */
 .shortcut {
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  color: var(--text-2);
-  padding: 3.5px 6px;
-  border-radius: var(--r-xs);
-  border: 1px solid var(--border);
-  background: var(--wash);
+  color: var(--text-3);
+  padding: 3px 5px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  transition: color var(--t-fast) var(--ease);
 }
 
 .menuSep {
@@ -273,27 +296,26 @@
   color: var(--text-3);
 }
 
-/* Search widens when it has focus — space is given when it's wanted. */
+/* Magiq search: a container-filled field with a quiet Ctrl+K key chip.
+   Widens when it has focus — space is given when it's wanted. */
 .search {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   height: 32px;
   padding: 0 var(--sp-3);
-  border-radius: var(--r-pill);
-  background: var(--wash);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text-2);
-  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease),
-    box-shadow var(--t-fast) var(--ease);
+  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
 
   &:focus-within {
     border-color: var(--focus-color);
-    background: var(--surface-2);
   }
 
   input {
-    width: 150px;
+    width: 132px;
     background: none;
     border: none;
     outline: none;
@@ -302,7 +324,7 @@
     transition: width var(--t-slow) var(--ease);
 
     &:focus {
-      width: 210px;
+      width: 196px;
     }
 
     &::placeholder {
@@ -311,44 +333,15 @@
   }
 }
 
-/* ------------------------------ Theme toggle ------------------------------ */
-.themeToggle {
-  display: grid;
-  place-items: center;
-  padding: 2px;
-  border-radius: var(--r-pill);
+.searchKbd {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--border-strong);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 2px 5px;
 }
 
-/* ADS toggle: neutral-bold track, inverse thumb; the thumb travel animates as
-   a state transition. Icons in the thumb keep the state legible beyond colour. */
-.themeTrack {
-  position: relative;
-  width: 40px;
-  height: 20px;
-  border-radius: var(--r-pill);
-  background: var(--text);
-  transition: background var(--t-med) var(--ease);
-
-  &:hover {
-    background: var(--text-2);
-  }
-}
-
-.themeThumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  color: var(--text);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-  transition: transform var(--t-med) var(--ease-pop);
-}
-
-.themeTrack[data-dark="true"] .themeThumb {
-  transform: translateX(20px);
-}
+/* The theme quick-toggle renders as a plain .iconBtn (Magiq: sun/moon). */

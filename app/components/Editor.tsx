@@ -2287,6 +2287,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefs.autosaveMinutes]);
 
+  // "Reduce motion" preference -> data-motion on <html> (globals.scss kills
+  // animations/transitions under [data-motion="off"], like the OS setting).
+  useEffect(() => {
+    document.documentElement.setAttribute("data-motion", prefs.reduceMotion ? "off" : "on");
+  }, [prefs.reduceMotion]);
+
   const markSaved = (label: string) => {
     autosaveDirtyRef.current = false;
     setSaveState({ label, ok: true });
@@ -3250,7 +3256,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       } else if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "F5") {
         e.preventDefault();
         contentAwareFillOp();
-      } else if (e.ctrlKey && !e.altKey && !e.shiftKey && key === "k") {
+      } else if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === ",") {
+        // Ctrl+K now focuses the command search (TopBar owns that listener).
         e.preventDefault();
         setPrefsOpen(true);
       } else if (e.ctrlKey && !e.shiftKey && key === "n") {
@@ -3408,6 +3415,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       <TopBar
         onMenuAction={handleMenuAction}
         onSelectTool={setTool}
+        initialTheme={initialTheme}
         onUndo={doUndo}
         onRedo={doRedo}
         canUndo={history.index > 0}

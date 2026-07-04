@@ -226,10 +226,11 @@
     color: var(--text);
   }
 
+  /* Magiq: active segment = solid accent. */
   &[data-active="true"] {
-    color: var(--text);
-    background: var(--surface-3);
-    box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--border);
+    color: var(--accent-contrast);
+    background: var(--accent);
+    font-weight: var(--weight-semibold);
   }
 }
 

@@ -69,8 +69,8 @@
     to right,
     var(--accent) 0%,
     var(--accent) var(--pct, 50%),
-    var(--input) var(--pct, 50%),
-    var(--input) 100%
+    var(--track) var(--pct, 50%),
+    var(--track) 100%
   );
   cursor: pointer;
   outline: none;
@@ -82,41 +82,43 @@
     linear-gradient(var(--border-strong), var(--border-strong)) 50% / 1px 8px no-repeat,
     linear-gradient(
       to right,
-      var(--input) 0,
-      var(--input) var(--lo, 50%),
+      var(--track) 0,
+      var(--track) var(--lo, 50%),
       var(--accent) var(--lo, 50%),
       var(--accent) var(--hi, 50%),
-      var(--input) var(--hi, 50%),
-      var(--input) 100%
+      var(--track) var(--hi, 50%),
+      var(--track) 100%
     );
 }
 
+/* Magiq slider thumb: white, raised, 12px. */
 .slider input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  background: var(--accent);
-  border: 2px solid var(--surface);
-  box-shadow: var(--shadow-sm);
+  background: #fff;
+  border: none;
+  box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
   transition: transform var(--t-fast) var(--ease);
 }
 
 .slider input[type="range"]::-webkit-slider-thumb:hover {
-  transform: scale(1.15);
+  transform: scale(1.2);
 }
 
 .slider input[type="range"]:active::-webkit-slider-thumb {
-  transform: scale(1.25);
+  transform: scale(1.3);
 }
 
 .slider input[type="range"]::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  background: var(--accent);
-  border: 2px solid var(--surface);
+  background: #fff;
+  border: none;
+  box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
 }
 
 /* ------------------------------ Number field ------------------------------ */
@@ -134,17 +136,16 @@
   height: 30px;
   padding: 0 8px;
   background: var(--surface-2);
-  border: 1px solid var(--input);
+  border: 1px solid var(--border);
   border-radius: var(--r-md);
   transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
 
   &:hover {
-    background: var(--surface-hover);
+    border-color: var(--accent);
   }
 
   &:focus-within {
     border-color: var(--focus-color);
-    background: var(--surface-2);
   }
 
   input {
@@ -190,14 +191,14 @@
   padding: 0 9px 0 11px;
   font-size: 12px;
   background: var(--surface-2);
-  border: 1px solid var(--input);
+  border: 1px solid var(--border);
   border-radius: var(--r-md);
   color: var(--text);
   cursor: pointer;
   transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 
   &:hover {
-    background: var(--surface-hover);
+    border-color: var(--accent);
   }
 
   &[aria-expanded="true"] {
@@ -306,10 +307,11 @@
       color: var(--text);
     }
 
+    /* Magiq: the active segment is a SOLID accent fill. */
     &[data-active="true"] {
-      color: var(--accent);
-      background: var(--selected-bg);
-      box-shadow: inset 0 0 0 1px var(--accent);
+      color: var(--accent-contrast);
+      background: var(--accent);
+      font-weight: var(--weight-semibold);
     }
   }
 }

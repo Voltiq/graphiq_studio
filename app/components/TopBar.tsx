@@ -4,8 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, CornerDownLeft, Redo2, Search, Undo2, type LucideIcon } from "lucide-react";
 import styles from "./TopBar.module.scss";
 import logo from "../icon.png";
+import ThemeToggle from "./ThemeToggle";
 import { MENUS } from "../lib/menus";
 import { TOOL_GROUPS, type ToolId } from "../lib/tools";
+import { DEFAULT_THEME, type Theme } from "../lib/theme";
 
 /** One searchable command: a tool or an executable menu item. */
 interface Command {
@@ -20,6 +22,7 @@ interface Command {
 export default function TopBar({
   onMenuAction,
   onSelectTool,
+  initialTheme = DEFAULT_THEME,
   onUndo,
   onRedo,
   canUndo = false,
@@ -28,6 +31,7 @@ export default function TopBar({
 }: {
   onMenuAction?: (action: string) => void;
   onSelectTool?: (id: ToolId) => void;
+  initialTheme?: Theme;
   onUndo?: () => void;
   onRedo?: () => void;
   canUndo?: boolean;
@@ -111,6 +115,18 @@ export default function TopBar({
     return () => document.removeEventListener("mousedown", onDown);
   }, [q]);
 
+  // Ctrl+K focuses the command search (the chip in the pill advertises it).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Close menus on outside click / Escape.
   useEffect(() => {
     if (!open) return;
@@ -137,6 +153,7 @@ export default function TopBar({
         </span>
         <span className={styles.brandName}>Graphiq</span>
         <span className={styles.brandTag}>Studio</span>
+        <span className={styles.brandDot} aria-hidden />
       </div>
 
       <nav className={styles.menubar} ref={barRef}>
@@ -250,6 +267,7 @@ export default function TopBar({
                 }
               }}
             />
+            <kbd className={styles.searchKbd}>Ctrl+K</kbd>
           </div>
 
           {results.length > 0 && (
@@ -284,6 +302,8 @@ export default function TopBar({
             </div>
           )}
         </div>
+
+        <ThemeToggle initialTheme={initialTheme} />
       </div>
     </header>
   );

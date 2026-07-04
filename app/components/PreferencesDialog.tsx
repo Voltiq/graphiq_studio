@@ -1,12 +1,34 @@
 "use client";
 
 import { useState } from "react";
-import { ClipboardPaste, Palette, SlidersHorizontal, X } from "lucide-react";
+import { Check, ClipboardPaste, Palette, SlidersHorizontal, X } from "lucide-react";
 import styles from "./PreferencesDialog.module.scss";
-import ThemeToggle from "./ThemeToggle";
+import { applyTheme, currentTheme, resolvedDark } from "./ThemeToggle";
 import { Slider, Toggle } from "./Controls";
-import type { Theme } from "../lib/theme";
+import { ACCENTS, ACCENT_COOKIE, DEFAULT_ACCENT, isAccent, type Accent, type Theme } from "../lib/theme";
 import type { PasteDefault, PasteOversize, Preferences } from "../lib/prefs";
+
+const ONE_YEAR = 60 * 60 * 24 * 365;
+
+/** Theme options as Magiq's preview cards: a mini mock UI + radio + label. */
+const THEME_OPTIONS: { id: Theme; name: string }[] = [
+  { id: "light", name: "Light" },
+  { id: "dark", name: "Dark" },
+  { id: "system", name: "Match system" },
+];
+
+function liveAccent(): Accent {
+  if (typeof document !== "undefined") {
+    const a = document.documentElement.getAttribute("data-accent");
+    if (isAccent(a)) return a;
+  }
+  return DEFAULT_ACCENT;
+}
+
+function applyAccent(a: Accent) {
+  document.documentElement.setAttribute("data-accent", a);
+  document.cookie = `${ACCENT_COOKIE}=${a}; path=/; max-age=${ONE_YEAR}; SameSite=Lax`;
+}
 
 const PASTE_OPTIONS: { value: PasteDefault; title: string; desc: string }[] = [
   { value: "ask", title: "Ask every time", desc: "Show the paste dialog to choose each time" },
@@ -71,6 +93,18 @@ export default function PreferencesDialog({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("appearance");
+  const [theme, setTheme] = useState<Theme>(() => currentTheme(initialTheme));
+  const [accent, setAccent] = useState<Accent>(() => liveAccent());
+  const dark = resolvedDark(theme);
+
+  const pickTheme = (t: Theme) => {
+    setTheme(t);
+    applyTheme(t);
+  };
+  const pickAccent = (a: Accent) => {
+    setAccent(a);
+    applyAccent(a);
+  };
 
   return (
     <div className={styles.overlay} onMouseDown={onClose}>
@@ -110,14 +144,74 @@ export default function PreferencesDialog({
           <div className={styles.prefsPane}>
             {tab === "appearance" && (
               <>
+                <p className={styles.paneIntro}>
+                  Customize how Graphiq Studio looks on this device. Changes apply instantly.
+                </p>
+
                 <section className={styles.section}>
                   <span className={styles.groupLabel}>Theme</span>
-                  <div className={styles.row}>
+                  <div className={styles.themeCards}>
+                    {THEME_OPTIONS.map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        className={styles.themeCard}
+                        data-selected={theme === t.id}
+                        onClick={() => pickTheme(t.id)}
+                      >
+                        <span className={styles.themePreview} data-mode={t.id}>
+                          <span className={styles.pBar} style={{ width: "56%", height: 8 }} />
+                          <span className={styles.pBar} style={{ width: "82%" }} />
+                          <span className={styles.pBar} style={{ width: "44%" }} />
+                          <span className={styles.pDot} />
+                        </span>
+                        <span className={styles.themeMeta}>
+                          <span className={styles.themeRadio} data-on={theme === t.id} />
+                          {t.name}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Accent color</span>
+                  <div className={styles.accentRow}>
+                    {ACCENTS.map((a) => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        className={styles.accentDot}
+                        data-selected={accent === a.id}
+                        style={{ background: dark ? a.dark : a.light }}
+                        title={a.label}
+                        aria-label={`${a.label} accent`}
+                        onClick={() => pickAccent(a.id)}
+                      >
+                        {accent === a.id && <Check size={14} strokeWidth={3} />}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Motion &amp; accessibility</span>
+                  <div className={styles.motionCard}>
                     <div className={styles.rowText}>
-                      <strong>Mode</strong>
-                      <em>Switch between light and dark</em>
+                      <strong>Reduce motion</strong>
+                      <em>Minimize non-essential animations and panel transitions</em>
                     </div>
-                    <ThemeToggle initialTheme={initialTheme} />
+                    <button
+                      type="button"
+                      className={styles.switch}
+                      role="switch"
+                      aria-checked={prefs.reduceMotion}
+                      aria-label="Reduce motion"
+                      data-on={prefs.reduceMotion}
+                      onClick={() => onChange({ reduceMotion: !prefs.reduceMotion })}
+                    >
+                      <span className={styles.switchThumb} />
+                    </button>
                   </div>
                 </section>
               </>

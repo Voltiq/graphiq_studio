@@ -26,12 +26,12 @@
   height: 28px;
   padding: 0 11px;
   line-height: 1;
-  border-radius: var(--r-pill);
+  border-radius: var(--r-md);
   background: var(--selected-bg);
-  box-shadow: 0 0 0 1px var(--accent);
+  border: 1px solid var(--accent);
   font-size: 12px;
-  font-weight: var(--weight-medium);
-  color: var(--text);
+  font-weight: var(--weight-semibold);
+  color: var(--accent);
 
   svg {
     color: var(--accent);

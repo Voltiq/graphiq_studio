@@ -1,32 +1,37 @@
 /* ===========================================================================
-   Global styles & design tokens — Atlassian (DESIGN.md / DESIGN.dark.md)
-   Neutral-dominant surfaces on an 8px rhythm; colour carries meaning (brand
-   blue for selection/primary, semantic roles for status); depth is earned via
-   the four-plane elevation model (default / raised / overlay / sunken), never
-   decorative. Motion is quiet: practical ease-out for everyday moves, bold
-   curves only for prominent overlays — no bounce, no blur, no glow.
+   Global styles & design tokens — Atlassian × Magiq Studio
+   The palette, elevation and type rules come from DESIGN.md / DESIGN.dark.md;
+   the interaction styling follows the Magiq Studio reference UI: ACTIVE IS A
+   SOLID ACCENT FILL (tools, tabs, menu hover — accent bg + inverse text),
+   inputs and wells sit on the `container` surface, sliders are a quiet track
+   with an accent fill and a white raised thumb. Depth is earned (raised /
+   overlay shadows only), motion is quiet and can be reduced per preference.
 
-   Theme = [data-theme] (dark/light) on <html>, set on the server from a
-   cookie so there is never a flash of the wrong look.
+   Theme  = [data-theme]  light | dark | system  (system follows the OS)
+   Accent = [data-accent] blue | teal | green | purple | magenta | orange
+   Motion = [data-motion] on | off (the "Reduce motion" preference)
+   All three render server-side from cookies/prefs — no flash of wrong look.
 
-   Token names are the app-wide contract (consumed by every *.module.scss);
-   values map 1:1 to the DESIGN.md token catalog:
-     --bg / --surface            surface (page + chrome panels)
-     --surface-2                 surface-raised (inputs, cards)
-     --surface-3                 surface-overlay (menus, dialogs, raised rows)
-     --canvas-void               surface-sunken (the image well)
-     --border / --border-strong  border / border-bold
-     --input                     border-input
-     --wash / --wash-2           background-neutral-subtle-hovered / -pressed
-     --text / --text-2 / --text-3  text / text-subtle / text-subtlest
-     --accent (+ -2, -rgb)       brand blue (selected / primary)
-     --shadow-sm / --shadow      shadow-raised / shadow-overlay
+   Token names are the app-wide contract (consumed by every *.module.scss):
+     --bg (app background)       = surface-sunken
+     --surface                   = panels / chrome
+     --surface-2                 = container (inputs, wells, chip groups)
+     --surface-3                 = overlay (menus, dialogs)
+     --canvas-void               = sunken (the image well)
+     --border / --border-strong  = border / border-bold
+     --input                     = border-input
+     --track                     = slider / progress track
+     --wash / --wash-2           = neutral-subtle hovered / pressed
+     --text / --text-2 / --text-3 = text / subtle / subtlest
+     --accent (+ -2, -rgb, -contrast) = the chosen accent (brand)
+     --selected-bg               = accent-tinted selected fill (color-mix)
+     --shadow-sm / --shadow      = shadow-raised / shadow-overlay
    =========================================================================== */
 
 :root {
-  /* Radii — ADS t-shirt scale, chosen by component class:
-     xs 2px badges/kbd · sm 4px lozenges/tooltips · md 6px buttons/inputs
-     lg 8px cards/menus · xl 12px modals · pill for avatars only */
+  /* Radii — ADS t-shirt scale by component class:
+     xs 2px kbd/badges · sm 4px lozenges/tooltips · md 6px buttons/inputs/menus
+     lg 8px cards/wells · xl 12px modals */
   --r-xs: 2px;
   --r-sm: 4px;
   --r-md: 6px;
@@ -35,19 +40,18 @@
   --r-2xl: 16px;
   --r-pill: 999px;
 
-  /* Spacing — 8px-base steps (space-050…space-300) */
+  /* Spacing — 8px-base steps */
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 24px;
 
-  /* Motion — ADS durations + easings. Interactions 100ms, transitions 200ms,
-     large moves 250ms. No bounce/elastic in product UI. */
-  --t-fast: 100ms; /* hovers, presses (xshort) */
-  --t-short: 150ms; /* popups, dropdown menus (short) */
-  --t-med: 200ms; /* reveals, fades, modals (medium) */
-  --t-slow: 250ms; /* theme switch, layout-ish moves (long) */
+  /* Motion — ADS durations/easings; Magiq menus drop in ~130-150ms. */
+  --t-fast: 100ms; /* hovers, presses */
+  --t-short: 150ms; /* popups, dropdown menus */
+  --t-med: 200ms; /* reveals, fades, modals */
+  --t-slow: 250ms; /* theme switch, layout-ish moves */
   --ease: cubic-bezier(0.4, 1, 0.6, 1); /* out-practical: everyday moves */
   --ease-pop: cubic-bezier(0, 0.4, 0, 1); /* out-bold: prominent entrances */
   --ease-in: cubic-bezier(0.6, 0, 0.8, 0.6); /* in-practical: exits */
@@ -69,88 +73,78 @@
   --toolbar-w: 48px;
   --dock-w: 320px;
 
+  /* ------------------------- Accent: Blue (default) -----------------------
+     Each accent provides a light-theme and a dark-theme pair (hex + rgb);
+     the theme blocks below pick the right one via --accent-l/--accent-d. */
+  --accent-l: #1868db;
+  --accent-l-rgb: 24, 104, 219;
+  --accent-d: #669df1;
+  --accent-d-rgb: 102, 157, 241;
+
   color-scheme: dark;
 }
 
-/* ---------------------------- Dark theme ----------------------------------
-   DESIGN.dark.md values. Planes: sunken #18191A < default #1F1F21 <
-   raised #242528 < overlay #2B2C2F. The image sits on the sunken well so it
-   dominates; chrome stays on the default plane with hairline borders. */
-[data-theme="dark"] {
-  color-scheme: dark;
-
-  /* Brand (selected / primary) */
-  --accent: #669df1; /* background-brand-bold / text-selected */
-  --accent-rgb: 102, 157, 241;
-  --accent-contrast: #1f1f21; /* text-inverse */
-  --accent-2: #8fb8f6; /* background-brand-bold-hovered */
-  --focus-color: #8fb8f6; /* border-focused */
-  --selected-bg: #1c2b42; /* background-selected */
-
-  --bg: #1f1f21; /* surface */
-  --bg-grad: var(--bg);
-  --surface: #1f1f21; /* chrome panels */
-  --surface-2: #242528; /* raised: inputs, cards */
-  --surface-3: #2b2c2f; /* overlay: menus, dialogs */
-  --surface-hover: #2b2c2f;
-  --sidebar: var(--surface);
-  --canvas-void: #18191a; /* sunken: the image well */
-  --checker-a: #2b2c2f;
-  --checker-b: #1f1f21;
-
-  --border: #e3e4f21f; /* border (hairline) */
-  --border-strong: #7e8188; /* border-bold */
-  --input: #7e8188; /* border-input */
-  --wash: #ceced912; /* background-neutral-subtle-hovered */
-  --wash-2: #e3e4f21f; /* background-neutral-subtle-pressed */
-
-  --text: #cecfd2;
-  --text-2: #a9abaf; /* text-subtle */
-  --text-3: #96999e; /* text-subtlest */
-  --text-disabled: #e5e9f640;
-
-  /* Semantic roles */
-  --danger: #f15b50; /* icon-danger */
-  --danger-rgb: 241, 91, 80;
-  --danger-text: #fd9891; /* text-danger */
-  --danger-bold: #f87168; /* background-danger-bold (text-inverse on it) */
-  --success: #82b536; /* icon-success (lime) */
-  --success-bold: #94c748; /* background-success-bold (toggle checked) */
-  --warning: #fbc828;
-
-  /* Elevation — paired shadows (never hand-authored elsewhere) */
-  --shadow-sm: 0px 1px 1px #0104043b, 0px 0px 1px #0104043b; /* raised */
-  --shadow-md: 0px 0px 0px 1px #bdbdbd1f, 0px 8px 12px #0104042a, 0px 0px 1px 1px #0104043b;
-  --shadow: 0px 0px 0px 1px #bdbdbd1f, 0px 8px 12px #0104042a, 0px 0px 1px 1px #0104043b; /* overlay */
-  --glow: 0 0 0 0 transparent; /* retired (no top-edge glow in ADS) */
-  --inset: 0 0 0 0 transparent;
-
-  /* Transient surfaces are SOLID overlay — ADS has no acrylic/frost. */
-  --frost: #2b2c2f;
-  --blanket: #10121499;
-  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus-color);
+/* ------------------------------ Accents ----------------------------------
+   Magiq's six: blue (default) · teal · green · purple · magenta · orange.
+   Light values are the ADS `*-bolder` hues; dark values the brighter pairs. */
+[data-accent="teal"] {
+  --accent-l: #2898bd;
+  --accent-l-rgb: 40, 152, 189;
+  --accent-d: #42b2d7;
+  --accent-d-rgb: 66, 178, 215;
 }
 
-/* ---------------------------- Light theme ---------------------------------
-   DESIGN.md values. White page, bordered panels, sunken image well. */
-[data-theme="light"] {
+[data-accent="green"] {
+  --accent-l: #22a06b;
+  --accent-l-rgb: 34, 160, 107;
+  --accent-d: #2abb7f;
+  --accent-d-rgb: 42, 187, 127;
+}
+
+[data-accent="purple"] {
+  --accent-l: #964ac0;
+  --accent-l-rgb: 150, 74, 192;
+  --accent-d: #bf63f3;
+  --accent-d-rgb: 191, 99, 243;
+}
+
+[data-accent="magenta"] {
+  --accent-l: #cd519d;
+  --accent-l-rgb: 205, 81, 157;
+  --accent-d: #da62ac;
+  --accent-d-rgb: 218, 98, 172;
+}
+
+[data-accent="orange"] {
+  --accent-l: #e06c00;
+  --accent-l-rgb: 224, 108, 0;
+  --accent-d: #f68909;
+  --accent-d-rgb: 246, 137, 9;
+}
+
+/* ---------------------------- Theme mixins --------------------------------
+   DESIGN.md (light) and DESIGN.dark.md (dark) values. `system` applies light
+   by default and the dark mixin under prefers-color-scheme. */
+@mixin theme-light {
   color-scheme: light;
 
-  --accent: #1868db;
-  --accent-rgb: 24, 104, 219;
+  --accent: var(--accent-l);
+  --accent-rgb: var(--accent-l-rgb);
   --accent-contrast: #ffffff;
-  --accent-2: #1558bc;
-  --focus-color: #4688ec;
-  --selected-bg: #e9f2fe;
+  --accent-2: color-mix(in srgb, var(--accent) 86%, #000); /* hovered/pressed */
+  --focus-color: var(--accent);
+  --selected-bg: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  --selected-bg-2: color-mix(in srgb, var(--accent) 22%, var(--surface));
 
-  --bg: #ffffff;
+  --bg: #f8f8f8; /* app background = sunken */
   --bg-grad: var(--bg);
-  --surface: #ffffff;
-  --surface-2: #ffffff; /* raised (differentiated by border + shadow) */
-  --surface-3: #ffffff; /* overlay */
+  --surface: #ffffff; /* panels / chrome */
+  --surface-2: #f0f1f2; /* container: inputs, wells, chip groups */
+  --surface-3: #ffffff; /* overlay: menus, dialogs */
   --surface-hover: #f0f1f2;
   --sidebar: var(--surface);
-  --canvas-void: #f8f8f8; /* sunken */
+  --canvas-void: #f8f8f8; /* sunken: the image well */
+  --track: #dddee1; /* slider / progress track */
   --checker-a: #ffffff;
   --checker-b: #dddee1;
 
@@ -173,15 +167,89 @@
   --success-bold: #5b7f24;
   --warning: #e06c00;
 
-  --shadow-sm: 0px 1px 1px #1e1f2140, 0px 0px 1px #1e1f214f;
+  --shadow-sm: 0px 1px 1px #1e1f2140, 0px 0px 1px #1e1f214f; /* raised */
   --shadow-md: 0px 8px 12px #1e1f2126, 0px 0px 1px #1e1f214f;
-  --shadow: 0px 8px 12px #1e1f2126, 0px 0px 1px #1e1f214f;
-  --glow: 0 0 0 0 transparent;
+  --shadow: 0px 8px 12px #1e1f2126, 0px 0px 1px #1e1f214f; /* overlay */
+  --glow: 0 0 0 0 transparent; /* retired */
   --inset: 0 0 0 0 transparent;
 
   --frost: #ffffff;
   --blanket: #050c1f75;
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus-color);
+}
+
+@mixin theme-dark {
+  color-scheme: dark;
+
+  --accent: var(--accent-d);
+  --accent-rgb: var(--accent-d-rgb);
+  --accent-contrast: #1f1f21; /* text-inverse */
+  --accent-2: color-mix(in srgb, var(--accent) 82%, #fff);
+  --focus-color: var(--accent);
+  --selected-bg: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  --selected-bg-2: color-mix(in srgb, var(--accent) 24%, var(--surface));
+
+  --bg: #18191a; /* sunken */
+  --bg-grad: var(--bg);
+  --surface: #1f1f21;
+  --surface-2: #303134; /* container */
+  --surface-3: #2b2c2f; /* overlay */
+  --surface-hover: #2b2c2f;
+  --sidebar: var(--surface);
+  --canvas-void: #18191a;
+  --track: #3d3f43;
+  --checker-a: #2b2c2f;
+  --checker-b: #1f1f21;
+
+  --border: #e3e4f21f;
+  --border-strong: #7e8188;
+  --input: #7e8188;
+  --wash: #ceced912;
+  --wash-2: #e3e4f21f;
+
+  --text: #cecfd2;
+  --text-2: #a9abaf;
+  --text-3: #96999e;
+  --text-disabled: #e5e9f640;
+
+  --danger: #f15b50;
+  --danger-rgb: 241, 91, 80;
+  --danger-text: #fd9891;
+  --danger-bold: #f87168;
+  --success: #82b536;
+  --success-bold: #94c748;
+  --warning: #fbc828;
+
+  --shadow-sm: 0px 1px 1px #0104043b, 0px 0px 1px #0104043b;
+  --shadow-md: 0px 0px 0px 1px #bdbdbd1f, 0px 8px 12px #0104042a, 0px 0px 1px 1px #0104043b;
+  --shadow: 0px 0px 0px 1px #bdbdbd1f, 0px 8px 12px #0104042a, 0px 0px 1px 1px #0104043b;
+  --glow: 0 0 0 0 transparent;
+  --inset: 0 0 0 0 transparent;
+
+  --frost: #2b2c2f;
+  --blanket: #10121499;
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus-color);
+}
+
+[data-theme="light"] {
+  @include theme-light;
+}
+
+[data-theme="dark"] {
+  @include theme-dark;
+}
+
+/* "Match system": light by default, dark when the OS says so. */
+[data-theme="system"] {
+  @include theme-light;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-theme="system"] {
+    @include theme-dark;
+    color-scheme: light dark;
+  }
 }
 
 * {
@@ -225,9 +293,8 @@ textarea {
 }
 
 /* ------------------------- Keyboard focus ring ----------------------------
-   ADS focus contract: 2px ring in border-focused, offset 2px from the box.
-   Only for keyboard focus, never for clicks. Text inputs opt out here — their
-   wrappers show a :focus-within border per the textfield recipe. */
+   2px accent ring, offset 2px from the box (ADS focus contract; the ring
+   follows the chosen accent, as in Magiq). Keyboard focus only. */
 button:focus-visible,
 a:focus-visible,
 select:focus-visible,
@@ -269,7 +336,9 @@ input[type="range"]:focus-visible {
   background-clip: content-box;
 }
 
-/* ------------------------- Reduced motion --------------------------------- */
+/* ------------------------- Reduced motion ---------------------------------
+   Honoured from BOTH the OS preference and the in-app "Reduce motion" toggle
+   (Preferences ▸ Appearance → [data-motion="off"] on <html>). */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -278,4 +347,12 @@ input[type="range"]:focus-visible {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+[data-motion="off"] *,
+[data-motion="off"] *::before,
+[data-motion="off"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
 }

@@ -18,7 +18,7 @@ export interface Preferences {
   sharedGradients: boolean;
   /** Max history rows shown before the History panel becomes scrollable. */
   maxHistory: number;
-  /** New document: show the size dialog (false ⇒ create with the defaults). */
+  /** New document: show the size dialog (false â create with the defaults). */
   newDocAsk: boolean;
   /** New-document default canvas size (px). */
   newDocWidth: number;
@@ -26,6 +26,9 @@ export interface Preferences {
   /** Autosave interval in minutes (0 = off). Snapshots go to IndexedDB and are
    *  offered for restore after an unclean exit. */
   autosaveMinutes: number;
+  /** Minimize non-essential animations and panel transitions
+   *  (Preferences ▸ Appearance; applied as data-motion="off" on <html>). */
+  reduceMotion: boolean;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -38,6 +41,7 @@ export const DEFAULT_PREFS: Preferences = {
   newDocWidth: 1920,
   newDocHeight: 1080,
   autosaveMinutes: 2,
+  reduceMotion: false,
 };
 
 const KEY = "graphiq:preferences";
