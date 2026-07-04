@@ -897,6 +897,15 @@
   &:hover {
     border-color: var(--accent);
   }
+
+  /* Filter mask (smart filters): dashed chip + flask glyph tells it apart from
+     the layer mask at a glance. */
+  &[data-kind="filter"] {
+    border-style: dashed;
+    display: grid;
+    place-items: center;
+    color: color-mix(in srgb, #1a1a1a 78%, transparent);
+  }
 }
 
 .maskOff {

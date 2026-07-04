@@ -2484,7 +2484,8 @@ export default function CanvasArea({
       maskSelectionRects: (id) => engine.maskSelectionRects(id),
       setActiveSurface: (id, surface) => engine.setActiveSurface(id, surface),
       getActiveSurface: (id) => engine.getActiveSurface(id),
-      applySmartFilters: (layerId, filters, side) => engine.applySmartFilters(layerId, filters, side),
+      applySmartFilters: (layerId, filters, side, useFilterMask) =>
+        engine.applySmartFilters(layerId, filters, side, useFilterMask),
       contentAwareFill: (layerId, sel, selAngle, selPivot) =>
         engine.contentAwareFill(layerId, sel, selAngle, selPivot),
       resizeCanvasAnchored: (w, h, dx, dy, ids) => engine.resizeCanvasAnchored(w, h, dx, dy, ids),
@@ -3493,9 +3494,9 @@ export default function CanvasArea({
     if (tool === "brush" || tool === "pencil" || tool === "eraser") {
       if (engine.isFloating) engine.commitFloat(); // merge before painting on it
       let layerId: string;
-      if (activeLayerId && engine.getActiveSurface(activeLayerId) === "mask") {
-        // Painting the active layer's (or group's) mask — target it directly so
-        // brush/pencil don't auto-create a new pixel layer via ensureLayer.
+      if (activeLayerId && engine.getActiveSurface(activeLayerId) !== "pixels") {
+        // Painting the active layer's (or group's) layer/filter mask — target it
+        // directly so brush/pencil don't auto-create a new layer via ensureLayer.
         layerId = activeLayerId;
       } else if (tool === "eraser") {
         if (!activeLayerId) return; // nothing to erase

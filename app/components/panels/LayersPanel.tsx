@@ -206,7 +206,7 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                 {isGroup ? (
                   <span
                     className={styles.layerGroupIcon}
-                    data-active={l.mask ? l.id === activeLayerId && api.maskSurface === "pixels" : undefined}
+                    data-active={l.mask || l.filterMask ? l.id === activeLayerId && api.maskSurface === "pixels" : undefined}
                   >
                     {l.expanded ? <FolderOpen size={16} /> : <Folder size={16} />}
                   </span>
@@ -217,9 +217,9 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                 ) : (
                   <span
                     className={styles.layerThumb}
-                    data-active={l.mask ? l.id === activeLayerId && api.maskSurface === "pixels" : undefined}
+                    data-active={l.mask || l.filterMask ? l.id === activeLayerId && api.maskSurface === "pixels" : undefined}
                     onClick={
-                      l.mask
+                      l.mask || l.filterMask
                         ? (e) => {
                             e.stopPropagation();
                             api.select(l.id, "replace");
@@ -284,6 +284,35 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                       {!l.mask.enabled && <span className={styles.maskOff}>✕</span>}
                     </button>
                   </>
+                )}
+                {l.type !== "adjustment" && l.filterMask && (
+                  <button
+                    type="button"
+                    className={styles.maskThumb}
+                    data-kind="filter"
+                    data-active={l.id === activeLayerId && api.maskSurface === "filterMask"}
+                    data-disabled={!l.filterMask.enabled}
+                    title={
+                      l.filterMask.enabled
+                        ? "Filter mask (confines the smart filters) — click to paint it, Shift-click to disable"
+                        : "Filter mask (disabled) — Shift-click to enable"
+                    }
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (e.shiftKey) {
+                        api.toggleFilterMaskEnabled(l.id);
+                        return;
+                      }
+                      api.select(l.id, "replace");
+                      api.chooseSurface(l.id, "filterMask");
+                    }}
+                  >
+                    {l.filterMask.enabled ? (
+                      <FlaskConical size={13} />
+                    ) : (
+                      <span className={styles.maskOff}>✕</span>
+                    )}
+                  </button>
                 )}
                 <div className={styles.layerMeta}>
                   {editingId === l.id ? (

@@ -1,3 +1,4 @@
+import { filterMaskKey } from "./layers";
 import type { LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers";
 import type { Rect } from "./view";
 
@@ -6,10 +7,16 @@ export const PROJECT_EXT = "gproj";
 /** Pre-rename extension — old files still open everywhere. */
 export const LEGACY_PROJECT_EXT = "aproj";
 
-type SerializedLeaf = LayerLeaf & { data: string | null; maskImage?: string | null };
+type SerializedLeaf = LayerLeaf & {
+  data: string | null;
+  maskImage?: string | null;
+  /** v8: the smart-filter mask grayscale (leaf/group with node.filterMask). */
+  filterMaskImage?: string | null;
+};
 type SerializedGroup = Omit<LayerGroup, "children"> & {
   children: SerializedNode[];
   maskImage?: string | null;
+  filterMaskImage?: string | null;
 };
 /** Adjustment nodes carry no pixel image — just their spec + clip + (Spec 01) mask. */
 type SerializedAdjustment = LayerAdjustment & { maskImage?: string | null };
@@ -59,13 +66,20 @@ function serializeNode(
   getMask: (id: string) => string | null,
 ): SerializedNode {
   // A mask (when present) is serialized as a grayscale PNG data URL alongside the
-  // node; node.mask metadata rides along through the spread.
+  // node; node.mask metadata rides along through the spread. The filter mask
+  // (v8) lives in the engine under filterMaskKey(id) — same exporter works.
   const maskImage = node.mask ? getMask(node.id) : null;
+  if (node.type === "adjustment") return { ...node, maskImage }; // no pixel image / filters
+  const filterMaskImage = node.filterMask ? getMask(filterMaskKey(node.id)) : null;
   if (node.type === "group") {
-    return { ...node, maskImage, children: node.children.map((c) => serializeNode(c, getImage, getMask)) };
+    return {
+      ...node,
+      maskImage,
+      filterMaskImage,
+      children: node.children.map((c) => serializeNode(c, getImage, getMask)),
+    };
   }
-  if (node.type === "adjustment") return { ...node, maskImage }; // no pixel image
-  return { ...node, data: getImage(node.id), maskImage };
+  return { ...node, data: getImage(node.id), maskImage, filterMaskImage };
 }
 
 /** Build the full, self-describing project document (layers + pixels + state). */
@@ -78,7 +92,7 @@ export function serializeProject(
 ): ProjectFile {
   return {
     format: "graphiq-project",
-    version: 7,
+    version: 8, // v8 adds filterMaskImage + node.filterMask (Spec 07 addendum)
     name: doc.name,
     width: doc.width,
     height: doc.height,

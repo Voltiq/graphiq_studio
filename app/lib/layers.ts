@@ -14,7 +14,15 @@ export interface MaskMeta {
 }
 
 /** Which surface of a layer paint tools currently target. */
-export type ActiveSurface = "pixels" | "mask";
+export type ActiveSurface = "pixels" | "mask" | "filterMask";
+
+/** Engine masks-map key of a node's smart-filter mask. The filter mask reuses
+ *  the ENTIRE layer-mask machinery (grayscale canvas, alpha cache, history's
+ *  "mask" surface, restore paths) by living in the same engine maps under this
+ *  derived key — the layer mask stays under the plain node id. */
+export function filterMaskKey(id: string): string {
+  return "fm:" + id;
+}
 
 export interface LayerBase {
   id: string;
@@ -36,6 +44,10 @@ export interface LayerBase {
    *  stack rendered on this node's OWN pixels at composite time — below layer
    *  effects, above raw pixels. Params only; never baked unless applied. */
   filters?: SmartFilter[];
+  /** Present ⇒ the node carries a filter mask: one grayscale raster (engine-held,
+   *  keyed by `filterMaskKey(id)`) that confines the WHOLE smart-filter stack —
+   *  white = filtered, black = original pixels, gray = a blend of the two. */
+  filterMask?: MaskMeta;
 }
 
 /** A pixel layer (has its own canvas in the paint engine, keyed by id). */
@@ -78,6 +90,7 @@ export type LayerPatch = Partial<
   clipped?: boolean;
   effects?: LayerEffects | undefined;
   filters?: SmartFilter[] | undefined;
+  filterMask?: MaskMeta | undefined;
 };
 
 export const BLEND_MODES = [
@@ -383,6 +396,8 @@ export interface LayersApi {
   applyMask: () => void;
   toggleMaskEnabled: (id: string) => void;
   toggleMaskLinked: (id: string) => void;
+  /** Enable/disable a node's smart-filter mask (Shift-click on its chip). */
+  toggleFilterMaskEnabled: (id: string) => void;
   loadMaskAsSelection: () => void;
   // ---- Adjustment layers ----
   /** Create a non-destructive adjustment layer above the active layer. */

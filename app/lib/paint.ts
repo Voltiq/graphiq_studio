@@ -1,6 +1,6 @@
 ﻿import { parseColor, toHex8 } from "./color";
 import type { Rect } from "./view";
-import { clipGroupsOf } from "./layers";
+import { clipGroupsOf, filterMaskKey } from "./layers";
 import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerNode } from "./layers";
 import { applyAdjustments, isDefaultAdjust, type Adjustments } from "./adjust";
 import { renderShape, type ShapeGeom } from "./shapes";
@@ -311,7 +311,7 @@ export interface EngineHandle {
   setActiveSurface: (id: string, surface: ActiveSurface) => void;
   getActiveSurface: (id: string) => ActiveSurface;
   /** Spec 07: bake a smart-filter stack into pixels (one combined step). */
-  applySmartFilters: (layerId: string, filters: SmartFilter[], side?: HistorySide) => void;
+  applySmartFilters: (layerId: string, filters: SmartFilter[], side?: HistorySide, useFilterMask?: boolean) => void;
   /** Anchored canvas reframe (Canvas Size dialog) — call before the dims patch. */
   resizeCanvasAnchored: (w: number, h: number, dx: number, dy: number, ownLayerIds?: string[]) => void;
   /** Fill the selection with synthesized surrounding content (one entry). */
@@ -425,6 +425,8 @@ export interface CropSnapshot {
 export interface LeafSnapshot {
   layer: ImageData | null;
   mask: ImageData | null;
+  /** The smart-filter mask grayscale (Spec 07 addendum), when the leaf has one. */
+  fmMask?: ImageData | null;
 }
 
 /** Whole-image transforms (Image menu). 90° rotations swap the dimensions. */
@@ -1105,27 +1107,41 @@ export class PaintEngine {
 
   // ---- Layer-mask surface resolution & alpha derivation --------------------
 
-  /** The surface paint tools should target for `id` — "mask" only while a mask
-   *  exists and has been selected as the active surface. */
-  activeSurface(id: string): ActiveSurface {
-    return this.masks.has(id) && this.surfaces.get(id) === "mask" ? "mask" : "pixels";
+  /** The UI-facing surface of `id` — the selected surface, but only while its
+   *  raster actually exists (a deleted mask falls back to pixels). */
+  getActiveSurface(id: string): ActiveSurface {
+    const s = this.surfaces.get(id);
+    if (s === "mask" && this.masks.has(id)) return "mask";
+    if (s === "filterMask" && this.masks.has(filterMaskKey(id))) return "filterMask";
+    return "pixels";
   }
 
-  getActiveSurface(id: string): ActiveSurface {
-    return this.activeSurface(id);
+  /** Binary form for paint routing: EITHER mask kind ⇒ "mask" — the stroke /
+   *  fill / blur pipelines treat the two identically and resolve which raster
+   *  via maskKeyOf(). */
+  private activeSurface(id: string): "pixels" | "mask" {
+    return this.getActiveSurface(id) === "pixels" ? "pixels" : "mask";
+  }
+
+  /** The masks-map key `id`'s current mask surface resolves to: the node id for
+   *  the layer mask, `filterMaskKey(id)` for the filter mask. History entries for
+   *  mask paint record THIS key as their layerId, so undo lands on the right raster. */
+  private maskKeyOf(id: string): string {
+    return this.surfaces.get(id) === "filterMask" ? filterMaskKey(id) : id;
   }
 
   setActiveSurface(id: string, surface: ActiveSurface): void {
     if (surface === "mask" && !this.masks.has(id)) return; // no mask to paint
+    if (surface === "filterMask" && !this.masks.has(filterMaskKey(id))) return;
     this.surfaces.set(id, surface);
     this.emitChange();
   }
 
-  /** The canvas a paint op should draw into for `id`: the mask when it is the
-   *  active surface, otherwise the layer. The single chokepoint that lets every
-   *  tool paint a mask with no per-tool changes. */
+  /** The canvas a paint op should draw into for `id`: the active mask (layer or
+   *  filter) when one is targeted, otherwise the layer. The single chokepoint
+   *  that lets every tool paint either mask with no per-tool changes. */
   private surfaceTarget(id: string): Layer {
-    if (this.activeSurface(id) === "mask") return this.masks.get(id)!;
+    if (this.activeSurface(id) === "mask") return this.masks.get(this.maskKeyOf(id))!;
     return this.layer(id);
   }
 
@@ -1163,7 +1179,9 @@ export class PaintEngine {
    *  derived from (committed grayscale + in-progress stroke), bounded to the
    *  stroke's dirty rect so the mask brush previews live without a full re-derive. */
   private maskDisplay(id: string): HTMLCanvasElement | null {
-    if (this.painting && this.strokeOnMask && this.strokeLayer === id && this.stroke) {
+    // `id` here is a masks-map key: a node id (layer mask) or fm:<id> (filter
+    // mask) — resolve the live stroke's target key so either previews live.
+    if (this.painting && this.strokeOnMask && this.stroke && this.strokeLayer && this.maskKeyOf(this.strokeLayer) === id) {
       const mask = this.masks.get(id);
       if (mask) {
         if (!this.maskPrevG || this.maskPrevG.c.width !== this.w || this.maskPrevG.c.height !== this.h)
@@ -1231,12 +1249,17 @@ export class PaintEngine {
     this.emitChange();
   }
 
-  /** Free a mask + its alpha cache, resetting the active surface to pixels. */
+  /** Free a mask + its alpha cache, resetting the active surface to pixels.
+   *  Accepts either a node id (layer mask) or a filterMaskKey (filter mask). */
   freeMask(id: string): void {
     this.masks.delete(id);
     this.maskAlpha.delete(id);
     this.bumpMask(id); // the node's masked render changed
     if (this.surfaces.get(id) === "mask") this.surfaces.set(id, "pixels");
+    if (id.startsWith("fm:")) {
+      const base = id.slice(3);
+      if (this.surfaces.get(base) === "filterMask") this.surfaces.set(base, "pixels");
+    }
     this.emitChange();
   }
 
@@ -1312,7 +1335,9 @@ export class PaintEngine {
     fn: (ctx: CanvasRenderingContext2D, src: HTMLCanvasElement) => void,
   ): void {
     for (const [id, m] of this.masks) {
-      if (ids && !ids.includes(id)) continue;
+      // A filter mask (fm:<id>) is owned by its base layer — transform with it.
+      const owner = id.startsWith("fm:") ? id.slice(3) : id;
+      if (ids && !ids.includes(owner)) continue;
       const next = this.mkMask(true);
       fn(next.ctx, m.c);
       this.masks.set(id, next);
@@ -1532,7 +1557,8 @@ export class PaintEngine {
     const bounds = this.featherBounds(this.boundsOf(rects, angle, pivot), feather);
     if (!bounds) return;
     const onMask = this.activeSurface(layerId) === "mask";
-    const l = onMask ? this.masks.get(layerId)! : this.layer(layerId);
+    const mid = onMask ? this.maskKeyOf(layerId) : layerId; // history/derive key
+    const l = onMask ? this.masks.get(mid)! : this.layer(layerId);
     const before = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
     if (feather > 0) {
       // Lay the colour down only where a feathered mask is opaque (soft edges).
@@ -1553,8 +1579,8 @@ export class PaintEngine {
       l.ctx.restore();
     }
     const after = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
-    this.pushEntry(layerId, bounds, before, after, "Fill", undefined, onMask ? "mask" : "layer");
-    if (onMask) this.deriveMaskAlpha(layerId, bounds);
+    this.pushEntry(mid, bounds, before, after, "Fill", undefined, onMask ? "mask" : "layer");
+    if (onMask) this.deriveMaskAlpha(mid, bounds);
     this.emitChange();
   }
 
@@ -1710,7 +1736,8 @@ export class PaintEngine {
     this.endFill();
     if (this.gradLayer && this.gradLayer !== layerId) this.endGradient();
     const onMask = this.activeSurface(layerId) === "mask";
-    const l = onMask ? this.masks.get(layerId)! : this.layer(layerId);
+    const mid = onMask ? this.maskKeyOf(layerId) : layerId;
+    const l = onMask ? this.masks.get(mid)! : this.layer(layerId);
     const fresh = this.gradLayer !== layerId || !this.gradOrig || !this.gradBounds;
     let b: Rect;
     if (fresh) {
@@ -1744,7 +1771,7 @@ export class PaintEngine {
     if (!this.gradEntry) {
       if (this.pos < this.entries.length) this.entries.length = this.pos;
       this.gradEntry = {
-        layerId,
+        layerId: mid,
         rect: b,
         before: this.gradOrig!,
         after,
@@ -1757,7 +1784,7 @@ export class PaintEngine {
     } else {
       this.gradEntry.after = after;
     }
-    if (onMask) this.deriveMaskAlpha(layerId, b);
+    if (onMask) this.deriveMaskAlpha(mid, b);
     else this.bumpPixel(layerId);
     this.emitChange();
   }
@@ -1868,7 +1895,7 @@ export class PaintEngine {
     this.endPath();
     if (this.fillLayer && this.fillLayer !== layerId) this.endFill();
     this.fillOnMask = this.activeSurface(layerId) === "mask";
-    const l = this.fillOnMask ? this.masks.get(layerId)! : this.layer(layerId);
+    const l = this.fillOnMask ? this.masks.get(this.maskKeyOf(layerId))! : this.layer(layerId);
     if (this.fillLayer !== layerId || !this.fillOrig) {
       this.fillLayer = layerId;
       this.fillOrig = this.fillOnMask ? this.mkMask(true) : this.mk(this.w, this.h, true);
@@ -1892,7 +1919,7 @@ export class PaintEngine {
       }
     }
     this.fillState = { rects, color, antialias };
-    if (this.fillOnMask) this.deriveMaskAlpha(layerId); // refresh cache so the mask preview updates
+    if (this.fillOnMask) this.deriveMaskAlpha(this.maskKeyOf(layerId)); // refresh cache so the mask preview updates
     this.emitChange();
   }
 
@@ -1955,11 +1982,12 @@ export class PaintEngine {
         const y1 = Math.min(this.h, r.y + r.h + pad);
         const b = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
         const onMask = this.fillOnMask;
-        const l = onMask ? this.masks.get(layerId)! : this.layer(layerId);
+        const mid = onMask ? this.maskKeyOf(layerId) : layerId;
+        const l = onMask ? this.masks.get(mid)! : this.layer(layerId);
         const before = orig.ctx.getImageData(b.x, b.y, b.w, b.h);
         const after = l.ctx.getImageData(b.x, b.y, b.w, b.h);
-        this.pushEntry(layerId, b, before, after, "Fill", undefined, onMask ? "mask" : "layer");
-        if (onMask) this.deriveMaskAlpha(layerId, b);
+        this.pushEntry(mid, b, before, after, "Fill", undefined, onMask ? "mask" : "layer");
+        if (onMask) this.deriveMaskAlpha(mid, b);
       }
     }
     this.fillOnMask = false;
@@ -1979,7 +2007,8 @@ export class PaintEngine {
     const bounds = this.featherBounds(this.boundsOf(rects, angle, pivot), feather);
     if (!bounds) return;
     const onMask = this.activeSurface(layerId) === "mask";
-    const l = onMask ? this.masks.get(layerId)! : this.layer(layerId);
+    const mid = onMask ? this.maskKeyOf(layerId) : layerId;
+    const l = onMask ? this.masks.get(mid)! : this.layer(layerId);
     const before = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
     l.ctx.save();
     l.ctx.globalAlpha = 1;
@@ -1994,8 +2023,8 @@ export class PaintEngine {
     }
     l.ctx.restore();
     const after = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
-    this.pushEntry(layerId, bounds, before, after, label, undefined, onMask ? "mask" : "layer");
-    if (onMask) this.deriveMaskAlpha(layerId, bounds);
+    this.pushEntry(mid, bounds, before, after, label, undefined, onMask ? "mask" : "layer");
+    if (onMask) this.deriveMaskAlpha(mid, bounds);
     this.emitChange();
   }
 
@@ -2010,15 +2039,17 @@ export class PaintEngine {
       dst.ctx.clearRect(0, 0, this.w, this.h);
       dst.ctx.drawImage(src.c, 0, 0);
     }
-    // Carry the mask too (the clone keeps its MaskMeta via clone-subtree).
-    const srcMask = this.masks.get(srcId);
-    if (srcMask) {
-      const m = this.mkMask(true);
-      m.ctx.drawImage(srcMask.c, 0, 0);
-      this.masks.set(dstId, m);
-      this.deriveMaskAlpha(dstId);
-    } else {
-      this.freeMask(dstId);
+    // Carry both masks too (the clone keeps its meta via clone-subtree).
+    for (const key of [dstId, filterMaskKey(dstId)]) {
+      const srcMask = this.masks.get(key === dstId ? srcId : filterMaskKey(srcId));
+      if (srcMask) {
+        const m = this.mkMask(true);
+        m.ctx.drawImage(srcMask.c, 0, 0);
+        this.masks.set(key, m);
+        this.deriveMaskAlpha(key);
+      } else {
+        this.freeMask(key);
+      }
     }
     this.bumpPixel(dstId);
     this.emitChange();
@@ -2034,9 +2065,11 @@ export class PaintEngine {
     for (const id of deleteIds) {
       this.layers.delete(id);
       this.freeMask(id);
+      this.freeMask(filterMaskKey(id));
       this.dropCache(id);
     }
-    this.freeMask(targetId); // the merged result is flat — no mask
+    this.freeMask(targetId); // the merged result is flat — no masks
+    this.freeMask(filterMaskKey(targetId));
     this.dropCache(targetId);
     this.layers.set(targetId, { c, ctx });
     this.bumpPixel(targetId);
@@ -2046,11 +2079,14 @@ export class PaintEngine {
   /** Bake a layer's smart-filter stack into its stored pixels (the explicit
    *  destructive "Apply Smart Filters"): one combined history step — the pixel
    *  patch plus the structural stack-removal passed in as `side`. */
-  applySmartFilters(layerId: string, filters: SmartFilter[], side?: HistorySide) {
+  applySmartFilters(layerId: string, filters: SmartFilter[], side?: HistorySide, useFilterMask = false) {
     const l = this.layers.get(layerId);
     if (!l || !filters.length) return;
     const before = l.ctx.getImageData(0, 0, this.w, this.h);
-    const filtered = this.renderFiltered(l.c, filters);
+    // Baking honours an enabled filter mask — the baked pixels must equal what
+    // the stack rendered. The caller frees the fm raster via its structural side.
+    const fm = useFilterMask ? this.maskDisplay(filterMaskKey(layerId)) : null;
+    const filtered = this.renderFiltered(l.c, filters, fm);
     l.ctx.globalAlpha = 1;
     l.ctx.globalCompositeOperation = "source-over";
     l.ctx.clearRect(0, 0, this.w, this.h);
@@ -2173,13 +2209,15 @@ export class PaintEngine {
     this.healApply(layerId, coverage, rx, ry, rw, rh, "Content-Aware Fill");
   }
 
-  /** Forget a layer's offscreen canvas + mask + cached render (after removal). */
+  /** Forget a layer's offscreen canvas + masks + cached render (after removal). */
   removeLayer(id: string) {
     this.layers.delete(id);
     this.freeMask(id);
+    this.freeMask(filterMaskKey(id));
     this.dropCache(id);
     this.pixelVersion.delete(id);
     this.maskVersion.delete(id);
+    this.maskVersion.delete(filterMaskKey(id));
     this.toneCache.delete(id);
   }
 
@@ -2403,9 +2441,11 @@ export class PaintEngine {
     for (const id of ids) {
       const l = this.layers.get(id);
       const mk = this.masks.get(id);
+      const fm = this.masks.get(filterMaskKey(id));
       m.set(id, {
         layer: l ? l.ctx.getImageData(0, 0, this.w, this.h) : null,
         mask: mk ? mk.ctx.getImageData(0, 0, this.w, this.h) : null,
+        fmMask: fm ? fm.ctx.getImageData(0, 0, this.w, this.h) : null,
       });
     }
     return m;
@@ -2427,6 +2467,8 @@ export class PaintEngine {
       }
       if (snap.mask) this.restoreMask(id, snap.mask);
       else this.freeMask(id);
+      if (snap.fmMask) this.restoreMask(filterMaskKey(id), snap.fmMask);
+      else this.freeMask(filterMaskKey(id));
     }
     this.emitChange();
   }
@@ -2546,13 +2588,18 @@ export class PaintEngine {
     const mv = node.mask?.enabled ? (this.maskVersion.get(node.id) ?? 0) : "x";
     const fx = hasEnabledFx(node.effects) ? fnv(fxHash(node.effects)) : "0";
     const flt = hasEnabledFilters(node.filters) ? fnv(filterStackHash(node.filters)) : "0";
+    // The filter mask only shapes the render while the stack actually runs.
+    const fmv =
+      flt !== "0" && node.filterMask?.enabled
+        ? (this.maskVersion.get(filterMaskKey(node.id)) ?? 0)
+        : "x";
     if (node.type === "group") {
       let sig = "";
       for (const c of node.children) sig += this.effectiveKey(c) + ";";
-      return `G${fnv(sig)}|${flt}|${fx}|${mv}|${this.cs}|${this.docEpoch}`;
+      return `G${fnv(sig)}|${flt}|${fmv}|${fx}|${mv}|${this.cs}|${this.docEpoch}`;
     }
     const pv = this.pixelVersion.get(node.id) ?? 0;
-    return `L${pv}|${flt}|${fx}|${mv}|${this.cs}|${this.docEpoch}`;
+    return `L${pv}|${flt}|${fmv}|${fx}|${mv}|${this.cs}|${this.docEpoch}`;
   }
 
   /** What a parent's merge depends on for one child: the child's intrinsic key
@@ -2702,8 +2749,16 @@ export class PaintEngine {
     this.drawStack(bctx, node.children); // sub-stack: clip groups / adjustments stay group-isolated
     // Group smart filters run on the merged children (group isolation), below
     // the group's own effects — same order as a leaf: pixels → filters → fx.
-    const filtered = hasEnabledFilters(node.filters) ? this.renderFiltered(bc, node.filters!) : bc;
+    const filtered = hasEnabledFilters(node.filters)
+      ? this.renderFiltered(bc, node.filters!, this.filterMaskAlpha(node))
+      : bc;
     return styled ? renderStyled(filtered, node.effects!, this.cs).canvas : filtered;
+  }
+
+  /** The alpha buffer confining a node's smart-filter stack (null = unmasked).
+   *  Routed through maskDisplay so painting the filter mask previews live. */
+  private filterMaskAlpha(node: LayerNode): HTMLCanvasElement | null {
+    return node.filterMask?.enabled ? this.maskDisplay(filterMaskKey(node.id)) : null;
   }
 
   /** The display source for a single leaf/group node WITH its effects (but without
@@ -2714,7 +2769,9 @@ export class PaintEngine {
     if (!disp) return null;
     // Order within a layer: raw pixels → smart filters → layer effects.
     // (Effects derive their silhouette from the FILTERED display — Spec 07 §5.3.)
-    const filtered = hasEnabledFilters(node.filters) ? this.renderFiltered(disp, node.filters!) : disp;
+    const filtered = hasEnabledFilters(node.filters)
+      ? this.renderFiltered(disp, node.filters!, this.filterMaskAlpha(node))
+      : disp;
     return hasEnabledFx(node.effects) ? this.styledLeaf(node, filtered) : filtered;
   }
 
@@ -2745,10 +2802,15 @@ export class PaintEngine {
    *  pre-filter result with its own blend mode + opacity. Returns a fresh
    *  layer-sized canvas; the node's stored pixels are never touched. Only
    *  reached on a render-cache miss — the product is cached by renderNode. */
-  private renderFiltered(src: HTMLCanvasElement, filters: SmartFilter[]): HTMLCanvasElement {
+  private renderFiltered(
+    src: HTMLCanvasElement,
+    filters: SmartFilter[],
+    fmAlpha: HTMLCanvasElement | null = null,
+  ): HTMLCanvasElement {
     const out = this.mk(this.w, this.h, true);
     out.ctx.drawImage(src, 0, 0);
     let cur = out.ctx.getImageData(0, 0, this.w, this.h);
+    const base = fmAlpha ? cur : null; // pristine pixels; never mutated by the loop below
     for (const f of filters) {
       if (!f.enabled) continue;
       const applied = applyFilter(cur, f, this.cs);
@@ -2768,6 +2830,26 @@ export class PaintEngine {
       out.ctx.globalAlpha = 1;
       out.ctx.globalCompositeOperation = "source-over";
       cur = out.ctx.getImageData(0, 0, this.w, this.h);
+    }
+    // Filter mask: confine the WHOLE stack — result = orig + (filtered − orig) ×
+    // mask, interpolated premultiplied so partially-covered edge pixels don't
+    // tint. The mask alpha lives in fmAlpha's A channel (the derived cache).
+    if (base && cur !== base) {
+      const m = fmAlpha!.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
+      const a = base.data;
+      const b = cur.data;
+      for (let i = 0; i < b.length; i += 4) {
+        const t = m[i + 3] / 255;
+        if (t >= 1) continue; // fully filtered — the common (white) case
+        const aa = a[i + 3];
+        const ba = b[i + 3];
+        const na = aa + (ba - aa) * t;
+        const inv = na > 0 ? 1 / na : 0;
+        b[i] = (a[i] * aa * (1 - t) + b[i] * ba * t) * inv;
+        b[i + 1] = (a[i + 1] * aa * (1 - t) + b[i + 1] * ba * t) * inv;
+        b[i + 2] = (a[i + 2] * aa * (1 - t) + b[i + 2] * ba * t) * inv;
+        b[i + 3] = na;
+      }
     }
     out.ctx.putImageData(cur, 0, 0);
     return out.c;
@@ -3995,15 +4077,16 @@ export class PaintEngine {
     this.lineTo(this.lastRaw.x, this.lastRaw.y);
 
     const layerId = this.strokeLayer!;
-    const onMask = this.strokeOnMask && this.masks.has(layerId);
-    const target = onMask ? this.masks.get(layerId)! : this.layer(layerId);
+    const mid = this.maskKeyOf(layerId);
+    const onMask = this.strokeOnMask && this.masks.has(mid);
+    const target = onMask ? this.masks.get(mid)! : this.layer(layerId);
     const rect = this.dirtyRect();
     if (rect) {
       const before = target.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
       this.drawStroke(target.ctx);
       const after = target.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
       this.pushEntry(
-        layerId,
+        onMask ? mid : layerId,
         rect,
         before,
         after,
@@ -4011,7 +4094,7 @@ export class PaintEngine {
         undefined,
         onMask ? "mask" : "layer",
       );
-      if (onMask) this.deriveMaskAlpha(layerId, rect); // refresh the alpha cache for the painted region
+      if (onMask) this.deriveMaskAlpha(mid, rect); // refresh the alpha cache for the painted region
     }
 
     this.stroke.ctx.clearRect(0, 0, this.w, this.h);
@@ -4289,8 +4372,8 @@ export class PaintEngine {
     this.endAdjust();
     // Mask surface active → the blur brush softens the MASK's pixels instead
     // (same session; grayscale target, history lands on the mask surface).
-    this.blurOnMask = this.activeSurface(layerId) === "mask" && this.masks.has(layerId);
-    const l = this.blurOnMask ? this.masks.get(layerId)! : this.layer(layerId);
+    this.blurOnMask = this.activeSurface(layerId) === "mask";
+    const l = this.blurOnMask ? this.masks.get(this.maskKeyOf(layerId))! : this.layer(layerId);
     this.blurring = true;
     this.blurLayer = layerId;
     this.blurOpts = { ...blur };
@@ -4475,8 +4558,8 @@ export class PaintEngine {
     if (this.blurOnMask) {
       // Masks are colour-agnostic (sRGB) — untagged ImageData, then refresh the
       // alpha cache for the baked rect so the softened mask previews live.
-      this.masks.get(this.blurLayer)!.ctx.putImageData(new ImageData(out, iw, ih), ix, iy);
-      this.deriveMaskAlpha(this.blurLayer, { x: ix, y: iy, w: iw, h: ih });
+      this.masks.get(this.maskKeyOf(this.blurLayer))!.ctx.putImageData(new ImageData(out, iw, ih), ix, iy);
+      this.deriveMaskAlpha(this.maskKeyOf(this.blurLayer), { x: ix, y: iy, w: iw, h: ih });
     } else {
       this.layer(this.blurLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
     }
@@ -4493,10 +4576,11 @@ export class PaintEngine {
       const w = Math.min(this.w - 1, D.x1) - x + 1;
       const h = Math.min(this.h - 1, D.y1) - y + 1;
       if (w > 0 && h > 0) {
-        const target = this.blurOnMask ? this.masks.get(layerId)! : this.layer(layerId);
+        const mid = this.blurOnMask ? this.maskKeyOf(layerId) : layerId;
+        const target = this.blurOnMask ? this.masks.get(mid)! : this.layer(layerId);
         const before = this.subImage(this.blurOrig, x, y, w, h);
         const after = target.ctx.getImageData(x, y, w, h);
-        this.pushEntry(layerId, { x, y, w, h }, before, after, "Blur", undefined, this.blurOnMask ? "mask" : "layer");
+        this.pushEntry(mid, { x, y, w, h }, before, after, "Blur", undefined, this.blurOnMask ? "mask" : "layer");
       }
     }
     this.blurring = false;
@@ -4526,8 +4610,8 @@ export class PaintEngine {
     if (this.w < 1 || this.h < 1) return;
     this.endAdjust();
     // Mask surface active → dodge/burn lightens/darkens the MASK (reveal/hide).
-    this.dodgeOnMask = this.activeSurface(layerId) === "mask" && this.masks.has(layerId);
-    const l = this.dodgeOnMask ? this.masks.get(layerId)! : this.layer(layerId);
+    this.dodgeOnMask = this.activeSurface(layerId) === "mask";
+    const l = this.dodgeOnMask ? this.masks.get(this.maskKeyOf(layerId))! : this.layer(layerId);
     this.dodging = true;
     this.dodgeLayer = layerId;
     this.dodgeOpts = { ...opts };
@@ -4693,8 +4777,8 @@ export class PaintEngine {
       }
     }
     if (this.dodgeOnMask) {
-      this.masks.get(this.dodgeLayer)!.ctx.putImageData(new ImageData(out, iw, ih), ix, iy);
-      this.deriveMaskAlpha(this.dodgeLayer, { x: ix, y: iy, w: iw, h: ih });
+      this.masks.get(this.maskKeyOf(this.dodgeLayer))!.ctx.putImageData(new ImageData(out, iw, ih), ix, iy);
+      this.deriveMaskAlpha(this.maskKeyOf(this.dodgeLayer), { x: ix, y: iy, w: iw, h: ih });
     } else {
       this.layer(this.dodgeLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
     }
@@ -4711,11 +4795,12 @@ export class PaintEngine {
       const w = Math.min(this.w - 1, D.x1) - x + 1;
       const h = Math.min(this.h - 1, D.y1) - y + 1;
       if (w > 0 && h > 0) {
-        const target = this.dodgeOnMask ? this.masks.get(layerId)! : this.layer(layerId);
+        const mid = this.dodgeOnMask ? this.maskKeyOf(layerId) : layerId;
+        const target = this.dodgeOnMask ? this.masks.get(mid)! : this.layer(layerId);
         const before = this.subImage(this.dodgeOrig, x, y, w, h);
         const after = target.ctx.getImageData(x, y, w, h);
         const label = this.dodgeOpts?.mode === "burn" ? "Burn" : "Dodge";
-        this.pushEntry(layerId, { x, y, w, h }, before, after, label, undefined, this.dodgeOnMask ? "mask" : "layer");
+        this.pushEntry(mid, { x, y, w, h }, before, after, label, undefined, this.dodgeOnMask ? "mask" : "layer");
       }
     }
     this.dodging = false;

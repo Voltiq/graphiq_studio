@@ -59,6 +59,7 @@ import { invertRects, type Pan, type Rect } from "../lib/view";
 import {
   cloneSubtree,
   collectLeafIds,
+  filterMaskKey,
   findNode,
   flattenedIds,
   insertInGroup,
@@ -1132,6 +1133,90 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     );
   };
 
+  // ---- Filter mask (Spec 07 addendum): confines a node's smart-filter stack ----
+  const addFilterMaskOp = (layerId: string, init: "reveal" | "hide" | "selection" = "reveal") => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    if (!eng || !layerId) return;
+    const node = findNode(d.layers, layerId);
+    if (!node || node.type === "adjustment" || node.filterMask) return;
+    if (!node.filters?.length) {
+      showToast("Add a smart filter first — the filter mask confines the stack.");
+      return;
+    }
+    if (init === "selection" && !d.selection.length) {
+      showToast("Make a selection first to create a mask from it.");
+      return;
+    }
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const after = updateNode(before, layerId, { filterMask: { enabled: true, linked: true } });
+    const key = filterMaskKey(layerId);
+    eng.allocMask(key, init, init === "selection" ? d.selection : null, d.selectionAngle, d.selectionPivot);
+    const snap = eng.captureMask(key);
+    setDocSel(docId, after, sel);
+    eng.setActiveSurface(layerId, "filterMask");
+    setPaintSurface("filterMask");
+    eng.pushStructural(
+      "Add Filter Mask",
+      () => {
+        eng.freeMask(key);
+        setDocSel(docId, before, sel);
+        setPaintSurface("pixels");
+      },
+      () => {
+        if (snap) eng.restoreMask(key, snap);
+        setDocSel(docId, after, sel);
+      },
+    );
+  };
+
+  const removeFilterMaskOp = (layerId: string) => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    if (!eng || !layerId) return;
+    const node = findNode(d.layers, layerId);
+    if (!node || node.type === "adjustment" || !node.filterMask) return;
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const after = updateNode(before, layerId, { filterMask: undefined });
+    const key = filterMaskKey(layerId);
+    const snap = eng.captureMask(key);
+    eng.freeMask(key); // also resets a "filterMask" active surface to pixels
+    setDocSel(docId, after, sel);
+    setPaintSurface(eng.getActiveSurface(layerId));
+    eng.pushStructural(
+      "Delete Filter Mask",
+      () => {
+        if (snap) eng.restoreMask(key, snap);
+        setDocSel(docId, before, sel);
+      },
+      () => {
+        eng.freeMask(key);
+        setDocSel(docId, after, sel);
+      },
+    );
+  };
+
+  const setFilterMaskEnabled = (layerId: string, enabled: boolean) => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    const node = findNode(d.layers, layerId);
+    if (!eng || !node || node.type === "adjustment" || !node.filterMask) return;
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const after = updateNode(before, layerId, { filterMask: { ...node.filterMask, enabled } });
+    setDocSel(docId, after, sel);
+    eng.pushStructural(
+      enabled ? "Enable Filter Mask" : "Disable Filter Mask",
+      () => setDocSel(docId, before, sel),
+      () => setDocSel(docId, after, sel),
+    );
+  };
+
   const loadMaskAsSelectionOp = () => {
     const eng = paintRef.current;
     const d = activeDocRef.current;
@@ -1552,12 +1637,28 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const docId = d.id;
     const sel = selNow();
     const before = d.layers;
-    const after = updateNode(before, id, { filters: undefined });
+    // Baking consumes the filter mask too — it shaped the baked pixels.
+    const after = updateNode(before, id, { filters: undefined, filterMask: undefined });
+    const eng = paintRef.current;
+    const key = filterMaskKey(id);
+    const fmSnap = node.filterMask ? (eng?.captureMask(key) ?? null) : null;
     setDocSel(docId, after, sel);
-    paintRef.current?.applySmartFilters(id, node.filters, {
-      undo: () => setDocSel(docId, before, sel),
-      redo: () => setDocSel(docId, after, sel),
-    });
+    eng?.applySmartFilters(
+      id,
+      node.filters,
+      {
+        undo: () => {
+          if (fmSnap) eng.restoreMask(key, fmSnap);
+          setDocSel(docId, before, sel);
+        },
+        redo: () => {
+          eng.freeMask(key);
+          setDocSel(docId, after, sel);
+        },
+      },
+      !!node.filterMask?.enabled,
+    );
+    eng?.freeMask(key);
     setFilterTarget(null);
   };
   const openLayerStyleOp = (id: string) => {
@@ -1862,6 +1963,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     toggleMaskLinked: (id) => {
       const n = findNode(active.layers, id);
       if (n?.mask) toggleMaskMeta(id, { linked: !n.mask.linked }, n.mask.linked ? "Unlink Layer Mask" : "Link Layer Mask");
+    },
+    toggleFilterMaskEnabled: (id) => {
+      const n = findNode(active.layers, id);
+      if (n && n.type !== "adjustment" && n.filterMask) setFilterMaskEnabled(id, !n.filterMask.enabled);
     },
     loadMaskAsSelection: loadMaskAsSelectionOp,
     addAdjustment: (typeId) => addAdjustmentOp(typeId),
@@ -2258,10 +2363,20 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         const fx = n.effects ? { effects: n.effects } : {};
         const clip = n.clipped ? { clipped: true } : {};
         const flt = n.filters?.length ? { filters: n.filters } : {};
+        // v8: filter mask meta + grayscale (restored under filterMaskKey(new id)).
+        const fmMeta =
+          n.type !== "adjustment" && n.filterMask
+            ? { filterMask: { enabled: n.filterMask.enabled, linked: n.filterMask.linked } }
+            : {};
+        const pushFm = (id: string) => {
+          if (n.type !== "adjustment" && n.filterMaskImage)
+            masks.push({ id: filterMaskKey(id), data: n.filterMaskImage });
+        };
         if (n.type === "group") {
           const id = `grp-${(layerSeqRef.current += 1)}`;
           idMap.set(n.id, id);
           if (n.maskImage) masks.push({ id, data: n.maskImage });
+          pushFm(id);
           return {
             id,
             type: "group",
@@ -2274,6 +2389,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             ...fx,
             ...clip,
             ...flt,
+            ...fmMeta,
             children: remap(n.children),
           };
         }
@@ -2298,6 +2414,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         idMap.set(n.id, id);
         if (n.data) images.push({ id, data: n.data });
         if (n.maskImage) masks.push({ id, data: n.maskImage });
+        pushFm(id);
         return {
           id,
           type: "layer",
@@ -2310,6 +2427,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           ...fx,
           ...clip,
           ...flt,
+          ...fmMeta,
         };
       });
 
@@ -3650,6 +3768,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
               onLive={(filters) => setFiltersLive(filterTarget, filters)}
               onCommit={(filters, label) => setFiltersOp(filterTarget, filters, label)}
               onApplyAll={() => applyFiltersOp(filterTarget)}
+              onAddFilterMask={(init) => addFilterMaskOp(filterTarget, init)}
+              onRemoveFilterMask={() => removeFilterMaskOp(filterTarget)}
+              onToggleFilterMask={(enabled) => setFilterMaskEnabled(filterTarget, enabled)}
+              onPaintFilterMask={() => {
+                chooseSurface(filterTarget, "filterMask");
+                commitFilterEdit();
+                setFilterTarget(null); // close so the brush can reach the canvas
+              }}
+              hasSelection={active.selection.length > 0}
               onClose={() => {
                 commitFilterEdit();
                 setFilterTarget(null);

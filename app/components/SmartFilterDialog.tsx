@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
+  Brush,
   Droplets,
   Focus,
   Grid3x3,
@@ -91,6 +92,11 @@ export default function SmartFilterDialog({
   onLive,
   onCommit,
   onApplyAll,
+  onAddFilterMask,
+  onRemoveFilterMask,
+  onToggleFilterMask,
+  onPaintFilterMask,
+  hasSelection = false,
   onClose,
 }: {
   node: LayerLeaf | LayerGroup;
@@ -100,6 +106,13 @@ export default function SmartFilterDialog({
   onCommit: (filters: SmartFilter[] | undefined, label: string) => void;
   /** Bake the stack into the layer's pixels (leaf layers only). */
   onApplyAll: () => void;
+  /** Filter mask — one grayscale raster confining the whole stack. */
+  onAddFilterMask: (init: "reveal" | "selection") => void;
+  onRemoveFilterMask: () => void;
+  onToggleFilterMask: (enabled: boolean) => void;
+  /** Target the mask as the paint surface (closes the dialog to paint). */
+  onPaintFilterMask: () => void;
+  hasSelection?: boolean;
   onClose: () => void;
 }) {
   const filters = node.filters ?? [];
@@ -473,6 +486,66 @@ export default function SmartFilterDialog({
                   </div>
                 </div>
               )}
+              <div className={styles.group}>
+                <span className={styles.groupTitle}>Filter Mask</span>
+                {node.filterMask ? (
+                  <>
+                    <p className={styles.paneDesc}>
+                      One grayscale mask confines the whole stack — white shows the filtered result,
+                      black keeps the original pixels. Paint it with any brush.
+                    </p>
+                    <div className={styles.paneActions}>
+                      <Toggle
+                        label="Enabled"
+                        checked={node.filterMask.enabled}
+                        onChange={(on) => onToggleFilterMask(on)}
+                      />
+                      <button
+                        type="button"
+                        className={styles.resetBtn}
+                        onClick={onPaintFilterMask}
+                        title="Make the filter mask the paint target and close this dialog"
+                      >
+                        <Brush size={11} /> Paint
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.resetBtn}
+                        onClick={onRemoveFilterMask}
+                        title="Delete the filter mask (the stack applies everywhere again)"
+                      >
+                        <Trash2 size={11} /> Delete
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className={styles.paneDesc}>
+                      Confine these filters to part of the layer with a paintable grayscale mask.
+                    </p>
+                    <div className={styles.paneActions}>
+                      <button
+                        type="button"
+                        className={styles.resetBtn}
+                        disabled={!filters.length}
+                        onClick={() => onAddFilterMask("reveal")}
+                        title={filters.length ? "Add a reveal-all filter mask" : "Add a smart filter first"}
+                      >
+                        <Plus size={11} /> Add Mask
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.resetBtn}
+                        disabled={!filters.length || !hasSelection}
+                        onClick={() => onAddFilterMask("selection")}
+                        title={hasSelection ? "Mask from the current selection" : "Make a selection first"}
+                      >
+                        <Plus size={11} /> From Selection
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>

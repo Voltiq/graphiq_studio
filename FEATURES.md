@@ -1,4 +1,4 @@
-﻿# Graphiq Studio — Features & Architecture
+# Graphiq Studio — Features & Architecture
 
 A browser-based, **fully client-side** raster photo editor with a non-destructive layer stack. There is no server, database, or upload — images never leave the machine; everything is computed in the browser on HTML `<canvas>` elements.
 
@@ -216,9 +216,9 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Effects** composite as a single `drawImage` of the cached styled buffer when idle. **Tone** LUTs are built once per spec change and applied as one typed-array pass. **Clip groups** add one buffer + one composite pass per group (the `destination-in` clip is GPU, no per-pixel JS).
 - Group and clip-group buffers are **fresh per composite** (nesting-safe) — consistent with the existing group compositing; pooled buffers are used only where re-entrancy can't occur.
 
-## Persistence (`.gproj`, format v6)
+## Persistence (`.gproj`, format v8)
 
-- A self-describing JSON: doc name/size, foreground/background, active/selected layers, selection, and the layer tree. **Pixel layers** serialise as PNG data-URLs; **masks** as grayscale PNG data-URLs + `{enabled, linked}`; **adjustment specs**, **layer effects**, and **clipped** flags as plain JSON. Adjustment/effect/clip nodes carry **no raster** — they re-render from params on load.
+- A self-describing JSON: doc name/size, foreground/background, active/selected layers, selection, and the layer tree. **Pixel layers** serialise as PNG data-URLs; **masks** (layer + filter) as grayscale PNG data-URLs + `{enabled, linked}`; **adjustment specs**, **layer effects**, **smart filters**, and **clipped** flags as plain JSON. Adjustment/effect/clip nodes carry **no raster** — they re-render from params on load.
 - **Backward-compatible:** older files (any earlier version, missing mask/effects/adjustment/clipped fields) open unchanged with those features simply absent.
 - Tool options, colours, marquee shape/apex, view toggles, and theme persist separately in `localStorage`.
 - **Autosave & crash recovery:** the active document snapshots to IndexedDB on a Preferences interval (default every 2 min, only when something changed); a heartbeat flag detects unclean exits and offers **Restore / Discard** on the next start. The status bar shows the real save state ("Unsaved changes" / "Saved" / "Autosaved HH:MM") along with the true document colour space and a Photoshop-style flattened/all-layers size estimate.
@@ -231,7 +231,7 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 Honest list of what is **partial, deferred, or absent**:
 
 **Non-destructive stack gaps**
-- **Smart-filter stack mask** is not yet implemented (a second per-layer mask surface confining the filter stack — planned as its own task in TODO.md §1).
+- **Filter-mask move:** the smart-filter mask always tracks its layer through canvas transforms; there is no unlinked per-mask move (the layer mask has one via the link toggle).
 - **Curves "targeted on-canvas adjustment"** (click-drag the image to move the curve node at the sampled tone) is **not** implemented (it was optional in the spec).
 - **Gradient stroke effect:** the engine can render a gradient-filled stroke, but the Layer Style dialog exposes Stroke as **colour-only** (the Gradient *Overlay* has a 2-stop editor).
 - **Clip edge case:** a clipped layer sitting directly above a **non-clipped adjustment layer** is treated as **inert** rather than clipping to the pixel base *below* the adjustment (a rare configuration; the spec permitted "inert" as a fallback).
@@ -245,7 +245,8 @@ Honest list of what is **partial, deferred, or absent**:
 - **8-bit only.** All processing is Canvas 2D `ImageData` (8-bit per channel); there is **no 16/32-bit pipeline** and **no WebGL/WebGPU** path. High-bit-depth, a GPU renderer, and RAW development are future research tracks, not built.
 
 **Smart Filters (Spec 07 built)**
-- Every layer/group can carry a non-destructive, re-editable **smart-filter stack** (Effects menu / Layers panel ▸ Smart Filters…): **Blur** (all nine Blur Gallery types, sharing the same kernel), **Sharpen** (Unsharp Mask), **Noise**, **Pixelate** (Mosaic), **Distort** (Twirl/Pinch/Wave), **Stylize** (Find Edges/Emboss/Posterize/Threshold) — each with enable/reorder/remove, per-filter blend mode + opacity, one-step undo per edit, live document preview, cached via the render graph, serialized in `.gproj` v7, and bakeable via "Apply". The old placeholder menu items are now wired. Not included: a stack-wide filter mask, and Liquify (still a stub — it's a warp-mesh tool, out of scope).
+- Every layer/group can carry a non-destructive, re-editable **smart-filter stack** (Effects menu / Layers panel ▸ Smart Filters…): **Blur** (all nine Blur Gallery types, sharing the same kernel), **Sharpen** (Unsharp Mask), **Noise**, **Pixelate** (Mosaic), **Distort** (Twirl/Pinch/Wave), **Stylize** (Find Edges/Emboss/Posterize/Threshold) — each with enable/reorder/remove, per-filter blend mode + opacity, one-step undo per edit, live document preview, cached via the render graph, serialized in `.gproj` (v7+), and bakeable via "Apply". The old placeholder menu items are now wired. Not included: Liquify (still a stub — it's a warp-mesh tool, out of scope).
+- **Filter mask**: every stack can carry one grayscale mask that confines ALL its filters — white shows the filtered result, black keeps the original pixels, gray blends (premultiplied, so soft edges don't tint). Managed in the Smart Filters dialog (Add Mask / From Selection / Enable toggle / Paint / Delete) and shown as a dashed flask chip in the Layers panel (click targets it for painting, Shift-click disables/enables). It's a full paint surface: brush, pencil, eraser, fills, gradients, the blur/dodge/burn brushes and selection fills all work on it, with normal undo/redo. It duplicates with the layer, tracks canvas resizes/rotations/crops, is consumed by "Apply (Bake)", and saves as `filterMaskImage` in `.gproj` **v8** (v7 and older files still open).
 - A few **Settings/Help** menu items (Performance, Scratch Disks, the Help pages) are stubs. **Keyboard Shortcuts** is implemented: a searchable window (Settings ▸ Keyboard Shortcuts… / Help ▸ Keyboard Shortcuts) generated from the tool and menu registries plus the canvas/panel gestures.
 
 **Roadmap status:** all specs **01–07** (Masks, Adjustment Layers, Layer Effects, Curves & Levels, Clipping Masks, Render Graph, Smart Filters) are implemented.
