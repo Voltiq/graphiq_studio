@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Check, ClipboardPaste, Palette, SlidersHorizontal, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, ClipboardPaste, Gauge, Palette, SlidersHorizontal, X } from "lucide-react";
 import styles from "./PreferencesDialog.module.scss";
 import { applyTheme, currentTheme, resolvedDark } from "./ThemeToggle";
 import { Slider, Toggle } from "./Controls";
@@ -43,12 +43,13 @@ const OVERSIZE_OPTIONS: { value: PasteOversize; title: string; desc: string }[] 
   { value: "expand", title: "Expand canvas to fit", desc: "Grow the canvas so the whole image fits" },
 ];
 
-type Tab = "appearance" | "pasting" | "editing";
+type Tab = "appearance" | "pasting" | "editing" | "performance";
 
 const TABS: { id: Tab; label: string; icon: typeof Palette }[] = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "pasting", label: "Pasting", icon: ClipboardPaste },
   { id: "editing", label: "Editing", icon: SlidersHorizontal },
+  { id: "performance", label: "Performance", icon: Gauge },
 ];
 
 function OptionList<T extends string>({
@@ -81,15 +82,27 @@ function OptionList<T extends string>({
   );
 }
 
+interface CacheStats {
+  enabled: boolean;
+  entries: number;
+  bytes: number;
+  budget: number;
+  hits: number;
+  misses: number;
+}
+
 export default function PreferencesDialog({
   initialTheme,
   prefs,
   onChange,
+  getCacheStats,
   onClose,
 }: {
   initialTheme: Theme;
   prefs: Preferences;
   onChange: (patch: Partial<Preferences>) => void;
+  /** Live render-cache stats for the Performance tab (null before first frame). */
+  getCacheStats?: () => CacheStats | null;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("appearance");
@@ -105,6 +118,17 @@ export default function PreferencesDialog({
     setAccent(a);
     applyAccent(a);
   };
+
+  // Live cache stats while the Performance tab is visible (1s cadence).
+  const [stats, setStats] = useState<CacheStats | null>(null);
+  useEffect(() => {
+    if (tab !== "performance" || !getCacheStats) return;
+    const read = () => setStats(getCacheStats());
+    read();
+    const id = window.setInterval(read, 1000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
 
   return (
     <div className={styles.overlay} onMouseDown={onClose}>
@@ -336,6 +360,67 @@ export default function PreferencesDialog({
                     value={prefs.maxHistory}
                     onChange={(n) => onChange({ maxHistory: n })}
                   />
+                </section>
+              </>
+            )}
+
+            {tab === "performance" && (
+              <>
+                <p className={styles.paneIntro}>
+                  The render cache keeps composited layer products in memory so unchanged parts of
+                  the document never recompute. A bigger budget helps large, layered documents; a
+                  smaller one frees memory sooner.
+                </p>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Render cache</span>
+                  <Slider
+                    label="Memory budget"
+                    min={64}
+                    max={1024}
+                    step={64}
+                    unit=" MB"
+                    value={prefs.cacheBudgetMB}
+                    onChange={(n) => onChange({ cacheBudgetMB: n })}
+                  />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Live statistics</span>
+                  {stats ? (
+                    <div className={styles.statsCard}>
+                      <div className={styles.statRow}>
+                        <span>Memory used</span>
+                        <strong>
+                          {(stats.bytes / (1024 * 1024)).toFixed(1)} of{" "}
+                          {Math.round(stats.budget / (1024 * 1024))} MB
+                        </strong>
+                      </div>
+                      <div className={styles.statMeter}>
+                        <span
+                          style={{
+                            width: `${Math.min(100, (stats.bytes / Math.max(1, stats.budget)) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                      <div className={styles.statRow}>
+                        <span>Cached products</span>
+                        <strong>{stats.entries}</strong>
+                      </div>
+                      <div className={styles.statRow}>
+                        <span>Hit rate (this session)</span>
+                        <strong>
+                          {stats.hits + stats.misses > 0
+                            ? `${Math.round((stats.hits / (stats.hits + stats.misses)) * 100)}%`
+                            : "—"}
+                        </strong>
+                      </div>
+                      <div className={styles.statRow}>
+                        <span>Cache</span>
+                        <strong>{stats.enabled ? "On" : "Off (debug)"}</strong>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className={styles.sectionHint}>Open a document to see cache activity.</p>
+                  )}
                 </section>
               </>
             )}

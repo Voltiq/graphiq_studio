@@ -645,3 +645,46 @@
     left: 18px;
   }
 }
+
+/* -------------------- Performance: live cache statistics ------------------- */
+.statsCard {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+
+.statRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  font-size: 12px;
+  color: var(--text-2);
+
+  strong {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    font-weight: var(--weight-medium);
+    color: var(--text);
+  }
+}
+
+/* Budget usage meter — same anatomy as the Magiq sliders (track + accent fill). */
+.statMeter {
+  height: 4px;
+  border-radius: var(--r-sm);
+  background: var(--track);
+  overflow: hidden;
+
+  span {
+    display: block;
+    height: 100%;
+    border-radius: var(--r-sm);
+    background: var(--accent);
+    transition: width var(--t-med) var(--ease);
+  }
+}

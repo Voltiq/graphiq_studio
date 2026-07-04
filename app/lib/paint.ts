@@ -1,6 +1,6 @@
 ﻿import { parseColor, toHex8 } from "./color";
 import type { Rect } from "./view";
-import { clipGroupsOf, filterMaskKey } from "./layers";
+import { blendOp, clipGroupsOf, filterMaskKey } from "./layers";
 import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerNode } from "./layers";
 import { applyAdjustments, isDefaultAdjust, type Adjustments } from "./adjust";
 import { renderShape, type ShapeGeom } from "./shapes";
@@ -14,6 +14,7 @@ import {
   hasEnabledFilters,
   type SmartFilter,
 } from "./filters";
+import { GpuToneRenderer } from "./gpu";
 import { healPadding, healRegion } from "./heal";
 import { buildCanvasGradient } from "./gradient";
 import {
@@ -323,7 +324,15 @@ export interface EngineHandle {
   ) => void;
   /** Spec 06 debug: toggle the render cache for A/B pixel-identity checks. */
   setRenderCacheEnabled: (on: boolean) => void;
-  renderCacheStats: () => { enabled: boolean; entries: number; bytes: number };
+  renderCacheStats: () => {
+    enabled: boolean;
+    entries: number;
+    bytes: number;
+    budget: number;
+    hits: number;
+    misses: number;
+  };
+  setRenderCacheBudget: (mb: number) => void;
 }
 
 export interface CopyResult {
@@ -345,28 +354,7 @@ export interface PendingPaste {
   float?: boolean;
 }
 
-const BLEND_MAP: Record<string, GlobalCompositeOperation> = {
-  Normal: "source-over",
-  Dissolve: "source-over",
-  Darken: "darken",
-  Multiply: "multiply",
-  "Color Burn": "color-burn",
-  "Linear Burn": "multiply",
-  Lighten: "lighten",
-  Screen: "screen",
-  "Color Dodge": "color-dodge",
-  Add: "lighter",
-  Overlay: "overlay",
-  "Soft Light": "soft-light",
-  "Hard Light": "hard-light",
-  Difference: "difference",
-  Exclusion: "exclusion",
-  Hue: "hue",
-  Saturation: "saturation",
-  Color: "color",
-  Luminosity: "luminosity",
-};
-const blendOp = (b: string): GlobalCompositeOperation => BLEND_MAP[b] ?? "source-over";
+// BLEND_MAP / blendOp moved to layers.ts (shared with the filters worker).
 
 const makeCanvas = (
   w: number,
@@ -510,7 +498,9 @@ export class PaintEngine {
   private renderCacheOn = true; // debug A/B toggle (disabled ⇒ full recompute)
   private renderTick = 0; // LRU clock
   private renderBytes = 0; // owned bytes currently cached
-  private renderBudget = 256 * 1024 * 1024; // LRU eviction beyond this
+  private renderBudget = 256 * 1024 * 1024; // LRU eviction beyond this (Preferences ▸ Performance)
+  private cacheHits = 0;
+  private cacheMisses = 0;
   private frameProtect = new Set<string>(); // entries used by the current frame
   private keyMemo = new Map<string, string>(); // per-composite effectiveKey memo
   private liveBypass = new Set<string>(); // live layer ids + their ancestor path
@@ -528,22 +518,81 @@ export class PaintEngine {
   // Compiled Curves/Levels LUTs per adjustment-node id, keyed by the spec JSON.
   // (Param→LUT math memo, not a pixel cache — stays separate from renderCache.)
   private toneCache = new Map<string, { key: string; luts: ToneLUTs }>();
+  // The tree the current/last composite ran against (for dirty-region proofs).
+  private curTree: LayerNode[] | null = null;
+  // Dirty-region bookkeeping per cached ADJUSTMENT product: which document
+  // region changed beneath it since the product was cached, and the state it
+  // was cached against. Lets a key miss re-process only that region instead of
+  // the whole document (adjustments are strictly per-pixel, so this is exact).
+  private adjMeta = new Map<
+    string,
+    { ownSig: string; tree: LayerNode[]; dirty: Rect | null; unbounded: boolean }
+  >();
 
   /** Mark a layer's pixels changed: its key (and every dependent's) changes, so
-   *  caches miss next composite. `rect` bounds the change for the view blit. */
+   *  caches miss next composite. `rect` bounds the change for the view blit and
+   *  for region-scoped adjustment recompute — but only when the change really
+   *  is local (see changeReaches: effects/filters spread pixels past the rect). */
   private bumpPixel(id: string, rect?: Rect) {
     this.pixelVersion.set(id, (this.pixelVersion.get(id) ?? 0) + 1);
     this.dropCache(id);
-    this.pendingDirty = unionRect(this.pendingDirty, rect ?? null);
-    if (!rect) this.lastTree = null; // unbounded change → next blit is full
+    const bounded = rect && !this.changeReaches(id, "pixel") ? rect : null;
+    this.pendingDirty = unionRect(this.pendingDirty, bounded);
+    if (!bounded) this.lastTree = null; // unbounded change → next blit is full
+    this.noteBelowChange(bounded);
   }
 
-  /** Mark a node's mask changed (same key mechanics as bumpPixel). */
+  /** Mark a node's mask changed (same key mechanics as bumpPixel). A plain
+   *  layer mask multiplies the FINAL styled render, so its change is per-pixel;
+   *  a filter mask (fm:*) feeds the filter stack and inherits its reach. */
   private bumpMask(id: string, rect?: Rect) {
     this.maskVersion.set(id, (this.maskVersion.get(id) ?? 0) + 1);
     this.dropCache(id);
-    this.pendingDirty = unionRect(this.pendingDirty, rect ?? null);
-    if (!rect) this.lastTree = null;
+    const bounded = rect && !this.changeReaches(id, "mask") ? rect : null;
+    this.pendingDirty = unionRect(this.pendingDirty, bounded);
+    if (!bounded) this.lastTree = null;
+    this.noteBelowChange(bounded);
+  }
+
+  /** Does a rect-bounded change on `id` alter rendered pixels OUTSIDE the rect?
+   *  True when the node's own render spreads pixels (enabled smart filters for
+   *  any change; layer effects for pixel changes — a shadow/glow follows the
+   *  silhouette) or when ANY ancestor group is styled. Unknown ids (no tree
+   *  seen yet) are conservatively treated as reaching. */
+  private changeReaches(id: string, kind: "pixel" | "mask"): boolean {
+    const tree = this.curTree;
+    if (!tree) return true;
+    const fm = id.startsWith("fm:");
+    const target = fm ? id.slice(3) : id;
+    let reach = true; // stays true when the id isn't in the tree (conservative)
+    const walk = (nodes: LayerNode[], ancStyled: boolean): boolean => {
+      for (const n of nodes) {
+        const own = hasEnabledFx(n.effects) || hasEnabledFilters(n.filters);
+        if (n.id === target) {
+          if (ancStyled) reach = true;
+          else if (fm) reach = hasEnabledFilters(n.filters);
+          else if (kind === "mask") reach = false; // applied after fx/filters
+          else reach = own;
+          return true;
+        }
+        if (n.type === "group" && walk(n.children, ancStyled || own)) return true;
+      }
+      return false;
+    };
+    walk(tree, false);
+    return reach;
+  }
+
+  /** Fold a committed change into every cached adjustment product's dirty
+   *  region (null = unbounded → that product needs a full recompute on miss).
+   *  Unioning changes that are above/apart from an adjustment is harmless —
+   *  re-processing an unchanged region reproduces the same pixels. */
+  private noteBelowChange(rect: Rect | null) {
+    if (!this.adjMeta.size) return;
+    for (const m of this.adjMeta.values()) {
+      if (!rect) m.unbounded = true;
+      else if (!m.unbounded) m.dirty = unionRect(m.dirty, rect);
+    }
   }
 
   /** Free a node's cached render (also used by LRU eviction + deletion). */
@@ -568,6 +617,39 @@ export class PaintEngine {
     this.renderCache.clear();
     this.renderBytes = 0;
     this.lastTree = null;
+    this.adjMeta.clear();
+  }
+
+  // ---- GPU tone stage (WebGL2 LUTs; Canvas2D is the always-correct fallback) --
+  private gpuTone: GpuToneRenderer | null | undefined; // undefined = not tried yet
+  private gpuOn = true;
+
+  /** Is the GPU LUT pass usable for the working colour space (lazy init)? */
+  private gpuAvailable(): boolean {
+    if (!this.gpuOn) return false;
+    if (this.gpuTone === undefined || (this.gpuTone && this.gpuTone.cs !== this.cs))
+      this.gpuTone = GpuToneRenderer.create(this.cs);
+    return !!this.gpuTone;
+  }
+
+  /** The GPU LUT pass for the working colour space (null = CPU path). */
+  private gpuToneRender(src: HTMLCanvasElement, w: number, h: number, luts: ToneLUTs): HTMLCanvasElement | null {
+    return this.gpuAvailable() ? this.gpuTone!.render(src, w, h, luts) : null;
+  }
+
+  /** Debug A/B toggle (window.__gqGPU): GPU vs CPU tone stage. Clears cached
+   *  adjustment products so the whole document re-renders on the chosen path. */
+  setGpuEnabled(on: boolean) {
+    this.gpuOn = on;
+    this.renderCache.clear();
+    this.renderBytes = 0;
+    this.adjMeta.clear();
+    this.lastTree = null;
+    this.emitChange();
+  }
+
+  gpuStatus(): { enabled: boolean; active: boolean } {
+    return { enabled: this.gpuOn, active: this.gpuOn && !!this.gpuTone };
   }
 
   /** Debug A/B toggle: with the cache off, every composite fully recomputes —
@@ -583,8 +665,30 @@ export class PaintEngine {
   }
 
   /** Cache occupancy (dev overlay / console). */
-  renderCacheStats(): { enabled: boolean; entries: number; bytes: number } {
-    return { enabled: this.renderCacheOn, entries: this.renderCache.size, bytes: this.renderBytes };
+  renderCacheStats(): {
+    enabled: boolean;
+    entries: number;
+    bytes: number;
+    budget: number;
+    hits: number;
+    misses: number;
+  } {
+    return {
+      enabled: this.renderCacheOn,
+      entries: this.renderCache.size,
+      bytes: this.renderBytes,
+      budget: this.renderBudget,
+      hits: this.cacheHits,
+      misses: this.cacheMisses,
+    };
+  }
+
+  /** Set the render-cache LRU byte budget (Preferences ▸ Performance). Evicts
+   *  immediately when shrinking; entries used by the last frame stay protected. */
+  setRenderCacheBudget(mb: number): void {
+    const clamped = Math.max(64, Math.min(2048, Math.round(mb)));
+    this.renderBudget = clamped * 1024 * 1024;
+    this.evictOverBudget();
   }
 
   /** Make a canvas in the working colour space (for layer-content buffers). */
@@ -1528,7 +1632,7 @@ export class PaintEngine {
     if (this.pos < this.entries.length) this.entries.length = this.pos;
     this.entries.push({ layerId, rect, before, after, label, side, surface });
     this.pos = this.entries.length;
-    if (surface !== "mask") this.bumpPixel(layerId); // layer pixels changed → restyle
+    if (surface !== "mask") this.bumpPixel(layerId, rect); // layer pixels changed → restyle
     this.emitHistory();
   }
 
@@ -2098,7 +2202,10 @@ export class PaintEngine {
   }
 
   // ---- Spot heal / content-aware fill ---------------------------------------
-  /** Shared tail: crop the padded region, heal `coverage`, bake + one entry. */
+  /** Shared tail: crop the padded region, heal `coverage`, bake + one entry.
+   *  The solve runs in the heal worker (UI stays responsive on big blobs);
+   *  finishHeal validates + bakes the reply, or computes synchronously when
+   *  workers are unavailable. */
   private healApply(
     layerId: string,
     coverage: Uint8ClampedArray,
@@ -2111,11 +2218,33 @@ export class PaintEngine {
     const l = this.layers.get(layerId);
     if (!l) return;
     const src = l.ctx.getImageData(rx, ry, rw, rh);
-    const healed = healRegion({ src, coverage });
-    l.ctx.putImageData(healed, rx, ry);
-    this.pushEntry(layerId, { x: rx, y: ry, w: rw, h: rh }, src, healed, label);
-    this.bumpPixel(layerId, { x: rx, y: ry, w: rw, h: rh });
-    this.emitChange();
+    const job = {
+      layerId,
+      rx,
+      ry,
+      rw,
+      rh,
+      label,
+      epoch: this.docEpoch,
+      docW: this.w,
+      docH: this.h,
+      before: src,
+      coverage,
+    };
+    const w = this.ensureHealWorker();
+    if (!w) {
+      this.finishHeal(job, null); // sync path
+      return;
+    }
+    const id = ++this.healJobSeq;
+    this.healPending.set(id, job);
+    // Ship COPIES: `before`/`coverage` stay usable for history + the fallback.
+    const srcCopy = src.data.slice();
+    const covCopy = coverage.slice();
+    w.postMessage(
+      { id, w: rw, h: rh, src: srcCopy.buffer, coverage: covCopy.buffer },
+      [srcCopy.buffer, covCopy.buffer],
+    );
   }
 
   /** Multiply a region-space coverage by the current selection's mask. */
@@ -2219,6 +2348,9 @@ export class PaintEngine {
     this.maskVersion.delete(id);
     this.maskVersion.delete(filterMaskKey(id));
     this.toneCache.delete(id);
+    this.filteredCache.delete(id);
+    this.filterPending.delete(id);
+    this.adjMeta.delete(id);
   }
 
   /** A leaf layer's pixels as a PNG data URL (null if it has no canvas yet). */
@@ -2711,10 +2843,12 @@ export class PaintEngine {
     if (!bypass) {
       const hit = this.renderCache.get(node.id);
       if (hit && hit.key === key) {
+        this.cacheHits++;
         hit.tick = ++this.renderTick;
         this.frameProtect.add(node.id);
         return hit.c;
       }
+      this.cacheMisses++;
     }
     // Miss → recompute with the SAME ops as the uncached path.
     const styled = this.styledSource(node);
@@ -2749,9 +2883,7 @@ export class PaintEngine {
     this.drawStack(bctx, node.children); // sub-stack: clip groups / adjustments stay group-isolated
     // Group smart filters run on the merged children (group isolation), below
     // the group's own effects — same order as a leaf: pixels → filters → fx.
-    const filtered = hasEnabledFilters(node.filters)
-      ? this.renderFiltered(bc, node.filters!, this.filterMaskAlpha(node))
-      : bc;
+    const filtered = hasEnabledFilters(node.filters) ? this.filteredProduct(node, bc) : bc;
     return styled ? renderStyled(filtered, node.effects!, this.cs).canvas : filtered;
   }
 
@@ -2769,9 +2901,7 @@ export class PaintEngine {
     if (!disp) return null;
     // Order within a layer: raw pixels → smart filters → layer effects.
     // (Effects derive their silhouette from the FILTERED display — Spec 07 §5.3.)
-    const filtered = hasEnabledFilters(node.filters)
-      ? this.renderFiltered(disp, node.filters!, this.filterMaskAlpha(node))
-      : disp;
+    const filtered = hasEnabledFilters(node.filters) ? this.filteredProduct(node, disp) : disp;
     return hasEnabledFx(node.effects) ? this.styledLeaf(node, filtered) : filtered;
   }
 
@@ -2904,18 +3034,90 @@ export class PaintEngine {
       if (hit && hit.key === key) {
         hit.tick = ++this.renderTick;
         this.frameProtect.add(node.id);
+        // A key match proves the product equals f(current below-state): reset
+        // the dirty bookkeeping so the next miss can be region-scoped.
+        if (this.curTree)
+          this.adjMeta.set(node.id, {
+            ownSig: this.adjustmentOwnSig(node),
+            tree: this.curTree,
+            dirty: null,
+            unbounded: false,
+          });
         ctx.globalCompositeOperation = "copy"; // replace the accumulator wholesale
         ctx.drawImage(hit.c, 0, 0);
         ctx.globalCompositeOperation = "source-over";
         return;
       }
+      // Miss. If everything that changed beneath since the cached product was
+      // built is rect-bounded (same immutable tree, per-pixel changes only, no
+      // effect/filter reach — see bumpPixel/changeReaches), the adjustment only
+      // needs re-processing INSIDE that rect: adjustments are strictly
+      // per-pixel, so outside it f(below) is byte-identical to the old product.
+      const prev = this.renderCache.get(node.id);
+      const meta = this.adjMeta.get(node.id);
+      if (
+        prev &&
+        meta &&
+        !meta.unbounded &&
+        meta.dirty &&
+        this.curTree !== null &&
+        meta.tree === this.curTree &&
+        meta.ownSig === this.adjustmentOwnSig(node) &&
+        // Tone specs with the GPU pass active take the full path instead: it is
+        // already cheap (no readback / JS loop), and patching a GPU product
+        // with CPU pixels could seam at the region border (sub-LSB
+        // unpremultiply differences on semi-transparent pixels).
+        (node.adjustment.type === "sliders" || !this.gpuAvailable())
+      ) {
+        const r = clampRect(meta.dirty, this.w, this.h);
+        // Worth it only while the region is clearly smaller than the document.
+        if (r && r.w * r.h <= 0.7 * this.w * this.h) {
+          const own = this.mk(this.w, this.h);
+          own.ctx.drawImage(prev.c, 0, 0); // old post-apply pixels everywhere
+          // Fresh BELOW pixels inside the region…
+          own.ctx.save();
+          own.ctx.beginPath();
+          own.ctx.rect(r.x, r.y, r.w, r.h);
+          own.ctx.clip();
+          own.ctx.clearRect(r.x, r.y, r.w, r.h);
+          own.ctx.drawImage(ctx.canvas, 0, 0);
+          own.ctx.restore();
+          // …processed by the same math as the full path, region-scoped.
+          this.applyAdjustmentRegion(own.ctx, node, r);
+          ctx.globalCompositeOperation = "copy";
+          ctx.drawImage(own.c, 0, 0);
+          ctx.globalCompositeOperation = "source-over";
+          this.cacheStore(node.id, key, own.c, true);
+          this.adjMeta.set(node.id, {
+            ownSig: meta.ownSig,
+            tree: meta.tree,
+            dirty: null,
+            unbounded: false,
+          });
+          return;
+        }
+      }
     }
-    this.applyAdjustmentNode(ctx, node); // the existing (expensive) read-back path
+    this.applyAdjustmentNode(ctx, node); // the full-document read-back path
     if (!bypass) {
       const own = this.mk(this.w, this.h);
       own.ctx.drawImage(ctx.canvas, 0, 0);
       this.cacheStore(node.id, key, own.c, true);
+      if (this.curTree)
+        this.adjMeta.set(node.id, {
+          ownSig: this.adjustmentOwnSig(node),
+          tree: this.curTree,
+          dirty: null,
+          unbounded: false,
+        });
     }
+  }
+
+  /** The adjustment-key components that are NOT the below signature — a partial
+   *  (region-scoped) product update is only sound when these are unchanged. */
+  private adjustmentOwnSig(node: LayerAdjustment): string {
+    const mv = node.mask?.enabled ? (this.maskVersion.get(node.id) ?? 0) : "x";
+    return `${fnv(this.specHash(node.adjustment))}|${mv}|${node.opacity}|${node.blend}|${this.cs}|${this.docEpoch}`;
   }
 
   /** Cache-backed clip-group step: the assembled group (pre base opacity/blend)
@@ -3007,22 +3209,76 @@ export class PaintEngine {
    *  `applyAdjustments`; Curves/Levels apply cached LUTs. Clipping is NOT handled
    *  here — a clipped adjustment is a clip-group member processed against the
    *  already-base-shaped buffer (see renderClipGroup). */
+  /** Region-scoped twin of applyAdjustmentNode: reads the below pixels only in
+   *  `r`, processes them with the SAME math, and composes them back modulated
+   *  by opacity × mask × blend — all confined to `r`. Every operation involved
+   *  (the adjustment itself, the alpha modulation, canvas blend modes) is
+   *  per-pixel, so the result is byte-identical to a full re-process inside `r`
+   *  and untouched outside it. */
+  private applyAdjustmentRegion(ctx: CanvasRenderingContext2D, node: LayerAdjustment, r: Rect) {
+    const spec = node.adjustment;
+    if (spec.type === "sliders" && isDefaultAdjust(spec.params)) return; // neutral → no-op
+    const below = ctx.getImageData(r.x, r.y, r.w, r.h);
+    const out =
+      spec.type === "sliders"
+        ? applyAdjustments(below, spec.params, this.cs)
+        : applyToneLUTs(below, this.toneLUTs(node.id, spec));
+    const maskAlpha = node.mask?.enabled ? this.maskDisplay(node.id) : null;
+    const opacity = Math.max(0, Math.min(1, node.opacity / 100));
+    const op = blendOp(node.blend);
+    if (opacity >= 1 && !maskAlpha && op === "source-over") {
+      ctx.putImageData(out, r.x, r.y); // fast path: unmasked Normal replace
+      return;
+    }
+    // Region-sized buffers (the full path uses doc-sized shared ones).
+    const tmp = this.mk(r.w, r.h);
+    tmp.ctx.putImageData(out, 0, 0);
+    const mod = this.mk(r.w, r.h);
+    mod.ctx.fillStyle = `rgba(0,0,0,${opacity})`;
+    mod.ctx.fillRect(0, 0, r.w, r.h);
+    if (maskAlpha) {
+      mod.ctx.globalCompositeOperation = "destination-in";
+      mod.ctx.drawImage(maskAlpha, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+      mod.ctx.globalCompositeOperation = "source-over";
+    }
+    tmp.ctx.globalCompositeOperation = "destination-in";
+    tmp.ctx.drawImage(mod.c, 0, 0);
+    tmp.ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = op;
+    ctx.drawImage(tmp.c, r.x, r.y);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+  }
+
   private applyAdjustmentNode(ctx: CanvasRenderingContext2D, node: LayerAdjustment) {
     const w = this.w;
     const h = this.h;
     if (w < 1 || h < 1) return;
     const spec = node.adjustment;
     if (spec.type === "sliders" && isDefaultAdjust(spec.params)) return; // neutral → no-op
-    const below = ctx.getImageData(0, 0, w, h);
-    const out =
-      spec.type === "sliders"
-        ? applyAdjustments(below, spec.params, this.cs) // REUSED slider math
-        : applyToneLUTs(below, this.toneLUTs(node.id, spec)); // single LUT pass (mutates `below`)
+    // Tone specs (Curves/Levels) take the GPU LUT pass when available: the
+    // accumulator uploads straight to a texture and the result comes back via
+    // drawImage — no full-document getImageData, no JS per-pixel loop.
+    const gpuOut =
+      spec.type === "sliders" ? null : this.gpuToneRender(ctx.canvas, w, h, this.toneLUTs(node.id, spec));
+    const out = gpuOut
+      ? null
+      : spec.type === "sliders"
+        ? applyAdjustments(ctx.getImageData(0, 0, w, h), spec.params, this.cs) // REUSED slider math
+        : applyToneLUTs(ctx.getImageData(0, 0, w, h), this.toneLUTs(node.id, spec)); // single LUT pass
     const maskAlpha = node.mask?.enabled ? this.maskDisplay(node.id) : null;
     const opacity = Math.max(0, Math.min(1, node.opacity / 100));
     const op = blendOp(node.blend);
     if (opacity >= 1 && !maskAlpha && op === "source-over") {
-      ctx.putImageData(out, 0, 0); // fast path: full, unmasked, Normal replace
+      // Fast path: full, unmasked, Normal replace.
+      if (gpuOut) {
+        ctx.globalCompositeOperation = "copy";
+        ctx.drawImage(gpuOut, 0, 0);
+        ctx.globalCompositeOperation = "source-over";
+      } else {
+        ctx.putImageData(out!, 0, 0);
+      }
       return;
     }
     // Adjusted pixels in a temp, then confine them to the modulation alpha.
@@ -3030,7 +3286,8 @@ export class PaintEngine {
     tmp.ctx.globalAlpha = 1;
     tmp.ctx.globalCompositeOperation = "source-over";
     tmp.ctx.clearRect(0, 0, w, h);
-    tmp.ctx.putImageData(out, 0, 0);
+    if (gpuOut) tmp.ctx.drawImage(gpuOut, 0, 0);
+    else tmp.ctx.putImageData(out!, 0, 0);
     const mod = this.adjBuf("mod");
     mod.ctx.globalAlpha = 1;
     mod.ctx.globalCompositeOperation = "source-over";
@@ -3058,15 +3315,21 @@ export class PaintEngine {
    *  output regardless of cache state. */
   exportComposite(tree: LayerNode[], clean = false): HTMLCanvasElement {
     const wasOn = this.renderCacheOn;
-    if (clean) this.renderCacheOn = false;
+    const gpuWas = this.gpuOn;
+    if (clean) {
+      this.renderCacheOn = false;
+      this.gpuOn = false; // byte-certain output = the always-correct CPU path
+    }
     this.keyMemo.clear();
     this.frameProtect.clear();
     this.liveBypass = this.computeLiveBypass(tree);
+    this.curTree = tree;
     const { c, ctx } = this.mk(this.w, this.h, true); // readback for adjustment nodes
     this.drawStack(ctx, tree);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
     this.renderCacheOn = wasOn;
+    this.gpuOn = gpuWas;
     return c;
   }
 
@@ -3082,6 +3345,7 @@ export class PaintEngine {
     const b = new Array<number>(256).fill(0);
     if (this.w < 1 || this.h < 1) return { r, g, b };
     const full = this.mk(this.w, this.h, true);
+    this.curTree = tree;
     this.drawStack(full.ctx, tree);
     full.ctx.globalAlpha = 1;
     full.ctx.globalCompositeOperation = "source-over";
@@ -3120,6 +3384,7 @@ export class PaintEngine {
     this.keyMemo.clear();
     this.frameProtect.clear();
     this.liveBypass = this.computeLiveBypass(tree);
+    this.curTree = tree;
     const acc = this.adjBuf("comp", true);
     acc.ctx.globalAlpha = 1;
     acc.ctx.globalCompositeOperation = "source-over";
@@ -4822,6 +5087,252 @@ export class PaintEngine {
   // are session- and sequence-guarded: stale results are dropped, and nothing
   // is ever applied after cancel/commit. Falls back to the sync path.
   private blurWorker: Worker | null = null;
+
+  // ---- Heal worker (one-shot jobs; sync fallback if workers are unavailable) --
+  private healWorker: Worker | null = null;
+  private healWorkerBroken = false;
+  private healJobSeq = 0;
+  private healPending = new Map<
+    number,
+    {
+      layerId: string;
+      rx: number;
+      ry: number;
+      rw: number;
+      rh: number;
+      label: string;
+      epoch: number;
+      docW: number;
+      docH: number;
+      before: ImageData;
+      coverage: Uint8ClampedArray; // kept for the sync fallback on worker error
+    }
+  >();
+
+  private ensureHealWorker(): Worker | null {
+    if (this.healWorkerBroken) return null;
+    if (this.healWorker) return this.healWorker;
+    if (typeof Worker === "undefined") {
+      this.healWorkerBroken = true;
+      return null;
+    }
+    try {
+      const w = new Worker(new URL("../workers/heal.worker.ts", import.meta.url), {
+        type: "module",
+      });
+      w.onmessage = (e) => this.onHealWorkerMessage(e);
+      w.onerror = () => {
+        // Permanent sync fallback — and finish anything already in flight
+        // synchronously so no released heal blob is silently lost.
+        this.healWorkerBroken = true;
+        try {
+          w.terminate();
+        } catch {
+          /* ignore */
+        }
+        this.healWorker = null;
+        const pending = [...this.healPending.values()];
+        this.healPending.clear();
+        for (const job of pending) this.finishHeal(job, null);
+      };
+      this.healWorker = w;
+      return w;
+    } catch {
+      this.healWorkerBroken = true;
+      return null;
+    }
+  }
+
+  private onHealWorkerMessage(e: MessageEvent<{ id: number; data: ArrayBuffer }>) {
+    const job = this.healPending.get(e.data.id);
+    if (!job) return;
+    this.healPending.delete(e.data.id);
+    this.finishHeal(job, new Uint8ClampedArray(e.data.data));
+  }
+
+  /** Bake a finished heal (worker bytes, or recompute sync when bytes = null).
+   *  Discards the result if the document was reframed while it was in flight —
+   *  the captured coordinates would no longer be valid. */
+  private finishHeal(
+    job: {
+      layerId: string;
+      rx: number;
+      ry: number;
+      rw: number;
+      rh: number;
+      label: string;
+      epoch: number;
+      docW: number;
+      docH: number;
+      before: ImageData;
+      coverage: Uint8ClampedArray;
+    },
+    bytes: Uint8ClampedArray<ArrayBuffer> | null,
+  ) {
+    if (job.epoch !== this.docEpoch || job.docW !== this.w || job.docH !== this.h) return;
+    const l = this.layers.get(job.layerId);
+    if (!l) return; // layer deleted while healing
+    let healed: ImageData;
+    if (bytes) {
+      try {
+        healed = new ImageData(bytes, job.rw, job.rh, { colorSpace: this.cs });
+      } catch {
+        healed = new ImageData(bytes, job.rw, job.rh);
+      }
+    } else {
+      healed = healRegion({ src: job.before, coverage: job.coverage });
+    }
+    l.ctx.putImageData(healed, job.rx, job.ry);
+    this.pushEntry(
+      job.layerId,
+      { x: job.rx, y: job.ry, w: job.rw, h: job.rh },
+      job.before,
+      healed,
+      job.label,
+    );
+    this.bumpPixel(job.layerId, { x: job.rx, y: job.ry, w: job.rw, h: job.rh });
+    this.emitChange();
+  }
+
+  // ---- Smart-filter worker (stale-while-refresh product cache) ---------------
+  // A node's filtered pixels are cached per node id, keyed by its nodeKey. On a
+  // key miss WITH a stale product available, the recompute runs in the worker
+  // while the stale product draws this frame — so param drags stay fluid; the
+  // fresh result lands via onFilterWorkerMessage and triggers a recomposite.
+  private filterWorker: Worker | null = null;
+  private filterWorkerBroken = false;
+  private filterJobSeq = 0;
+  /** Per-node newest in-flight job (older replies are dropped). */
+  private filterPending = new Map<string, { seq: number; key: string }>();
+  private filteredCache = new Map<string, { key: string; canvas: HTMLCanvasElement }>();
+
+  private ensureFilterWorker(): Worker | null {
+    if (this.filterWorkerBroken) return null;
+    if (this.filterWorker) return this.filterWorker;
+    if (typeof Worker === "undefined") {
+      this.filterWorkerBroken = true;
+      return null;
+    }
+    try {
+      const w = new Worker(new URL("../workers/filters.worker.ts", import.meta.url), {
+        type: "module",
+      });
+      w.onmessage = (e) => this.onFilterWorkerMessage(e);
+      w.onerror = () => {
+        // Permanent sync fallback: pending stale frames self-heal because the
+        // next composite misses the product cache and recomputes in-line.
+        this.filterWorkerBroken = true;
+        try {
+          w.terminate();
+        } catch {
+          /* ignore */
+        }
+        this.filterWorker = null;
+        this.filterPending.clear();
+        this.renderCache.clear();
+        this.lastTree = null;
+        this.adjMeta.clear();
+        this.emitChange();
+      };
+      this.filterWorker = w;
+      return w;
+    } catch {
+      this.filterWorkerBroken = true;
+      return null;
+    }
+  }
+
+  private onFilterWorkerMessage(
+    e: MessageEvent<{ id: number; nodeId: string; key: string; w: number; h: number; data: ArrayBuffer }>,
+  ) {
+    const { id, nodeId, key, w, h, data } = e.data;
+    const pend = this.filterPending.get(nodeId);
+    if (!pend || pend.seq !== id) return; // superseded by a newer job
+    this.filterPending.delete(nodeId);
+    if (w !== this.w || h !== this.h) return; // document reframed mid-flight
+    const bytes = new Uint8ClampedArray(data);
+    let img: ImageData;
+    try {
+      img = new ImageData(bytes, w, h, { colorSpace: this.cs });
+    } catch {
+      img = new ImageData(bytes, w, h);
+    }
+    const cv = this.mk(w, h);
+    cv.ctx.putImageData(img, 0, 0);
+    this.storeFiltered(nodeId, key, cv.c);
+    // Frames composited while this was in flight cached STALE products under
+    // fresh keys (the node itself, its ancestors, clip groups, adjustment
+    // accumulators). One cache clear is the safe, cheap invalidation — the
+    // expensive part (the filter product) is warm in filteredCache.
+    this.renderCache.clear();
+    this.renderBytes = 0;
+    this.lastTree = null;
+    this.adjMeta.clear();
+    this.emitChange();
+  }
+
+  private storeFiltered(id: string, key: string, canvas: HTMLCanvasElement) {
+    this.filteredCache.delete(id); // re-insert to refresh Map order (LRU-ish)
+    this.filteredCache.set(id, { key, canvas });
+    while (this.filteredCache.size > 8) {
+      const oldest = this.filteredCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.filteredCache.delete(oldest);
+    }
+  }
+
+  /** Queue an async recompute of `node`'s filter stack (true = queued/running). */
+  private kickFilterJob(node: LayerNode, src: HTMLCanvasElement, key: string): boolean {
+    const w = this.ensureFilterWorker();
+    if (!w) return false;
+    const pend = this.filterPending.get(node.id);
+    if (pend && pend.key === key) return true; // this exact state is already queued
+    const seq = ++this.filterJobSeq;
+    this.filterPending.set(node.id, { seq, key });
+    const img = src.getContext("2d")!.getImageData(0, 0, this.w, this.h);
+    const transfers: ArrayBuffer[] = [img.data.buffer];
+    let fm: ArrayBuffer | null = null;
+    const fmCanvas = this.filterMaskAlpha(node);
+    if (fmCanvas) {
+      const fmImg = fmCanvas.getContext("2d")!.getImageData(0, 0, this.w, this.h);
+      fm = fmImg.data.buffer;
+      transfers.push(fm);
+    }
+    w.postMessage(
+      {
+        id: seq,
+        nodeId: node.id,
+        key,
+        w: this.w,
+        h: this.h,
+        cs: this.cs,
+        src: img.data.buffer,
+        fm,
+        filters: node.filters,
+      },
+      transfers,
+    );
+    return true;
+  }
+
+  /** The node's filtered pixels via the product cache: hit → cached canvas;
+   *  miss with a stale product → async worker refresh, stale drawn this frame;
+   *  cold (or live-session bypass) → synchronous compute, exactly as before. */
+  private filteredProduct(node: LayerNode, src: HTMLCanvasElement): HTMLCanvasElement {
+    const live = this.liveBypass.has(node.id);
+    if (!live) {
+      const key = this.nodeKey(node);
+      const ent = this.filteredCache.get(node.id);
+      if (ent && ent.key === key) return ent.canvas;
+      if (ent && this.kickFilterJob(node, src, key)) return ent.canvas; // stale + refresh
+      const out = this.renderFiltered(src, node.filters!, this.filterMaskAlpha(node));
+      this.storeFiltered(node.id, key, out);
+      return out;
+    }
+    // A live paint/move session mutates `src` without version bumps — the key
+    // can't see those changes, so always compute in-line and never cache.
+    return this.renderFiltered(src, node.filters!, this.filterMaskAlpha(node));
+  }
   private blurWorkerBroken = false;
   private blurSessionId = 0;
   private blurRenderSeq = 0;

@@ -26,6 +26,8 @@ export interface Preferences {
   /** Autosave interval in minutes (0 = off). Snapshots go to IndexedDB and are
    *  offered for restore after an unclean exit. */
   autosaveMinutes: number;
+  /** Render-cache LRU budget in MB (Preferences ▸ Performance). */
+  cacheBudgetMB: number;
   /** Minimize non-essential animations and panel transitions
    *  (Preferences ▸ Appearance; applied as data-motion="off" on <html>). */
   reduceMotion: boolean;
@@ -41,6 +43,7 @@ export const DEFAULT_PREFS: Preferences = {
   newDocWidth: 1920,
   newDocHeight: 1080,
   autosaveMinutes: 2,
+  cacheBudgetMB: 256,
   reduceMotion: false,
 };
 

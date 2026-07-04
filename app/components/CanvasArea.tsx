@@ -1072,18 +1072,25 @@ export default function CanvasArea({
   if (!engineRef.current) engineRef.current = new PaintEngine();
   const engine = engineRef.current;
 
-  // Dev-only console hook for render-cache A/B verification (Spec 06):
-  // __gqRenderCache.disable() must produce pixel-identical output, just slower.
+  // Dev-only console hooks: __gqRenderCache A/B (Spec 06 — disable() must be
+  // pixel-identical, just slower) and __gqGPU A/B (WebGL2 tone-LUT stage vs
+  // the always-correct Canvas2D path).
   useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
-    const w = window as unknown as { __gqRenderCache?: object };
+    const w = window as unknown as { __gqRenderCache?: object; __gqGPU?: object };
     w.__gqRenderCache = {
       enable: () => engine.setRenderCacheEnabled(true),
       disable: () => engine.setRenderCacheEnabled(false),
       stats: () => engine.renderCacheStats(),
     };
+    w.__gqGPU = {
+      enable: () => engine.setGpuEnabled(true),
+      disable: () => engine.setGpuEnabled(false),
+      status: () => engine.gpuStatus(),
+    };
     return () => {
       delete w.__gqRenderCache;
+      delete w.__gqGPU;
     };
   }, [engine]);
 
@@ -2491,6 +2498,7 @@ export default function CanvasArea({
       resizeCanvasAnchored: (w, h, dx, dy, ids) => engine.resizeCanvasAnchored(w, h, dx, dy, ids),
       setRenderCacheEnabled: (on) => engine.setRenderCacheEnabled(on),
       renderCacheStats: () => engine.renderCacheStats(),
+      setRenderCacheBudget: (mb) => engine.setRenderCacheBudget(mb),
     };
     engine.syncHistory();
     scheduleComposite();

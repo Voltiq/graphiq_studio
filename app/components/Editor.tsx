@@ -2293,6 +2293,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     document.documentElement.setAttribute("data-motion", prefs.reduceMotion ? "off" : "on");
   }, [prefs.reduceMotion]);
 
+  // Render-cache budget preference -> engine LRU limit (evicts when shrunk).
+  useEffect(() => {
+    paintRef.current?.setRenderCacheBudget(prefs.cacheBudgetMB);
+  }, [prefs.cacheBudgetMB]);
+
   const markSaved = (label: string) => {
     autosaveDirtyRef.current = false;
     setSaveState({ label, ok: true });
@@ -3707,6 +3712,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           initialTheme={initialTheme}
           prefs={prefs}
           onChange={updatePrefs}
+          getCacheStats={() => paintRef.current?.renderCacheStats() ?? null}
           onClose={() => setPrefsOpen(false)}
         />
       )}

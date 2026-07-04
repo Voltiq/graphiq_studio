@@ -93,6 +93,32 @@ export type LayerPatch = Partial<
   filterMask?: MaskMeta | undefined;
 };
 
+/** Blend-mode name → canvas composite op. Shared by the engine's compositor
+ *  and the smart-filter worker (both blend with the same table). Modes without
+ *  a native op (Dissolve, Linear Burn≈multiply, Add=lighter) use the closest. */
+export const BLEND_MAP: Record<string, GlobalCompositeOperation> = {
+  Normal: "source-over",
+  Dissolve: "source-over",
+  Darken: "darken",
+  Multiply: "multiply",
+  "Color Burn": "color-burn",
+  "Linear Burn": "multiply",
+  Lighten: "lighten",
+  Screen: "screen",
+  "Color Dodge": "color-dodge",
+  Add: "lighter",
+  Overlay: "overlay",
+  "Soft Light": "soft-light",
+  "Hard Light": "hard-light",
+  Difference: "difference",
+  Exclusion: "exclusion",
+  Hue: "hue",
+  Saturation: "saturation",
+  Color: "color",
+  Luminosity: "luminosity",
+};
+export const blendOp = (b: string): GlobalCompositeOperation => BLEND_MAP[b] ?? "source-over";
+
 export const BLEND_MODES = [
   "Normal",
   "Dissolve",
