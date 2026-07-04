@@ -56,9 +56,9 @@ export interface Tool {
 export const TOOL_GROUPS: Tool[][] = [
   [
     { id: "move", name: "Move", icon: Move, shortcut: "V" },
-    { id: "select", name: "Rectangular Marquee", icon: BoxSelect, shortcut: "M" },
+    { id: "select", name: "Rectangular marquee", icon: BoxSelect, shortcut: "M" },
     { id: "lasso", name: "Lasso", icon: Lasso, shortcut: "L" },
-    { id: "wand", name: "Magic Wand", icon: Wand2, shortcut: "W" },
+    { id: "wand", name: "Magic wand", icon: Wand2, shortcut: "W" },
     { id: "crop", name: "Crop", icon: Crop, shortcut: "C" },
     { id: "eyedropper", name: "Eyedropper", icon: Pipette, shortcut: "I" },
   ],
@@ -66,9 +66,9 @@ export const TOOL_GROUPS: Tool[][] = [
     { id: "brush", name: "Brush", icon: Brush, shortcut: "B" },
     { id: "pencil", name: "Pencil", icon: Pencil, shortcut: "N" },
     { id: "eraser", name: "Eraser", icon: Eraser, shortcut: "E" },
-    { id: "clone", name: "Clone Stamp", icon: Stamp, shortcut: "S" },
-    { id: "heal", name: "Spot Heal", icon: Bandage, shortcut: "J" },
-    { id: "bucket", name: "Paint Bucket", icon: PaintBucket, shortcut: "G" },
+    { id: "clone", name: "Clone stamp", icon: Stamp, shortcut: "S" },
+    { id: "heal", name: "Spot heal", icon: Bandage, shortcut: "J" },
+    { id: "bucket", name: "Paint bucket", icon: PaintBucket, shortcut: "G" },
     { id: "gradient", name: "Gradient", icon: Blend, shortcut: "G" },
   ],
   [

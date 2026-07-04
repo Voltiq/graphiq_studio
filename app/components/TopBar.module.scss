@@ -5,12 +5,8 @@
   align-items: center;
   gap: var(--sp-1);
   padding: 0 var(--sp-3);
-  /* No backdrop-filter here: it would become a "backdrop root" and stop the
-     descendant dropdown menus from blurring the canvas behind them. Nothing
-     renders behind the top bar anyway, so a translucent fill is enough. */
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  background: var(--surface);
   border-bottom: 1px solid var(--border);
-  box-shadow: var(--glow);
   z-index: 60;
 }
 
@@ -39,32 +35,18 @@
 }
 
 .brandName {
-  font-weight: 650;
-  font-size: 13.5px;
-  letter-spacing: -0.02em;
-
-  /* the safelight dot — the one place the brand carries the accent */
-  &::after {
-    content: "";
-    display: inline-block;
-    width: 5px;
-    height: 5px;
-    margin-left: 3px;
-    border-radius: 50%;
-    background: var(--accent);
-    vertical-align: 1px;
-  }
+  font-weight: var(--weight-bold);
+  font-size: 14px;
 }
 
+/* Quiet product tag beside the name — bordered, not a fill-only pill. */
 .brandTag {
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-3);
-  padding: 2.5px 6px;
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  color: var(--text-2);
+  padding: 1px 6px;
   border: 1px solid var(--border);
-  border-radius: var(--r-pill);
+  border-radius: var(--r-sm);
   background: var(--wash);
 }
 
@@ -80,7 +62,7 @@
 }
 
 .menuButton {
-  font-size: 13px;
+  font-size: 14px;
   color: color-mix(in srgb, var(--text) 78%, transparent);
   padding: 5px 10px;
   border-radius: var(--r-md);
@@ -97,21 +79,19 @@
   }
 }
 
-/* Frosted transient surface: translucent fill + backdrop blur. */
+/* Transient overlay: surface-overlay + shadow-overlay, radius-large. */
 .dropdown {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
   min-width: 236px;
   padding: 5px;
-  background: var(--frost);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  background: var(--surface-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  box-shadow: var(--shadow), var(--glow);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
   z-index: 80;
-  animation: dropIn var(--t-med) var(--ease-pop);
+  animation: dropIn var(--t-short) var(--ease);
   transform-origin: top left;
 }
 
@@ -132,19 +112,19 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-5);
-  font-size: 13px;
+  font-size: 14px;
   padding: 6px 9px 6px 7px;
   border-radius: var(--r-md);
   color: color-mix(in srgb, var(--text) 92%, transparent);
   transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 
   &:hover:not(:disabled) {
-    background: var(--wash-2);
+    background: var(--wash);
     color: var(--text);
   }
 
   &:active:not(:disabled) {
-    background: color-mix(in srgb, var(--wash-2) 60%, var(--wash));
+    background: var(--wash-2);
   }
 
   &:disabled {
@@ -162,7 +142,7 @@
   display: inline-flex;
   width: 18px;
   flex-shrink: 0;
-  color: var(--accent); /* checked = state = amber */
+  color: var(--accent); /* checked = selected = brand */
 
   &[data-on="false"] {
     visibility: hidden;
@@ -172,13 +152,13 @@
 /* Shortcut as a quiet key chip */
 .shortcut {
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   color: var(--text-2);
   padding: 3.5px 6px;
-  border-radius: 5px;
+  border-radius: var(--r-xs);
   border: 1px solid var(--border);
   background: var(--wash);
 }
@@ -226,7 +206,7 @@
   position: relative;
 }
 
-/* Results — a frosted transient surface, hanging right-aligned off the pill. */
+/* Results — overlay surface, hanging right-aligned off the pill. */
 .searchResults {
   position: absolute;
   top: calc(100% + 6px);
@@ -238,14 +218,12 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-  background: var(--frost);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  background: var(--surface-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  box-shadow: var(--shadow), var(--glow);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
   z-index: 90;
-  animation: dropIn var(--t-med) var(--ease-pop);
+  animation: dropIn var(--t-short) var(--ease);
   transform-origin: top right;
 }
 
@@ -255,7 +233,7 @@
   gap: 8px;
   width: 100%;
   padding: 6px 9px;
-  font-size: 12.5px;
+  font-size: 12px;
   border-radius: var(--r-md);
   color: var(--text);
   text-align: left;
@@ -285,7 +263,7 @@
 .searchSub {
   margin-left: auto;
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--text-3);
 }
 
@@ -310,9 +288,8 @@
     box-shadow var(--t-fast) var(--ease);
 
   &:focus-within {
-    border-color: rgba(var(--accent-rgb), 0.55);
-    background: var(--wash-2);
-    box-shadow: var(--focus-ring);
+    border-color: var(--focus-color);
+    background: var(--surface-2);
   }
 
   input {
@@ -320,7 +297,7 @@
     background: none;
     border: none;
     outline: none;
-    font-size: 12.5px;
+    font-size: 12px;
     color: var(--text);
     transition: width var(--t-slow) var(--ease);
 
@@ -342,34 +319,34 @@
   border-radius: var(--r-pill);
 }
 
+/* ADS toggle: neutral-bold track, inverse thumb; the thumb travel animates as
+   a state transition. Icons in the thumb keep the state legible beyond colour. */
 .themeTrack {
   position: relative;
-  width: 46px;
-  height: 26px;
+  width: 40px;
+  height: 20px;
   border-radius: var(--r-pill);
-  background: var(--wash-2);
-  border: 1px solid var(--border);
-  transition: background var(--t-med) var(--ease), border-color var(--t-med) var(--ease);
+  background: var(--text);
+  transition: background var(--t-med) var(--ease);
 
   &:hover {
-    border-color: var(--border-strong);
+    background: var(--text-2);
   }
 }
 
-/* The thumb is the safelight: amber in the dark, paper in the light. */
 .themeThumb {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   display: grid;
   place-items: center;
   border-radius: 50%;
-  color: var(--accent-contrast);
-  background: var(--accent);
+  color: var(--text);
+  background: var(--surface);
   box-shadow: var(--shadow-sm);
-  transition: transform var(--t-slow) var(--ease-pop);
+  transition: transform var(--t-med) var(--ease-pop);
 }
 
 .themeTrack[data-dark="true"] .themeThumb {

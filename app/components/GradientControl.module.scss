@@ -13,7 +13,7 @@
   transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 
   &:hover {
-    border-color: rgba(var(--accent-rgb), 0.6);
+    border-color: var(--accent);
     box-shadow: var(--shadow-sm);
   }
 }
@@ -29,12 +29,10 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
-  background: var(--frost);
-  backdrop-filter: blur(22px) saturate(140%);
-  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  background: var(--surface-3);
   border: 1px solid var(--border);
   border-radius: var(--r-xl);
-  box-shadow: var(--shadow), var(--glow);
+  box-shadow: var(--shadow);
   animation: pop var(--t-med) var(--ease-pop);
   transform-origin: top left;
 }
@@ -70,8 +68,8 @@
 
   &[data-on="true"] {
     color: var(--text);
-    border-color: rgba(var(--accent-rgb), 0.45);
-    background: rgba(var(--accent-rgb), 0.11);
+    border-color: var(--accent);
+    background: var(--selected-bg);
   }
 }
 
@@ -103,11 +101,9 @@
 }
 
 .presetsLabel {
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-3);
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+  color: var(--text-2);
 }
 
 .presetsActions {
@@ -160,7 +156,7 @@
 
   &[data-sel="true"] {
     border-color: var(--accent);
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 0 0 3px rgba(var(--accent-rgb), 0.4);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 0 0 3px var(--accent);
   }
 }
 
@@ -200,7 +196,7 @@
 
   &:focus {
     outline: none;
-    border-color: rgba(var(--accent-rgb), 0.6);
+    border-color: var(--accent);
     box-shadow: var(--focus-ring);
   }
 
@@ -220,13 +216,13 @@
   transition: border-color var(--t-fast) var(--ease);
 
   &:hover {
-    border-color: rgba(var(--accent-rgb), 0.6);
+    border-color: var(--accent);
   }
 }
 
 .hint {
   flex: 1;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--text-3);
 }
 
@@ -273,7 +269,7 @@
   transition: border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
 
   &:hover {
-    border-color: rgba(var(--accent-rgb), 0.6);
+    border-color: var(--accent);
     transform: translateY(-1px);
   }
 }
@@ -309,6 +305,6 @@
 
   &:hover {
     color: var(--accent);
-    border-color: rgba(var(--accent-rgb), 0.55);
+    border-color: var(--accent);
   }
 }

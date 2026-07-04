@@ -24,7 +24,7 @@
   gap: 8px;
   height: 27px;
   padding: 0 12px;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--text-2);
   border-radius: var(--r-md);
   transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
@@ -39,7 +39,7 @@
     }
   }
 
-  /* Active document: raised chip + a short amber underline pill. */
+  /* Active document: raised chip + a selected underline marker. */
   &[data-active="true"] {
     color: var(--text);
     background: var(--surface-2);
@@ -85,7 +85,7 @@
   font: inherit;
   color: var(--text);
   background: var(--surface-2);
-  border: 1px solid rgba(var(--accent-rgb), 0.6);
+  border: 1px solid var(--accent);
   border-radius: var(--r-sm);
   outline: none;
   box-shadow: var(--focus-ring);
@@ -299,7 +299,7 @@ $ruler: 22px;
   /* outline (not border) so the dashed frame doesn't shift the glyphs, keeping
      the live preview aligned with the rasterized result. */
   border: none;
-  outline: 1px dashed rgba(var(--accent-rgb), 0.8);
+  outline: 1px dashed var(--accent);
   background: transparent;
   resize: none;
   overflow: hidden;
@@ -320,12 +320,10 @@ $ruler: 22px;
   align-items: center;
   gap: 4px;
   padding: 4px;
-  background: var(--frost);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  background: var(--surface-3);
   border: 1px solid var(--border);
   border-radius: var(--r-pill);
-  box-shadow: var(--shadow-md), var(--glow);
+  box-shadow: var(--shadow-md);
   z-index: 5;
 
   button {

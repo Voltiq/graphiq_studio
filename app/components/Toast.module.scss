@@ -10,14 +10,12 @@
   gap: var(--sp-2);
   max-width: min(460px, calc(100vw - 32px));
   padding: 9px 8px 9px 13px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text);
-  background: var(--frost);
-  backdrop-filter: blur(18px) saturate(140%);
-  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  background: var(--surface-3);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow), var(--glow);
+  box-shadow: var(--shadow);
   animation: toastIn var(--t-med) var(--ease-pop);
 }
 

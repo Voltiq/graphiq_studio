@@ -1,39 +1,39 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { getServerAccent, getServerTheme } from "./lib/theme.server";
+import { getServerTheme } from "./lib/theme.server";
 import "./globals.scss";
 
-// Self-hosted Geist (variable TTFs in app/fonts) — avoids the Google Fonts
-// fetch that was failing and falling back to a system font.
-const geistSans = localFont({
-  variable: "--font-geist-sans",
+// Self-hosted Atlassian Sans / Atlassian Mono (variable TTFs in app/fonts) —
+// the product typefaces per DESIGN.md. No third-party fonts.
+const atlassianSans = localFont({
+  variable: "--font-atlassian-sans",
   display: "swap",
   src: [
     {
-      path: "./fonts/Geist-VariableFont_wght.ttf",
-      weight: "100 900",
+      path: "./fonts/AtlassianSans.v3.ttf",
+      weight: "100 1000",
       style: "normal",
     },
     {
-      path: "./fonts/Geist-Italic-VariableFont_wght.ttf",
-      weight: "100 900",
+      path: "./fonts/AtlassianSansItalic.v3.ttf",
+      weight: "100 1000",
       style: "italic",
     },
   ],
 });
 
-const geistMono = localFont({
-  variable: "--font-geist-mono",
+const atlassianMono = localFont({
+  variable: "--font-atlassian-mono",
   display: "swap",
   src: [
     {
-      path: "./fonts/GeistMono-VariableFont_wght.ttf",
-      weight: "100 900",
+      path: "./fonts/AtlassianMono.v2.ttf",
+      weight: "100 1000",
       style: "normal",
     },
     {
-      path: "./fonts/GeistMono-Italic-VariableFont_wght.ttf",
-      weight: "100 900",
+      path: "./fonts/AtlassianMonoItalic.v2.ttf",
+      weight: "100 1000",
       style: "italic",
     },
   ],
@@ -56,18 +56,16 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   const theme = await getServerTheme();
-  const accent = await getServerAccent();
 
   return (
     <html
       lang="en"
       data-theme={theme}
-      data-accent={accent}
-      className={`${geistSans.variable} ${geistMono.variable}`}
+      className={`${atlassianSans.variable} ${atlassianMono.variable}`}
       suppressHydrationWarning
     >
-      {/* geistSans.className applies the font directly (immune to var() chains). */}
-      <body className={geistSans.className}>{children}</body>
+      {/* atlassianSans.className applies the font directly (immune to var() chains). */}
+      <body className={atlassianSans.className}>{children}</body>
     </html>
   );
 }

@@ -87,7 +87,7 @@ export default function ProfileCompareDialog({
         onKeyDown={(e) => e.key === "Escape" && onClose()}
       >
         <header className={styles.head}>
-          <h2>Compare Color Profiles</h2>
+          <h2>Compare color profiles</h2>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>

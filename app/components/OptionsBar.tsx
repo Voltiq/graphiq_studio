@@ -604,7 +604,7 @@ function renderOptions(
         { id: "thirds", label: "Rule of Thirds" },
         { id: "grid", label: "Grid" },
         { id: "diagonal", label: "Diagonal" },
-        { id: "golden", label: "Golden Ratio" },
+        { id: "golden", label: "Golden ratio" },
         { id: "none", label: "None" },
       ];
       const curGridLabel = GRID_OPTS.find((g) => g.id === crop.grid)?.label ?? "Rule of Thirds";

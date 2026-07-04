@@ -306,7 +306,7 @@ export default function AdjustmentsPanel({
         <span className={styles.groupLabel}>Detail</span>
         <Slider label="Sharpen" min={0} max={100} value={adjust.sharpen} onChange={(v) => onChange({ sharpen: v })} />
         <Slider label="Clarity" min={-100} max={100} bipolar value={adjust.clarity} onChange={(v) => onChange({ clarity: v })} />
-        <Slider label="Noise Reduction" min={0} max={100} value={adjust.noise} onChange={(v) => onChange({ noise: v })} />
+        <Slider label="Noise reduction" min={0} max={100} value={adjust.noise} onChange={(v) => onChange({ noise: v })} />
       </div>
 
       <button
@@ -316,7 +316,7 @@ export default function AdjustmentsPanel({
         onClick={onReset}
       >
         <RotateCcw size={14} />
-        {editing ? "Reset This Layer" : "Reset Adjustments"}
+        {editing ? "Reset this layer" : "Reset adjustments"}
       </button>
 
       {editing ? (

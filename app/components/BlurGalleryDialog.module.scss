@@ -6,8 +6,7 @@
   z-index: 200;
   display: grid;
   place-items: center;
-  background: rgba(12, 9, 6, 0.55);
-  backdrop-filter: blur(6px);
+  background: var(--blanket);
   animation: fade var(--t-med) var(--ease);
 }
 
@@ -25,10 +24,10 @@
   max-height: calc(100vh - 64px);
   display: flex;
   flex-direction: column;
-  background: var(--surface);
+  background: var(--surface-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-2xl);
-  box-shadow: var(--shadow), var(--glow);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow);
   animation: pop var(--t-med) var(--ease-pop);
   overflow: hidden;
 }
@@ -52,9 +51,8 @@
   border-bottom: 1px solid var(--border);
 
   h2 {
-    font-size: 13.5px;
-    font-weight: 650;
-    letter-spacing: -0.01em;
+    font-size: 14px;
+    font-weight: var(--weight-bold);
   }
 }
 
@@ -117,11 +115,10 @@
   z-index: 1;
   display: grid;
   place-items: center;
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1;
   color: var(--text);
   background: color-mix(in srgb, var(--surface) 70%, transparent);
-  backdrop-filter: blur(2px);
 }
 
 .controls {
@@ -145,11 +142,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-3);
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+  color: var(--text-2);
 
   &::after {
     content: "";
@@ -202,8 +197,8 @@
 
   &[data-active="true"] {
     color: var(--accent);
-    border-color: rgba(var(--accent-rgb), 0.5);
-    background: rgba(var(--accent-rgb), 0.12);
+    border-color: var(--accent);
+    background: var(--selected-bg);
   }
 }
 
@@ -218,7 +213,6 @@
   gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4);
   border-top: 1px solid var(--border);
-  background: var(--surface-2);
 }
 
 .footNote {
@@ -231,12 +225,12 @@
 }
 
 .btn {
-  height: 34px;
-  padding: 0 16px;
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: var(--r-lg);
-  color: var(--text);
+  height: 32px;
+  padding: 0 12px;
+  font-size: 14px;
+  font-weight: var(--weight-medium);
+  border-radius: var(--r-md);
+  color: var(--text-2);
   background: transparent;
   border: 1px solid var(--border);
   transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
@@ -259,7 +253,7 @@
   font-weight: 600;
 
   &:hover {
-    background: color-mix(in srgb, var(--accent) 90%, #fff);
+    background: var(--accent-2);
     border-color: transparent;
   }
 }

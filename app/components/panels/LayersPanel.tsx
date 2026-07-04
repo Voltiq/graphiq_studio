@@ -448,7 +448,7 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
               <Pencil size={13} /> Rename
             </button>
             <button type="button" onClick={() => run(api.duplicate)}>
-              <Copy size={13} /> {multi ? "Duplicate Layers" : "Duplicate"}
+              <Copy size={13} /> {multi ? "Duplicate layers" : "Duplicate"}
             </button>
             {menu.node.type === "adjustment" && (
               <button type="button" onClick={() => run(() => api.editAdjustment(menu.node.id))}>
@@ -456,11 +456,11 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
               </button>
             )}
             <button type="button" onClick={() => run(() => api.toggleClip(menu.node.id))}>
-              <CornerDownRight size={13} /> {menu.node.clipped ? "Release Clipping Mask" : "Create Clipping Mask"}
+              <CornerDownRight size={13} /> {menu.node.clipped ? "Release clipping mask" : "Create clipping mask"}
             </button>
             <div className={styles.menuSep} />
             <button type="button" onClick={() => run(api.group)}>
-              <FolderPlus size={13} /> {multi ? "Group Selection" : "Group"}
+              <FolderPlus size={13} /> {multi ? "Group selection" : "Group"}
             </button>
             {menu.node.type === "group" && (
               <button type="button" onClick={() => run(() => api.ungroup(menu.node.id))}>
@@ -468,7 +468,7 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
               </button>
             )}
             <button type="button" onClick={() => run(api.merge)}>
-              <ArrowDownToLine size={13} /> {multi ? "Merge Layers" : "Merge Down"}
+              <ArrowDownToLine size={13} /> {multi ? "Merge layers" : "Merge down"}
             </button>
             <button type="button" onClick={() => run(api.flatten)}>
               <LayersIcon size={13} /> Flatten Image
@@ -504,7 +504,7 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                   <CircleDashed size={13} /> Mask to Selection
                 </button>
                 <button type="button" onClick={() => run(() => api.toggleMaskEnabled(menu.node.id))}>
-                  <CircleDashed size={13} /> {menu.node.mask.enabled ? "Disable Mask" : "Enable Mask"}
+                  <CircleDashed size={13} /> {menu.node.mask.enabled ? "Disable mask" : "Enable mask"}
                 </button>
                 <button type="button" onClick={() => run(api.applyMask)}>
                   <CircleDashed size={13} /> Apply Mask
@@ -525,7 +525,7 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
             )}
             <div className={styles.menuSep} />
             <button type="button" className={styles.menuDanger} onClick={() => run(api.remove)}>
-              <Trash2 size={13} /> {multi ? "Delete Layers" : "Delete"}
+              <Trash2 size={13} /> {multi ? "Delete layers" : "Delete"}
             </button>
           </div>
           </>,

@@ -334,7 +334,7 @@ export default function LayerStyleDialog({
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className={styles.head}>
-          <h2>Layer Style</h2>
+          <h2>Layer style</h2>
           <span className={styles.nameChip} title={layerName}>
             {layerName}
           </span>
@@ -418,7 +418,7 @@ export default function LayerStyleDialog({
           </span>
           <div className={styles.footSpacer} />
           <button type="button" className={`${styles.btn} ${styles.clearBtn}`} onClick={onClear}>
-            Clear All
+            Clear all
           </button>
           <button type="button" className={`${styles.btn} ${styles.primary}`} onClick={onClose}>
             Done

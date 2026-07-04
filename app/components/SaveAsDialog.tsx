@@ -42,7 +42,7 @@ export default function SaveAsDialog({
         }}
       >
         <header className={styles.head}>
-          <h2>Save As</h2>
+          <h2>Save as</h2>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>

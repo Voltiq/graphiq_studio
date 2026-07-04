@@ -102,7 +102,7 @@ export default function ShortcutsDialog({ onClose }: { onClose: () => void }) {
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className={styles.head}>
-          <h2>Keyboard Shortcuts</h2>
+          <h2>Keyboard shortcuts</h2>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>

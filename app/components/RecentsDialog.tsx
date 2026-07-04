@@ -72,7 +72,7 @@ export default function RecentsDialog({
         onKeyDown={(e) => e.key === "Escape" && onClose()}
       >
         <header className={styles.head}>
-          <h2>Open Recent</h2>
+          <h2>Open recent</h2>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>

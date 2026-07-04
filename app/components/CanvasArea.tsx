@@ -431,14 +431,14 @@ function textSpecOf(v: VectorText) {
 // triangle apex) — distinct from the white resize handles. Plus the default
 // symmetric trapezoid top-edge insets.
 /* Shape/pen node handles follow the UI accent (`--accent`). Reading a computed
-   style is not free, so the value is cached per theme × accent combination. */
-let shapeNodeCache = { key: "", color: "#f5a04c" };
+   style is not free, so the value is cached per theme. */
+let shapeNodeCache = { key: "", color: "#1868db" };
 function shapeNodeColor(): string {
   const el = document.documentElement;
-  const key = `${el.getAttribute("data-theme")}|${el.getAttribute("data-accent")}`;
+  const key = el.getAttribute("data-theme") ?? "";
   if (key !== shapeNodeCache.key) {
     const v = getComputedStyle(el).getPropertyValue("--accent").trim();
-    shapeNodeCache = { key, color: v || "#f5a04c" };
+    shapeNodeCache = { key, color: v || "#1868db" };
   }
   return shapeNodeCache.color;
 }

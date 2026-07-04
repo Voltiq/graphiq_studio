@@ -236,11 +236,11 @@ export default function BlurGalleryDialog({
         className={styles.dialog}
         role="dialog"
         aria-modal="true"
-        aria-label="Blur Gallery"
+        aria-label="Blur gallery"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className={styles.head}>
-          <h2>Blur Gallery</h2>
+          <h2>Blur gallery</h2>
           <span className={styles.kindChip}>{BLUR_FX_LABELS[settings.kind]}</span>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
             <X size={16} />

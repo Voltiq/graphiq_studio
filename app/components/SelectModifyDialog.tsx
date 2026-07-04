@@ -47,7 +47,7 @@ export default function SelectModifyDialog({
         style={{ width: 360 }}
       >
         <header className={styles.head}>
-          <h2>{feather ? "Feather Selection" : "Grow Selection"}</h2>
+          <h2>{feather ? "Feather selection" : "Grow selection"}</h2>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>

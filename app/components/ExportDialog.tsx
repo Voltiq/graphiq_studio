@@ -75,7 +75,7 @@ export default function ExportDialog({
         }}
       >
         <header className={styles.head}>
-          <h2>Export As</h2>
+          <h2>Export as</h2>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>

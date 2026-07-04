@@ -101,7 +101,7 @@ export default function CurvesDialog({
     const root = getComputedStyle(document.documentElement);
     const ink = root.getPropertyValue("--text").trim() || "#f2f0ec";
     const voidBg = root.getPropertyValue("--canvas-void").trim() || "#121110";
-    const accent = root.getPropertyValue("--accent").trim() || "#f5a04c";
+    const accent = root.getPropertyValue("--accent").trim() || "#1868db";
     const line = ch === "rgb" ? ink : LINE[ch];
     const inner = size - PAD * 2;
     const gx = (x: number) => PAD + (x / 255) * inner;

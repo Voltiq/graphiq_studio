@@ -149,7 +149,7 @@ export default function LevelsDialog({
     }
     // Clipped ranges + boundary markers (tied to the black/white handles).
     const accent =
-      getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#f5a04c";
+      getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#1868db";
     const bx = (p.inBlack / 255) * cssW;
     const wx = (p.inWhite / 255) * cssW;
     ctx.fillStyle = "rgba(0,0,0,0.45)";

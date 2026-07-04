@@ -62,7 +62,7 @@ export default function NewDocDialog({
         }}
       >
         <header className={styles.head}>
-          <h2>New Document</h2>
+          <h2>New document</h2>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>

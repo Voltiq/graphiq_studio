@@ -1,45 +1,66 @@
 /* ===========================================================================
-   Global styles & design tokens — "Darkroom"
-   Graphite surfaces + a safelight accent. The interaction grammar everywhere:
-   HOVER IS NEUTRAL (a faint foreground wash), ACCENT MEANS STATE (active tool,
-   selection, focus, checked, primary action). Persistent surfaces are solid;
-   transient surfaces (menus, popovers, tooltips) frost.
+   Global styles & design tokens — Atlassian (DESIGN.md / DESIGN.dark.md)
+   Neutral-dominant surfaces on an 8px rhythm; colour carries meaning (brand
+   blue for selection/primary, semantic roles for status); depth is earned via
+   the four-plane elevation model (default / raised / overlay / sunken), never
+   decorative. Motion is quiet: practical ease-out for everyday moves, bold
+   curves only for prominent overlays — no bounce, no blur, no glow.
 
-   Theme = [data-theme] (dark/light) × [data-accent] (theme colour) on <html>,
-   both set on the server from cookies, so there is never a flash of the wrong
-   look. Each accent defines its hue variables; the theme blocks below derive
-   the accent AND slightly tint every neutral surface with it via color-mix.
+   Theme = [data-theme] (dark/light) on <html>, set on the server from a
+   cookie so there is never a flash of the wrong look.
+
+   Token names are the app-wide contract (consumed by every *.module.scss);
+   values map 1:1 to the DESIGN.md token catalog:
+     --bg / --surface            surface (page + chrome panels)
+     --surface-2                 surface-raised (inputs, cards)
+     --surface-3                 surface-overlay (menus, dialogs, raised rows)
+     --canvas-void               surface-sunken (the image well)
+     --border / --border-strong  border / border-bold
+     --input                     border-input
+     --wash / --wash-2           background-neutral-subtle-hovered / -pressed
+     --text / --text-2 / --text-3  text / text-subtle / text-subtlest
+     --accent (+ -2, -rgb)       brand blue (selected / primary)
+     --shadow-sm / --shadow      shadow-raised / shadow-overlay
    =========================================================================== */
 
 :root {
-  /* Radii — tight for in-row controls, generous for floating surfaces */
-  --r-xs: 4px;
-  --r-sm: 6px;
-  --r-md: 8px;
-  --r-lg: 10px;
-  --r-xl: 14px;
+  /* Radii — ADS t-shirt scale, chosen by component class:
+     xs 2px badges/kbd · sm 4px lozenges/tooltips · md 6px buttons/inputs
+     lg 8px cards/menus · xl 12px modals · pill for avatars only */
+  --r-xs: 2px;
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 12px;
   --r-2xl: 16px;
   --r-pill: 999px;
 
-  /* Spacing scale */
+  /* Spacing — 8px-base steps (space-050…space-300) */
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
   --sp-4: 16px;
   --sp-5: 24px;
 
-  /* Motion — one vocabulary for the whole app */
-  --t-fast: 100ms;   /* hovers, presses */
-  --t-med: 160ms;    /* reveals, fades */
-  --t-slow: 240ms;   /* theme switch, layout-ish moves */
-  --ease: cubic-bezier(0.2, 0, 0, 1);          /* standard decel */
-  --ease-pop: cubic-bezier(0.25, 1.3, 0.4, 1); /* overshoot for popovers/thumbs */
+  /* Motion — ADS durations + easings. Interactions 100ms, transitions 200ms,
+     large moves 250ms. No bounce/elastic in product UI. */
+  --t-fast: 100ms; /* hovers, presses (xshort) */
+  --t-short: 150ms; /* popups, dropdown menus (short) */
+  --t-med: 200ms; /* reveals, fades, modals (medium) */
+  --t-slow: 250ms; /* theme switch, layout-ish moves (long) */
+  --ease: cubic-bezier(0.4, 1, 0.6, 1); /* out-practical: everyday moves */
+  --ease-pop: cubic-bezier(0, 0.4, 0, 1); /* out-bold: prominent entrances */
+  --ease-in: cubic-bezier(0.6, 0, 0.8, 0.6); /* in-practical: exits */
 
-  /* Typography */
-  /* Fallback inside var() (e.g. "geistSans", the generated @font-face name) so an
-     unresolved --font-geist-* can never poison the value into the serif default. */
-  --font-sans: var(--font-geist-sans, "geistSans"), system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: var(--font-geist-mono, "geistMono"), "SFMono-Regular", ui-monospace, monospace;
+  /* Typography — Atlassian Sans / Atlassian Mono (self-hosted). */
+  --font-sans: var(--font-atlassian-sans, "atlassianSans"), system-ui, -apple-system, "Segoe UI",
+    sans-serif;
+  --font-mono: var(--font-atlassian-mono, "atlassianMono"), "SFMono-Regular", ui-monospace,
+    monospace;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 653;
 
   /* Sizing of chrome */
   --topbar-h: 48px;
@@ -48,179 +69,119 @@
   --toolbar-w: 48px;
   --dock-w: 320px;
 
-  /* ------------------------- Theme colour: Amber (default) -----------------
-     Each accent provides: the surface tint (--tint-rgb), a pale tinted white
-     for dark-theme hairlines/washes (--fg-tint-rgb), and the accent for each
-     base theme with its on-accent text colour. */
-  --tint-rgb: 245, 160, 76;
-  --fg-tint-rgb: 247, 236, 219;
-  --accent-dark: #f5a04c;
-  --accent-dark-rgb: 245, 160, 76;
-  --accent-dark-contrast: #221302;
-  --accent-light: #b8650d;
-  --accent-light-rgb: 184, 101, 13;
-  --accent-light-contrast: #fffdf9;
-
   color-scheme: dark;
-}
-
-/* ------------------------------ Theme colours ----------------------------- */
-[data-accent="ocean"] {
-  --tint-rgb: 92, 155, 245;
-  --fg-tint-rgb: 223, 234, 249;
-  --accent-dark: #5c9bf5;
-  --accent-dark-rgb: 92, 155, 245;
-  --accent-dark-contrast: #071a33;
-  --accent-light: #2563cf;
-  --accent-light-rgb: 37, 99, 207;
-  --accent-light-contrast: #f7faff;
-}
-
-[data-accent="violet"] {
-  --tint-rgb: 167, 139, 250;
-  --fg-tint-rgb: 233, 227, 249;
-  --accent-dark: #a78bfa;
-  --accent-dark-rgb: 167, 139, 250;
-  --accent-dark-contrast: #180d33;
-  --accent-light: #6d4fc9;
-  --accent-light-rgb: 109, 79, 201;
-  --accent-light-contrast: #faf8ff;
-}
-
-[data-accent="emerald"] {
-  --tint-rgb: 74, 222, 128;
-  --fg-tint-rgb: 223, 246, 231;
-  --accent-dark: #4ade80;
-  --accent-dark-rgb: 74, 222, 128;
-  --accent-dark-contrast: #05230f;
-  --accent-light: #15803d;
-  --accent-light-rgb: 21, 128, 61;
-  --accent-light-contrast: #f4fdf7;
-}
-
-[data-accent="rose"] {
-  --tint-rgb: 251, 113, 133;
-  --fg-tint-rgb: 250, 226, 231;
-  --accent-dark: #fb7185;
-  --accent-dark-rgb: 251, 113, 133;
-  --accent-dark-contrast: #33060d;
-  --accent-light: #be123c;
-  --accent-light-rgb: 190, 18, 60;
-  --accent-light-contrast: #fff7f8;
-}
-
-/* Mono: a pure-neutral interface; the "tint" is grey, so surfaces stay clean
-   and the accent is near-foreground (shadcn-style). */
-[data-accent="mono"] {
-  --tint-rgb: 128, 128, 128;
-  --fg-tint-rgb: 235, 235, 235;
-  --accent-dark: #e5e5e5;
-  --accent-dark-rgb: 229, 229, 229;
-  --accent-dark-contrast: #171717;
-  --accent-light: #262626;
-  --accent-light-rgb: 38, 38, 38;
-  --accent-light-contrast: #fafafa;
 }
 
 /* ---------------------------- Dark theme ----------------------------------
-   Layering, darkest → lightest: canvas void < bg < surface (panels/chrome)
-   < surface-2 (inputs, menus) < surface-3 (raised). The image always sits on
-   the darkest field so it dominates. Every neutral carries ~2-3% of the theme
-   colour so the accent feels native rather than pasted on. */
+   DESIGN.dark.md values. Planes: sunken #18191A < default #1F1F21 <
+   raised #242528 < overlay #2B2C2F. The image sits on the sunken well so it
+   dominates; chrome stays on the default plane with hairline borders. */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --accent: var(--accent-dark);
-  --accent-rgb: var(--accent-dark-rgb);
-  --accent-contrast: var(--accent-dark-contrast);
-  --accent-2: color-mix(in srgb, var(--accent) 72%, #777777);
+  /* Brand (selected / primary) */
+  --accent: #669df1; /* background-brand-bold / text-selected */
+  --accent-rgb: 102, 157, 241;
+  --accent-contrast: #1f1f21; /* text-inverse */
+  --accent-2: #8fb8f6; /* background-brand-bold-hovered */
+  --focus-color: #8fb8f6; /* border-focused */
+  --selected-bg: #1c2b42; /* background-selected */
 
-  --bg: color-mix(in srgb, #161616 97.5%, rgb(var(--tint-rgb)));
+  --bg: #1f1f21; /* surface */
   --bg-grad: var(--bg);
-  --surface: color-mix(in srgb, #1b1b1b 97.5%, rgb(var(--tint-rgb)));      /* panels / chrome */
-  --surface-2: color-mix(in srgb, #222222 97%, rgb(var(--tint-rgb)));      /* inputs / menus / cards */
-  --surface-3: color-mix(in srgb, #292929 96.5%, rgb(var(--tint-rgb)));    /* raised */
-  --surface-hover: var(--surface-3);
+  --surface: #1f1f21; /* chrome panels */
+  --surface-2: #242528; /* raised: inputs, cards */
+  --surface-3: #2b2c2f; /* overlay: menus, dialogs */
+  --surface-hover: #2b2c2f;
   --sidebar: var(--surface);
-  --canvas-void: color-mix(in srgb, #111111 98%, rgb(var(--tint-rgb)));
-  /* Transparency checkerboard */
-  --checker-a: color-mix(in srgb, #242424 97%, rgb(var(--tint-rgb)));
-  --checker-b: color-mix(in srgb, #191919 97.5%, rgb(var(--tint-rgb)));
+  --canvas-void: #18191a; /* sunken: the image well */
+  --checker-a: #2b2c2f;
+  --checker-b: #1f1f21;
 
-  /* Hairlines + washes are tinted-white alpha so they sit on any surface */
-  --border: rgba(var(--fg-tint-rgb), 0.09);
-  --border-strong: rgba(var(--fg-tint-rgb), 0.16);
-  --input: rgba(var(--fg-tint-rgb), 0.13);
-  --wash: rgba(var(--fg-tint-rgb), 0.05);    /* neutral hover fill */
-  --wash-2: rgba(var(--fg-tint-rgb), 0.09);  /* pressed / open fill */
+  --border: #e3e4f21f; /* border (hairline) */
+  --border-strong: #7e8188; /* border-bold */
+  --input: #7e8188; /* border-input */
+  --wash: #ceced912; /* background-neutral-subtle-hovered */
+  --wash-2: #e3e4f21f; /* background-neutral-subtle-pressed */
 
-  --text: #f2f0ec;
-  --text-2: color-mix(in srgb, #a2a09c 94%, rgb(var(--tint-rgb)));
-  --text-3: color-mix(in srgb, #6e6c67 94%, rgb(var(--tint-rgb)));
+  --text: #cecfd2;
+  --text-2: #a9abaf; /* text-subtle */
+  --text-3: #96999e; /* text-subtlest */
+  --text-disabled: #e5e9f640;
 
-  /* Status */
-  --danger: #f4564e;
-  --danger-rgb: 244, 86, 78;
-  --success: #4fc06d;
-  --warning: #eab308;
+  /* Semantic roles */
+  --danger: #f15b50; /* icon-danger */
+  --danger-rgb: 241, 91, 80;
+  --danger-text: #fd9891; /* text-danger */
+  --danger-bold: #f87168; /* background-danger-bold (text-inverse on it) */
+  --success: #82b536; /* icon-success (lime) */
+  --success-bold: #94c748; /* background-success-bold (toggle checked) */
+  --warning: #fbc828;
 
-  /* Elevation + top-edge highlight */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
-  --shadow-md: 0 8px 20px -6px rgba(0, 0, 0, 0.55);
-  --shadow: 0 20px 48px -12px rgba(0, 0, 0, 0.65);
-  --glow: inset 0 1px 0 0 rgba(var(--fg-tint-rgb), 0.05);
-  --inset: inset 0 1px 0 rgba(var(--fg-tint-rgb), 0.05);
+  /* Elevation — paired shadows (never hand-authored elsewhere) */
+  --shadow-sm: 0px 1px 1px #0104043b, 0px 0px 1px #0104043b; /* raised */
+  --shadow-md: 0px 0px 0px 1px #bdbdbd1f, 0px 8px 12px #0104042a, 0px 0px 1px 1px #0104043b;
+  --shadow: 0px 0px 0px 1px #bdbdbd1f, 0px 8px 12px #0104042a, 0px 0px 1px 1px #0104043b; /* overlay */
+  --glow: 0 0 0 0 transparent; /* retired (no top-edge glow in ADS) */
+  --inset: 0 0 0 0 transparent;
 
-  /* Frosted (transient) surface fill — pair with backdrop-filter */
-  --frost: color-mix(in srgb, var(--surface-2) 88%, transparent);
-  --focus-ring: 0 0 0 3px rgba(var(--accent-rgb), 0.22);
+  /* Transient surfaces are SOLID overlay — ADS has no acrylic/frost. */
+  --frost: #2b2c2f;
+  --blanket: #10121499;
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus-color);
 }
 
 /* ---------------------------- Light theme ---------------------------------
-   Paper, tinted the same way; the accent is darkened for contrast. */
+   DESIGN.md values. White page, bordered panels, sunken image well. */
 [data-theme="light"] {
   color-scheme: light;
 
-  --accent: var(--accent-light);
-  --accent-rgb: var(--accent-light-rgb);
-  --accent-contrast: var(--accent-light-contrast);
-  --accent-2: color-mix(in srgb, var(--accent) 72%, #8a8a8a);
+  --accent: #1868db;
+  --accent-rgb: 24, 104, 219;
+  --accent-contrast: #ffffff;
+  --accent-2: #1558bc;
+  --focus-color: #4688ec;
+  --selected-bg: #e9f2fe;
 
-  --bg: color-mix(in srgb, #f2f1ef 97%, rgb(var(--tint-rgb)));
+  --bg: #ffffff;
   --bg-grad: var(--bg);
-  --surface: color-mix(in srgb, #fafaf9 98%, rgb(var(--tint-rgb)));
-  --surface-2: color-mix(in srgb, #efeeec 97%, rgb(var(--tint-rgb)));
-  --surface-3: color-mix(in srgb, #e6e4e1 96%, rgb(var(--tint-rgb)));
-  --surface-hover: color-mix(in srgb, #e8e6e2 96%, rgb(var(--tint-rgb)));
+  --surface: #ffffff;
+  --surface-2: #ffffff; /* raised (differentiated by border + shadow) */
+  --surface-3: #ffffff; /* overlay */
+  --surface-hover: #f0f1f2;
   --sidebar: var(--surface);
-  --canvas-void: color-mix(in srgb, #d8d6d2 97%, rgb(var(--tint-rgb)));
-  --checker-a: color-mix(in srgb, #f0efec 97%, rgb(var(--tint-rgb)));
-  --checker-b: color-mix(in srgb, #dbd9d5 97%, rgb(var(--tint-rgb)));
+  --canvas-void: #f8f8f8; /* sunken */
+  --checker-a: #ffffff;
+  --checker-b: #dddee1;
 
-  /* Near-neutral ink hairlines: at these alphas a hue would be invisible. */
-  --border: rgba(45, 41, 35, 0.13);
-  --border-strong: rgba(45, 41, 35, 0.21);
-  --input: rgba(45, 41, 35, 0.17);
-  --wash: rgba(45, 41, 35, 0.05);
-  --wash-2: rgba(45, 41, 35, 0.09);
+  --border: #0b120e24;
+  --border-strong: #7d818a;
+  --input: #8c8f97;
+  --wash: #0515240f;
+  --wash-2: #0b120e24;
 
-  --text: #211f1b;
-  --text-2: #6c6860;
-  --text-3: #918b82;
+  --text: #292a2e;
+  --text-2: #505258;
+  --text-3: #6b6e76;
+  --text-disabled: #080f214a;
 
-  --danger: #d33a2f;
-  --danger-rgb: 211, 58, 47;
-  --success: #1f9d4d;
-  --warning: #b98a06;
+  --danger: #c9372c;
+  --danger-rgb: 201, 55, 44;
+  --danger-text: #ae2e24;
+  --danger-bold: #c9372c;
+  --success: #6a9a23;
+  --success-bold: #5b7f24;
+  --warning: #e06c00;
 
-  --shadow-sm: 0 1px 2px rgba(52, 44, 30, 0.09);
-  --shadow-md: 0 8px 20px -6px rgba(52, 44, 30, 0.14);
-  --shadow: 0 20px 48px -12px rgba(52, 44, 30, 0.2);
-  --glow: inset 0 1px 0 0 rgba(255, 255, 255, 0.85);
-  --inset: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --shadow-sm: 0px 1px 1px #1e1f2140, 0px 0px 1px #1e1f214f;
+  --shadow-md: 0px 8px 12px #1e1f2126, 0px 0px 1px #1e1f214f;
+  --shadow: 0px 8px 12px #1e1f2126, 0px 0px 1px #1e1f214f;
+  --glow: 0 0 0 0 transparent;
+  --inset: 0 0 0 0 transparent;
 
-  --frost: color-mix(in srgb, var(--surface) 86%, transparent);
-  --focus-ring: 0 0 0 3px rgba(var(--accent-rgb), 0.2);
+  --frost: #ffffff;
+  --blanket: #050c1f75;
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus-color);
 }
 
 * {
@@ -260,20 +221,21 @@ textarea {
 }
 
 ::selection {
-  background: rgba(var(--accent-rgb), 0.35);
+  background: rgba(var(--accent-rgb), 0.3);
 }
 
 /* ------------------------- Keyboard focus ring ----------------------------
-   One ring for the whole app: only for keyboard focus, never for clicks.
-   Text inputs opt out here — their wrappers show a :focus-within ring, and the
-   canvas text editor draws its own dashed frame. */
+   ADS focus contract: 2px ring in border-focused, offset 2px from the box.
+   Only for keyboard focus, never for clicks. Text inputs opt out here — their
+   wrappers show a :focus-within border per the textfield recipe. */
 button:focus-visible,
 a:focus-visible,
 select:focus-visible,
 summary:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid rgba(var(--accent-rgb), 0.65);
-  outline-offset: 1px;
+  outline: 2px solid var(--focus-color);
+  outline-offset: 2px;
+  border-radius: var(--r-md);
 }
 
 input:focus-visible:not([type="range"]):not([type="checkbox"]):not([type="radio"]),

@@ -372,7 +372,7 @@ export default function SmartFilterDialog({
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className={styles.head}>
-          <h2>Smart Filters</h2>
+          <h2>Smart filters</h2>
           <span className={styles.nameChip} title={node.name}>
             {node.name}
           </span>
@@ -564,7 +564,7 @@ export default function SmartFilterDialog({
               setSelId(null);
             }}
           >
-            Clear All
+            Clear all
           </button>
           <button
             type="button"
@@ -573,7 +573,7 @@ export default function SmartFilterDialog({
             title={node.type !== "layer" ? "Only pixel layers can bake filters" : "Bake the stack into the layer's pixels"}
             onClick={onApplyAll}
           >
-            Apply (Bake)
+            Apply (bake)
           </button>
           <button type="button" className={`${styles.btn} ${styles.primary}`} onClick={onClose}>
             Done

@@ -70,10 +70,8 @@
   height: 26px;
   padding: 0 8px;
   border-radius: var(--r-md);
-  font-size: 10.5px;
-  font-weight: 650;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
   color: var(--text-2);
   transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 
@@ -165,7 +163,7 @@
   background-size: 10px 10px;
 }
 
-/* The view frame is state → amber, with a dark seat so it reads on any image. */
+/* The view frame is brand-blue, with a dark seat so it reads on any image. */
 .navView {
   position: absolute;
   border: 1.5px solid var(--accent);
@@ -313,7 +311,7 @@
 
     .filterThumb {
       border-color: var(--accent);
-      box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.35);
+      box-shadow: 0 0 0 2px var(--accent);
     }
   }
 }
@@ -356,8 +354,6 @@
   border-radius: var(--r-sm);
   color: #fff;
   background: rgba(10, 8, 6, 0.55);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
   opacity: 0;
   cursor: pointer;
   transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
@@ -432,7 +428,7 @@
   transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 
   &:focus {
-    border-color: rgba(var(--accent-rgb), 0.6);
+    border-color: var(--accent);
     box-shadow: var(--focus-ring);
   }
 
@@ -480,11 +476,9 @@
 
 /* Shared small-caps section label */
 .groupLabel {
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-3);
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+  color: var(--text-2);
 }
 
 /* Full-width "Reset Adjustments" button. */
@@ -579,7 +573,7 @@
     width: 100%;
     height: 30px;
     padding: 0 28px 0 10px;
-    font-size: 12.5px;
+    font-size: 12px;
     background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: var(--r-md);
@@ -593,7 +587,7 @@
     }
 
     &:focus-visible {
-      border-color: rgba(var(--accent-rgb), 0.6);
+      border-color: var(--accent);
       box-shadow: var(--focus-ring);
     }
   }
@@ -693,15 +687,15 @@
   }
 
   &[data-selected="true"] {
-    background: rgba(var(--accent-rgb), 0.11);
-    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.28);
+    background: var(--selected-bg);
+    box-shadow: inset 0 0 0 1px var(--accent);
   }
 
-  /* The primary (active) layer: stronger tint + the amber notch, matching the
+  /* The primary (active) layer: stronger tint + the selected rail marker, matching the
      tool rail — one motif for "this is the one". */
   &[data-active="true"] {
-    background: rgba(var(--accent-rgb), 0.14);
-    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.45);
+    background: var(--selected-bg);
+    box-shadow: inset 0 0 0 1px var(--accent);
 
     &::before {
       content: "";
@@ -732,7 +726,7 @@
   z-index: 300;
 }
 
-/* Context menu — frosted transient surface, neutral hovers, red danger. */
+/* Context menu — overlay surface, neutral hovers, red danger. */
 .layerMenu {
   position: fixed;
   z-index: 301;
@@ -741,13 +735,11 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-  background: var(--frost);
-  backdrop-filter: blur(20px) saturate(140%);
-  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  background: var(--surface-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  box-shadow: var(--shadow), var(--glow);
-  animation: menuPop var(--t-med) var(--ease-pop);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  animation: menuPop var(--t-short) var(--ease);
   transform-origin: top left;
 
   button {
@@ -755,7 +747,7 @@
     align-items: center;
     gap: var(--sp-2);
     padding: 7px 10px;
-    font-size: 12.5px;
+    font-size: 12px;
     color: var(--text);
     border-radius: var(--r-md);
     text-align: left;
@@ -768,7 +760,7 @@
     }
 
     &:hover {
-      background: var(--wash-2);
+      background: var(--wash);
 
       svg {
         color: var(--text);
@@ -776,7 +768,7 @@
     }
 
     &:active {
-      background: color-mix(in srgb, var(--wash-2) 60%, var(--wash));
+      background: var(--wash-2);
     }
   }
 
@@ -915,7 +907,7 @@
   place-items: center;
   color: var(--danger);
   font-size: 15px;
-  font-weight: 700;
+  font-weight: var(--weight-bold);
   line-height: 1;
 }
 
@@ -948,7 +940,7 @@
 
 .layerName {
   min-width: 0;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -960,7 +952,7 @@
 }
 
 .layerSub {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-2);
   text-transform: capitalize;
   white-space: nowrap;
@@ -973,9 +965,9 @@
   width: 100%;
   height: 22px;
   padding: 0 6px;
-  font-size: 12.5px;
+  font-size: 12px;
   background: var(--surface);
-  border: 1px solid rgba(var(--accent-rgb), 0.6);
+  border: 1px solid var(--accent);
   border-radius: var(--r-sm);
   color: var(--text);
   outline: none;
@@ -1040,7 +1032,7 @@
   gap: 10px;
   padding: 6px var(--sp-2);
   border-radius: var(--r-md);
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--text-2);
   text-align: left;
   transition: background var(--t-fast) var(--ease), opacity var(--t-fast) var(--ease);
@@ -1050,16 +1042,16 @@
   }
 
   &[data-active="true"] {
-    background: rgba(var(--accent-rgb), 0.12);
-    box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.32);
+    background: var(--selected-bg);
+    box-shadow: inset 0 0 0 1px var(--accent);
 
     .historyLabel {
       color: var(--text);
     }
 
     .historyIcon {
-      border-color: rgba(var(--accent-rgb), 0.5);
-      background: rgba(var(--accent-rgb), 0.16);
+      border-color: var(--accent);
+      background: var(--selected-bg);
       color: var(--accent);
     }
   }
@@ -1092,7 +1084,7 @@
 
 .historyStep {
   margin-left: auto;
-  font-size: 10px;
+  font-size: 11px;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   color: var(--text-3);
@@ -1165,13 +1157,13 @@
   }
 
   &[data-channel="r"] {
-    --ch: #f87171;
+    --ch: #f15b50;
   }
   &[data-channel="g"] {
-    --ch: #4ade80;
+    --ch: #22a06b;
   }
   &[data-channel="b"] {
-    --ch: #60a5fa;
+    --ch: #4688ec;
   }
 }
 
@@ -1194,11 +1186,9 @@
 }
 
 .metaSectionTitle {
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-3);
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+  color: var(--text-2);
   margin-bottom: 2px;
 }
 

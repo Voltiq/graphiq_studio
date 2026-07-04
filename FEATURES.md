@@ -107,7 +107,7 @@ These five systems are the heart of the editor. They are all **composite-time**:
 - **File/export:** Save/Open **`.gproj`**; **Export As** PNG · JPEG · WebP · AVIF (quality + alpha, feature-detected); **Print** `Ctrl+P`; **Recents** list; EXIF **Metadata** panel.
 - **Panels (Window menu):** Color · Adjustments · Layers · History · Navigator · Channels · Metadata, in a right dock; Reset Workspace.
 - **View:** Zoom In/Out, **Fit** `Ctrl+0`, **100%** `Ctrl+1`, Rulers, **Pixel Grid** `Ctrl+'`, Snap, Navigator overview.
-- **UI/UX:** token-driven neutral-dark theme + blue accent, light/dark toggle; **Preferences** `Ctrl+K`; non-blocking toasts; tooltips; full menu bar.
+- **UI/UX:** Atlassian design language (DESIGN.md / DESIGN.dark.md): neutral surfaces on an 8px rhythm, brand-blue selected states, semantic status colours, four-plane elevation (no blur/glow), Atlassian Sans/Mono, sentence-case text, light + dark themes (no accent-colour options); **Preferences** `Ctrl+K`; non-blocking toasts; inverted tooltips; full menu bar.
 
 ---
 

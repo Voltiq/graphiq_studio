@@ -128,7 +128,6 @@
     padding: 0 22px 0 10px;
     font-size: 12px;
     font-weight: 500;
-    letter-spacing: 0.02em;
     background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: var(--r-md);
@@ -142,7 +141,7 @@
     }
 
     &:focus-visible {
-      border-color: rgba(var(--accent-rgb), 0.6);
+      border-color: var(--accent);
       box-shadow: var(--focus-ring);
     }
   }
@@ -180,7 +179,7 @@
   }
 
   &:focus-within {
-    border-color: rgba(var(--accent-rgb), 0.6);
+    border-color: var(--accent);
     box-shadow: var(--focus-ring);
   }
 
@@ -192,7 +191,6 @@
     outline: none;
     text-align: center;
     font-size: 12px;
-    letter-spacing: 0.02em;
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     color: var(--text);
@@ -221,11 +219,9 @@
 }
 
 .swatchLabel {
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-3);
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+  color: var(--text-2);
 }
 
 .swatchActions {
@@ -257,7 +253,7 @@
 }
 
 .swatchSub {
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--text-3);
 }
 

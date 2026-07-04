@@ -10,13 +10,11 @@
   z-index: 9000;
   width: 248px;
   padding: var(--sp-3);
-  background: var(--frost);
-  backdrop-filter: blur(22px) saturate(140%);
-  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  background: var(--surface-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  box-shadow: var(--shadow), var(--glow);
-  animation: pop var(--t-med) var(--ease-pop);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  animation: pop var(--t-short) var(--ease);
   transform-origin: top left;
 }
 
