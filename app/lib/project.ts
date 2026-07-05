@@ -28,6 +28,8 @@ export interface ProjectFile {
   name: string;
   width: number;
   height: number;
+  /** Pixels per inch (physical-unit rulers + print size). Absent in old files. */
+  dpi?: number;
   foreground: string;
   background: string;
   activeLayerId: string | null;
@@ -54,6 +56,7 @@ export interface ProjectInput {
   name: string;
   width: number;
   height: number;
+  dpi?: number;
   layers: LayerNode[];
   activeLayerId: string | null;
   selectedLayerIds: string[];
@@ -96,6 +99,7 @@ export function serializeProject(
     name: doc.name,
     width: doc.width,
     height: doc.height,
+    dpi: doc.dpi ?? 300,
     foreground: colors.foreground,
     background: colors.background,
     activeLayerId: doc.activeLayerId,

@@ -8,6 +8,7 @@ import type {
   DodgeSettings,
   GradientSettings,
   HealSettings,
+  LassoMode,
   MarqueeShape,
   MoveMode,
   PenSettings,
@@ -52,6 +53,7 @@ export interface ToolPrefs {
   resizeMode: SelectResizeMode;
   resizeSmooth: boolean;
   marqueeShape: MarqueeShape;
+  lassoMode: LassoMode;
   triangleApex: number;
   sampleSize: string;
   sampleScope: string;

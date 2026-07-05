@@ -11,6 +11,7 @@ import {
   MoreHorizontal,
   Palette,
   Plus,
+  Settings2,
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
@@ -23,6 +24,7 @@ import HistoryPanel from "./panels/HistoryPanel";
 import NavigatorPanel from "./panels/NavigatorPanel";
 import ChannelsPanel from "./panels/ChannelsPanel";
 import MetadataPanel from "./panels/MetadataPanel";
+import PropertiesPanel from "./panels/PropertiesPanel";
 import type { NavigatorView } from "../lib/view";
 import type { LayersApi } from "../lib/layers";
 import type { EngineHandle, HistorySummary } from "../lib/paint";
@@ -32,6 +34,7 @@ import type { ImageMetadata } from "../lib/metadata";
 export type PanelVisibility = {
   color: boolean;
   adjustments: boolean;
+  properties: boolean;
   layers: boolean;
   history: boolean;
   navigator: boolean;
@@ -44,6 +47,7 @@ type PanelId =
   | "channels"
   | "color"
   | "adjustments"
+  | "properties"
   | "layers"
   | "history"
   | "metadata";
@@ -52,6 +56,7 @@ const DEFAULT_ORDER: PanelId[] = [
   "channels",
   "color",
   "adjustments",
+  "properties",
   "layers",
   "history",
   "metadata",
@@ -67,6 +72,7 @@ const DEFAULT_OPEN: Record<PanelId, boolean> = {
   channels: false,
   color: true,
   adjustments: true,
+  properties: true,
   layers: true,
   history: false,
   metadata: false,
@@ -136,6 +142,7 @@ interface Props {
   docName: string;
   colorSpace: WorkingSpace;
   imageMeta: ImageMetadata | null;
+  docDpi?: number;
 }
 
 const IconBtn = ({
@@ -182,6 +189,7 @@ export default function RightDock({
   docName,
   colorSpace,
   imageMeta,
+  docDpi = 300,
 }: Props) {
   const [order, setOrder] = useState<PanelId[]>(DEFAULT_ORDER);
   const [openMap, setOpenMap] = useState<Record<PanelId, boolean>>(DEFAULT_OPEN);
@@ -295,6 +303,12 @@ export default function RightDock({
             />
           </Panel>
         ) : null;
+      case "properties":
+        return panels.properties ? (
+          <Panel key="properties" title="Properties" icon={Settings2} {...dp}>
+            <PropertiesPanel api={layers} />
+          </Panel>
+        ) : null;
       case "layers":
         return panels.layers ? (
           <Panel
@@ -334,6 +348,7 @@ export default function RightDock({
               name={docName}
               width={view.docW}
               height={view.docH}
+              dpi={docDpi}
               colorSpace={colorSpace}
               meta={imageMeta}
             />

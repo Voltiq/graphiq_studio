@@ -49,12 +49,14 @@ export default function MetadataPanel({
   name,
   width,
   height,
+  dpi = 300,
   colorSpace,
   meta,
 }: {
   name: string;
   width: number;
   height: number;
+  dpi?: number;
   colorSpace: WorkingSpace;
   meta: ImageMetadata | null;
 }) {
@@ -82,6 +84,7 @@ export default function MetadataPanel({
       <Section title="Document">
         <Row label="Name" value={name} />
         <Row label="Dimensions" value={`${width} × ${height} px`} />
+        <Row label="Resolution" value={`${dpi} ppi (${(width / dpi).toFixed(2)} × ${(height / dpi).toFixed(2)} in)`} />
         <Row label="Megapixels" value={`${megapixels} MP`} />
         <Row label="Aspect ratio" value={aspectRatio(width, height)} />
         <Row label="Color mode" value="RGB · 8-bit" />

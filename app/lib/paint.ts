@@ -348,6 +348,8 @@ export interface EngineHandle {
     misses: number;
   };
   setRenderCacheBudget: (mb: number) => void;
+  setHistoryLimit: (n: number) => void;
+  setWorkersEnabled: (on: boolean) => void;
 }
 
 export interface CopyResult {
@@ -521,6 +523,8 @@ export class PaintEngine {
   private renderBudget = 256 * 1024 * 1024; // LRU eviction beyond this (Preferences ▸ Performance)
   private cacheHits = 0;
   private cacheMisses = 0;
+  private historyLimit = 60; // max undoable steps kept (Preferences ▸ Performance)
+  private workersOn = true; // background compute (blur/filters/heal) toggle
   private frameProtect = new Set<string>(); // entries used by the current frame
   private keyMemo = new Map<string, string>(); // per-composite effectiveKey memo
   private liveBypass = new Set<string>(); // live layer ids + their ancestor path
@@ -702,6 +706,31 @@ export class PaintEngine {
       hits: this.cacheHits,
       misses: this.cacheMisses,
     };
+  }
+
+  /** Cap the undo history (Preferences ▸ Performance): oldest steps drop off
+   *  the far end — their pixel patches are the biggest memory holders. */
+  setHistoryLimit(n: number): void {
+    this.historyLimit = Math.max(10, Math.min(200, Math.round(n)));
+    this.trimHistory();
+  }
+
+  private trimHistory(): void {
+    let dropped = 0;
+    while (this.entries.length > this.historyLimit) {
+      this.entries.shift();
+      dropped++;
+    }
+    if (dropped) {
+      this.pos = Math.max(0, this.pos - dropped);
+      this.emitHistory();
+    }
+  }
+
+  /** Route heavy compute through workers (on) or the synchronous fallbacks
+   *  (off — a debugging aid). In-flight jobs still land; new work obeys. */
+  setWorkersEnabled(on: boolean): void {
+    this.workersOn = on;
   }
 
   /** Set the render-cache LRU byte budget (Preferences ▸ Performance). Evicts
@@ -1712,6 +1741,7 @@ export class PaintEngine {
     if (this.pos < this.entries.length) this.entries.length = this.pos;
     this.entries.push({ layerId, rect, before, after, label, side, surface });
     this.pos = this.entries.length;
+    this.trimHistory();
     if (surface !== "mask") this.bumpPixel(layerId, rect); // layer pixels changed → restyle
     this.emitHistory();
   }
@@ -1726,6 +1756,7 @@ export class PaintEngine {
     if (this.pos < this.entries.length) this.entries.length = this.pos;
     this.entries.push({ label, side: { undo, redo } });
     this.pos = this.entries.length;
+    this.trimHistory();
     this.emitHistory();
   }
 
@@ -5235,7 +5266,7 @@ export class PaintEngine {
   >();
 
   private ensureHealWorker(): Worker | null {
-    if (this.healWorkerBroken) return null;
+    if (!this.workersOn || this.healWorkerBroken) return null;
     if (this.healWorker) return this.healWorker;
     if (typeof Worker === "undefined") {
       this.healWorkerBroken = true;
@@ -5346,7 +5377,7 @@ export class PaintEngine {
   private exporting = false;
 
   private ensureFilterWorker(): Worker | null {
-    if (this.filterWorkerBroken) return null;
+    if (!this.workersOn || this.filterWorkerBroken) return null;
     if (this.filterWorker) return this.filterWorker;
     if (typeof Worker === "undefined") {
       this.filterWorkerBroken = true;
@@ -5519,7 +5550,7 @@ export class PaintEngine {
   private blurPending = new Map<number, (applied: boolean) => void>();
 
   private ensureBlurWorker(): Worker | null {
-    if (this.blurWorkerBroken) return null;
+    if (!this.workersOn || this.blurWorkerBroken) return null;
     if (this.blurWorker) return this.blurWorker;
     if (typeof Worker === "undefined") {
       this.blurWorkerBroken = true;

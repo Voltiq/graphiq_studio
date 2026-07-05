@@ -24,6 +24,8 @@ const CANVAS_SHORTCUTS: Section[] = [
       { name: "Zoom at the cursor", keys: "Ctrl+Wheel" },
       { name: "Pan vertically / horizontally", keys: "Wheel / Shift+Wheel" },
       { name: "Cycle marquee shape", keys: "Shift+M" },
+      { name: "Cycle lasso mode (freehand / polygonal / magnetic)", keys: "Shift+L" },
+      { name: "Polygonal lasso: close path / cancel / undo point", keys: "Enter / Esc / Backspace" },
       { name: "Constrain marquee to 1:1", keys: "hold Shift" },
       { name: "Add to selection while dragging", keys: "hold Ctrl" },
       { name: "Subtract from selection while dragging", keys: "hold Alt" },

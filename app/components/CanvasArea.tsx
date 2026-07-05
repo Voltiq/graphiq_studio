@@ -4,6 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
 import { Maximize2, Minus, Plus, X } from "lucide-react";
 import styles from "./CanvasArea.module.scss";
 import type { WorkingSpace } from "../lib/colorspace";
+import type { MeasureUnit } from "../lib/prefs";
+import type { LassoMode } from "../lib/tools";
 import { clamp, parseColor, toHex8 } from "../lib/color";
 import { clampPan, normalizeRect, type Pan, type Rect } from "../lib/view";
 import type {
@@ -72,25 +74,31 @@ function niceStep(raw: number): number {
 
 /**
  * Ticks for a ruler `length` px long, where document coord 0 sits at `offset`
- * screen px and each doc px is `scale` screen px. Labels (document coordinates)
- * sit on major ticks; four minor ticks fall between them.
+ * screen px and each doc px is `scale` screen px. Labels sit on major ticks
+ * (four minors between) and are expressed in the measurement unit —
+ * `pxPerUnit` = 1 for pixels, the document PPI for inches, PPI/2.54 for cm.
  */
-function rulerTicks(length: number, offset: number, scale: number): RulerTick[] {
+function rulerTicks(length: number, offset: number, scale: number, pxPerUnit = 1): RulerTick[] {
   const ticks: RulerTick[] = [];
-  if (length <= 0 || scale <= 0) return ticks;
-  const step = niceStep(70 / scale); // aim for ~70px between labels
+  if (length <= 0 || scale <= 0 || pxPerUnit <= 0) return ticks;
+  const unitScale = scale * pxPerUnit; // screen px per UNIT
+  const step = niceStep(70 / unitScale); // aim for ~70px between labels (unit space)
   const minor = step / 5;
-  const dStart = -offset / scale;
-  const dEnd = (length - offset) / scale;
-  const first = Math.floor(dStart / step) * step;
-  for (let d = first; d <= dEnd + step; d += step) {
+  const uStart = -offset / unitScale;
+  const uEnd = (length - offset) / unitScale;
+  const first = Math.floor(uStart / step) * step;
+  const fmt = (u: number) =>
+    pxPerUnit === 1
+      ? String(Math.round(u))
+      : (Math.abs(u) < 1e-9 ? 0 : u).toFixed(2).replace(/\.?0+$/, "");
+  for (let u = first; u <= uEnd + step; u += step) {
     for (let k = 1; k < 5; k++) {
-      const pos = offset + (d + minor * k) * scale;
+      const pos = offset + (u + minor * k) * unitScale;
       if (pos >= 0 && pos <= length) ticks.push({ pos, major: false });
     }
-    const pos = offset + d * scale;
+    const pos = offset + u * unitScale;
     if (pos >= 0 && pos <= length) {
-      ticks.push({ pos, label: String(Math.round(d)), major: true });
+      ticks.push({ pos, label: fmt(u), major: true });
     }
   }
   return ticks;
@@ -574,6 +582,9 @@ export default function CanvasArea({
   onLoadDone,
   colorSpace,
   showRulers,
+  unit = "px",
+  docDpi = 300,
+  lassoMode = "free",
   showGrid,
   snap,
   viewApiRef,
@@ -680,6 +691,9 @@ export default function CanvasArea({
   onLoadDone: (docId: string) => void;
   colorSpace: WorkingSpace;
   showRulers: boolean;
+  unit?: MeasureUnit;
+  docDpi?: number;
+  lassoMode?: LassoMode;
   showGrid: boolean;
   snap: boolean;
   viewApiRef: RefObject<ViewApi | null>;
@@ -720,10 +734,113 @@ export default function CanvasArea({
   wandOptsRef.current = wand;
   const dragRectRef = useRef<Rect | null>(null);
   const marqueeRef = useRef<{ x: number; y: number; mode: SelOp } | null>(null);
-  // In-progress freeform lasso path (doc-space points); closed on pointer up.
+  // In-progress freeform/magnetic lasso path (doc-space points); closed on
+  // pointer up. The polygonal variant collects CLICKED vertices in polyRef
+  // instead (open until explicitly closed).
   const lassoRef = useRef<{ x: number; y: number }[] | null>(null);
   // How the current lasso combines with the existing selection (set at start).
   const lassoModeRef = useRef<SelOp>("new");
+  const lassoVariantRef = useRef<LassoMode>("free");
+  lassoVariantRef.current = lassoMode;
+  // Polygonal lasso: committed vertices + the rubber-band cursor position.
+  const polyRef = useRef<{ pts: { x: number; y: number }[]; op: SelOp } | null>(null);
+  const polyHoverRef = useRef<{ x: number; y: number } | null>(null);
+  // Magnetic lasso: Sobel edge-magnitude map of the composite, built at stroke
+  // start (downscaled to a cap so big documents stay fast).
+  const edgeMapRef = useRef<{ w: number; h: number; sx: number; sy: number; mag: Uint8ClampedArray } | null>(null);
+
+  /** Grayscale Sobel magnitude of the flattened composite (capped resolution). */
+  const buildEdgeMap = () => {
+    const comp = engine.exportComposite(layersRef.current);
+    const cap = 1400;
+    const scale = Math.min(1, cap / Math.max(comp.width, comp.height, 1));
+    const w = Math.max(2, Math.round(comp.width * scale));
+    const h = Math.max(2, Math.round(comp.height * scale));
+    const cv = document.createElement("canvas");
+    cv.width = w;
+    cv.height = h;
+    const cx = cv.getContext("2d", { willReadFrequently: true })!;
+    cx.imageSmoothingEnabled = true;
+    cx.drawImage(comp, 0, 0, w, h);
+    const d = cx.getImageData(0, 0, w, h).data;
+    const lum = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++)
+      lum[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+    const mag = new Uint8ClampedArray(w * h);
+    for (let y = 1; y < h - 1; y++)
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        const gx =
+          -lum[i - w - 1] - 2 * lum[i - 1] - lum[i + w - 1] +
+          lum[i - w + 1] + 2 * lum[i + 1] + lum[i + w + 1];
+        const gy =
+          -lum[i - w - 1] - 2 * lum[i - w] - lum[i - w + 1] +
+          lum[i + w - 1] + 2 * lum[i + w] + lum[i + w + 1];
+        mag[i] = Math.min(255, (Math.abs(gx) + Math.abs(gy)) / 3);
+      }
+    edgeMapRef.current = { w, h, sx: w / comp.width, sy: h / comp.height, mag };
+  };
+
+  // Magnetic snap search width, in DOCUMENT pixels — the cursor pulls to a
+  // strong edge anywhere within this radius, so the line snaps even when it's
+  // drawn some distance off the edge.
+  const MAGNETIC_DOC_RADIUS = 30;
+
+  /** Snap a doc-space point to the strongest nearby edge (magnetic lasso).
+   *  Searches a window ~MAGNETIC_DOC_RADIUS doc-px wide and picks the highest
+   *  edge magnitude, with only a gentle distance penalty so a clearly stronger
+   *  edge several pixels away still wins. Falls back to the raw cursor when
+   *  nothing edge-like is nearby. */
+  const snapToEdge = (pt: { x: number; y: number }) => {
+    const m = edgeMapRef.current;
+    if (!m) return pt;
+    const mx = Math.round(pt.x * m.sx);
+    const my = Math.round(pt.y * m.sy);
+    const R = Math.max(4, Math.min(40, Math.round(MAGNETIC_DOC_RADIUS * m.sx)));
+    let best = -Infinity;
+    let bx = mx;
+    let by = my;
+    let bmag = 0;
+    for (let dy = -R; dy <= R; dy++) {
+      const y = my + dy;
+      if (y < 1 || y >= m.h - 1) continue;
+      const row = y * m.w;
+      for (let dx = -R; dx <= R; dx++) {
+        const x = mx + dx;
+        if (x < 1 || x >= m.w - 1) continue;
+        const mag = m.mag[row + x];
+        // Gentle falloff: distance costs ~0.9 magnitude per map px, so a strong
+        // edge (say 120) still beats a bland patch under the cursor.
+        const score = mag - 0.9 * Math.hypot(dx, dy);
+        if (score > best) {
+          best = score;
+          bx = x;
+          by = y;
+          bmag = mag;
+        }
+      }
+    }
+    if (bmag < 16) return pt; // no real edge in range — follow the cursor
+    return { x: bx / m.sx, y: by / m.sy };
+  };
+
+  /** Close + commit the polygonal lasso (Enter / double-click / click-on-start). */
+  const commitPolyLasso = () => {
+    const poly = polyRef.current;
+    polyRef.current = null;
+    polyHoverRef.current = null;
+    if (!poly) return;
+    const region = poly.pts.length >= 3 ? engine.lassoSelect(poly.pts) : null;
+    if (region && region.rects.length) {
+      if (poly.op === "new") {
+        wandSegsRef.current = { key: region.rects, segs: region.segments };
+        onSelectionChange(region.rects);
+      } else {
+        applyCombined(engine.combineSelection(selectionRef.current, region.rects, poly.op));
+      }
+    }
+    ensureAnts();
+  };
   // Hand-tool pan drag: starting pointer position + pan at the start of the drag.
   const handRef = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null);
   // Shape-tool drag: start point + the current (preview) doc-space box.
@@ -1444,6 +1561,44 @@ export default function CanvasArea({
       ctx.setLineDash([]);
     }
 
+    // --- polygonal lasso in progress: committed edges + rubber-band to cursor,
+    //     with a vertex handle on each point. Subtract ops draw red. ---
+    const poly = polyRef.current;
+    if (poly && poly.pts.length) {
+      const sub = poly.op === "subtract";
+      const hover = polyHoverRef.current;
+      const path = () => {
+        ctx.beginPath();
+        ctx.moveTo(p.x + poly.pts[0].x * s, p.y + poly.pts[0].y * s);
+        for (let i = 1; i < poly.pts.length; i++) {
+          ctx.lineTo(p.x + poly.pts[i].x * s, p.y + poly.pts[i].y * s);
+        }
+        if (hover) ctx.lineTo(p.x + hover.x * s, p.y + hover.y * s); // rubber band
+      };
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      for (let pass = 0; pass < 2; pass++) {
+        ctx.strokeStyle = pass === 0 ? "rgba(0,0,0,0.75)" : sub ? "#ff3b3b" : "#fff";
+        ctx.lineDashOffset = -antsOffset.current + (pass === 0 ? 0 : 4);
+        path();
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      // Vertex handles — filled dots, larger + accented on the start point.
+      for (let i = 0; i < poly.pts.length; i++) {
+        const vx = p.x + poly.pts[i].x * s;
+        const vy = p.y + poly.pts[i].y * s;
+        const r = i === 0 ? 4 : 3;
+        ctx.beginPath();
+        ctx.arc(vx, vy, r, 0, Math.PI * 2);
+        ctx.fillStyle = i === 0 ? "#fff" : "rgba(255,255,255,0.9)";
+        ctx.strokeStyle = "rgba(0,0,0,0.8)";
+        ctx.lineWidth = 1;
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
     // --- subtract preview (Alt): the region being removed, in red. A faint red
     //     fill marks the part that overlaps the current selection (what's cut),
     //     and a red marching-ants outline traces the whole dragged region. ---
@@ -1970,6 +2125,7 @@ export default function CanvasArea({
       selectionRef.current.length > 0 ||
       dragRectRef.current ||
       lassoRef.current ||
+      polyRef.current ||
       shapeRef.current ||
       bucketRef.current ||
       liveBucketRef.current ||
@@ -2163,6 +2319,44 @@ export default function CanvasArea({
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, engine]);
+
+  // Polygonal lasso keys: Enter closes, Escape cancels, Backspace undoes a
+  // vertex. Cancels the in-progress polygon when the tool/variant changes.
+  useEffect(() => {
+    const cancelPoly = () => {
+      if (polyRef.current) {
+        polyRef.current = null;
+        polyHoverRef.current = null;
+        ensureAnts();
+      }
+    };
+    if (tool !== "lasso" || lassoMode !== "poly") {
+      cancelPoly();
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (!polyRef.current) return;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitPolyLasso();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        cancelPoly();
+      } else if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        const poly = polyRef.current;
+        poly.pts.pop();
+        if (poly.pts.length === 0) cancelPoly();
+        else ensureAnts();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      cancelPoly();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool, lassoMode, engine]);
 
   // Live-update a magic-wand selection when its options change (e.g. dragging
   // the Tolerance slider) — re-run the wand from the same seed, reusing the
@@ -2501,6 +2695,8 @@ export default function CanvasArea({
       setRenderCacheEnabled: (on) => engine.setRenderCacheEnabled(on),
       renderCacheStats: () => engine.renderCacheStats(),
       setRenderCacheBudget: (mb) => engine.setRenderCacheBudget(mb),
+      setHistoryLimit: (n) => engine.setHistoryLimit(n),
+      setWorkersEnabled: (on) => engine.setWorkersEnabled(on),
     };
     engine.syncHistory();
     scheduleComposite();
@@ -3383,9 +3579,35 @@ export default function CanvasArea({
     if (tool === "lasso") {
       if (engine.isFloating) engine.commitFloat(); // merge before reselecting
       e.preventDefault();
-      viewRef.current?.setPointerCapture(e.pointerId);
       const p = toDoc(e);
-      lassoRef.current = [{ x: p.x, y: p.y }];
+      const variant = lassoVariantRef.current;
+      if (variant === "poly") {
+        // Click-point polygon: each click drops a vertex. Double-click, or a
+        // click back on the start point, closes it. No pointer capture — the
+        // cursor roams freely between clicks (rubber band tracks it on move).
+        const poly = polyRef.current;
+        const scale = zoomRef.current / 100;
+        if (poly) {
+          const near = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+            Math.hypot(a.x - b.x, a.y - b.y) * scale <= 8;
+          if (e.detail >= 2 || (poly.pts.length >= 3 && near(p, poly.pts[0]))) {
+            commitPolyLasso();
+            return;
+          }
+          poly.pts.push({ x: p.x, y: p.y });
+        } else {
+          polyRef.current = { pts: [{ x: p.x, y: p.y }], op: selectOp(e) };
+        }
+        polyHoverRef.current = { x: p.x, y: p.y };
+        ensureAnts();
+        return;
+      }
+      // Freehand or magnetic: drag a path. Magnetic snaps points to edges, so
+      // build the composite's edge map once at stroke start.
+      viewRef.current?.setPointerCapture(e.pointerId);
+      if (variant === "magnetic") buildEdgeMap();
+      const start = variant === "magnetic" ? snapToEdge(p) : p;
+      lassoRef.current = [start];
       lassoModeRef.current = selectOp(e); // Ctrl adds, Alt subtracts, else new
       ensureAnts();
       return;
@@ -3860,7 +4082,16 @@ export default function CanvasArea({
       const last = pts[pts.length - 1];
       // Add a point only after moving ~2 screen px, to keep the path light.
       const minD = 2 / (zoomRef.current / 100);
-      if (Math.hypot(p.x - last.x, p.y - last.y) >= minD) pts.push({ x: p.x, y: p.y });
+      if (Math.hypot(p.x - last.x, p.y - last.y) >= minD) {
+        // Magnetic: pin each new point to the strongest nearby edge.
+        pts.push(lassoVariantRef.current === "magnetic" ? snapToEdge(p) : { x: p.x, y: p.y });
+      }
+      ensureAnts();
+      return;
+    }
+    // Polygonal lasso in progress: track the cursor for the rubber-band edge.
+    if (polyRef.current) {
+      polyHoverRef.current = toDoc(e);
       ensureAnts();
       return;
     }
@@ -4227,6 +4458,7 @@ export default function CanvasArea({
       const pts = lassoRef.current;
       const mode = lassoModeRef.current;
       lassoRef.current = null;
+      edgeMapRef.current = null; // free the magnetic edge map
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       // Close the polygon (straight start↔end edge) and rasterize it to a region,
@@ -4428,8 +4660,9 @@ export default function CanvasArea({
   const scale = zoom / 100;
 
   // Tick marks for the rulers — aligned to the canvas, dynamic on pan/zoom.
-  const hTicks = rulerTicks(vpSize.w, pan.x, zoom / 100);
-  const vTicks = rulerTicks(vpSize.h, pan.y, zoom / 100);
+  const pxPerUnit = unit === "in" ? docDpi : unit === "cm" ? docDpi / 2.54 : 1;
+  const hTicks = rulerTicks(vpSize.w, pan.x, zoom / 100, pxPerUnit);
+  const vTicks = rulerTicks(vpSize.h, pan.y, zoom / 100, pxPerUnit);
 
   // Accept the in-progress rename (Enter / blur), or drop it (Escape sets the flag).
   const commitTabRename = () => {

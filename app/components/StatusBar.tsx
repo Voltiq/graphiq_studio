@@ -4,11 +4,18 @@ import { useEffect, useState } from "react";
 import { BoxSelect, Check, CircleDashed, MousePointer2 } from "lucide-react";
 import styles from "./StatusBar.module.scss";
 import { WORKING_SPACE_LABELS, type WorkingSpace } from "../lib/colorspace";
+import type { MeasureUnit } from "../lib/prefs";
 import { getTool, type ToolId } from "../lib/tools";
 import { parseColor, swatchBg, toHex6 } from "../lib/color";
 import type { Rect } from "../lib/view";
 
 /** Photoshop-style document sizes: flattened / all layers, from real dims. */
+/** Pixels → the display unit, trimmed to 2 decimals. */
+function fmtUnit(px: number, unit: MeasureUnit, dpi: number): string {
+  const v = unit === "in" ? px / dpi : (px / dpi) * 2.54;
+  return v.toFixed(2).replace(/\.?0+$/, "");
+}
+
 function fmtBytes(n: number): string {
   if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))}K`;
   return `${(n / (1024 * 1024)).toFixed(1)}M`;
@@ -49,6 +56,8 @@ export default function StatusBar({
   width,
   height,
   colorSpace,
+  unit = "px",
+  dpi = 300,
   layerCount,
   saveState,
   selection,
@@ -61,6 +70,8 @@ export default function StatusBar({
   width: number;
   height: number;
   colorSpace: WorkingSpace;
+  unit?: MeasureUnit;
+  dpi?: number;
   layerCount: number;
   saveState: { label: string; ok: boolean };
   selection: Rect[];
@@ -93,7 +104,9 @@ export default function StatusBar({
         <span className={styles.muted}>{Math.round(parseColor(foreground).a * 100)}%</span>
         <span className={styles.sep}>|</span>
         <span>
-          {width} × {height} px
+          {unit === "px"
+            ? `${width} × ${height} px`
+            : `${fmtUnit(width, unit, dpi)} × ${fmtUnit(height, unit, dpi)} ${unit} @ ${dpi} ppi`}
         </span>
         <span className={styles.sep}>|</span>
         <span>{WORKING_SPACE_LABELS[colorSpace]} / 8-bit</span>

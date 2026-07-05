@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ClipboardPaste, Gauge, Palette, SlidersHorizontal, X } from "lucide-react";
+import { Check, ClipboardPaste, Gauge, Palette, Ruler, SlidersHorizontal, X } from "lucide-react";
 import styles from "./PreferencesDialog.module.scss";
 import { applyTheme, currentTheme, resolvedDark } from "./ThemeToggle";
 import { Slider, Toggle } from "./Controls";
 import { ACCENTS, ACCENT_COOKIE, DEFAULT_ACCENT, isAccent, type Accent, type Theme } from "../lib/theme";
-import type { PasteDefault, PasteOversize, Preferences } from "../lib/prefs";
+import type { MeasureUnit, PasteDefault, PasteOversize, Preferences } from "../lib/prefs";
 import { downloadSettings, importSettings, resetSettings } from "../lib/settings";
 
 const ONE_YEAR = 60 * 60 * 24 * 365;
@@ -44,13 +44,20 @@ const OVERSIZE_OPTIONS: { value: PasteOversize; title: string; desc: string }[] 
   { value: "expand", title: "Expand canvas to fit", desc: "Grow the canvas so the whole image fits" },
 ];
 
-type Tab = "appearance" | "pasting" | "editing" | "performance";
+type Tab = "appearance" | "pasting" | "editing" | "units" | "performance";
 
 const TABS: { id: Tab; label: string; icon: typeof Palette }[] = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "pasting", label: "Pasting", icon: ClipboardPaste },
   { id: "editing", label: "Editing", icon: SlidersHorizontal },
+  { id: "units", label: "Units & rulers", icon: Ruler },
   { id: "performance", label: "Performance", icon: Gauge },
+];
+
+const UNIT_OPTIONS: { value: MeasureUnit; title: string; desc: string }[] = [
+  { value: "px", title: "Pixels", desc: "Rulers and size readouts in raw pixels" },
+  { value: "in", title: "Inches", desc: "Physical units via the document's resolution (ppi)" },
+  { value: "cm", title: "Centimeters", desc: "Physical units via the document's resolution (ppi)" },
 ];
 
 function OptionList<T extends string>({
@@ -366,6 +373,36 @@ export default function PreferencesDialog({
               </>
             )}
 
+            {tab === "units" && (
+              <>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Measurement unit</span>
+                  <OptionList
+                    options={UNIT_OPTIONS}
+                    value={prefs.unit}
+                    onPick={(v) => onChange({ unit: v })}
+                  />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Resolution</span>
+                  <p className={styles.sectionHint}>
+                    Default resolution stamped on new documents — it drives inch/cm rulers,
+                    physical size readouts and true-size printing. Each document can override it
+                    in the New document dialog.
+                  </p>
+                  <Slider
+                    label="Default resolution"
+                    min={72}
+                    max={600}
+                    step={1}
+                    unit=" ppi"
+                    value={prefs.defaultDpi}
+                    onChange={(n) => onChange({ defaultDpi: n })}
+                  />
+                </section>
+              </>
+            )}
+
             {tab === "performance" && (
               <>
                 <p className={styles.paneIntro}>
@@ -384,6 +421,38 @@ export default function PreferencesDialog({
                     value={prefs.cacheBudgetMB}
                     onChange={(n) => onChange({ cacheBudgetMB: n })}
                   />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Undo</span>
+                  <p className={styles.sectionHint}>
+                    Steps kept in memory — pixel patches are the biggest memory use. Older steps
+                    drop off the far end.
+                  </p>
+                  <Slider
+                    label="Undo steps"
+                    min={10}
+                    max={200}
+                    step={10}
+                    value={prefs.historyLimit}
+                    onChange={(n) => onChange({ historyLimit: n })}
+                  />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Compute</span>
+                  <div className={styles.row}>
+                    <div className={styles.rowText}>
+                      <strong>Background workers</strong>
+                      <em>
+                        Blur gallery, smart filters, healing and RAW decode run off-thread; turn
+                        off only when debugging (everything falls back to synchronous)
+                      </em>
+                    </div>
+                    <Toggle
+                      label=""
+                      checked={prefs.useWorkers}
+                      onChange={(on) => onChange({ useWorkers: on })}
+                    />
+                  </div>
                 </section>
                 <section className={styles.section}>
                   <span className={styles.groupLabel}>Live statistics</span>

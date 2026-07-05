@@ -1,6 +1,9 @@
 "use client";
 
 import {
+  Hexagon,
+  Lasso as LassoIcon,
+  Magnet,
   AlignCenter,
   AlignHorizontalJustifyCenter,
   AlignLeft,
@@ -39,6 +42,7 @@ import {
   type TextSettings,
   type GradientSettings,
   type GradientType,
+  type LassoMode,
   type MarqueeShape,
   type MoveMode,
   type PenSettings,
@@ -124,6 +128,8 @@ export default function OptionsBar({
   onResizeSmooth,
   marqueeShape,
   onMarqueeShape,
+  lassoMode,
+  onLassoMode,
   triangleApex,
   onTriangleApex,
   wand,
@@ -173,6 +179,8 @@ export default function OptionsBar({
   resizeSmooth: boolean;
   onResizeSmooth: (v: boolean) => void;
   marqueeShape: MarqueeShape;
+  lassoMode: LassoMode;
+  onLassoMode: (m: LassoMode) => void;
   onMarqueeShape: (s: MarqueeShape) => void;
   triangleApex: number;
   onTriangleApex: (v: number) => void;
@@ -218,6 +226,8 @@ export default function OptionsBar({
           onResizeSmooth,
           marqueeShape,
           onMarqueeShape,
+          lassoMode,
+          onLassoMode,
           triangleApex,
           onTriangleApex,
           wand,
@@ -257,6 +267,8 @@ function renderOptions(
   onResizeSmooth: (v: boolean) => void,
   marqueeShape: MarqueeShape,
   onMarqueeShape: (s: MarqueeShape) => void,
+  lassoMode: LassoMode,
+  onLassoMode: (m: LassoMode) => void,
   triangleApex: number,
   onTriangleApex: (v: number) => void,
   wand: { tolerance: number; contiguous: boolean; sampleAll: boolean },
@@ -703,6 +715,21 @@ function renderOptions(
     case "wand":
       return (
         <>
+          {tool === "lasso" && (
+            <>
+              <Segmented
+                label="Mode"
+                value={lassoMode}
+                onChange={(v) => onLassoMode(v as LassoMode)}
+                options={[
+                  { value: "free", icon: <LassoIcon size={14} />, title: "Freehand lasso (drag)" },
+                  { value: "poly", icon: <Hexagon size={14} />, title: "Polygonal lasso — click points; Enter/double-click closes" },
+                  { value: "magnetic", icon: <Magnet size={14} />, title: "Magnetic lasso — drag along an edge, points snap to it" },
+                ]}
+              />
+              <Divider />
+            </>
+          )}
           {tool === "select" && (
             <>
               <Segmented

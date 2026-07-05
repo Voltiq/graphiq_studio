@@ -1,5 +1,8 @@
 // User preferences, persisted to localStorage (separate from per-document state).
 
+/** Measurement unit for rulers and size readouts. */
+export type MeasureUnit = "px" | "in" | "cm";
+
 /** Where a clipboard paste goes by default. "ask" shows the paste dialog. */
 export type PasteDefault = "ask" | "new-layer" | "current-layer" | "new-canvas";
 
@@ -28,6 +31,16 @@ export interface Preferences {
   autosaveMinutes: number;
   /** Render-cache LRU budget in MB (Preferences ▸ Performance). */
   cacheBudgetMB: number;
+  /** Ruler / size-readout unit (physical units use the document's PPI). */
+  unit: MeasureUnit;
+  /** Default resolution (pixels per inch) stamped on new documents; used for
+   *  physical-unit rulers/readouts and true-size printing. */
+  defaultDpi: number;
+  /** Max undoable steps kept in memory (older steps drop off the far end). */
+  historyLimit: number;
+  /** Run heavy compute (Blur Gallery, smart filters, heal, RAW decode) in
+   *  background workers. Off = synchronous fallbacks (debugging aid). */
+  useWorkers: boolean;
   /** Minimize non-essential animations and panel transitions
    *  (Preferences ▸ Appearance; applied as data-motion="off" on <html>). */
   reduceMotion: boolean;
@@ -44,6 +57,10 @@ export const DEFAULT_PREFS: Preferences = {
   newDocHeight: 1080,
   autosaveMinutes: 2,
   cacheBudgetMB: 256,
+  unit: "px",
+  defaultDpi: 300,
+  historyLimit: 60,
+  useWorkers: true,
   reduceMotion: false,
 };
 

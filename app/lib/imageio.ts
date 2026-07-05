@@ -162,6 +162,12 @@ async function decodeEmbeddedJpeg(file: File): Promise<ImageBitmap | null> {
   return best;
 }
 
+let rawWorkerEnabled = true;
+/** Preferences ▸ Performance "background workers" — off = decode RAW inline. */
+export function setRawWorkerEnabled(on: boolean): void {
+  rawWorkerEnabled = on;
+}
+
 /** True when the buffer starts with a TIFF header (DNG/RAW containers). */
 function looksLikeTIFF(b: Uint8Array): boolean {
   return (
@@ -176,7 +182,7 @@ function looksLikeTIFF(b: Uint8Array): boolean {
  *  when workers are unavailable. Null = not a supported DNG. */
 async function decodeRawDNG(buffer: ArrayBuffer): Promise<ImageBitmap | null> {
   let result: { width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> } | null = null;
-  if (typeof Worker !== "undefined") {
+  if (rawWorkerEnabled && typeof Worker !== "undefined") {
     result = await new Promise<{ width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> } | null>((resolve) => {
       let worker: Worker | null = null;
       try {

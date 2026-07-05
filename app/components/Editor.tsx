@@ -52,6 +52,7 @@ import {
   type MoveMode,
   type PenSettings,
   type SelectResizeMode,
+  type LassoMode,
   type MarqueeShape,
   type ShapeSettings,
   type ToolId,
@@ -121,6 +122,7 @@ import {
   renderExport,
   saveImageBlob,
   type ExportOptions,
+  setRawWorkerEnabled,
 } from "../lib/imageio";
 import { addRecent } from "../lib/recents";
 import {
@@ -172,6 +174,8 @@ interface Doc {
   selectionPivot: { x: number; y: number } | null;
   /** Source-image file/EXIF metadata (set when a doc originates from an image). */
   metadata?: ImageMetadata | null;
+  /** Pixels per inch — physical-unit rulers/readouts + true-size print. */
+  dpi?: number;
 }
 
 /** A layer selection: the primary (active) id plus the full selected set. */
@@ -180,6 +184,7 @@ type Sel = { active: string | null; selected: string[] };
 const ALL_PANELS: PanelVisibility = {
   color: true,
   adjustments: true,
+  properties: true,
   layers: true,
   history: true,
   navigator: true,
@@ -190,6 +195,7 @@ const ALL_PANELS: PanelVisibility = {
 const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
   "window-color": "color",
   "window-adjustments": "adjustments",
+  "window-properties": "properties",
   "window-layers": "layers",
   "window-history": "history",
   "window-navigator": "navigator",
@@ -197,11 +203,12 @@ const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
   "window-metadata": "metadata",
 };
 
-const makeDoc = (seq: number, size?: { w: number; h: number }): Doc => ({
+const makeDoc = (seq: number, size?: { w: number; h: number }, dpi = 300): Doc => ({
   id: `doc-${seq}`,
   name: `Untitled-${seq}`,
   width: size?.w ?? 1920,
   height: size?.h ?? 1080,
+  dpi,
   layers: [],
   activeLayerId: null,
   selectedLayerIds: [],
@@ -344,6 +351,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [marqueeShape, setMarqueeShape] = useState<MarqueeShape>("rect");
   const marqueeShapeRef = useRef(marqueeShape);
   marqueeShapeRef.current = marqueeShape;
+  const [lassoMode, setLassoMode] = useState<LassoMode>("free");
+  const lassoModeRef = useRef(lassoMode);
+  lassoModeRef.current = lassoMode;
   const [triangleApex, setTriangleApex] = useState(0.5);
   const [sampleSizeLabel, setSampleSizeLabel] = useState("Point sample");
   const [sampleScopeLabel, setSampleScopeLabel] = useState("All layers");
@@ -372,6 +382,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (p.resizeMode) setResizeMode(p.resizeMode);
     if (typeof p.resizeSmooth === "boolean") setResizeSmooth(p.resizeSmooth);
     if (p.marqueeShape) setMarqueeShape(p.marqueeShape);
+    if (p.lassoMode) setLassoMode(p.lassoMode);
     if (typeof p.triangleApex === "number") setTriangleApex(p.triangleApex);
     if (p.sampleSize) setSampleSizeLabel(p.sampleSize);
     if (p.sampleScope) setSampleScopeLabel(p.sampleScope);
@@ -405,6 +416,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           resizeMode,
           resizeSmooth,
           marqueeShape,
+          lassoMode,
           triangleApex,
           sampleSize: sampleSizeLabel,
           sampleScope: sampleScopeLabel,
@@ -433,6 +445,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     resizeMode,
     resizeSmooth,
     marqueeShape,
+    lassoMode,
     triangleApex,
     sampleSizeLabel,
     sampleScopeLabel,
@@ -2085,7 +2098,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       const layer: Layer = { id: layerId, type: "layer", name: "Pasted Layer", visible: true, opacity: 100, blend: "Normal" };
       setDocs((ds) => [
         ...ds,
-        { id: docId, name: `Untitled-${seq}`, width: imgW, height: imgH, layers: [layer], activeLayerId: layerId, selectedLayerIds: [layerId], selection: [], selectionAngle: 0, selectionPivot: null },
+        { id: docId, name: `Untitled-${seq}`, width: imgW, height: imgH, dpi: prefsRef.current.defaultDpi, layers: [layer], activeLayerId: layerId, selectedLayerIds: [layerId], selection: [], selectionAngle: 0, selectionPivot: null },
       ]);
       setActiveId(docId);
       setPendingPaste({ docId, layerId, source, x: 0, y: 0 });
@@ -2189,10 +2202,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   // New canvas — the New Document dialog, or the stored default size.
-  const createDoc = (opts?: { name?: string; width?: number; height?: number }) => {
+  const createDoc = (opts?: { name?: string; width?: number; height?: number; dpi?: number }) => {
     const seq = (seqRef.current += 1);
     const p = prefsRef.current;
-    const d = makeDoc(seq, { w: opts?.width ?? p.newDocWidth, h: opts?.height ?? p.newDocHeight });
+    const d = makeDoc(
+      seq,
+      { w: opts?.width ?? p.newDocWidth, h: opts?.height ?? p.newDocHeight },
+      opts?.dpi ?? p.defaultDpi,
+    );
     if (opts?.name) d.name = opts.name;
     setDocs((ds) => [...ds, d]);
     setActiveId(d.id);
@@ -2303,6 +2320,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   useEffect(() => {
     paintRef.current?.setRenderCacheBudget(prefs.cacheBudgetMB);
   }, [prefs.cacheBudgetMB]);
+
+  // Undo-step cap -> engine history trim (oldest steps drop first).
+  useEffect(() => {
+    paintRef.current?.setHistoryLimit(prefs.historyLimit);
+  }, [prefs.historyLimit]);
+
+  // Background-worker toggle -> engine compute paths + the RAW decoder.
+  useEffect(() => {
+    paintRef.current?.setWorkersEnabled(prefs.useWorkers);
+    setRawWorkerEnabled(prefs.useWorkers);
+  }, [prefs.useWorkers]);
 
   const markSaved = (label: string) => {
     autosaveDirtyRef.current = false;
@@ -2460,6 +2488,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       name: p.name || `Untitled-${seq}`,
       width: p.width,
       height: p.height,
+      dpi: p.dpi ?? 300,
       layers,
       activeLayerId,
       selectedLayerIds,
@@ -2532,12 +2561,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       return;
     }
     cd.open();
+    // Physical size from the document's PPI (true-size print); still fits the
+    // page when larger than the printable area.
+    const d0 = activeDocRef.current;
+    const printW = (d0.width / (d0.dpi ?? 300)).toFixed(4);
     cd.write(
       '<!doctype html><html><head><meta charset="utf-8"><style>' +
         "@page{margin:10mm;}" +
         "*{margin:0;padding:0;box-sizing:border-box;}" +
         ".wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}" +
-        ".wrap img{max-width:100%;max-height:100%;}" +
+        `.wrap img{width:${printW}in;max-width:100%;max-height:100%;object-fit:contain;}` +
         '</style></head><body><div class="wrap"><img alt=""></div></body></html>',
     );
     cd.close();
@@ -3437,6 +3470,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             selectionFeatherRef.current,
           );
         }
+      } else if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "l") {
+        // Shift+L cycles the lasso variant (freehand → polygonal → magnetic).
+        e.preventDefault();
+        setTool("lasso");
+        const cur = lassoModeRef.current;
+        const next = cur === "free" ? "poly" : cur === "poly" ? "magnetic" : "free";
+        setLassoMode(next);
+        showToast(
+          next === "free" ? "Freehand lasso" : next === "poly" ? "Polygonal lasso" : "Magnetic lasso",
+        );
       } else if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "m") {
         // Shift+M cycles the marquee shape (rectangle → ellipse → triangle), à la
         // Photoshop, switching to the marquee tool so the change is visible.
@@ -3483,6 +3526,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         checks={{
           "window-color": panels.color,
           "window-adjustments": panels.adjustments,
+          "window-properties": panels.properties,
           "window-layers": panels.layers,
           "window-history": panels.history,
           "window-navigator": panels.navigator,
@@ -3510,6 +3554,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onResizeSmooth={setResizeSmooth}
         marqueeShape={marqueeShape}
         onMarqueeShape={setMarqueeShape}
+        lassoMode={lassoMode}
+        onLassoMode={setLassoMode}
         triangleApex={triangleApex}
         onTriangleApex={setTriangleApex}
         wand={wand}
@@ -3633,6 +3679,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           resizeMode={resizeMode}
           resizeSmooth={resizeSmooth}
           marqueeShape={marqueeShape}
+          lassoMode={lassoMode}
           triangleApex={triangleApex}
           wand={wand}
           sampleSize={SAMPLE_SIZE_PX[sampleSizeLabel] ?? 1}
@@ -3646,6 +3693,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onLoadDone={(docId) => setPendingLoads((ls) => ls.filter((p) => p.docId !== docId))}
           colorSpace={colorSpace}
           showRulers={showRulers}
+          unit={prefs.unit}
+          docDpi={active.dpi ?? 300}
           showGrid={showGrid}
           snap={snap}
           viewApiRef={viewApiRef}
@@ -3696,6 +3745,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           docName={active.name}
           colorSpace={colorSpace}
           imageMeta={active.metadata ?? null}
+          docDpi={active.dpi ?? 300}
         />
       </div>
       <StatusBar
@@ -3706,6 +3756,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         width={active.width}
         height={active.height}
         colorSpace={colorSpace}
+        unit={prefs.unit}
+        dpi={active.dpi ?? 300}
         layerCount={collectLeafIds(active.layers).length}
         saveState={saveState}
         selection={active.selection}
@@ -3759,6 +3811,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           defaultName={`Untitled-${seqRef.current + 1}`}
           defaultWidth={prefs.newDocWidth}
           defaultHeight={prefs.newDocHeight}
+          defaultDpi={prefs.defaultDpi}
           onCreate={createDoc}
           onClose={() => setNewDocOpen(false)}
         />

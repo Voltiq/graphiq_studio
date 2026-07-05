@@ -20,18 +20,21 @@ export default function NewDocDialog({
   defaultName,
   defaultWidth,
   defaultHeight,
+  defaultDpi = 300,
   onCreate,
   onClose,
 }: {
   defaultName: string;
   defaultWidth: number;
   defaultHeight: number;
-  onCreate: (opts: { name: string; width: number; height: number }) => void;
+  defaultDpi?: number;
+  onCreate: (opts: { name: string; width: number; height: number; dpi: number }) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState(defaultName);
   const [w, setW] = useState(defaultWidth);
   const [h, setH] = useState(defaultHeight);
+  const [dpi, setDpi] = useState(defaultDpi);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -46,7 +49,12 @@ export default function NewDocDialog({
   }, [onClose]);
 
   const create = () =>
-    onCreate({ name: name.trim() || defaultName, width: clampSize(w), height: clampSize(h) });
+    onCreate({
+      name: name.trim() || defaultName,
+      width: clampSize(w),
+      height: clampSize(h),
+      dpi: Math.max(1, Math.min(1200, Math.round(dpi) || 300)),
+    });
   const preset = PRESETS.find((p) => p.w === w && p.h === h);
 
   return (
@@ -108,6 +116,13 @@ export default function NewDocDialog({
             <div className={styles.numBox}>
               <input type="number" min={1} max={8192} value={h} onChange={(e) => setH(Number(e.target.value))} />
               <span className={styles.unit}>px</span>
+            </div>
+          </div>
+          <div className={styles.row}>
+            <span className={styles.rowLabel}>Resolution</span>
+            <div className={styles.numBox}>
+              <input type="number" min={1} max={1200} value={dpi} onChange={(e) => setDpi(Number(e.target.value))} />
+              <span className={styles.unit}>ppi</span>
             </div>
           </div>
           <p className={styles.hint}>

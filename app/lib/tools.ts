@@ -467,6 +467,9 @@ export const DEFAULT_BLUR_FX: BlurFxSettings = {
 };
 
 /** Rectangular-marquee tool shape: a rectangle, ellipse, or triangle region. */
+/** Lasso variants: freehand drag, click-point polygon, edge-snapping drag. */
+export type LassoMode = "free" | "poly" | "magnetic";
+
 export type MarqueeShape = "rect" | "ellipse" | "triangle";
 
 /** Marquee resize sub-mode: resize the outline only, or scale the pixels inside. */
