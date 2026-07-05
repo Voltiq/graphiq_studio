@@ -1,6 +1,7 @@
 "use client";
 
 import { type ReactNode } from "react";
+import type { WorkingSpace } from "../../lib/colorspace";
 import { ExternalLink } from "lucide-react";
 import styles from "../RightDock.module.scss";
 import { formatBytes, type ImageMetadata } from "../../lib/metadata";
@@ -54,7 +55,7 @@ export default function MetadataPanel({
   name: string;
   width: number;
   height: number;
-  colorSpace: PredefinedColorSpace;
+  colorSpace: WorkingSpace;
   meta: ImageMetadata | null;
 }) {
   const megapixels = ((width * height) / 1e6).toFixed(width * height >= 1e7 ? 0 : 1);
@@ -62,7 +63,12 @@ export default function MetadataPanel({
   // Some cameras repeat the make inside the model — collapse the duplication.
   const cameraName =
     meta?.make && meta?.model?.startsWith(meta.make) ? meta.model : camera;
-  const profile = colorSpace === "display-p3" ? "Display P3" : "sRGB IEC61966-2.1";
+  const profile =
+    colorSpace === "display-p3"
+      ? "Display P3"
+      : colorSpace === "adobe-rgb"
+        ? "Adobe RGB (1998) — emulated"
+        : "sRGB IEC61966-2.1";
 
   const hasCamera = !!(cameraName || meta?.lensModel || meta?.software);
   const hasCapture = !!(

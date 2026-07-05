@@ -130,6 +130,8 @@ export const MENUS: Menu[] = [
       { label: "Show rulers", action: "view-rulers" },
       { label: "Pixel grid", shortcut: "Ctrl+'", action: "view-grid" },
       { label: "Snap", separatorAfter: true, action: "view-snap" },
+      { label: "Proof colors", shortcut: "Ctrl+Alt+Y", action: "view-proof" },
+      { label: "Gamut warning", shortcut: "Ctrl+Alt+Shift+Y", action: "view-gamut", separatorAfter: true },
       { label: "Compare color profiles…", action: "color-compare" },
     ],
   },

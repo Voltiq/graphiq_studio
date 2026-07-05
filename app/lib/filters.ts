@@ -382,6 +382,41 @@ export interface StylizeParams {
   level: number; // threshold 0–255
 }
 
+/** Scale a filter's SPATIAL (pixel-unit) parameters by `s` — the progressive
+ *  half-resolution preview runs the stack on a downscaled source, so a blur
+ *  radius (etc.) must shrink with it to look the same. Percent / degree /
+ *  value-threshold params pass through untouched. */
+export function scaleFilterParams(f: SmartFilter, s: number): SmartFilter {
+  switch (f.type) {
+    case "blur": {
+      // zoom is %, spin is degrees; every other kind's amount is pixels.
+      const px = f.params.kind !== "zoom" && f.params.kind !== "spin";
+      return px ? { ...f, params: { ...f.params, amount: Math.max(1, f.params.amount * s) } } : f;
+    }
+    case "sharpen":
+      return { ...f, params: { ...f.params, radius: Math.max(1, f.params.radius * s) } };
+    case "pixelate":
+      return { ...f, params: { ...f.params, cellSize: Math.max(1, f.params.cellSize * s) } };
+    case "distort":
+      return f.params.mode === "wave"
+        ? {
+            ...f,
+            params: {
+              ...f.params,
+              amplitude: f.params.amplitude * s,
+              wavelength: Math.max(1, f.params.wavelength * s),
+            },
+          }
+        : f; // twirl/pinch params are degrees / % of the shorter side
+    case "stylize":
+      return f.params.mode === "emboss"
+        ? { ...f, params: { ...f.params, height: Math.max(1, f.params.height * s) } }
+        : f;
+    default:
+      return f;
+  }
+}
+
 interface FilterBase {
   id: string;
   enabled: boolean;

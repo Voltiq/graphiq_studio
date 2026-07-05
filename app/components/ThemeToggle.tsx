@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 import { THEME_COOKIE, isTheme, type Theme } from "../lib/theme";
 import styles from "./TopBar.module.scss";
@@ -34,7 +34,21 @@ export function resolvedDark(theme: Theme): boolean {
 export default function ThemeToggle({ initialTheme }: { initialTheme: Theme }) {
   const [theme, setTheme] = useState<Theme>(() => currentTheme(initialTheme));
 
-  const isDark = resolvedDark(theme);
+  // `system` resolves via matchMedia, which the server can't know — so the
+  // first client render must NOT consult it (hydration must match the SSR
+  // markup). Resolve after mount, and track live OS theme changes while the
+  // theme stays on `system`.
+  const [sysDark, setSysDark] = useState(false);
+  useEffect(() => {
+    if (theme !== "system") return;
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const sync = () => setSysDark(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, [theme]);
+
+  const isDark = theme === "system" ? sysDark : theme === "dark";
 
   const toggle = () => {
     const next: Theme = isDark ? "light" : "dark";

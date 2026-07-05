@@ -185,6 +185,74 @@ function buildEffective(
   return { r: composeLUT(rgb, r), g: composeLUT(rgb, g), b: composeLUT(rgb, b) };
 }
 
+// ---- 16-bit/channel tone path ---------------------------------------------
+// The 8-bit LUTs quantize at 256 steps; the high-bit adjustment path (emulated
+// working spaces convert once into 16-bit, run the math, and quantize once at
+// the end) uses 65 536-entry tables built by sampling the SAME continuous
+// evaluators — composed continuously (channel ∘ master) so no intermediate
+// 8-bit rounding sneaks back in. Byte v widens to v·257 (0→0, 255→65535).
+
+export interface ToneLUTs16 {
+  r: Uint16Array;
+  g: Uint16Array;
+  b: Uint16Array;
+}
+
+/** Continuous Levels evaluator — the levelsLUT formula, unrounded. */
+function levelsF(p: ChannelParams): (x: number) => number {
+  const inB = clamp(p.inBlack, 0, 255);
+  const inW = clamp(p.inWhite, 0, 255);
+  const span = inW - inB || 1;
+  const g = 1 / clamp(p.gamma, 0.01, 9.99);
+  const oB = clamp(p.outBlack, 0, 255);
+  const oW = clamp(p.outWhite, 0, 255);
+  return (x) => {
+    let t = (x - inB) / span;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    return oB + Math.pow(t, g) * (oW - oB);
+  };
+}
+
+/** 65k table of channel(master(x)) over the continuous 0–255 domain. */
+function lut16(master: (x: number) => number, channel: (x: number) => number): Uint16Array {
+  const out = new Uint16Array(65536);
+  for (let i = 0; i < 65536; i++) {
+    const x = i / 257; // exact 0..255 domain (65535/257 = 255)
+    let v = master(x);
+    v = v < 0 ? 0 : v > 255 ? 255 : v;
+    v = channel(v);
+    v = v < 0 ? 0 : v > 255 ? 255 : v;
+    out[i] = v * 257 + 0.5;
+  }
+  return out;
+}
+
+export function buildLevelsLUTs16(spec: Extract<ToneAdjustment, { type: "levels" }>): ToneLUTs16 {
+  const c = spec.channels;
+  const master = levelsF(c.rgb);
+  return { r: lut16(master, levelsF(c.r)), g: lut16(master, levelsF(c.g)), b: lut16(master, levelsF(c.b)) };
+}
+
+export function buildCurvesLUTs16(spec: Extract<ToneAdjustment, { type: "curves" }>): ToneLUTs16 {
+  const c = spec.channels;
+  const master = curveSampler(c.rgb);
+  return {
+    r: lut16(master, curveSampler(c.r)),
+    g: lut16(master, curveSampler(c.g)),
+    b: lut16(master, curveSampler(c.b)),
+  };
+}
+
+/** Apply 16-bit LUTs to an RGBA16 buffer in place (alpha untouched). */
+export function applyToneLUTs16(d: Uint16Array, luts: ToneLUTs16): void {
+  const { r, g, b } = luts;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = r[d[i]];
+    d[i + 1] = g[d[i + 1]];
+    d[i + 2] = b[d[i + 2]];
+  }
+}
+
 export function buildLevelsLUTs(spec: Extract<ToneAdjustment, { type: "levels" }>): ToneLUTs {
   const c = spec.channels;
   return buildEffective(levelsLUT(c.rgb), levelsLUT(c.r), levelsLUT(c.g), levelsLUT(c.b));

@@ -2,7 +2,7 @@
 import type { Rect } from "./view";
 import { blendOp, clipGroupsOf, filterMaskKey } from "./layers";
 import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerNode } from "./layers";
-import { applyAdjustments, isDefaultAdjust, type Adjustments } from "./adjust";
+import { applyAdjustments, applyAdjustments16, isDefaultAdjust, type Adjustments } from "./adjust";
 import { renderShape, type ShapeGeom } from "./shapes";
 import { boxBlurPass, clampi } from "./blur";
 import { fxHash, hasEnabledFx, renderStyled } from "./effects";
@@ -12,17 +12,31 @@ import {
   computeBlurFx,
   filterStackHash,
   hasEnabledFilters,
+  scaleFilterParams,
   type SmartFilter,
 } from "./filters";
+import {
+  adobe16ToSrgbBytes,
+  canvasSpaceOf,
+  proofIsIdentity,
+  proofTransformInPlace,
+  srgbBytesToAdobe16,
+  type ProofTarget,
+  type WorkingSpace,
+} from "./colorspace";
 import { GpuToneRenderer } from "./gpu";
 import { healPadding, healRegion } from "./heal";
 import { buildCanvasGradient } from "./gradient";
 import {
   applyToneLUTs,
+  applyToneLUTs16,
   buildCurvesLUTs,
+  buildCurvesLUTs16,
   buildLevelsLUTs,
+  buildLevelsLUTs16,
   type ToneAdjustment,
   type ToneLUTs,
+  type ToneLUTs16,
 } from "./tone";
 import { renderPenStroke } from "./pen";
 import type {
@@ -290,7 +304,8 @@ export interface EngineHandle {
   endAdjust: () => void;
   /** Discard the live adjustment session (restore original, drop its entry). */
   revertAdjust: () => void;
-  setColorSpace: (cs: PredefinedColorSpace) => void;
+  setColorSpace: (ws: WorkingSpace) => void;
+  setProofing: (simulate: boolean, warn: boolean, target: ProofTarget) => void;
   captureLeaves: (ids: string[]) => Map<string, LeafSnapshot>;
   restoreLeaves: (snaps: Map<string, LeafSnapshot>) => void;
   pushStructural: (label: string, undo: () => void, redo: () => void) => void;
@@ -462,7 +477,12 @@ export class PaintEngine {
   // Working colour space. Layer/scratch/float/export buffers use it (wide-gamut
   // preserved); the stroke buffer + brush tip stay sRGB so brush colours, which
   // are authored from sRGB hex, convert correctly when composited onto layers.
-  private cs: PredefinedColorSpace = "srgb";
+  private cs: PredefinedColorSpace = "srgb"; // canvas (storage/display) space
+  private ws: WorkingSpace = "srgb"; // working space (adjustment math)
+  // Soft proofing (VIEW-only): simulate the target space / mark its gamut.
+  private proofTarget: ProofTarget = "srgb";
+  private proofSimulate = false;
+  private gamutWarn = false;
 
   // --- Layer masks (non-destructive) -----------------------------------------
   // Grayscale mask per layer id (R=G=B=value); absent ⇒ no mask. Colour-agnostic
@@ -517,7 +537,7 @@ export class PaintEngine {
   private docEpoch = 0;
   // Compiled Curves/Levels LUTs per adjustment-node id, keyed by the spec JSON.
   // (Param→LUT math memo, not a pixel cache — stays separate from renderCache.)
-  private toneCache = new Map<string, { key: string; luts: ToneLUTs }>();
+  private toneCache = new Map<string, { key: string; luts: ToneLUTs; luts16?: ToneLUTs16 }>();
   // The tree the current/last composite ran against (for dirty-region proofs).
   private curTree: LayerNode[] | null = null;
   // Dirty-region bookkeeping per cached ADJUSTMENT product: which document
@@ -627,6 +647,7 @@ export class PaintEngine {
   /** Is the GPU LUT pass usable for the working colour space (lazy init)? */
   private gpuAvailable(): boolean {
     if (!this.gpuOn) return false;
+    if (this.ws === "adobe-rgb") return false; // LUT math must run in Adobe primaries (CPU)
     if (this.gpuTone === undefined || (this.gpuTone && this.gpuTone.cs !== this.cs))
       this.gpuTone = GpuToneRenderer.create(this.cs);
     return !!this.gpuTone;
@@ -909,18 +930,26 @@ export class PaintEngine {
     this.vctx = v ? v.getContext("2d", { colorSpace: this.cs }) : null;
   }
 
-  /** Switch the working colour space, converting existing layers into it. */
-  setColorSpace(cs: PredefinedColorSpace) {
-    if (cs === this.cs) return;
+  /** Switch the working colour space. Native spaces (sRGB / Display P3) convert
+   *  the stored pixels between canvas spaces; the emulated Adobe RGB space only
+   *  redirects the adjustment MATH — bytes stay on the sRGB canvas, so toggling
+   *  it is lossless (adjustment products recompute via the epoch bump). */
+  setColorSpace(ws: WorkingSpace) {
+    if (ws === this.ws) return;
+    const nextCanvas = canvasSpaceOf(ws);
+    const canvasChanged = nextCanvas !== this.cs;
     this.wandSrc = null;
     this.invalidateStyled();
-    this.cs = cs;
-    if (this.scratch) this.scratch = this.mk(this.w, this.h);
-    // drawImage converts each layer's pixels from the old space into the new one.
-    for (const [id, l] of this.layers) {
-      const next = this.mk(this.w, this.h, true);
-      next.ctx.drawImage(l.c, 0, 0);
-      this.layers.set(id, next);
+    this.ws = ws;
+    this.cs = nextCanvas;
+    if (canvasChanged) {
+      if (this.scratch) this.scratch = this.mk(this.w, this.h);
+      // drawImage converts each layer's pixels from the old space into the new one.
+      for (const [id, l] of this.layers) {
+        const next = this.mk(this.w, this.h, true);
+        next.ctx.drawImage(l.c, 0, 0);
+        this.layers.set(id, next);
+      }
     }
     this.endAdjust();
     this.emitChange();
@@ -928,6 +957,57 @@ export class PaintEngine {
 
   get colorSpace() {
     return this.cs;
+  }
+
+  get workingSpace(): WorkingSpace {
+    return this.ws;
+  }
+
+  /** Soft-proof settings (Ctrl+Alt+Y / Ctrl+Alt+Shift+Y; target from the
+   *  Color Management dialog). View-only — exports never proof. */
+  setProofing(simulate: boolean, warn: boolean, target: ProofTarget): void {
+    if (simulate === this.proofSimulate && warn === this.gamutWarn && target === this.proofTarget) return;
+    this.proofSimulate = simulate;
+    this.gamutWarn = warn;
+    this.proofTarget = target;
+    this.lastTree = null; // next view blit must repaint everything
+    this.emitChange();
+  }
+
+  private proofingActive(): boolean {
+    return (this.proofSimulate || this.gamutWarn) && !proofIsIdentity(this.cs, this.proofTarget);
+  }
+
+  /** Slider / tone maths on `src` in the WORKING space.
+   *  Native spaces run the existing 8-bit path (a single pass quantizes once
+   *  already). The emulated Adobe RGB space runs the 16-BIT pipeline: canvas
+   *  bytes decode straight to Adobe RGBA16, the math runs at 16 bits (65k-entry
+   *  tone LUTs), and ONE final quantization writes the sRGB bytes — so an
+   *  identity edit roundtrips byte-exact and nothing quantizes mid-pipeline.
+   *  `ownSrc` marks a caller-owned buffer the native tone path may mutate
+   *  in place (the adjustment sites hand in fresh getImageData copies). */
+  private applyColorMath(
+    src: ImageData,
+    op:
+      | { kind: "sliders"; params: Adjustments }
+      | { kind: "tone"; luts: ToneLUTs; luts16: () => ToneLUTs16 },
+    ownSrc = false,
+  ): ImageData {
+    if (this.ws !== "adobe-rgb") {
+      if (op.kind === "sliders") return applyAdjustments(src, op.params, this.cs);
+      const target = ownSrc
+        ? src
+        : new ImageData(new Uint8ClampedArray(src.data), src.width, src.height, {
+            colorSpace: this.cs,
+          });
+      return applyToneLUTs(target, op.luts); // mutates target in place
+    }
+    const wide = srgbBytesToAdobe16(src.data);
+    if (op.kind === "sliders") applyAdjustments16(wide, src.width, src.height, op.params);
+    else applyToneLUTs16(wide, op.luts16());
+    const out = new ImageData(src.width, src.height, { colorSpace: this.cs });
+    adobe16ToSrgbBytes(wide, out.data);
+    return out;
   }
 
   setDoc(w: number, h: number, ownLayerIds?: string[]) {
@@ -2387,13 +2467,16 @@ export class PaintEngine {
   private processAdjust(before: ImageData): ImageData {
     let res: ImageData;
     if (this.adjTone) {
-      const copy = new ImageData(new Uint8ClampedArray(before.data), before.width, before.height, {
-        colorSpace: this.cs,
+      const tone = this.adjTone;
+      const luts = tone.type === "levels" ? buildLevelsLUTs(tone) : buildCurvesLUTs(tone);
+      // ownSrc=false: the session snapshot must never be mutated.
+      res = this.applyColorMath(before, {
+        kind: "tone",
+        luts,
+        luts16: () => (tone.type === "levels" ? buildLevelsLUTs16(tone) : buildCurvesLUTs16(tone)),
       });
-      const luts = this.adjTone.type === "levels" ? buildLevelsLUTs(this.adjTone) : buildCurvesLUTs(this.adjTone);
-      res = applyToneLUTs(copy, luts);
     } else if (this.adjPending) {
-      res = applyAdjustments(before, this.adjPending, this.cs);
+      res = this.applyColorMath(before, { kind: "sliders", params: this.adjPending });
     } else {
       return before;
     }
@@ -3204,6 +3287,19 @@ export class PaintEngine {
     return luts;
   }
 
+  /** The 65k-entry twin, cached beside the 8-bit tables (same spec key). */
+  private toneLUTs16(id: string, spec: ToneAdjustment): ToneLUTs16 {
+    const key = this.specHash(spec);
+    let hit = this.toneCache.get(id);
+    if (!hit || hit.key !== key) {
+      this.toneLUTs(id, spec); // (re)build + cache the 8-bit entry first
+      hit = this.toneCache.get(id)!;
+    }
+    if (!hit.luts16)
+      hit.luts16 = spec.type === "levels" ? buildLevelsLUTs16(spec) : buildCurvesLUTs16(spec);
+    return hit.luts16;
+  }
+
   /** Re-process everything in `ctx` beneath this adjustment node, modulated by the
    *  node's opacity × layer-mask and blended with its blend mode. Sliders reuse
    *  `applyAdjustments`; Curves/Levels apply cached LUTs. Clipping is NOT handled
@@ -3218,11 +3314,17 @@ export class PaintEngine {
   private applyAdjustmentRegion(ctx: CanvasRenderingContext2D, node: LayerAdjustment, r: Rect) {
     const spec = node.adjustment;
     if (spec.type === "sliders" && isDefaultAdjust(spec.params)) return; // neutral → no-op
-    const below = ctx.getImageData(r.x, r.y, r.w, r.h);
-    const out =
+    const out = this.applyColorMath(
+      ctx.getImageData(r.x, r.y, r.w, r.h),
       spec.type === "sliders"
-        ? applyAdjustments(below, spec.params, this.cs)
-        : applyToneLUTs(below, this.toneLUTs(node.id, spec));
+        ? { kind: "sliders", params: spec.params }
+        : {
+            kind: "tone",
+            luts: this.toneLUTs(node.id, spec),
+            luts16: () => this.toneLUTs16(node.id, spec),
+          },
+      true,
+    );
     const maskAlpha = node.mask?.enabled ? this.maskDisplay(node.id) : null;
     const opacity = Math.max(0, Math.min(1, node.opacity / 100));
     const op = blendOp(node.blend);
@@ -3264,9 +3366,17 @@ export class PaintEngine {
       spec.type === "sliders" ? null : this.gpuToneRender(ctx.canvas, w, h, this.toneLUTs(node.id, spec));
     const out = gpuOut
       ? null
-      : spec.type === "sliders"
-        ? applyAdjustments(ctx.getImageData(0, 0, w, h), spec.params, this.cs) // REUSED slider math
-        : applyToneLUTs(ctx.getImageData(0, 0, w, h), this.toneLUTs(node.id, spec)); // single LUT pass
+      : this.applyColorMath(
+          ctx.getImageData(0, 0, w, h),
+          spec.type === "sliders"
+            ? { kind: "sliders", params: spec.params } // REUSED slider math
+            : {
+                kind: "tone",
+                luts: this.toneLUTs(node.id, spec),
+                luts16: () => this.toneLUTs16(node.id, spec),
+              },
+          true, // fresh getImageData — the tone path may mutate it in place
+        );
     const maskAlpha = node.mask?.enabled ? this.maskDisplay(node.id) : null;
     const opacity = Math.max(0, Math.min(1, node.opacity / 100));
     const op = blendOp(node.blend);
@@ -3316,6 +3426,7 @@ export class PaintEngine {
   exportComposite(tree: LayerNode[], clean = false): HTMLCanvasElement {
     const wasOn = this.renderCacheOn;
     const gpuWas = this.gpuOn;
+    this.exporting = true; // no preview/stale filter products in exports
     if (clean) {
       this.renderCacheOn = false;
       this.gpuOn = false; // byte-certain output = the always-correct CPU path
@@ -3330,6 +3441,7 @@ export class PaintEngine {
     ctx.globalCompositeOperation = "source-over";
     this.renderCacheOn = wasOn;
     this.gpuOn = gpuWas;
+    this.exporting = false;
     return c;
   }
 
@@ -3400,7 +3512,20 @@ export class PaintEngine {
       this.renderCacheOn && this.lastTree === tree && this.pendingDirty
         ? clampRect(this.pendingDirty, this.w, this.h)
         : null;
-    if (d) {
+    if (this.proofingActive()) {
+      // Soft proof: transform the blitted pixels through the target space on
+      // the way to the view (the document itself is untouched). Reuses the
+      // dirty-rect bound so painting under a proof stays region-priced.
+      const x = d?.x ?? 0;
+      const y = d?.y ?? 0;
+      const w = d?.w ?? this.w;
+      const h = d?.h ?? this.h;
+      if (w > 0 && h > 0) {
+        const img = acc.ctx.getImageData(x, y, w, h);
+        proofTransformInPlace(img.data, this.cs, this.proofTarget, this.proofSimulate, this.gamutWarn);
+        ctx.putImageData(img, x, y);
+      }
+    } else if (d) {
       ctx.clearRect(d.x, d.y, d.w, d.h);
       ctx.drawImage(acc.c, d.x, d.y, d.w, d.h, d.x, d.y, d.w, d.h);
     } else {
@@ -5203,8 +5328,22 @@ export class PaintEngine {
   private filterWorkerBroken = false;
   private filterJobSeq = 0;
   /** Per-node newest in-flight job (older replies are dropped). */
-  private filterPending = new Map<string, { seq: number; key: string }>();
-  private filteredCache = new Map<string, { key: string; canvas: HTMLCanvasElement }>();
+  private filterPending = new Map<
+    string,
+    { seq: number; key: string; quality: "preview" | "full"; docW: number; docH: number }
+  >();
+  private filteredCache = new Map<
+    string,
+    { key: string; canvas: HTMLCanvasElement; quality: "preview" | "full" }
+  >();
+
+  /** Progressive preview kicks in above this many document pixels — below it a
+   *  half-res pass saves nothing worth the resample. */
+  private static PREVIEW_MIN_PIXELS = 2_000_000;
+  /** True while exportComposite runs: exports must never contain half-res
+   *  preview or stale-param products, so anything but an exact full-quality
+   *  cache hit computes synchronously at full resolution. */
+  private exporting = false;
 
   private ensureFilterWorker(): Worker | null {
     if (this.filterWorkerBroken) return null;
@@ -5249,7 +5388,7 @@ export class PaintEngine {
     const pend = this.filterPending.get(nodeId);
     if (!pend || pend.seq !== id) return; // superseded by a newer job
     this.filterPending.delete(nodeId);
-    if (w !== this.w || h !== this.h) return; // document reframed mid-flight
+    if (pend.docW !== this.w || pend.docH !== this.h) return; // reframed mid-flight
     const bytes = new Uint8ClampedArray(data);
     let img: ImageData;
     try {
@@ -5257,9 +5396,22 @@ export class PaintEngine {
     } catch {
       img = new ImageData(bytes, w, h);
     }
-    const cv = this.mk(w, h);
-    cv.ctx.putImageData(img, 0, 0);
-    this.storeFiltered(nodeId, key, cv.c);
+    let out: HTMLCanvasElement;
+    if (w === this.w && h === this.h) {
+      const cv = this.mk(w, h);
+      cv.ctx.putImageData(img, 0, 0);
+      out = cv.c;
+    } else {
+      // Half-res preview → upscale to document size so consumers stay agnostic.
+      const small = this.mk(w, h);
+      small.ctx.putImageData(img, 0, 0);
+      const cv = this.mk(this.w, this.h);
+      cv.ctx.imageSmoothingEnabled = true;
+      cv.ctx.imageSmoothingQuality = "high";
+      cv.ctx.drawImage(small.c, 0, 0, w, h, 0, 0, this.w, this.h);
+      out = cv.c;
+    }
+    this.storeFiltered(nodeId, key, out, pend.quality);
     // Frames composited while this was in flight cached STALE products under
     // fresh keys (the node itself, its ancestors, clip groups, adjustment
     // accumulators). One cache clear is the safe, cheap invalidation — the
@@ -5271,9 +5423,9 @@ export class PaintEngine {
     this.emitChange();
   }
 
-  private storeFiltered(id: string, key: string, canvas: HTMLCanvasElement) {
+  private storeFiltered(id: string, key: string, canvas: HTMLCanvasElement, quality: "preview" | "full") {
     this.filteredCache.delete(id); // re-insert to refresh Map order (LRU-ish)
-    this.filteredCache.set(id, { key, canvas });
+    this.filteredCache.set(id, { key, canvas, quality });
     while (this.filteredCache.size > 8) {
       const oldest = this.filteredCache.keys().next().value;
       if (oldest === undefined) break;
@@ -5281,52 +5433,80 @@ export class PaintEngine {
     }
   }
 
-  /** Queue an async recompute of `node`'s filter stack (true = queued/running). */
-  private kickFilterJob(node: LayerNode, src: HTMLCanvasElement, key: string): boolean {
+  /** Queue an async recompute of `node`'s filter stack (true = queued/running).
+   *  `quality: "preview"` runs at half resolution — ¼ the pixels AND ¼ the
+   *  main-thread readback (the source downscales on the GPU before the read);
+   *  spatial filter params scale with it so the look matches full res. */
+  private kickFilterJob(
+    node: LayerNode,
+    src: HTMLCanvasElement,
+    key: string,
+    quality: "preview" | "full",
+  ): boolean {
     const w = this.ensureFilterWorker();
     if (!w) return false;
     const pend = this.filterPending.get(node.id);
-    if (pend && pend.key === key) return true; // this exact state is already queued
+    // Same state already queued at this quality (or better) → nothing to do.
+    if (pend && pend.key === key && (pend.quality === "full" || pend.quality === quality))
+      return true;
+    const scale = quality === "preview" ? 0.5 : 1;
+    const sw = Math.max(1, Math.round(this.w * scale));
+    const sh = Math.max(1, Math.round(this.h * scale));
     const seq = ++this.filterJobSeq;
-    this.filterPending.set(node.id, { seq, key });
-    const img = src.getContext("2d")!.getImageData(0, 0, this.w, this.h);
+    this.filterPending.set(node.id, { seq, key, quality, docW: this.w, docH: this.h });
+    const readScaled = (source: HTMLCanvasElement): ImageData => {
+      if (scale === 1) return source.getContext("2d")!.getImageData(0, 0, this.w, this.h);
+      const small = this.mk(sw, sh, true);
+      small.ctx.imageSmoothingEnabled = true;
+      small.ctx.imageSmoothingQuality = "high";
+      small.ctx.drawImage(source, 0, 0, this.w, this.h, 0, 0, sw, sh);
+      return small.ctx.getImageData(0, 0, sw, sh);
+    };
+    const img = readScaled(src);
     const transfers: ArrayBuffer[] = [img.data.buffer];
     let fm: ArrayBuffer | null = null;
     const fmCanvas = this.filterMaskAlpha(node);
     if (fmCanvas) {
-      const fmImg = fmCanvas.getContext("2d")!.getImageData(0, 0, this.w, this.h);
+      const fmImg = readScaled(fmCanvas as HTMLCanvasElement);
       fm = fmImg.data.buffer;
       transfers.push(fm);
     }
+    const filters =
+      scale === 1 ? node.filters : node.filters!.map((f) => (f.enabled ? scaleFilterParams(f, scale) : f));
     w.postMessage(
-      {
-        id: seq,
-        nodeId: node.id,
-        key,
-        w: this.w,
-        h: this.h,
-        cs: this.cs,
-        src: img.data.buffer,
-        fm,
-        filters: node.filters,
-      },
+      { id: seq, nodeId: node.id, key, w: sw, h: sh, cs: this.cs, src: img.data.buffer, fm, filters },
       transfers,
     );
     return true;
   }
 
   /** The node's filtered pixels via the product cache: hit → cached canvas;
-   *  miss with a stale product → async worker refresh, stale drawn this frame;
-   *  cold (or live-session bypass) → synchronous compute, exactly as before. */
+   *  miss with a stale product → async worker refresh (HALF-RES during drags on
+   *  large documents; the stale product draws this frame); a hit on a
+   *  half-res product means the params settled → quietly refine to full res.
+   *  Cold, live-session, or cache-disabled → synchronous compute, as before. */
   private filteredProduct(node: LayerNode, src: HTMLCanvasElement): HTMLCanvasElement {
-    const live = this.liveBypass.has(node.id);
+    // Cache-disabled covers the A/B toggle AND clean exports — both must never
+    // see a half-res preview product.
+    const live = this.liveBypass.has(node.id) || !this.renderCacheOn;
     if (!live) {
       const key = this.nodeKey(node);
       const ent = this.filteredCache.get(node.id);
-      if (ent && ent.key === key) return ent.canvas;
-      if (ent && this.kickFilterJob(node, src, key)) return ent.canvas; // stale + refresh
+      if (ent && ent.key === key && ent.quality === "full") return ent.canvas;
+      if (!this.exporting) {
+        if (ent && ent.key === key) {
+          // Settled on a preview → refine to full res in the background.
+          this.kickFilterJob(node, src, key, "full");
+          return ent.canvas;
+        }
+        if (ent) {
+          const quality =
+            this.w * this.h >= PaintEngine.PREVIEW_MIN_PIXELS ? ("preview" as const) : ("full" as const);
+          if (this.kickFilterJob(node, src, key, quality)) return ent.canvas; // stale + refresh
+        }
+      }
       const out = this.renderFiltered(src, node.filters!, this.filterMaskAlpha(node));
-      this.storeFiltered(node.id, key, out);
+      this.storeFiltered(node.id, key, out, "full");
       return out;
     }
     // A live paint/move session mutates `src` without version bumps — the key

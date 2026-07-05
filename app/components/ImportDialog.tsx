@@ -5,6 +5,8 @@ import { X } from "lucide-react";
 import styles from "./PasteDialog.module.scss";
 import sizeStyles from "./CanvasSizeDialog.module.scss";
 import type { ImageMetadata } from "../lib/metadata";
+import { WORKING_SPACE_LABELS, type WorkingSpace } from "../lib/colorspace";
+import type { ICCInfo } from "../lib/icc";
 
 export type ImportMode = "layers" | "canvas";
 
@@ -14,6 +16,10 @@ export interface ImportOptions {
   anchor: number;
   /** Grow the canvas to fit images larger than it (else they crop). */
   expand: boolean;
+  /** Embedded ICC handling: convert into the working space (browser CMS —
+   *  keeps appearance) or assign the working space (keep the raw numbers,
+   *  ignore the profile). Only meaningful when a profile was detected. */
+  profileMode: "convert" | "assign";
 }
 
 const ANCHOR_NAMES = [
@@ -33,6 +39,10 @@ export interface ImportItem {
   bitmap: ImageBitmap;
   /** File/EXIF metadata captured at decode time (for the Metadata panel). */
   meta?: ImageMetadata;
+  /** The source file — kept so "assign working space" can re-decode raw. */
+  file?: File;
+  /** Embedded ICC profile info (null/absent = untagged). */
+  icc?: ICCInfo | null;
 }
 
 function Thumb({ bitmap }: { bitmap: ImageBitmap }) {
@@ -60,23 +70,36 @@ export default function ImportDialog({
   items,
   docWidth,
   docHeight,
+  workingSpace = "srgb",
   onImport,
   onClose,
 }: {
   items: ImportItem[];
   docWidth: number;
   docHeight: number;
+  workingSpace?: WorkingSpace;
   onImport: (mode: ImportMode, opts: ImportOptions) => void;
   onClose: () => void;
 }) {
   const [mode, setMode] = useState<ImportMode>("layers");
   const [anchor, setAnchor] = useState(4); // centre
   const [expand, setExpand] = useState(true);
+  const [profileMode, setProfileMode] = useState<"convert" | "assign">("convert");
   const many = items.length > 1;
   const oversized = items.some((it) => it.bitmap.width > docWidth || it.bitmap.height > docHeight);
   const grownW = Math.max(docWidth, ...items.map((it) => it.bitmap.width));
   const grownH = Math.max(docHeight, ...items.map((it) => it.bitmap.height));
-  const opts: ImportOptions = { anchor, expand };
+  // The assign/convert choice only matters when a profile that ISN'T already
+  // the working space is embedded (converting sRGB into sRGB is a no-op).
+  const profiled = items.filter((it) => it.icc && it.icc.looksLike !== workingSpace);
+  const profileName =
+    profiled.length === 1
+      ? (profiled[0].icc?.description ?? "Unknown profile")
+      : profiled.length > 1
+        ? `${profiled.length} images carry embedded profiles`
+        : null;
+  const wsLabel = WORKING_SPACE_LABELS[workingSpace];
+  const opts: ImportOptions = { anchor, expand, profileMode };
 
   const OPTIONS: { value: ImportMode; title: string; desc: string }[] = [
     {
@@ -132,6 +155,41 @@ export default function ImportDialog({
               </span>
             )}
           </div>
+
+          {profileName && (
+            <>
+              <span className={styles.groupLabel}>Color profile</span>
+              <p className={styles.note}>
+                Embedded profile: <strong style={{ color: "var(--text-2)" }}>{profileName}</strong>
+              </p>
+              <div className={styles.options}>
+                <button
+                  type="button"
+                  className={styles.option}
+                  data-active={profileMode === "convert"}
+                  onClick={() => setProfileMode("convert")}
+                >
+                  <span className={styles.radio} />
+                  <span className={styles.optText}>
+                    <strong>Convert to {wsLabel} (recommended)</strong>
+                    <em>Keep the image&apos;s appearance — colors are converted into the working space</em>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className={styles.option}
+                  data-active={profileMode === "assign"}
+                  onClick={() => setProfileMode("assign")}
+                >
+                  <span className={styles.radio} />
+                  <span className={styles.optText}>
+                    <strong>Assign {wsLabel}</strong>
+                    <em>Keep the raw numbers and ignore the profile — the appearance will shift</em>
+                  </span>
+                </button>
+              </div>
+            </>
+          )}
 
           <span className={styles.groupLabel}>Import as</span>
           <div className={styles.options}>

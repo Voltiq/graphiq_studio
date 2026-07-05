@@ -4,14 +4,29 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import styles from "./PasteDialog.module.scss";
 import { p3Supported } from "../lib/imageio";
+import { PROOF_TARGET_LABELS, proofIsIdentity, canvasSpaceOf, type ProofTarget, type WorkingSpace } from "../lib/colorspace";
+
+const PROOF_TARGETS: ProofTarget[] = ["srgb", "display-p3", "adobe-rgb"];
 
 export default function ColorDialog({
   colorSpace,
   onColorSpace,
+  proofTarget,
+  onProofTarget,
+  proofColors,
+  gamutWarn,
+  onProofColors,
+  onGamutWarn,
   onClose,
 }: {
-  colorSpace: PredefinedColorSpace;
-  onColorSpace: (cs: PredefinedColorSpace) => void;
+  colorSpace: WorkingSpace;
+  onColorSpace: (ws: WorkingSpace) => void;
+  proofTarget: ProofTarget;
+  onProofTarget: (t: ProofTarget) => void;
+  proofColors: boolean;
+  gamutWarn: boolean;
+  onProofColors: (on: boolean) => void;
+  onGamutWarn: (on: boolean) => void;
   onClose: () => void;
 }) {
   const [supported] = useState(() => p3Supported());
@@ -60,6 +75,13 @@ export default function ColorDialog({
             >
               Display P3 (wide gamut)
             </button>
+            <button
+              type="button"
+              style={opt(colorSpace === "adobe-rgb")}
+              onClick={() => onColorSpace("adobe-rgb")}
+            >
+              Adobe RGB (1998)
+            </button>
           </div>
           {!supported && (
             <p style={{ fontSize: 11.5, color: "var(--text-3)", margin: 0 }}>
@@ -71,6 +93,38 @@ export default function ColorDialog({
             Display P3 keeps wide-gamut color through editing and export; imported profiled images
             are converted into the working space, and the canvas is color-managed to your display.
             The choice is remembered.
+          </p>
+          <p style={{ fontSize: 11.5, color: "var(--text-3)", lineHeight: 1.5, margin: 0 }}>
+            <strong style={{ color: "var(--text-2)" }}>Adobe RGB is emulated</strong>: browsers
+            can&apos;t display or store an Adobe RGB canvas, so pixels stay in sRGB on screen and
+            in exports. Adjustment layers, the Adjustments panel and Curves/Levels run their math
+            in Adobe RGB primaries (matrix-converted per pass), matching how those edits behave in
+            an Adobe RGB workflow — but colors outside sRGB still clip. Switching to or from it is
+            lossless.
+          </p>
+
+          <span className={styles.groupLabel}>Soft proofing</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            {PROOF_TARGETS.map((t) => (
+              <button key={t} type="button" style={opt(proofTarget === t)} onClick={() => onProofTarget(t)}>
+                {PROOF_TARGET_LABELS[t]}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" style={opt(proofColors)} onClick={() => onProofColors(!proofColors)}>
+              Proof colors (Ctrl+Alt+Y)
+            </button>
+            <button type="button" style={opt(gamutWarn)} onClick={() => onGamutWarn(!gamutWarn)}>
+              Gamut warning (Ctrl+Alt+Shift+Y)
+            </button>
+          </div>
+          <p style={{ fontSize: 11.5, color: "var(--text-3)", lineHeight: 1.5, margin: 0 }}>
+            Proofing simulates the target space on the view only — exports are untouched. Colors
+            outside the target&apos;s gamut clip (Proof colors) or highlight mid-gray (Gamut
+            warning).
+            {proofIsIdentity(canvasSpaceOf(colorSpace), proofTarget) &&
+              " Every color of the current canvas already fits inside this target, so this combination shows no difference — proof a Display P3 document against sRGB or Adobe RGB to see it work."}
           </p>
         </div>
 

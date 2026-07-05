@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { Maximize2, Minus, Plus, X } from "lucide-react";
 import styles from "./CanvasArea.module.scss";
+import type { WorkingSpace } from "../lib/colorspace";
 import { clamp, parseColor, toHex8 } from "../lib/color";
 import { clampPan, normalizeRect, type Pan, type Rect } from "../lib/view";
 import type {
@@ -677,7 +678,7 @@ export default function CanvasArea({
   onPasteDone: () => void;
   pendingLoads: PendingLoad[];
   onLoadDone: (docId: string) => void;
-  colorSpace: PredefinedColorSpace;
+  colorSpace: WorkingSpace;
   showRulers: boolean;
   showGrid: boolean;
   snap: boolean;
@@ -2478,6 +2479,7 @@ export default function CanvasArea({
       endAdjust: () => engine.endAdjust(),
       revertAdjust: () => engine.revertAdjust(),
       setColorSpace: (cs) => engine.setColorSpace(cs),
+      setProofing: (simulate, warn, target) => engine.setProofing(simulate, warn, target),
       captureLeaves: (ids) => engine.captureLeaves(ids),
       restoreLeaves: (snaps) => engine.restoreLeaves(snaps),
       pushStructural: (label, undo, redo) => engine.pushStructural(label, undo, redo),

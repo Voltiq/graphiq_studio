@@ -162,12 +162,80 @@ async function decodeEmbeddedJpeg(file: File): Promise<ImageBitmap | null> {
   return best;
 }
 
+/** True when the buffer starts with a TIFF header (DNG/RAW containers). */
+function looksLikeTIFF(b: Uint8Array): boolean {
+  return (
+    b.length > 8 &&
+    ((b[0] === 0x49 && b[1] === 0x49 && b[2] === 42 && b[3] === 0) ||
+      (b[0] === 0x4d && b[1] === 0x4d && b[2] === 0 && b[3] === 42))
+  );
+}
+
+/** Run the hand-written DNG decoder in a throwaway worker (decodes are rare
+ *  and heavy — ~a second for 24 MP); falls back to decoding on this thread
+ *  when workers are unavailable. Null = not a supported DNG. */
+async function decodeRawDNG(buffer: ArrayBuffer): Promise<ImageBitmap | null> {
+  let result: { width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> } | null = null;
+  if (typeof Worker !== "undefined") {
+    result = await new Promise<{ width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> } | null>((resolve) => {
+      let worker: Worker | null = null;
+      try {
+        worker = new Worker(new URL("../workers/dng.worker.ts", import.meta.url), { type: "module" });
+      } catch {
+        resolve(null);
+        return;
+      }
+      const done = (v: { width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> } | null) => {
+        worker?.terminate();
+        resolve(v);
+      };
+      worker.onerror = () => done(null);
+      worker.onmessage = (e: MessageEvent<{ ok: boolean; width?: number; height?: number; data?: ArrayBuffer }>) => {
+        const m = e.data;
+        done(
+          m.ok && m.data && m.width && m.height
+            ? { width: m.width, height: m.height, data: new Uint8ClampedArray(m.data) }
+            : null,
+        );
+      };
+      worker.postMessage({ buf: buffer }, [buffer]);
+    });
+  } else {
+    const { decodeDNG } = await import("./dng");
+    const r = decodeDNG(buffer);
+    result = r ? { width: r.width, height: r.height, data: new Uint8ClampedArray(r.data) } : null;
+  }
+  if (!result) return null;
+  try {
+    let img: ImageData;
+    try {
+      img = new ImageData(result.data, result.width, result.height, { colorSpace: "srgb" });
+    } catch {
+      img = new ImageData(result.data, result.width, result.height);
+    }
+    return await createImageBitmap(img);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Decode an image file to a drawable bitmap (null on failure). Honors embedded
- * colour profiles (`colorSpaceConversion: "default"`); falls back to the
- * embedded preview for camera-RAW files browsers can't decode natively.
+ * colour profiles (`colorSpaceConversion: "default"`). TIFF-shaped files try
+ * the hand-written DNG decoder first (true raw development: demosaic + as-shot
+ * white balance + camera matrix); anything outside that subset — and every
+ * other camera RAW — falls back to the embedded JPEG preview, as before.
  */
 export async function decodeImageFile(file: File): Promise<ImageBitmap | null> {
+  try {
+    const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
+    if (looksLikeTIFF(head)) {
+      const developed = await decodeRawDNG(await file.arrayBuffer());
+      if (developed) return developed;
+    }
+  } catch {
+    /* fall through to the standard decode paths */
+  }
   try {
     return await createImageBitmap(file, { colorSpaceConversion: "default" });
   } catch {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type DragEvent, type ReactNode, type RefObject } from "react";
+import { WORKING_SPACE_LABELS, type WorkingSpace } from "../lib/colorspace";
 import {
   BarChart3,
   Compass,
@@ -133,7 +134,7 @@ interface Props {
   engineRef: RefObject<EngineHandle | null>;
   /** Active document facts for the Metadata panel. */
   docName: string;
-  colorSpace: PredefinedColorSpace;
+  colorSpace: WorkingSpace;
   imageMeta: ImageMetadata | null;
 }
 

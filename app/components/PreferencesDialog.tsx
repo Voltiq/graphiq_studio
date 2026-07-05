@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, ClipboardPaste, Gauge, Palette, SlidersHorizontal, X } from "lucide-react";
 import styles from "./PreferencesDialog.module.scss";
 import { applyTheme, currentTheme, resolvedDark } from "./ThemeToggle";
 import { Slider, Toggle } from "./Controls";
 import { ACCENTS, ACCENT_COOKIE, DEFAULT_ACCENT, isAccent, type Accent, type Theme } from "../lib/theme";
 import type { PasteDefault, PasteOversize, Preferences } from "../lib/prefs";
+import { downloadSettings, importSettings, resetSettings } from "../lib/settings";
 
 const ONE_YEAR = 60 * 60 * 24 * 365;
 
@@ -106,6 +107,7 @@ export default function PreferencesDialog({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("appearance");
+  const importInputRef = useRef<HTMLInputElement>(null);
   const [theme, setTheme] = useState<Theme>(() => currentTheme(initialTheme));
   const [accent, setAccent] = useState<Accent>(() => liveAccent());
   const dark = resolvedDark(theme);
@@ -427,7 +429,57 @@ export default function PreferencesDialog({
           </div>
         </div>
 
-        <footer className={styles.foot}>
+        <footer className={styles.foot} style={{ justifyContent: "flex-start" }}>
+          <button
+            type="button"
+            className={styles.btn}
+            title="Reset every preference, tool option, panel layout and theme to its default"
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Reset all preferences to their defaults?\n\n" +
+                    "Tool options, panel layout, theme, accent, colour management and every " +
+                    "Preferences setting return to factory state. Saved gradients, swatches, " +
+                    "presets and recent files are kept.\n\nThe app reloads to apply.",
+                )
+              ) {
+                resetSettings();
+                window.location.reload();
+              }
+            }}
+          >
+            Restore defaults…
+          </button>
+          <button
+            type="button"
+            className={styles.btn}
+            title="Download every setting as graphiq-settings.json"
+            onClick={() => downloadSettings()}
+          >
+            Export settings
+          </button>
+          <button
+            type="button"
+            className={styles.btn}
+            title="Load a graphiq-settings.json export (reloads to apply)"
+            onClick={() => importInputRef.current?.click()}
+          >
+            Import settings…
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".json,application/json"
+            hidden
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (!f) return;
+              if (importSettings(await f.text())) window.location.reload();
+              else window.alert("That file isn't a Graphiq settings export.");
+            }}
+          />
+          <span style={{ flex: 1 }} />
           <button type="button" className={`${styles.btn} ${styles.primary}`} onClick={onClose}>
             Done
           </button>

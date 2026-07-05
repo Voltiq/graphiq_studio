@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { BoxSelect, Check, CircleDashed, MousePointer2 } from "lucide-react";
 import styles from "./StatusBar.module.scss";
+import { WORKING_SPACE_LABELS, type WorkingSpace } from "../lib/colorspace";
 import { getTool, type ToolId } from "../lib/tools";
 import { parseColor, swatchBg, toHex6 } from "../lib/color";
 import type { Rect } from "../lib/view";
@@ -59,7 +60,7 @@ export default function StatusBar({
   foreground: string;
   width: number;
   height: number;
-  colorSpace: PredefinedColorSpace;
+  colorSpace: WorkingSpace;
   layerCount: number;
   saveState: { label: string; ok: boolean };
   selection: Rect[];
@@ -95,7 +96,7 @@ export default function StatusBar({
           {width} × {height} px
         </span>
         <span className={styles.sep}>|</span>
-        <span>{colorSpace === "display-p3" ? "Display P3" : "sRGB"} / 8-bit</span>
+        <span>{WORKING_SPACE_LABELS[colorSpace]} / 8-bit</span>
       </div>
 
       <div className={styles.center}>

@@ -12,6 +12,8 @@ import CanvasSizeDialog, { type CanvasSize } from "./CanvasSizeDialog";
 import PasteDialog, { type PasteDest } from "./PasteDialog";
 import PreferencesDialog from "./PreferencesDialog";
 import TooltipHost from "./Tooltip";
+import { type ProofTarget, type WorkingSpace } from "../lib/colorspace";
+import { extractICCProfile } from "../lib/icc";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
 import {
@@ -323,7 +325,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // Current view toggles, reachable from the one-time keydown listener.
   const viewSettingsRef = useRef({ rulers: true, grid: false, snap: true });
   viewSettingsRef.current = { rulers: showRulers, grid: showGrid, snap };
-  const [colorSpace, setColorSpaceState] = useState<PredefinedColorSpace>("srgb");
+  const [colorSpace, setColorSpaceState] = useState<WorkingSpace>("srgb");
+  // Soft proofing (view-only): Ctrl+Alt+Y simulate, Ctrl+Alt+Shift+Y gamut warn.
+  const [proofColors, setProofColors] = useState(false);
+  const [gamutWarn, setGamutWarn] = useState(false);
+  const [proofTarget, setProofTargetState] = useState<ProofTarget>("srgb");
   const [colorDialogOpen, setColorDialogOpen] = useState(false);
   const [compareComposite, setCompareComposite] = useState<HTMLCanvasElement | null | undefined>(undefined);
   const [adjust, setAdjust] = useState<Adjustments>(DEFAULT_ADJUST);
@@ -2681,13 +2687,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const decoded = await Promise.all(
       files.map(async (f) => ({
         name: f.name,
+        file: f,
         bitmap: await decodeImageFile(f),
         meta: await extractMetadata(f),
+        icc: await extractICCProfile(f),
       })),
     );
     const items: ImportItem[] = decoded
       .filter((d) => d.bitmap !== null)
-      .map((d) => ({ name: d.name, bitmap: d.bitmap as ImageBitmap, meta: d.meta }));
+      .map((d) => ({
+        name: d.name,
+        file: d.file,
+        bitmap: d.bitmap as ImageBitmap,
+        meta: d.meta,
+        icc: d.icc,
+      }));
     if (!items.length) {
       window.alert("Couldn't read the selected image(s).");
       return;
@@ -2788,10 +2802,27 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setPendingLoads((ls) => [...ls, ...entries]);
   };
 
-  const applyImport = (mode: ImportMode, opts: ImportOptions) => {
-    const items = importItems;
+  const applyImport = async (mode: ImportMode, opts: ImportOptions) => {
+    let items = importItems;
     setImportItems(null);
     if (!items?.length) return;
+    if (opts.profileMode === "assign") {
+      // ASSIGN working space: keep the file's raw numbers and ignore the
+      // embedded profile — re-decode without colour management. (The default
+      // decode already CONVERTED, so only profiled items need the second pass.)
+      items = await Promise.all(
+        items.map(async (it) => {
+          if (!it.icc || !it.file) return it;
+          try {
+            const raw = await createImageBitmap(it.file, { colorSpaceConversion: "none" });
+            it.bitmap.close();
+            return { ...it, bitmap: raw };
+          } catch {
+            return it; // keep the converted decode rather than failing the import
+          }
+        }),
+      );
+    }
     if (mode === "layers") importAsLayers(items, opts);
     else importAsCanvases(items);
   };
@@ -2866,20 +2897,38 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     }
   }, [active.selection, active.selectionAngle, active.selectionPivot]);
 
-  // ---- Working colour space (sRGB / Display P3), persisted ----
+  // ---- Working colour space (sRGB / Display P3 / emulated Adobe RGB), persisted ----
   useEffect(() => {
     const saved = localStorage.getItem("pe-colorspace");
     if (saved === "display-p3" && p3Supported()) setColorSpaceState("display-p3");
+    else if (saved === "adobe-rgb") setColorSpaceState("adobe-rgb");
   }, []);
-  const setWorkingSpace = (cs: PredefinedColorSpace) => {
-    setColorSpaceState(cs);
+  const setWorkingSpace = (ws: WorkingSpace) => {
+    setColorSpaceState(ws);
     try {
-      localStorage.setItem("pe-colorspace", cs);
+      localStorage.setItem("pe-colorspace", ws);
     } catch {
       /* ignore */
     }
   };
   const openColorDialog = () => setColorDialogOpen(true);
+
+  // ---- Soft proofing (view-only) ----
+  useEffect(() => {
+    const saved = localStorage.getItem("pe-proof-target");
+    if (saved === "srgb" || saved === "display-p3" || saved === "adobe-rgb") setProofTargetState(saved);
+  }, []);
+  const setProofTarget = (t: ProofTarget) => {
+    setProofTargetState(t);
+    try {
+      localStorage.setItem("pe-proof-target", t);
+    } catch {
+      /* ignore */
+    }
+  };
+  useEffect(() => {
+    paintRef.current?.setProofing(proofColors, gamutWarn, proofTarget);
+  }, [proofColors, gamutWarn, proofTarget]);
   const openCompare = () => setCompareComposite(paintRef.current?.exportComposite(active.layers) ?? null);
 
   // ---- Window menu: panel visibility (persisted) ----
@@ -2939,6 +2988,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "view-rulers") persistView({ rulers: !v.rulers });
     else if (actionId === "view-grid") persistView({ grid: !v.grid });
     else if (actionId === "view-snap") persistView({ snap: !v.snap });
+    else if (actionId === "view-proof") setProofColors((p) => !p);
+    else if (actionId === "view-gamut") setGamutWarn((g) => !g);
   };
 
   const handleMenuAction = (actionId: string) => {
@@ -3307,6 +3358,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         // Ctrl+Alt+Shift+T = Transform Selection (outline only).
         e.preventDefault();
         enterTransform(!e.shiftKey);
+      } else if (e.ctrlKey && e.altKey && key === "y") {
+        e.preventDefault();
+        if (e.shiftKey) setGamutWarn((g) => !g);
+        else setProofColors((p) => !p);
       } else if (e.ctrlKey && key === "y") {
         e.preventDefault();
         doRedo();
@@ -3435,6 +3490,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           "window-metadata": panels.metadata,
           "view-rulers": showRulers,
           "view-grid": showGrid,
+          "view-proof": proofColors,
+          "view-gamut": gamutWarn,
           "view-snap": snap,
           "layer-clip": !!activeLeafNode?.clipped,
         }}
@@ -3846,6 +3903,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         <ColorDialog
           colorSpace={colorSpace}
           onColorSpace={setWorkingSpace}
+          proofTarget={proofTarget}
+          onProofTarget={setProofTarget}
+          proofColors={proofColors}
+          gamutWarn={gamutWarn}
+          onProofColors={setProofColors}
+          onGamutWarn={setGamutWarn}
           onClose={() => setColorDialogOpen(false)}
         />
       )}
@@ -3871,6 +3934,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           items={importItems}
           docWidth={active.width}
           docHeight={active.height}
+          workingSpace={colorSpace}
           onImport={applyImport}
           onClose={() => setImportItems(null)}
         />

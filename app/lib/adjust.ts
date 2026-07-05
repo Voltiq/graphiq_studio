@@ -195,6 +195,136 @@ function blur3(d: Uint8ClampedArray, w: number, h: number): Uint8ClampedArray {
 
 /** Apply tonal / colour / detail adjustments, returning a new ImageData in the
     given colour space (must match the target canvas to avoid a conversion). */
+/** 3×3 box blur over RGB for an RGBA16 buffer (alpha copied) — the 16-bit twin
+ *  of blur3, used by applyAdjustments16's noise/sharpen tail. */
+function blur3_16(d: Uint16Array, w: number, h: number): Uint16Array {
+  const o = new Uint16Array(d.length);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        let sum = 0;
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          const yy = y + dy;
+          if (yy < 0 || yy >= h) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const xx = x + dx;
+            if (xx < 0 || xx >= w) continue;
+            sum += d[(yy * w + xx) * 4 + c];
+            n++;
+          }
+        }
+        o[i + c] = sum / n + 0.5;
+      }
+      o[i + 3] = d[i + 3];
+    }
+  }
+  return o;
+}
+
+/**
+ * 16-bit/channel twin of applyAdjustments — KEEP THE MATH IN SYNC. Operates
+ * in place on an RGBA16 Uint16Array (0..65535 per channel; the float math is
+ * identical, only load/store scale differs), including the spatial
+ * noise/sharpen tail. Used by the high-bit adjustment path: an emulated
+ * working space converts ONCE into 16 bits, runs this, and quantizes once at
+ * the end — no per-stage byte rounding.
+ */
+export function applyAdjustments16(d: Uint16Array, w: number, h: number, a: Adjustments): void {
+  const S = 65535;
+
+  const expF = Math.pow(2, a.exposure / 100); // ±1 stop at ±100
+  const conF = 1 + a.contrast / 100;
+  const T = a.temperature / 100;
+  const Ti = a.tint / 100;
+  const Hi = a.highlights / 100;
+  const Sh = a.shadows / 100;
+  const Wh = a.whites / 100;
+  const Bl = a.blacks / 100;
+  const Sat = a.saturation / 100;
+  const Vib = a.vibrance / 100;
+  const Cla = a.clarity / 100;
+  const tonal = Hi || Sh || Wh || Bl;
+
+  for (let i = 0; i < d.length; i += 4) {
+    let r = d[i] / S;
+    let g = d[i + 1] / S;
+    let b = d[i + 2] / S;
+
+    if (expF !== 1) {
+      r *= expF;
+      g *= expF;
+      b *= expF;
+    }
+    if (conF !== 1) {
+      r = (r - 0.5) * conF + 0.5;
+      g = (g - 0.5) * conF + 0.5;
+      b = (b - 0.5) * conF + 0.5;
+    }
+    if (T) {
+      r += T * 0.12;
+      b -= T * 0.12;
+    }
+    if (Ti) {
+      g -= Ti * 0.12;
+      r += Ti * 0.06;
+      b += Ti * 0.06;
+    }
+    if (tonal) {
+      const lum = clamp01(0.299 * r + 0.587 * g + 0.114 * b);
+      const add =
+        Hi * 0.5 * Math.max(0, (lum - 0.5) * 2) +
+        Sh * 0.5 * Math.max(0, (0.5 - lum) * 2) +
+        Wh * 0.45 * (lum * lum) +
+        Bl * 0.45 * ((1 - lum) * (1 - lum));
+      r += add;
+      g += add;
+      b += add;
+    }
+    if (Cla) {
+      const lum = clamp01(0.299 * r + 0.587 * g + 0.114 * b);
+      const mid = 1 - Math.pow(Math.abs(lum - 0.5) * 2, 2); // midtone weight
+      const f = 1 + Cla * 0.5 * mid;
+      r = (r - 0.5) * f + 0.5;
+      g = (g - 0.5) * f + 0.5;
+      b = (b - 0.5) * f + 0.5;
+    }
+    if (Sat || Vib) {
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      let f = 1 + Sat;
+      if (Vib) {
+        const mx = Math.max(r, g, b);
+        const mn = Math.min(r, g, b);
+        const cur = mx <= 0 ? 0 : (mx - mn) / mx;
+        f += Vib * (1 - clamp01(cur));
+      }
+      r = lum + (r - lum) * f;
+      g = lum + (g - lum) * f;
+      b = lum + (b - lum) * f;
+    }
+
+    // Uint16Array truncates — round + clamp explicitly.
+    d[i] = clamp01(r) * S + 0.5;
+    d[i + 1] = clamp01(g) * S + 0.5;
+    d[i + 2] = clamp01(b) * S + 0.5;
+  }
+
+  if (a.noise > 0 || a.sharpen > 0) {
+    const blur = blur3_16(d, w, h);
+    const nAmt = a.noise / 100;
+    const sAmt = (a.sharpen / 100) * 1.4;
+    for (let i = 0; i < d.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        let v = d[i + c];
+        if (nAmt) v += (blur[i + c] - v) * nAmt;
+        if (sAmt) v += (v - blur[i + c]) * sAmt;
+        d[i + c] = v < 0 ? 0 : v > S ? S : v + 0.5;
+      }
+    }
+  }
+}
+
 export function applyAdjustments(
   src: ImageData,
   a: Adjustments,
