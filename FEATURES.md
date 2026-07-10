@@ -33,6 +33,7 @@ This document is written so someone **without the code** understands exactly wha
 | Brush / Pencil / Eraser | `B` / `N` / `E` | Independent size, hardness, opacity, flow, smoothing. |
 | Clone Stamp | `S` | Alt-set source, paint sampled pixels. |
 | Spot Heal | `J` | Paint a blob over a blemish; on release it heals in one pass — texture from the best-matching surroundings, tone-matched seamlessly (respects an active selection). |
+| Red Eye | `Y` | One click fixes a flash pupil: finds the red blob near the cursor (re-centres on it, adaptive redness thresholds so skin never qualifies), replaces red with min(G,B) — the white catchlight survives — and darkens toward a natural pupil. Size + darken options; respects an active selection; a click that finds nothing changes nothing. |
 | Paint Bucket | `G` | Flood fill: tolerance, contiguity, anti-alias, opacity. |
 | Gradient | `G` | Linear/radial, draggable re-editable on-canvas control + multi-stop editor; `Esc` keeps the fill and hides the controls. |
 | Blur | `R` | Blur brush with an on-canvas brush-ring cursor (coverage-mask model). |
