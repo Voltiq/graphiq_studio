@@ -24,6 +24,7 @@ export const MENUS: Menu[] = [
       { label: "Save as…", shortcut: "Ctrl+Shift+S", separatorAfter: true, action: "save-as" },
       { label: "Import…", action: "import" },
       { label: "Export as…", shortcut: "Ctrl+Shift+E", action: "export-as" },
+      { label: "Export PSD (layered)…", action: "export-psd" },
       { label: "Export SVG (vector layers)…", action: "export-svg" },
       { label: "Export LUT (.cube)…", separatorAfter: true, action: "export-lut" },
       { label: "Print…", shortcut: "Ctrl+P", separatorAfter: true, action: "print" },

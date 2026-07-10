@@ -117,8 +117,8 @@ export const RAW_EXTS = [
   "x3f", "raw", "rwl", "dcr",
 ];
 
-/** `accept` value for the import picker: any browser image type plus RAW. */
-export const IMPORT_ACCEPT = ["image/*", ...RAW_EXTS.map((e) => `.${e}`)].join(",");
+/** `accept` value for the import picker: any browser image type plus RAW + PSD. */
+export const IMPORT_ACCEPT = ["image/*", ".psd", ...RAW_EXTS.map((e) => `.${e}`)].join(",");
 
 /**
  * Pull the largest embedded JPEG out of a RAW (or other container) file. RAW

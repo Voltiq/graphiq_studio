@@ -125,6 +125,7 @@ import {
   setRawWorkerEnabled,
 } from "../lib/imageio";
 import { exportSVG, looksLikeSVG, parseSVGFile, translateVectorPath } from "../lib/svg";
+import { buildPSD, parsePSD, type PsdDocument, type PsdImage, type PsdNode, type PsdOutNode } from "../lib/psd";
 import { addRecent } from "../lib/recents";
 import {
   DEFAULT_ADJUST,
@@ -2790,9 +2791,84 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const stripExt = (n: string) => n.replace(/\.[^.]+$/, "") || "Image";
   const openImport = () => importInputRef.current?.click();
 
+  // Open a parsed PSD as its own document: convert the node tree (fresh ids,
+  // masks as MaskMeta) and hand the pixels/masks to the engine via PendingLoad
+  // — the same machinery .gproj loading uses.
+  const importPSDDocument = (fileName: string, psd: PsdDocument) => {
+    const seq = (seqRef.current += 1);
+    const docId = `doc-${seq}`;
+    const images: PendingLoad["images"] = [];
+    const masks: { id: string; source: CanvasImageSource }[] = [];
+    const toCanvas = (img: PsdImage): HTMLCanvasElement => {
+      const c = document.createElement("canvas");
+      c.width = img.width;
+      c.height = img.height;
+      c.getContext("2d")!.putImageData(new ImageData(img.data, img.width, img.height), 0, 0);
+      return c;
+    };
+    let firstLeaf: string | null = null;
+    const convert = (ns: PsdNode[]): LayerNode[] =>
+      ns.map((n): LayerNode => {
+        const id = nextLeafId();
+        if (n.mask) masks.push({ id, source: toCanvas(n.mask) });
+        const base = {
+          id,
+          name: n.name || "Layer",
+          visible: n.visible,
+          opacity: n.opacity,
+          blend: n.blend,
+          ...(n.mask ? { mask: { enabled: n.maskEnabled, linked: true } } : {}),
+        };
+        if (n.kind === "group")
+          return { ...base, type: "group", expanded: true, children: convert(n.children) };
+        if (!firstLeaf) firstLeaf = id;
+        if (n.image) images.push({ id, source: toCanvas(n.image) });
+        return { ...base, type: "layer", ...(n.clipped ? { clipped: true } : {}) };
+      });
+    const layers = convert(psd.nodes);
+    if (!layers.length) return;
+    setDocs((ds) => [
+      ...ds,
+      {
+        id: docId,
+        name: stripExt(fileName),
+        width: psd.width,
+        height: psd.height,
+        ...(psd.dpi ? { dpi: psd.dpi } : {}),
+        layers,
+        activeLayerId: firstLeaf,
+        selectedLayerIds: firstLeaf ? [firstLeaf] : [],
+        selection: [],
+        selectionAngle: 0,
+        selectionPivot: null,
+        metadata: null,
+      },
+    ]);
+    setActiveId(docId);
+    setPendingLoads((ls) => [...ls, { docId, images, masks }]);
+    if (psd.notes.length)
+      showToast(psd.notes[0] + (psd.notes.length > 1 ? ` (+${psd.notes.length - 1} more notes)` : ""));
+  };
+
   const onImportPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
+    const allFiles = Array.from(e.target.files ?? []);
     e.target.value = "";
+    if (!allFiles.length) return;
+    // PSDs open as their own layered documents; everything else flows through
+    // the import dialog.
+    const files: File[] = [];
+    for (const f of allFiles) {
+      if (!/\.psd$/i.test(f.name)) {
+        files.push(f);
+        continue;
+      }
+      const parsed = parsePSD(await f.arrayBuffer());
+      if (parsed) importPSDDocument(f.name, parsed);
+      else
+        window.alert(
+          `Couldn't read "${f.name}". 16/32-bit, CMYK and PSB files are outside the supported PSD subset.`,
+        );
+    }
     if (!files.length) return;
     const decoded = await Promise.all(
       files.map(async (f) => {
@@ -2961,6 +3037,76 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       skipped
         ? `Exported ${vectorLayers} vector layer${vectorLayers === 1 ? "" : "s"} — ${skipped} without a vector source skipped`
         : `Exported ${vectorLayers} vector layer${vectorLayers === 1 ? "" : "s"}`,
+    );
+  };
+
+  // Write the document as a layered PSD: the full tree (groups as section
+  // dividers), masks, opacity/blend/clipping/visibility, plus the flattened
+  // composite every PSD reader requires. Adjustment layers have no PSD
+  // equivalent in our model and are skipped (the composite keeps the look).
+  const exportPSD = () => {
+    const d = activeDocRef.current;
+    const eng = paintRef.current;
+    if (!eng) return;
+    const leafIds: string[] = [];
+    const collectIds = (ns: LayerNode[]) =>
+      ns.forEach((n) => {
+        if (n.type === "layer") leafIds.push(n.id);
+        else if (n.type === "group") collectIds(n.children);
+      });
+    collectIds(d.layers);
+    const snaps = eng.captureLeaves(leafIds);
+    let skipped = 0;
+    const convert = (ns: LayerNode[]): PsdOutNode[] =>
+      ns.flatMap((n): PsdOutNode[] => {
+        if (n.type === "adjustment") {
+          skipped++;
+          return [];
+        }
+        if (n.type === "group")
+          return [
+            {
+              kind: "group",
+              name: n.name,
+              visible: n.visible,
+              opacity: n.opacity,
+              blend: n.blend,
+              children: convert(n.children),
+              mask: n.mask ? (eng.captureMask(n.id) ?? null) : null,
+              maskEnabled: n.mask?.enabled !== false,
+            },
+          ];
+        const snap = snaps.get(n.id);
+        return [
+          {
+            kind: "layer",
+            name: n.name,
+            visible: n.visible,
+            opacity: n.opacity,
+            blend: n.blend,
+            clipped: !!n.clipped,
+            image: snap?.layer ?? null,
+            mask: n.mask ? (snap?.mask ?? null) : null,
+            maskEnabled: n.mask?.enabled !== false,
+          },
+        ];
+      });
+    const nodes = convert(d.layers);
+    const comp = eng.exportComposite(d.layers);
+    const ctx = comp.getContext("2d");
+    if (!ctx) return;
+    const buf = buildPSD(
+      d.width,
+      d.height,
+      d.dpi ?? 300,
+      nodes,
+      ctx.getImageData(0, 0, comp.width, comp.height),
+    );
+    downloadBlob(new Blob([buf], { type: "image/vnd.adobe.photoshop" }), `${d.name || "artwork"}.psd`);
+    showToast(
+      skipped
+        ? `Exported PSD — ${skipped} adjustment layer${skipped === 1 ? "" : "s"} skipped (no PSD equivalent)`
+        : "Exported PSD",
     );
   };
 
@@ -3183,6 +3329,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "import") openImport();
     else if (actionId === "export-as") openExport();
     else if (actionId === "export-svg") exportVectorSVG();
+    else if (actionId === "export-psd") exportPSD();
     else if (actionId === "export-lut") setLutExportOpen(true);
     else if (actionId === "print") printCanvas();
     else if (actionId === "effect-blur") openBlurFx();
