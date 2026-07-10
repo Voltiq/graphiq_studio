@@ -33,6 +33,7 @@ import {
   SAMPLE_SIZE_OPTIONS,
   type BlurSettings,
   type HealSettings,
+  type RedEyeSettings,
   type CloneSettings,
   type CropSettings,
   type DodgeMode,
@@ -86,6 +87,11 @@ interface BlurProps {
 interface HealProps {
   heal: HealSettings;
   onHeal: (patch: Partial<HealSettings>) => void;
+}
+
+interface RedEyeProps {
+  redEye: RedEyeSettings;
+  onRedEye: (patch: Partial<RedEyeSettings>) => void;
 }
 
 interface CloneProps {
@@ -148,6 +154,8 @@ export default function OptionsBar({
   onBlur,
   heal,
   onHeal,
+  redEye,
+  onRedEye,
   clone,
   onClone,
   text,
@@ -197,6 +205,7 @@ export default function OptionsBar({
 } & ShapeProps &
   BlurProps &
   HealProps &
+  RedEyeProps &
   CloneProps &
   TextProps &
   DodgeProps &
@@ -244,6 +253,7 @@ export default function OptionsBar({
           { crop, onCrop, cropBox, onCropBox, onCropApply, onCropReset, docWidth, docHeight },
           { blur, onBlur },
           { heal, onHeal },
+          { redEye, onRedEye },
           { clone, onClone },
           { text, onText },
           { dodge, onDodge },
@@ -285,6 +295,7 @@ function renderOptions(
   cropProps: CropProps,
   blurProps: BlurProps,
   healProps: HealProps,
+  redEyeProps: RedEyeProps,
   cloneProps: CloneProps,
   textProps: TextProps,
   dodgeProps: DodgeProps,
@@ -1014,6 +1025,30 @@ function renderOptions(
           />
           <Divider />
           <span className={styles.muted}>Paint over a blemish — it heals when you release.</span>
+        </>
+      );
+    }
+
+    case "redeye": {
+      const { redEye, onRedEye } = redEyeProps;
+      return (
+        <>
+          <Slider
+            label="Size"
+            min={6}
+            max={200}
+            unit="px"
+            value={redEye.size}
+            onChange={(n) => onRedEye({ size: n })}
+          />
+          <Slider
+            label="Darken"
+            unit="%"
+            value={redEye.darken}
+            onChange={(n) => onRedEye({ darken: n })}
+          />
+          <Divider />
+          <span className={styles.muted}>Click a red pupil — the ring should cover the eye.</span>
         </>
       );
     }

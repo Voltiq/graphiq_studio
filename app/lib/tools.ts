@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Bandage,
+  Eye,
   MousePointer2,
   Move,
   BoxSelect,
@@ -35,6 +36,7 @@ export type ToolId =
   | "eraser"
   | "clone"
   | "heal"
+  | "redeye"
   | "bucket"
   | "gradient"
   | "blur"
@@ -68,6 +70,7 @@ export const TOOL_GROUPS: Tool[][] = [
     { id: "eraser", name: "Eraser", icon: Eraser, shortcut: "E" },
     { id: "clone", name: "Clone stamp", icon: Stamp, shortcut: "S" },
     { id: "heal", name: "Spot heal", icon: Bandage, shortcut: "J" },
+    { id: "redeye", name: "Red eye", icon: Eye, shortcut: "Y" },
     { id: "bucket", name: "Paint bucket", icon: PaintBucket, shortcut: "G" },
     { id: "gradient", name: "Gradient", icon: Blend, shortcut: "G" },
   ],
@@ -426,6 +429,20 @@ export interface HealSettings {
 export const DEFAULT_HEAL: HealSettings = {
   size: 40,
   hardness: 65,
+};
+
+/** Red-eye tool settings. One click neutralizes + darkens the red pupil blob
+ *  it finds near the cursor. */
+export interface RedEyeSettings {
+  /** Search diameter, px (roughly the pupil size). */
+  size: number;
+  /** How dark the fixed pupil goes, 0–100 (0 = only remove the red). */
+  darken: number;
+}
+
+export const DEFAULT_REDEYE: RedEyeSettings = {
+  size: 30,
+  darken: 50,
 };
 
 export const DEFAULT_DODGE: DodgeSettings = {

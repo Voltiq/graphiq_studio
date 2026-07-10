@@ -14,6 +14,7 @@ import type {
   CropGrid,
   DodgeSettings,
   HealSettings,
+  RedEyeSettings,
   MarqueeShape,
   TextSettings,
   GradientStop,
@@ -541,6 +542,7 @@ export default function CanvasArea({
   shape,
   blur,
   heal,
+  redEye,
   clone,
   dodge,
   text,
@@ -635,6 +637,8 @@ export default function CanvasArea({
   /** Blur (focus) brush settings. */
   blur: BlurSettings;
   heal: HealSettings;
+  /** Red-eye tool settings (search size + darken amount). */
+  redEye: RedEyeSettings;
   /** Clone-stamp brush settings. */
   clone: CloneSettings;
   /** Dodge/Burn brush settings. */
@@ -935,6 +939,10 @@ export default function CanvasArea({
   healRef.current = heal;
   const healHoverRef = useRef<{ x: number; y: number } | null>(null);
   const healPtsRef = useRef<{ x: number; y: number }[] | null>(null);
+  // Red-eye tool: latest settings + hover point (ring cursor on the overlay).
+  const redEyeRef = useRef(redEye);
+  redEyeRef.current = redEye;
+  const redEyeHoverRef = useRef<{ x: number; y: number } | null>(null);
   // Dodge/Burn brush: latest settings + hover point (brush-ring cursor on overlay).
   const dodgeRef = useRef(dodge);
   dodgeRef.current = dodge;
@@ -2041,6 +2049,13 @@ export default function CanvasArea({
       }
     }
 
+    if (toolRef.current === "redeye" && redEyeHoverRef.current) {
+      const hx = p.x + redEyeHoverRef.current.x * s;
+      const hy = p.y + redEyeHoverRef.current.y * s;
+      drawRing(hx, hy, Math.max(1, (redEyeRef.current.size / 2) * s), 100);
+      drawCross(hx, hy, 4);
+    }
+
     if (toolRef.current === "blur" && blurHoverRef.current) {
       const b = blurRef.current;
       const hx = p.x + blurHoverRef.current.x * s;
@@ -2145,6 +2160,7 @@ export default function CanvasArea({
       ((toolRef.current === "brush" || toolRef.current === "pencil" || toolRef.current === "eraser") &&
         paintHoverRef.current) ||
       (toolRef.current === "heal" && (healHoverRef.current || healPtsRef.current)) ||
+      (toolRef.current === "redeye" && redEyeHoverRef.current) ||
       (toolRef.current === "blur" && blurHoverRef.current) ||
       (toolRef.current === "dodge" && dodgeHoverRef.current) ||
       (toolRef.current === "clone" && cloneHoverRef.current) ||
@@ -2701,6 +2717,8 @@ export default function CanvasArea({
         engine.applySmartFilters(layerId, filters, side, useFilterMask),
       contentAwareFill: (layerId, sel, selAngle, selPivot) =>
         engine.contentAwareFill(layerId, sel, selAngle, selPivot),
+      redEye: (layerId, x, y, size, darken, sel, selAngle, selPivot) =>
+        engine.redEye(layerId, x, y, size, darken, sel, selAngle, selPivot),
       resizeCanvasAnchored: (w, h, dx, dy, ids) => engine.resizeCanvasAnchored(w, h, dx, dy, ids),
       setRenderCacheEnabled: (on) => engine.setRenderCacheEnabled(on),
       renderCacheStats: () => engine.renderCacheStats(),
@@ -3779,6 +3797,25 @@ export default function CanvasArea({
       ensureAnts();
       return;
     }
+    if (tool === "redeye") {
+      if (!activeLayerId) return;
+      const node = findNode(layers, activeLayerId);
+      if (!node || node.type !== "layer") return; // pixel leaves only
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      const p = toDoc(e);
+      engine.redEye(
+        activeLayerId,
+        p.x,
+        p.y,
+        redEyeRef.current.size,
+        redEyeRef.current.darken,
+        selection.length ? selection : null,
+        selectionAngle,
+        selectionPivot,
+      );
+      return;
+    }
     if (tool === "blur") {
       if (!activeLayerId) return; // nothing to soften on an empty doc
       if (engine.isFloating) engine.commitFloat();
@@ -3902,6 +3939,11 @@ export default function CanvasArea({
     // Brush / pencil / eraser: track the pointer for the brush-ring cursor.
     if (toolRef.current === "brush" || toolRef.current === "pencil" || toolRef.current === "eraser") {
       paintHoverRef.current = { x: cur.x, y: cur.y };
+      ensureAnts();
+    }
+    // Red-eye: ring cursor tracking.
+    if (toolRef.current === "redeye") {
+      redEyeHoverRef.current = { x: cur.x, y: cur.y };
       ensureAnts();
     }
     // Spot heal: ring cursor + grow the blob while the pointer is down.
@@ -4832,6 +4874,7 @@ export default function CanvasArea({
                             tool === "clone" ||
                             tool === "dodge" ||
                             tool === "heal" ||
+                            tool === "redeye" ||
                             tool === "brush" ||
                             tool === "pencil" ||
                             tool === "eraser"

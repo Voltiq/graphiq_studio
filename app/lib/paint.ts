@@ -4,6 +4,7 @@ import { blendOp, clipGroupsOf, filterMaskKey } from "./layers";
 import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerNode } from "./layers";
 import { applyAdjustments, applyAdjustments16, isDefaultAdjust, type Adjustments } from "./adjust";
 import { applyExtraAdjustment, extraIsDefault, isExtraSpec, type ExtraAdjustment } from "./adjust-extra";
+import { removeRedEyeInPlace } from "./redeye";
 import { renderShape, type ShapeGeom } from "./shapes";
 import { boxBlurPass, clampi } from "./blur";
 import { fxHash, hasEnabledFx, renderStyled } from "./effects";
@@ -351,6 +352,17 @@ export interface EngineHandle {
     selAngle?: number,
     selPivot?: { x: number; y: number } | null,
   ) => void;
+  /** Red-eye click: neutralize + darken the red pupil blob near (x, y). */
+  redEye: (
+    layerId: string,
+    x: number,
+    y: number,
+    size: number,
+    darken: number,
+    sel?: Rect[] | null,
+    selAngle?: number,
+    selPivot?: { x: number; y: number } | null,
+  ) => boolean;
   /** Spec 06 debug: toggle the render cache for A/B pixel-identity checks. */
   setRenderCacheEnabled: (on: boolean) => void;
   renderCacheStats: () => {
@@ -2523,6 +2535,55 @@ export class PaintEngine {
     coverage.fill(255);
     this.clipCoverageToSelection(coverage, rx, ry, rw, rh, sel, selAngle, selPivot);
     this.healApply(layerId, coverage, rx, ry, rw, rh, "Content-Aware Fill");
+  }
+
+  /** Red-eye click: find the red pupil blob near (x, y) and neutralize +
+   *  darken it (redeye.ts). One "Red Eye" history entry; a no-op (nothing red
+   *  found) pushes nothing. Returns whether anything changed. */
+  redEye(
+    layerId: string,
+    x: number,
+    y: number,
+    size: number,
+    darken: number,
+    sel: Rect[] | null = null,
+    selAngle = 0,
+    selPivot: { x: number; y: number } | null = null,
+  ): boolean {
+    const l = this.layers.get(layerId);
+    if (!l) return false;
+    const radius = Math.max(2, size / 2);
+    const pad = 2; // mask blur margin
+    const rx = Math.max(0, Math.floor(x - radius - pad));
+    const ry = Math.max(0, Math.floor(y - radius - pad));
+    const rw = Math.min(this.w, Math.ceil(x + radius + pad)) - rx;
+    const rh = Math.min(this.h, Math.ceil(y + radius + pad)) - ry;
+    if (rw <= 0 || rh <= 0) return false;
+    const before = l.ctx.getImageData(rx, ry, rw, rh);
+    const after = new ImageData(new Uint8ClampedArray(before.data), rw, rh, { colorSpace: this.cs });
+    const changed = removeRedEyeInPlace(after.data, rw, rh, x - rx, y - ry, radius, darken);
+    if (!changed) return false;
+    // Confine to the active selection: outside it, keep the original bytes.
+    if (sel && sel.length) {
+      const coverage = new Uint8ClampedArray(rw * rh);
+      coverage.fill(255);
+      this.clipCoverageToSelection(coverage, rx, ry, rw, rh, sel, selAngle, selPivot);
+      const a = after.data;
+      const b = before.data;
+      for (let i = 0; i < coverage.length; i++) {
+        if (coverage[i] === 255) continue;
+        const o = i * 4;
+        const t = coverage[i] / 255;
+        a[o] = Math.round(b[o] + (a[o] - b[o]) * t);
+        a[o + 1] = Math.round(b[o + 1] + (a[o + 1] - b[o + 1]) * t);
+        a[o + 2] = Math.round(b[o + 2] + (a[o + 2] - b[o + 2]) * t);
+        a[o + 3] = Math.round(b[o + 3] + (a[o + 3] - b[o + 3]) * t);
+      }
+    }
+    l.ctx.putImageData(after, rx, ry);
+    this.pushEntry(layerId, { x: rx, y: ry, w: rw, h: rh }, before, after, "Red Eye");
+    this.emitChange();
+    return true;
   }
 
   /** Forget a layer's offscreen canvas + masks + cached render (after removal). */

@@ -30,6 +30,7 @@ import {
   BLUR_FX_LABELS,
   DEFAULT_BLUR,
   DEFAULT_HEAL,
+  DEFAULT_REDEYE,
   DEFAULT_BLUR_FX,
   DEFAULT_CLONE,
   DEFAULT_CROP,
@@ -43,6 +44,7 @@ import {
   type BlurFxSettings,
   type BlurSettings,
   type HealSettings,
+  type RedEyeSettings,
   type CloneSettings,
   type CropSettings,
   type DodgeSettings,
@@ -282,6 +284,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [pen, setPen] = useState<PenSettings>({ width: 8, taper: 0, bend: 0 });
   const [blur, setBlur] = useState<BlurSettings>(DEFAULT_BLUR);
   const [heal, setHeal] = useState<HealSettings>(DEFAULT_HEAL);
+  const [redEye, setRedEye] = useState<RedEyeSettings>(DEFAULT_REDEYE);
   const [clone, setClone] = useState<CloneSettings>(DEFAULT_CLONE);
   const [dodge, setDodge] = useState<DodgeSettings>(DEFAULT_DODGE);
   const [textSettings, setTextSettings] = useState<TextSettings>(DEFAULT_TEXT);
@@ -386,6 +389,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (p.pen) setPen((s) => ({ ...s, ...p.pen }));
     if (p.blur) setBlur((s) => ({ ...s, ...p.blur }));
     if (p.heal) setHeal((s) => ({ ...s, ...p.heal }));
+    if (p.redEye) setRedEye((s) => ({ ...s, ...p.redEye }));
     if (p.clone) setClone((s) => ({ ...s, ...p.clone }));
     if (p.dodge) setDodge((s) => ({ ...s, ...p.dodge }));
     if (p.text) setTextSettings((s) => ({ ...s, ...p.text }));
@@ -420,6 +424,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           pen,
           blur,
           heal,
+          redEye,
           clone,
           dodge,
           text: textSettings,
@@ -449,6 +454,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     pen,
     blur,
     heal,
+    redEye,
     clone,
     dodge,
     textSettings,
@@ -3856,6 +3862,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onBlur={(patch) => setBlur((b) => ({ ...b, ...patch }))}
         heal={heal}
         onHeal={(patch) => setHeal((h) => ({ ...h, ...patch }))}
+        redEye={redEye}
+        onRedEye={(patch) => setRedEye((r) => ({ ...r, ...patch }))}
         clone={clone}
         onClone={(patch) => setClone((c) => ({ ...c, ...patch }))}
         dodge={dodge}
@@ -3930,6 +3938,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           }}
           blur={blur}
           heal={heal}
+          redEye={redEye}
           clone={clone}
           dodge={dodge}
           text={textSettings}

@@ -12,6 +12,7 @@ import type {
   MarqueeShape,
   MoveMode,
   PenSettings,
+  RedEyeSettings,
   SelectResizeMode,
   ShapeSettings,
   TextSettings,
@@ -45,6 +46,7 @@ export interface ToolPrefs {
   pen: PenSettings;
   blur: BlurSettings;
   heal: HealSettings;
+  redEye: RedEyeSettings;
   clone: CloneSettings;
   dodge: DodgeSettings;
   text: TextSettings;
