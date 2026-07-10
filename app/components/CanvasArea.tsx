@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
 import { Maximize2, Minus, Plus, X } from "lucide-react";
 import styles from "./CanvasArea.module.scss";
 import type { WorkingSpace } from "../lib/colorspace";
-import type { MeasureUnit } from "../lib/prefs";
+import { checkerCSS, type CheckerColors, type CheckerSize, type MeasureUnit } from "../lib/prefs";
 import type { LassoMode } from "../lib/tools";
 import { clamp, parseColor, toHex8 } from "../lib/color";
 import { clampPan, normalizeRect, type Pan, type Rect } from "../lib/view";
@@ -584,6 +584,10 @@ export default function CanvasArea({
   showRulers,
   unit = "px",
   docDpi = 300,
+  checkerSize = "medium",
+  checkerColors = "auto",
+  checkerA = "#ffffff",
+  checkerB = "#cccccc",
   lassoMode = "free",
   showGrid,
   snap,
@@ -693,6 +697,11 @@ export default function CanvasArea({
   showRulers: boolean;
   unit?: MeasureUnit;
   docDpi?: number;
+  /** Transparency grid (Preferences ▸ Transparency): square size + colours. */
+  checkerSize?: CheckerSize;
+  checkerColors?: CheckerColors;
+  checkerA?: string;
+  checkerB?: string;
   lassoMode?: LassoMode;
   showGrid: boolean;
   snap: boolean;
@@ -4797,8 +4806,12 @@ export default function CanvasArea({
             }}
           >
             {/* Transparency checker behind the artwork. The pattern lives in
-                screen space, so its squares stay the same size on zoom. */}
-            <div className={styles.checker} />
+                screen space, so its squares stay the same size on zoom; size +
+                colours come from Preferences ▸ Transparency (checkerCSS). */}
+            <div
+              className={styles.checker}
+              style={checkerCSS(checkerSize, checkerColors, checkerA, checkerB)}
+            />
             <canvas
               key={colorSpace}
               ref={viewRef}

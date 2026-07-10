@@ -1,12 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ClipboardPaste, Gauge, Palette, Ruler, SlidersHorizontal, X } from "lucide-react";
+import { Check, ClipboardPaste, Gauge, Grid2x2, Palette, Ruler, SlidersHorizontal, X } from "lucide-react";
 import styles from "./PreferencesDialog.module.scss";
 import { applyTheme, currentTheme, resolvedDark } from "./ThemeToggle";
 import { Slider, Toggle } from "./Controls";
 import { ACCENTS, ACCENT_COOKIE, DEFAULT_ACCENT, isAccent, type Accent, type Theme } from "../lib/theme";
-import type { MeasureUnit, PasteDefault, PasteOversize, Preferences } from "../lib/prefs";
+import {
+  checkerCSS,
+  type CheckerColors,
+  type CheckerSize,
+  type MeasureUnit,
+  type PasteDefault,
+  type PasteOversize,
+  type Preferences,
+} from "../lib/prefs";
 import { downloadSettings, importSettings, resetSettings } from "../lib/settings";
 
 const ONE_YEAR = 60 * 60 * 24 * 365;
@@ -44,13 +52,14 @@ const OVERSIZE_OPTIONS: { value: PasteOversize; title: string; desc: string }[] 
   { value: "expand", title: "Expand canvas to fit", desc: "Grow the canvas so the whole image fits" },
 ];
 
-type Tab = "appearance" | "pasting" | "editing" | "units" | "performance";
+type Tab = "appearance" | "pasting" | "editing" | "units" | "transparency" | "performance";
 
 const TABS: { id: Tab; label: string; icon: typeof Palette }[] = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "pasting", label: "Pasting", icon: ClipboardPaste },
   { id: "editing", label: "Editing", icon: SlidersHorizontal },
   { id: "units", label: "Units & rulers", icon: Ruler },
+  { id: "transparency", label: "Transparency", icon: Grid2x2 },
   { id: "performance", label: "Performance", icon: Gauge },
 ];
 
@@ -58,6 +67,21 @@ const UNIT_OPTIONS: { value: MeasureUnit; title: string; desc: string }[] = [
   { value: "px", title: "Pixels", desc: "Rulers and size readouts in raw pixels" },
   { value: "in", title: "Inches", desc: "Physical units via the document's resolution (ppi)" },
   { value: "cm", title: "Centimeters", desc: "Physical units via the document's resolution (ppi)" },
+];
+
+const CHECKER_SIZE_OPTIONS: { value: CheckerSize; title: string; desc: string }[] = [
+  { value: "none", title: "None", desc: "No squares — a flat backdrop behind transparency" },
+  { value: "small", title: "Small", desc: "8 px squares" },
+  { value: "medium", title: "Medium", desc: "16 px squares — the default" },
+  { value: "large", title: "Large", desc: "24 px squares" },
+];
+
+const CHECKER_COLOR_OPTIONS: { value: CheckerColors; title: string; desc: string }[] = [
+  { value: "auto", title: "Match theme", desc: "Light or dark greys following the app theme" },
+  { value: "light", title: "Light", desc: "White with light-grey squares — the classic" },
+  { value: "mid", title: "Medium", desc: "Mid greys" },
+  { value: "dark", title: "Dark", desc: "Dark greys" },
+  { value: "custom", title: "Custom", desc: "Pick the two square colours yourself" },
 ];
 
 function OptionList<T extends string>({
@@ -401,6 +425,73 @@ export default function PreferencesDialog({
                     value={prefs.defaultDpi}
                     onChange={(n) => onChange({ defaultDpi: n })}
                   />
+                </section>
+              </>
+            )}
+
+            {tab === "transparency" && (
+              <>
+                <p className={styles.paneIntro}>
+                  The checkerboard shown behind transparent areas of the canvas. It lives in
+                  screen space, so the squares keep their size at every zoom level.
+                </p>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Preview</span>
+                  <div
+                    className={styles.checkerPreview}
+                    style={checkerCSS(
+                      prefs.checkerSize,
+                      prefs.checkerColors,
+                      prefs.checkerA,
+                      prefs.checkerB,
+                    )}
+                  />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Grid size</span>
+                  <OptionList
+                    options={CHECKER_SIZE_OPTIONS}
+                    value={prefs.checkerSize}
+                    onPick={(v) => onChange({ checkerSize: v })}
+                  />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Grid colors</span>
+                  <OptionList
+                    options={CHECKER_COLOR_OPTIONS}
+                    value={prefs.checkerColors}
+                    onPick={(v) => onChange({ checkerColors: v })}
+                  />
+                  {prefs.checkerColors === "custom" && (
+                    <div className={styles.colorWellRow}>
+                      <label className={styles.colorWellLabel}>
+                        <input
+                          type="color"
+                          className={styles.colorWell}
+                          value={prefs.checkerA}
+                          onChange={(e) => onChange({ checkerA: e.target.value })}
+                          aria-label="Backdrop colour"
+                        />
+                        <span>
+                          Backdrop
+                          <code>{prefs.checkerA}</code>
+                        </span>
+                      </label>
+                      <label className={styles.colorWellLabel}>
+                        <input
+                          type="color"
+                          className={styles.colorWell}
+                          value={prefs.checkerB}
+                          onChange={(e) => onChange({ checkerB: e.target.value })}
+                          aria-label="Square colour"
+                        />
+                        <span>
+                          Squares
+                          <code>{prefs.checkerB}</code>
+                        </span>
+                      </label>
+                    </div>
+                  )}
                 </section>
               </>
             )}

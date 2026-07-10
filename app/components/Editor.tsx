@@ -3695,6 +3695,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           showRulers={showRulers}
           unit={prefs.unit}
           docDpi={active.dpi ?? 300}
+          checkerSize={prefs.checkerSize}
+          checkerColors={prefs.checkerColors}
+          checkerA={prefs.checkerA}
+          checkerB={prefs.checkerB}
           showGrid={showGrid}
           snap={snap}
           viewApiRef={viewApiRef}

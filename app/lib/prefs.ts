@@ -3,6 +3,55 @@
 /** Measurement unit for rulers and size readouts. */
 export type MeasureUnit = "px" | "in" | "cm";
 
+/** Transparency-checkerboard square size ("none" = a flat backdrop, no squares).
+ *  Screen pixels — the pattern lives in screen space, so squares keep their
+ *  size at every zoom level. */
+export type CheckerSize = "none" | "small" | "medium" | "large";
+
+/** Checkerboard colour scheme; "auto" follows the theme's greys, "custom" uses
+ *  the user's two colours. */
+export type CheckerColors = "auto" | "light" | "mid" | "dark" | "custom";
+
+export const CHECKER_SIZE_PX: Record<CheckerSize, number> = {
+  none: 0,
+  small: 8,
+  medium: 16, // the historical default (CanvasArea.module.scss .checker)
+  large: 24,
+};
+
+/** The classic grey pairs (Photoshop's Light/Medium/Dark), [a, b] = [base, square]. */
+const CHECKER_PAIRS: Record<Exclude<CheckerColors, "auto" | "custom">, [string, string]> = {
+  light: ["#ffffff", "#cccccc"],
+  mid: ["#cccccc", "#999999"],
+  dark: ["#999999", "#666666"],
+};
+
+/** Inline background style for a transparency checker. "auto" resolves to the
+ *  theme's `--checker-a/b` vars so it keeps tracking light/dark; unknown values
+ *  from an old/hand-edited prefs file fall back to the defaults. Shared by the
+ *  document canvas and the Preferences preview so the two can never drift. */
+export function checkerCSS(
+  size: CheckerSize,
+  colors: CheckerColors,
+  customA: string,
+  customB: string,
+): { backgroundColor: string; backgroundImage: string; backgroundSize?: string } {
+  const [a, b] =
+    colors === "custom"
+      ? [customA, customB]
+      : (CHECKER_PAIRS[colors as keyof typeof CHECKER_PAIRS] ?? [
+          "var(--checker-a)",
+          "var(--checker-b)",
+        ]);
+  const px = CHECKER_SIZE_PX[size] ?? CHECKER_SIZE_PX.medium;
+  if (px === 0) return { backgroundColor: a, backgroundImage: "none" };
+  return {
+    backgroundColor: a,
+    backgroundImage: `repeating-conic-gradient(${b} 0% 25%, ${a} 0% 50%)`,
+    backgroundSize: `${px}px ${px}px`,
+  };
+}
+
 /** Where a clipboard paste goes by default. "ask" shows the paste dialog. */
 export type PasteDefault = "ask" | "new-layer" | "current-layer" | "new-canvas";
 
@@ -44,6 +93,13 @@ export interface Preferences {
   /** Minimize non-essential animations and panel transitions
    *  (Preferences ▸ Appearance; applied as data-motion="off" on <html>). */
   reduceMotion: boolean;
+  /** Transparency grid: checkerboard square size behind the document. */
+  checkerSize: CheckerSize;
+  /** Transparency grid: colour scheme ("custom" uses checkerA/checkerB). */
+  checkerColors: CheckerColors;
+  /** Custom checkerboard pair — base colour (a) and square colour (b). */
+  checkerA: string;
+  checkerB: string;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -62,6 +118,10 @@ export const DEFAULT_PREFS: Preferences = {
   historyLimit: 60,
   useWorkers: true,
   reduceMotion: false,
+  checkerSize: "medium",
+  checkerColors: "auto",
+  checkerA: "#ffffff",
+  checkerB: "#cccccc",
 };
 
 const KEY = "graphiq:preferences";
