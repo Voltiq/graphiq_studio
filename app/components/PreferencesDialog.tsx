@@ -97,6 +97,8 @@ interface CacheStats {
   budget: number;
   hits: number;
   misses: number;
+  /** Resident tiles across tiled products (very large documents; 0 = untiled). */
+  tiles: number;
 }
 
 export default function PreferencesDialog({
@@ -474,7 +476,10 @@ export default function PreferencesDialog({
                       </div>
                       <div className={styles.statRow}>
                         <span>Cached products</span>
-                        <strong>{stats.entries}</strong>
+                        <strong>
+                          {stats.entries}
+                          {stats.tiles > 0 ? ` (${stats.tiles} tiles)` : ""}
+                        </strong>
                       </div>
                       <div className={styles.statRow}>
                         <span>Hit rate (this session)</span>

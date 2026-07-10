@@ -18,6 +18,47 @@ export interface RenderNodeCache {
   tick: number;
 }
 
+// ---- Tiled products (very large documents) ----------------------------------
+// A doc-sized cached product on an 8k document is ~268 MB — bigger than the
+// whole default cache budget, so whole-canvas entries can't be kept or evicted
+// sensibly. Products whose math is strictly per-pixel (adjustment accumulators)
+// are instead stored as a grid of tiles: eviction frees individual tiles, and a
+// missing/stale tile is recomputed alone from the below-accumulator.
+
+/** Tile edge in document pixels (4 MB RGBA per full tile). */
+export const TILE_SIZE = 1024;
+/** Tile products at/above this full-product size — 64 MB is the smallest
+ *  budget setting, so anything bigger MUST be evictable in pieces. */
+export const TILE_PRODUCT_MIN_BYTES = 64 * 1024 * 1024;
+/** Separator for per-tile pseudo-ids fed to selectEvictions. NUL can't collide
+ *  with generated node ids (`layer-N` / `adj-N`), and even a crafted project id
+ *  containing it only mis-targets an eviction — caches are never truth. */
+export const TILE_ID_SEP = String.fromCharCode(0);
+
+export interface TileGrid {
+  cols: number;
+  rows: number;
+}
+
+/** The tile grid for a document, or null when it's small enough that whole-
+ *  canvas products stay cheaper (allocation + bookkeeping) than tiling. */
+export function tileGrid(w: number, h: number): TileGrid | null {
+  if (w < 1 || h < 1 || w * h * 4 < TILE_PRODUCT_MIN_BYTES) return null;
+  return { cols: Math.ceil(w / TILE_SIZE), rows: Math.ceil(h / TILE_SIZE) };
+}
+
+/** Document-space rect of tile `i` (row-major; edge tiles clamp to the doc). */
+export function tileRect(i: number, g: TileGrid, w: number, h: number): Rect {
+  const x = (i % g.cols) * TILE_SIZE;
+  const y = Math.floor(i / g.cols) * TILE_SIZE;
+  return { x, y, w: Math.min(TILE_SIZE, w - x), h: Math.min(TILE_SIZE, h - y) };
+}
+
+/** Do two rects share any pixel? */
+export function rectsOverlap(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
 /** 64-bit-ish FNV-1a over a string (two 32-bit passes with different seeds).
  *  Inputs are short version/param strings — never pixel data. */
 export function fnv(s: string): string {
@@ -58,9 +99,11 @@ export function clampRect(r: Rect, docW: number, docH: number): Rect | null {
  * Pick cache entries to evict, least-recently-used first, until `bytes` no
  * longer exceeds `budget`. Entries in `protect` (used by the frame being
  * composited) are never selected — evicting mid-frame could corrupt it.
+ * Entries only need bytes+tick, so callers can mix whole products with
+ * per-tile pseudo-entries (`<id>${TILE_ID_SEP}<tile index>`).
  */
 export function selectEvictions(
-  entries: Iterable<[string, RenderNodeCache]>,
+  entries: Iterable<[string, { bytes: number; tick: number }]>,
   bytes: number,
   budget: number,
   protect: ReadonlySet<string>,

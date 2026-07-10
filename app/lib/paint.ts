@@ -6,7 +6,18 @@ import { applyAdjustments, applyAdjustments16, isDefaultAdjust, type Adjustments
 import { renderShape, type ShapeGeom } from "./shapes";
 import { boxBlurPass, clampi } from "./blur";
 import { fxHash, hasEnabledFx, renderStyled } from "./effects";
-import { clampRect, fnv, selectEvictions, unionRect, type RenderNodeCache } from "./render-graph";
+import {
+  clampRect,
+  fnv,
+  rectsOverlap,
+  selectEvictions,
+  TILE_ID_SEP,
+  tileGrid,
+  tileRect,
+  unionRect,
+  type RenderNodeCache,
+  type TileGrid,
+} from "./render-graph";
 import {
   applyFilter,
   computeBlurFx,
@@ -346,6 +357,8 @@ export interface EngineHandle {
     budget: number;
     hits: number;
     misses: number;
+    /** Resident tiles across tiled products (large documents; 0 = untiled). */
+    tiles: number;
   };
   setRenderCacheBudget: (mb: number) => void;
   setHistoryLimit: (n: number) => void;
@@ -389,6 +402,23 @@ const makeCanvas = (
 interface Layer {
   c: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
+}
+
+/** One resident tile of a tiled adjustment product (its own LRU entry). */
+interface AdjTile {
+  c: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  bytes: number;
+  tick: number;
+}
+
+/** A cached adjustment product stored as a tile grid (very large documents). */
+interface TiledAdjProduct {
+  key: string;
+  grid: TileGrid;
+  tiles: (AdjTile | null)[];
+  bytes: number;
+  tick: number;
 }
 
 export type StrokeMode = "paint" | "erase";
@@ -552,6 +582,15 @@ export class PaintEngine {
     string,
     { ownSig: string; tree: LayerNode[]; dirty: Rect | null; unbounded: boolean }
   >();
+  // Tiled adjustment products (very large documents — see render-graph.ts).
+  // On docs where one full product would rival the whole cache budget, the
+  // cached accumulator is stored as a grid of tiles instead of one canvas:
+  // eviction frees single tiles, and a missing/stale tile is recomputed alone
+  // from the below-accumulator (adjustment math is strictly per-pixel, so a
+  // tile recompute is byte-identical to the full pass inside that tile).
+  // Entries share adjMeta with the whole-canvas path — exactly one of the two
+  // paths ever runs for a given document size.
+  private tiledAdj = new Map<string, TiledAdjProduct>();
 
   /** Mark a layer's pixels changed: its key (and every dependent's) changes, so
    *  caches miss next composite. `rect` bounds the change for the view blit and
@@ -571,7 +610,7 @@ export class PaintEngine {
    *  a filter mask (fm:*) feeds the filter stack and inherits its reach. */
   private bumpMask(id: string, rect?: Rect) {
     this.maskVersion.set(id, (this.maskVersion.get(id) ?? 0) + 1);
-    this.dropCache(id);
+    this.dropCache(id, true);
     const bounded = rect && !this.changeReaches(id, "mask") ? rect : null;
     this.pendingDirty = unionRect(this.pendingDirty, bounded);
     if (!bounded) this.lastTree = null;
@@ -619,13 +658,17 @@ export class PaintEngine {
     }
   }
 
-  /** Free a node's cached render (also used by LRU eviction + deletion). */
-  private dropCache(id: string) {
+  /** Free a node's cached render (also used by LRU eviction + deletion).
+   *  `keepTiles` (mask bumps only): a tiled adjustment product survives its own
+   *  mask paint — the key's mask version forces a miss, and the meta path then
+   *  recomputes just the tiles under the changed rect with the current mask. */
+  private dropCache(id: string, keepTiles = false) {
     const e = this.renderCache.get(id);
     if (e) {
       this.renderBytes -= e.bytes;
       this.renderCache.delete(id);
     }
+    if (!keepTiles) this.dropTiled(id);
     // A clip group led by this node caches under a prefixed id.
     const clip = this.renderCache.get(`clip:${id}`);
     if (clip) {
@@ -634,14 +677,30 @@ export class PaintEngine {
     }
   }
 
+  /** Free a tiled adjustment product (deletion / eviction cleanup). */
+  private dropTiled(id: string) {
+    const t = this.tiledAdj.get(id);
+    if (t) {
+      this.renderBytes -= t.bytes;
+      this.tiledAdj.delete(id);
+    }
+  }
+
+  /** Drop every cached product (whole-canvas AND tiled) + the dirty metadata.
+   *  The one honest way to invalidate wholesale — always resets the byte count. */
+  private clearRenderCaches() {
+    this.renderCache.clear();
+    this.tiledAdj.clear();
+    this.renderBytes = 0;
+    this.lastTree = null;
+    this.adjMeta.clear();
+  }
+
   /** Invalidate every intrinsic render (geometry or colour space changed):
    *  the epoch keys every entry, and the buffers are freed eagerly. */
   private invalidateStyled() {
     this.docEpoch++;
-    this.renderCache.clear();
-    this.renderBytes = 0;
-    this.lastTree = null;
-    this.adjMeta.clear();
+    this.clearRenderCaches();
   }
 
   // ---- GPU tone stage (WebGL2 LUTs; Canvas2D is the always-correct fallback) --
@@ -666,10 +725,7 @@ export class PaintEngine {
    *  adjustment products so the whole document re-renders on the chosen path. */
   setGpuEnabled(on: boolean) {
     this.gpuOn = on;
-    this.renderCache.clear();
-    this.renderBytes = 0;
-    this.adjMeta.clear();
-    this.lastTree = null;
+    this.clearRenderCaches();
     this.emitChange();
   }
 
@@ -681,10 +737,7 @@ export class PaintEngine {
    *  output must be pixel-identical to the cached path. */
   setRenderCacheEnabled(on: boolean) {
     this.renderCacheOn = on;
-    if (!on) {
-      this.renderCache.clear();
-      this.renderBytes = 0;
-    }
+    if (!on) this.clearRenderCaches();
     this.lastTree = null;
     this.emitChange();
   }
@@ -697,14 +750,18 @@ export class PaintEngine {
     budget: number;
     hits: number;
     misses: number;
+    tiles: number;
   } {
+    let tiles = 0;
+    for (const t of this.tiledAdj.values()) for (const tile of t.tiles) if (tile) tiles++;
     return {
       enabled: this.renderCacheOn,
-      entries: this.renderCache.size,
+      entries: this.renderCache.size + this.tiledAdj.size,
       bytes: this.renderBytes,
       budget: this.renderBudget,
       hits: this.cacheHits,
       misses: this.cacheMisses,
+      tiles,
     };
   }
 
@@ -2922,10 +2979,41 @@ export class PaintEngine {
     this.frameProtect.add(id);
   }
 
-  /** LRU-evict past the byte budget (never entries used by this frame). */
+  /** LRU-evict past the byte budget (never entries used by this frame).
+   *  Tiled adjustment products expose each resident tile as its own candidate
+   *  (`<id>${TILE_ID_SEP}<index>`), so a large product sheds exactly the
+   *  overage instead of vanishing whole — the surviving tiles stay valid and a
+   *  freed tile is recomputed alone on next use. */
   private evictOverBudget() {
     if (this.renderBytes <= this.renderBudget) return;
-    for (const id of selectEvictions(this.renderCache, this.renderBytes, this.renderBudget, this.frameProtect)) {
+    const self = this;
+    function* candidates(): Generator<[string, { bytes: number; tick: number }]> {
+      yield* self.renderCache;
+      for (const [id, t] of self.tiledAdj) {
+        if (self.frameProtect.has(id)) continue; // whole product in use this frame
+        for (let i = 0; i < t.tiles.length; i++) {
+          const tile = t.tiles[i];
+          if (tile) yield [id + TILE_ID_SEP + i, tile];
+        }
+      }
+    }
+    for (const id of selectEvictions(candidates(), this.renderBytes, this.renderBudget, this.frameProtect)) {
+      const sep = id.lastIndexOf(TILE_ID_SEP);
+      if (sep >= 0) {
+        const base = id.slice(0, sep);
+        const idx = Number(id.slice(sep + 1));
+        const t = this.tiledAdj.get(base);
+        const tile = t?.tiles[idx];
+        if (t && tile) {
+          t.tiles[idx] = null;
+          t.bytes -= tile.bytes;
+          this.renderBytes -= tile.bytes;
+          // Nothing resident left → drop the husk (key/meta would force a
+          // full rebuild anyway).
+          if (t.tiles.every((x) => !x)) this.dropTiled(base);
+        }
+        continue;
+      }
       const e = this.renderCache.get(id);
       if (e) {
         this.renderBytes -= e.bytes;
@@ -3143,6 +3231,14 @@ export class PaintEngine {
     // Only cache against the document-level accumulator geometry (doc-sized).
     if (ctx.canvas.width !== this.w || ctx.canvas.height !== this.h) bypass = true;
     const key = bypass ? "" : this.adjustmentKey(node, siblings);
+    // Very large documents store this product as a tile grid instead of one
+    // canvas (per-tile eviction + per-tile recompute) — exactly one of the two
+    // paths runs for a given document size, so the caches never mix.
+    const grid = bypass ? null : tileGrid(this.w, this.h);
+    if (grid) {
+      this.drawAdjustmentTiled(ctx, node, key, grid);
+      return;
+    }
     if (!bypass) {
       const hit = this.renderCache.get(node.id);
       if (hit && hit.key === key) {
@@ -3227,10 +3323,126 @@ export class PaintEngine {
     }
   }
 
+  /** Tiled twin of the cached-adjustment step (very large documents — §8 tiled
+   *  compositing). The product (the WHOLE accumulator after the adjustment)
+   *  lives as a grid of tiles. A full key hit draws the resident tiles and
+   *  recomputes only evicted ones from the below-accumulator; a key miss whose
+   *  changes since caching were all rect-bounded (same immutable tree,
+   *  per-pixel changes — the adjMeta proof) recomputes just the tiles under
+   *  that rect. Anything else rebuilds every tile from one full pass. The
+   *  adjustment math + modulation are strictly per-pixel, so a lone tile
+   *  recompute is byte-identical to the full pass inside that tile. GPU tone
+   *  products are never patched with CPU tiles (sub-LSB unpremultiply
+   *  divergence could seam at tile borders): with the GPU pass active, ANY
+   *  staleness takes the full pass — itself cheap, no readback — and every
+   *  tile re-slices from that single consistent source. */
+  private drawAdjustmentTiled(
+    ctx: CanvasRenderingContext2D,
+    node: LayerAdjustment,
+    key: string,
+    grid: TileGrid,
+  ) {
+    const id = node.id;
+    const n = grid.cols * grid.rows;
+    let entry = this.tiledAdj.get(id) ?? null;
+    if (entry && (entry.tiles.length !== n || entry.grid.cols !== grid.cols)) {
+      // Stale grid (resize bumps the epoch and clears — belt and braces only).
+      this.dropTiled(id);
+      entry = null;
+    }
+    const ownSig = this.adjustmentOwnSig(node, false);
+    // Which tiles need recomputing? null = all of them (full rebuild).
+    let stale: boolean[] | null = null;
+    if (entry && entry.key === key) {
+      stale = entry.tiles.map((t) => !t); // valid product — only evicted tiles
+    } else if (entry) {
+      const meta = this.adjMeta.get(id);
+      if (
+        meta &&
+        !meta.unbounded &&
+        meta.dirty &&
+        this.curTree !== null &&
+        meta.tree === this.curTree &&
+        meta.ownSig === ownSig
+      ) {
+        const r = clampRect(meta.dirty, this.w, this.h);
+        if (r)
+          stale = entry.tiles.map(
+            (t, i) => !t || rectsOverlap(tileRect(i, grid, this.w, this.h), r),
+          );
+      }
+    }
+    if (stale && stale.some(Boolean) && node.adjustment.type !== "sliders" && this.gpuAvailable())
+      stale = null; // tone + GPU: rebuild all tiles from one pass, never mix sources
+    if (!entry || !stale) {
+      // Full rebuild: the existing full-document math leaves the post-state in
+      // the accumulator; slice it into (reused) tile canvases.
+      this.applyAdjustmentNode(ctx, node);
+      if (!entry) {
+        entry = { key, grid, tiles: new Array<AdjTile | null>(n).fill(null), bytes: 0, tick: 0 };
+        this.tiledAdj.set(id, entry);
+      }
+      for (let i = 0; i < n; i++) {
+        const tr = tileRect(i, grid, this.w, this.h);
+        const tile = this.tileFor(entry, i, tr);
+        tile.ctx.clearRect(0, 0, tr.w, tr.h);
+        tile.ctx.drawImage(ctx.canvas, tr.x, tr.y, tr.w, tr.h, 0, 0, tr.w, tr.h);
+        tile.tick = ++this.renderTick;
+      }
+    } else {
+      // Recompute stale tiles alone: copy the below pixels (the accumulator)
+      // into the tile, then run the same region math the partial path uses.
+      for (let i = 0; i < n; i++) {
+        if (!stale[i]) continue;
+        const tr = tileRect(i, grid, this.w, this.h);
+        const tile = this.tileFor(entry, i, tr);
+        tile.ctx.globalAlpha = 1;
+        tile.ctx.globalCompositeOperation = "source-over";
+        tile.ctx.clearRect(0, 0, tr.w, tr.h);
+        tile.ctx.drawImage(ctx.canvas, tr.x, tr.y, tr.w, tr.h, 0, 0, tr.w, tr.h);
+        this.applyAdjustmentRegion(tile.ctx, node, tr, true);
+      }
+      // Every tile is valid now — replace the accumulator with the product.
+      // The tiles partition the document exactly, so clearing + drawing each
+      // is equivalent to the whole-canvas path's `copy` blit.
+      ctx.clearRect(0, 0, this.w, this.h);
+      for (let i = 0; i < n; i++) {
+        const tr = tileRect(i, grid, this.w, this.h);
+        const tile = entry.tiles[i]!;
+        ctx.drawImage(tile.c, tr.x, tr.y);
+        tile.tick = ++this.renderTick;
+      }
+    }
+    entry.key = key;
+    entry.tick = ++this.renderTick;
+    this.frameProtect.add(id);
+    if (this.curTree)
+      this.adjMeta.set(id, { ownSig, tree: this.curTree, dirty: null, unbounded: false });
+  }
+
+  /** The tile at `i`, allocated (and byte-accounted) on first need. Dimensions
+   *  per index are fixed for a given grid, so reuse never needs a resize. */
+  private tileFor(entry: TiledAdjProduct, i: number, tr: Rect): AdjTile {
+    let tile = entry.tiles[i];
+    if (!tile) {
+      const { c, ctx } = this.mk(tr.w, tr.h);
+      tile = { c, ctx, bytes: tr.w * tr.h * 4, tick: 0 };
+      entry.tiles[i] = tile;
+      entry.bytes += tile.bytes;
+      this.renderBytes += tile.bytes;
+    }
+    return tile;
+  }
+
   /** The adjustment-key components that are NOT the below signature — a partial
-   *  (region-scoped) product update is only sound when these are unchanged. */
-  private adjustmentOwnSig(node: LayerAdjustment): string {
-    const mv = node.mask?.enabled ? (this.maskVersion.get(node.id) ?? 0) : "x";
+   *  (region-scoped) product update is only sound when these are unchanged.
+   *  The tiled path excludes the mask version (`includeMask: false`): mask
+   *  modulation is per-pixel, so a rect-bounded mask paint keeps untouched
+   *  tiles valid — the changed rect arrives via adjMeta.dirty (bumpMask →
+   *  noteBelowChange), and structural mask changes (attach/enable) build a new
+   *  tree, which the meta tree-identity check catches. */
+  private adjustmentOwnSig(node: LayerAdjustment, includeMask = true): string {
+    const mv = !includeMask ? "m" : node.mask?.enabled ? (this.maskVersion.get(node.id) ?? 0) : "x";
     return `${fnv(this.specHash(node.adjustment))}|${mv}|${node.opacity}|${node.blend}|${this.cs}|${this.docEpoch}`;
   }
 
@@ -3341,12 +3553,21 @@ export class PaintEngine {
    *  by opacity × mask × blend — all confined to `r`. Every operation involved
    *  (the adjustment itself, the alpha modulation, canvas blend modes) is
    *  per-pixel, so the result is byte-identical to a full re-process inside `r`
-   *  and untouched outside it. */
-  private applyAdjustmentRegion(ctx: CanvasRenderingContext2D, node: LayerAdjustment, r: Rect) {
+   *  and untouched outside it. `local` = `ctx` is an r-sized canvas whose (0,0)
+   *  is the document's (r.x, r.y) — a tile — so pixel reads/writes drop the
+   *  offset while the (doc-sized) mask still samples at doc coords. */
+  private applyAdjustmentRegion(
+    ctx: CanvasRenderingContext2D,
+    node: LayerAdjustment,
+    r: Rect,
+    local = false,
+  ) {
+    const ox = local ? 0 : r.x;
+    const oy = local ? 0 : r.y;
     const spec = node.adjustment;
     if (spec.type === "sliders" && isDefaultAdjust(spec.params)) return; // neutral → no-op
     const out = this.applyColorMath(
-      ctx.getImageData(r.x, r.y, r.w, r.h),
+      ctx.getImageData(ox, oy, r.w, r.h),
       spec.type === "sliders"
         ? { kind: "sliders", params: spec.params }
         : {
@@ -3360,7 +3581,7 @@ export class PaintEngine {
     const opacity = Math.max(0, Math.min(1, node.opacity / 100));
     const op = blendOp(node.blend);
     if (opacity >= 1 && !maskAlpha && op === "source-over") {
-      ctx.putImageData(out, r.x, r.y); // fast path: unmasked Normal replace
+      ctx.putImageData(out, ox, oy); // fast path: unmasked Normal replace
       return;
     }
     // Region-sized buffers (the full path uses doc-sized shared ones).
@@ -3379,7 +3600,7 @@ export class PaintEngine {
     tmp.ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = op;
-    ctx.drawImage(tmp.c, r.x, r.y);
+    ctx.drawImage(tmp.c, ox, oy);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
   }
@@ -5399,9 +5620,7 @@ export class PaintEngine {
         }
         this.filterWorker = null;
         this.filterPending.clear();
-        this.renderCache.clear();
-        this.lastTree = null;
-        this.adjMeta.clear();
+        this.clearRenderCaches();
         this.emitChange();
       };
       this.filterWorker = w;
@@ -5445,12 +5664,10 @@ export class PaintEngine {
     this.storeFiltered(nodeId, key, out, pend.quality);
     // Frames composited while this was in flight cached STALE products under
     // fresh keys (the node itself, its ancestors, clip groups, adjustment
-    // accumulators). One cache clear is the safe, cheap invalidation — the
-    // expensive part (the filter product) is warm in filteredCache.
-    this.renderCache.clear();
-    this.renderBytes = 0;
-    this.lastTree = null;
-    this.adjMeta.clear();
+    // accumulators — tiled ones included). One cache clear is the safe, cheap
+    // invalidation — the expensive part (the filter product) is warm in
+    // filteredCache.
+    this.clearRenderCaches();
     this.emitChange();
   }
 
