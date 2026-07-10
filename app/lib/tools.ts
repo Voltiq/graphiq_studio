@@ -326,7 +326,37 @@ export interface VectorShape {
   apex?: number;
 }
 
-export type VectorData = VectorText | VectorShape;
+/** One styled subpath of an imported vector graphic (SVG). Coordinates live in
+ *  the source element's own user space; `matrix` maps them into document space
+ *  (import placement folds into e/f), so re-rasterizing at any scale stays
+ *  crisp. `d` is SVG path syntax — `Path2D` parses it natively. */
+export interface VectorPathElement {
+  d: string;
+  /** Element → document affine transform [a, b, c, d, e, f]. */
+  matrix: [number, number, number, number, number, number];
+  /** Fill colour (#rrggbbaa), "" = none. */
+  fill: string;
+  fillRule: "nonzero" | "evenodd";
+  /** Stroke colour (#rrggbbaa), "" = none. Width/dash are in element units. */
+  stroke: string;
+  strokeWidth: number;
+  cap: "butt" | "round" | "square";
+  join: "miter" | "round" | "bevel";
+  miter: number;
+  dash: number[];
+}
+
+/** An imported vector graphic (e.g. an SVG): styled subpaths painted in order
+ *  (first = bottom). Like the other recipes, the layer's pixels are the
+ *  rasterized result and this is the re-renderable source. */
+export interface VectorPath {
+  type: "path";
+  paths: VectorPathElement[];
+  /** Rasterized bounds (doc px), for hit-testing / info. */
+  bbox: { x: number; y: number; w: number; h: number };
+}
+
+export type VectorData = VectorText | VectorShape | VectorPath;
 
 /** Clone Stamp tool (Alt-click sets the source, then paint copies sampled pixels). */
 export interface CloneSettings {

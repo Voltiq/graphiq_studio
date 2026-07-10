@@ -16,13 +16,12 @@ import { Select, Slider, Toggle } from "../Controls";
 import { findNode, type LayersApi, type LayerNode, BLEND_MODES } from "../../lib/layers";
 import { FX_LABELS, FX_ORDER, hasEnabledFx, type FxKey } from "../../lib/effects";
 import { filterLabel, type SmartFilter } from "../../lib/filters";
-import { ADJUSTMENT_TYPES } from "../../lib/adjustment-types";
+import { ADJUSTMENT_TYPES, specLabel } from "../../lib/adjustment-types";
 import type { AdjustmentSpec } from "../../lib/adjust";
 
 /** Human label for an adjustment node's spec. */
 function adjustmentLabel(spec: AdjustmentSpec): string {
-  if (spec.type === "levels") return "Levels";
-  if (spec.type === "curves") return "Curves";
+  if (spec.type !== "sliders") return specLabel(spec); // tone + extra kinds
   return ADJUSTMENT_TYPES.find((t) => t.id === spec.preset)?.label ?? "Adjustments";
 }
 
@@ -57,7 +56,9 @@ export default function PropertiesPanel({ api }: { api: LayersApi }) {
       : node.vector
         ? node.vector.type === "text"
           ? "Text layer"
-          : "Shape layer"
+          : node.vector.type === "path"
+            ? "Vector layer"
+            : "Shape layer"
         : "Pixel layer";
 
   const fxKeys = !isAdjustment && node.effects ? FX_ORDER.filter((k) => node.effects?.[k]) : [];

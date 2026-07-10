@@ -1023,7 +1023,8 @@ export default function CanvasArea({
   ): { id: string; vector: VectorData } | null => {
     const pad = 4 / (zoomRef.current / 100);
     const hit = (v: VectorData): boolean => {
-      if (v.type === "text") {
+      if (v.type === "text" || v.type === "path") {
+        // Axis-aligned bounds (imported vectors bake rotation into their paths).
         const b = v.bbox;
         return pt.x >= b.x - pad && pt.x <= b.x + b.w + pad && pt.y >= b.y - pad && pt.y <= b.y + b.h + pad;
       }

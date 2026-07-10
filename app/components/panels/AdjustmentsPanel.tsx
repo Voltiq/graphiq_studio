@@ -1,7 +1,25 @@
 ﻿"use client";
 
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
-import { Check, Download, FolderInput, Layers, Plus, RotateCcw, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import {
+  Blend,
+  Check,
+  Contrast,
+  Download,
+  Equal,
+  FolderInput,
+  Layers,
+  Palette,
+  Pipette,
+  Plus,
+  Rainbow,
+  RotateCcw,
+  SlidersHorizontal,
+  SwatchBook,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 import { Slider } from "../Controls";
 import FilterExportDialog from "../FilterExportDialog";
 import styles from "../RightDock.module.scss";
@@ -14,6 +32,18 @@ import {
   type Adjustments,
   type ParsedPreset,
 } from "../../lib/adjust";
+import type { ExtraAdjustmentType } from "../../lib/adjust-extra";
+
+/** The extra adjustment-layer kinds offered below Curves/Levels. */
+const EXTRA_BUTTONS: { type: ExtraAdjustmentType; label: string; icon: typeof Palette }[] = [
+  { type: "huesat", label: "Hue / Saturation", icon: Palette },
+  { type: "selective", label: "Selective Color", icon: Pipette },
+  { type: "chanmix", label: "Channel Mixer", icon: Blend },
+  { type: "gradientmap", label: "Gradient Map", icon: Rainbow },
+  { type: "colorlookup", label: "Color Lookup…", icon: SwatchBook },
+  { type: "invert", label: "Invert", icon: Contrast },
+  { type: "equalize", label: "Equalize", icon: Equal },
+];
 
 const PRESETS_KEY = "graphiq:adjust-presets";
 const LEGACY_PRESETS_KEY = "aperture:adjust-presets"; // pre-rebrand fallback
@@ -44,6 +74,8 @@ export default function AdjustmentsPanel({
   onDelete,
   onAddCurves,
   onAddLevels,
+  onAddExtra,
+  onExportLut,
 }: {
   adjust: Adjustments;
   onChange: (patch: Partial<Adjustments>) => void;
@@ -63,6 +95,10 @@ export default function AdjustmentsPanel({
   /** Create a Curves / Levels adjustment layer (opens its editor). */
   onAddCurves?: () => void;
   onAddLevels?: () => void;
+  /** Create one of the extra adjustment layers (Hue/Sat, Selective, …). */
+  onAddExtra?: (type: ExtraAdjustmentType) => void;
+  /** Open the "Export LUT (.cube)" dialog (captures sliders or the layer stack). */
+  onExportLut?: () => void;
 }) {
   const dirty = !isDefaultAdjust(adjust);
   const [presets, setPresets] = useState<AdjustPreset[]>([]);
@@ -348,8 +384,32 @@ export default function AdjustmentsPanel({
               <SlidersHorizontal size={14} /> Levels
             </button>
           </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+            {EXTRA_BUTTONS.map((b) => (
+              <button
+                key={b.type}
+                type="button"
+                className={styles.resetAdjust}
+                style={b.type === "equalize" ? { gridColumn: "1 / -1" } : undefined}
+                title={`Add a ${b.label.replace(/…$/, "")} adjustment layer`}
+                onClick={() => onAddExtra?.(b.type)}
+              >
+                <b.icon size={14} /> {b.label}
+              </button>
+            ))}
+          </div>
         </>
       )}
+
+      <button
+        type="button"
+        className={styles.resetAdjust}
+        title="Capture these adjustments (sliders or the adjustment-layer stack) as a 3D .cube LUT"
+        onClick={onExportLut}
+      >
+        <Download size={14} />
+        Export as LUT (.cube)…
+      </button>
 
       <input
         ref={filesInputRef}

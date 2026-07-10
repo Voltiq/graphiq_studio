@@ -29,6 +29,7 @@ import type { NavigatorView } from "../lib/view";
 import type { LayersApi } from "../lib/layers";
 import type { EngineHandle, HistorySummary } from "../lib/paint";
 import type { Adjustments } from "../lib/adjust";
+import type { ExtraAdjustmentType } from "../lib/adjust-extra";
 import type { ImageMetadata } from "../lib/metadata";
 
 export type PanelVisibility = {
@@ -136,6 +137,10 @@ interface Props {
   onDeleteAdjustment: () => void;
   onAddCurves: () => void;
   onAddLevels: () => void;
+  /** Create one of the extra adjustment layers (Hue/Sat, Selective, …). */
+  onAddExtra: (type: ExtraAdjustmentType) => void;
+  /** Open the "Export LUT (.cube)" dialog. */
+  onExportLut: () => void;
   /** Imperative engine handle, for the live channels histogram. */
   engineRef: RefObject<EngineHandle | null>;
   /** Active document facts for the Metadata panel. */
@@ -184,6 +189,8 @@ export default function RightDock({
   onDeleteAdjustment,
   onAddCurves,
   onAddLevels,
+  onAddExtra,
+  onExportLut,
   panels,
   engineRef,
   docName,
@@ -300,6 +307,8 @@ export default function RightDock({
               onDelete={onDeleteAdjustment}
               onAddCurves={onAddCurves}
               onAddLevels={onAddLevels}
+              onAddExtra={onAddExtra}
+              onExportLut={onExportLut}
             />
           </Panel>
         ) : null;

@@ -124,6 +124,7 @@ import {
   type ExportOptions,
   setRawWorkerEnabled,
 } from "../lib/imageio";
+import { exportSVG, looksLikeSVG, parseSVGFile, translateVectorPath } from "../lib/svg";
 import { addRecent } from "../lib/recents";
 import {
   DEFAULT_ADJUST,
@@ -133,6 +134,16 @@ import {
   type Adjustments,
 } from "../lib/adjust";
 import { ADJUSTMENT_TYPES, specFromPreset, specFromType, specLabel } from "../lib/adjustment-types";
+import {
+  defaultExtra,
+  isExtraSpec,
+  parseCubeLUT,
+  EXTRA_LABELS,
+  type ExtraAdjustment,
+  type ExtraAdjustmentType,
+} from "../lib/adjust-extra";
+import AdjustmentExtraDialog from "./AdjustmentExtraDialog";
+import ExportLutDialog from "./ExportLutDialog";
 import { DEFAULT_FX, type FxKey, type LayerEffects } from "../lib/effects";
 import { defaultFilter, filterLabel, type FilterType, type SmartFilter } from "../lib/filters";
 import SmartFilterDialog from "./SmartFilterDialog";
@@ -1407,11 +1418,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (!toneEdit) return null;
     if (toneEdit.mode === "dest") return toneEdit.spec;
     const n = findNode(active.layers, toneEdit.layerId);
-    return n?.type === "adjustment" && n.adjustment.type !== "sliders" ? n.adjustment : null;
+    return n?.type === "adjustment" && (n.adjustment.type === "levels" || n.adjustment.type === "curves")
+      ? n.adjustment
+      : null;
   })();
 
-  // Live-edit a tone adjustment NODE's spec (debounced one-step structural history).
-  const setToneNodeSpec = (layerId: string, spec: ToneAdjustment) => {
+  // Live-edit an adjustment NODE's spec (debounced one-step structural history).
+  // Shared by the tone dialogs and the extra-adjustment dialog.
+  const setToneNodeSpec = (layerId: string, spec: AdjustmentSpec) => {
     const d = activeDocRef.current;
     if (!findNode(d.layers, layerId)) return;
     if (!adjEditRef.current || adjEditRef.current.layerId !== layerId) {
@@ -1433,6 +1447,62 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (n?.type !== "adjustment") return;
     const t = n.adjustment.type;
     if (t === "curves" || t === "levels") setToneEdit({ mode: "node", tool: t, layerId: id });
+  };
+
+  // ---- Extra adjustment layers (Hue/Sat, Selective, Mixer, Gradient Map,
+  //      Color Lookup, Invert, Equalize) --------------------------------------
+  const [extraEdit, setExtraEdit] = useState<{ layerId: string } | null>(null);
+  const extraSpec: ExtraAdjustment | null = (() => {
+    if (!extraEdit) return null;
+    const n = findNode(active.layers, extraEdit.layerId);
+    return n?.type === "adjustment" && isExtraSpec(n.adjustment) ? n.adjustment : null;
+  })();
+  // Where a picked .cube lands: a new layer, or an existing node's spec.
+  const cubeInputRef = useRef<HTMLInputElement>(null);
+  const cubeTargetRef = useRef<"new" | string | null>(null);
+  // Export the current adjustments AS a .cube LUT (File menu / Adjustments panel).
+  const [lutExportOpen, setLutExportOpen] = useState(false);
+
+  const addExtraAdjustment = (type: string) => {
+    if (type === "colorlookup") {
+      cubeTargetRef.current = "new";
+      cubeInputRef.current?.click();
+      return;
+    }
+    if (!(type in EXTRA_LABELS)) return;
+    const spec = defaultExtra(type as Exclude<ExtraAdjustmentType, "colorlookup">);
+    const id = addAdjustmentOp("", undefined, undefined, spec);
+    // Parameterized kinds open their editor right away; invert/equalize are done.
+    if (id && (type === "huesat" || type === "selective" || type === "chanmix" || type === "gradientmap"))
+      setExtraEdit({ layerId: id });
+  };
+
+  const onCubePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    const target = cubeTargetRef.current;
+    cubeTargetRef.current = null;
+    if (!f || !target) return;
+    let text: string;
+    try {
+      text = await f.text();
+    } catch {
+      window.alert("Couldn't read the .cube file.");
+      return;
+    }
+    const parsed = parseCubeLUT(text, stripExt(f.name));
+    if (!parsed.lut) {
+      window.alert(parsed.error ?? "Couldn't parse the .cube file.");
+      return;
+    }
+    const spec: AdjustmentSpec = {
+      type: "colorlookup",
+      name: parsed.lut.name,
+      size: parsed.lut.size,
+      table: parsed.lut.table,
+    };
+    if (target === "new") addAdjustmentOp("", `Color Lookup — ${parsed.lut.name}`, undefined, spec);
+    else setToneNodeSpec(target, spec); // replace the LUT on an existing node
   };
   const openDestructiveTone = (tool: "curves" | "levels") => {
     if (!activeLeafId) {
@@ -1997,8 +2067,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     editAdjustment: (id) => {
       const n = findNode(active.layers, id);
       if (n?.type !== "adjustment") return;
-      if (n.adjustment.type === "curves" || n.adjustment.type === "levels") editToneNode(id);
-      else selectLayer(id, "replace");
+      const t = n.adjustment.type;
+      if (t === "curves" || t === "levels") editToneNode(id);
+      else if (t === "huesat" || t === "selective" || t === "chanmix" || t === "gradientmap")
+        setExtraEdit({ layerId: id });
+      else if (t === "colorlookup") {
+        // Nothing to slide — editing a LUT layer means choosing another .cube.
+        cubeTargetRef.current = id;
+        cubeInputRef.current?.click();
+      } else selectLayer(id, "replace"); // sliders → panel; invert/equalize have no params
     },
     openLayerStyle: openLayerStyleOp,
     openFilters: openFiltersOp,
@@ -2718,13 +2795,29 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     e.target.value = "";
     if (!files.length) return;
     const decoded = await Promise.all(
-      files.map(async (f) => ({
-        name: f.name,
-        file: f,
-        bitmap: await decodeImageFile(f),
-        meta: await extractMetadata(f),
-        icc: await extractICCProfile(f),
-      })),
+      files.map(async (f) => {
+        // SVG: parsed into a vector recipe (or a faithful raster fallback) —
+        // browsers can't decode SVG through createImageBitmap.
+        if (looksLikeSVG(f)) {
+          const svg = await parseSVGFile(f);
+          return {
+            name: f.name,
+            file: f,
+            bitmap: svg?.bitmap ?? null,
+            meta: await extractMetadata(f),
+            icc: null,
+            vector: svg?.vector ?? null,
+          };
+        }
+        return {
+          name: f.name,
+          file: f,
+          bitmap: await decodeImageFile(f),
+          meta: await extractMetadata(f),
+          icc: await extractICCProfile(f),
+          vector: null,
+        };
+      }),
     );
     const items: ImportItem[] = decoded
       .filter((d) => d.bitmap !== null)
@@ -2734,6 +2827,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         bitmap: d.bitmap as ImageBitmap,
         meta: d.meta,
         icc: d.icc,
+        vector: d.vector,
       }));
     if (!items.length) {
       window.alert("Couldn't read the selected image(s).");
@@ -2765,13 +2859,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     };
     const place = () => {
       const before = activeDocRef.current.layers;
-      const leaves: Layer[] = items.map((it) => ({
+      const placements = items.map((it) => pos(it.bitmap.width, it.bitmap.height));
+      const leaves: Layer[] = items.map((it, i) => ({
         id: nextLeafId(),
         type: "layer",
         name: stripExt(it.name),
         visible: true,
         opacity: 100,
         blend: "Normal",
+        // SVG: keep the vector recipe (shifted to where the pixels land) so the
+        // layer stays a re-renderable vector source.
+        ...(it.vector ? { vector: translateVectorPath(it.vector, placements[i].x, placements[i].y) } : {}),
       }));
       const after = [...leaves, ...before]; // first image on top
       commitLayerChange(
@@ -2782,7 +2880,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         { active: leaves[0].id, selected: leaves.map((l) => l.id) },
         () =>
           leaves.forEach((leaf, i) => {
-            const p = pos(items[i].bitmap.width, items[i].bitmap.height);
+            const p = placements[i];
             paintRef.current?.setLayerImage(leaf.id, items[i].bitmap, p.x, p.y);
           }),
       );
@@ -2821,7 +2919,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         name: stripExt(it.name),
         width: it.bitmap.width,
         height: it.bitmap.height,
-        layers: [{ id: lid, type: "layer", name: stripExt(it.name), visible: true, opacity: 100, blend: "Normal" }],
+        layers: [
+          {
+            id: lid,
+            type: "layer",
+            name: stripExt(it.name),
+            visible: true,
+            opacity: 100,
+            blend: "Normal",
+            ...(it.vector ? { vector: it.vector } : {}),
+          },
+        ],
         activeLayerId: lid,
         selectedLayerIds: [lid],
         selection: [],
@@ -2833,6 +2941,27 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setDocs((ds) => [...ds, ...docs]);
     if (firstId) setActiveId(firstId);
     setPendingLoads((ls) => [...ls, ...entries]);
+  };
+
+  // Serialize the document's vector-bearing layers (shape / text / imported
+  // SVG) to a standalone .svg download. Raster/adjustment layers, masks and
+  // layer effects have no vector source — they're skipped and reported.
+  const exportVectorSVG = () => {
+    const d = activeDocRef.current;
+    const { svg, vectorLayers, skipped } = exportSVG(d.layers, d.width, d.height);
+    if (!vectorLayers) {
+      window.alert(
+        "No vector layers to export. SVG export covers shape layers, text layers and imported SVG vector layers.",
+      );
+      return;
+    }
+    const name = (d.name || "artwork").replace(/\.svg$/i, "");
+    downloadBlob(new Blob([svg], { type: "image/svg+xml" }), `${name}.svg`);
+    showToast(
+      skipped
+        ? `Exported ${vectorLayers} vector layer${vectorLayers === 1 ? "" : "s"} — ${skipped} without a vector source skipped`
+        : `Exported ${vectorLayers} vector layer${vectorLayers === 1 ? "" : "s"}`,
+    );
   };
 
   const applyImport = async (mode: ImportMode, opts: ImportOptions) => {
@@ -3053,6 +3182,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "save-as") setSaveAsOpen(true);
     else if (actionId === "import") openImport();
     else if (actionId === "export-as") openExport();
+    else if (actionId === "export-svg") exportVectorSVG();
+    else if (actionId === "export-lut") setLutExportOpen(true);
     else if (actionId === "print") printCanvas();
     else if (actionId === "effect-blur") openBlurFx();
     else if (actionId === "color-manage") openColorDialog();
@@ -3080,6 +3211,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "adj-tone-levels") addToneAdjustment("levels");
     else if (actionId === "tone-dest-curves") openDestructiveTone("curves");
     else if (actionId === "tone-dest-levels") openDestructiveTone("levels");
+    else if (actionId.startsWith("adj-x-")) addExtraAdjustment(actionId.slice(6));
     else if (actionId.startsWith("adj-")) addAdjustmentOp(actionId.slice(4));
     else if (actionId === "fx-open") {
       const id = activeDocRef.current.activeLayerId;
@@ -3744,6 +3876,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onDeleteAdjustment={removeSelected}
           onAddCurves={() => addToneAdjustment("curves")}
           onAddLevels={() => addToneAdjustment("levels")}
+          onAddExtra={addExtraAdjustment}
+          onExportLut={() => setLutExportOpen(true)}
           panels={panels}
           engineRef={paintRef}
           docName={active.name}
@@ -3913,6 +4047,24 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           );
         })()}
 
+      {lutExportOpen && (
+        <ExportLutDialog
+          layers={active.layers}
+          panelAdjust={sliderSpec ? sliderSpec.params : adjust}
+          docName={active.name}
+          onClose={() => setLutExportOpen(false)}
+        />
+      )}
+      {extraEdit && extraSpec && (
+        <AdjustmentExtraDialog
+          spec={extraSpec}
+          onChange={(s) => setToneNodeSpec(extraEdit.layerId, s)}
+          onClose={() => {
+            commitAdjustEdit();
+            setExtraEdit(null);
+          }}
+        />
+      )}
       {toneEdit && toneSpec && toneEdit.tool === "curves" && toneSpec.type === "curves" && (
         <CurvesDialog
           spec={toneSpec}
@@ -4012,6 +4164,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onChange={onImportPicked}
         hidden
       />
+      <input ref={cubeInputRef} type="file" accept=".cube" onChange={onCubePicked} hidden />
 
       <TooltipHost />
     </div>

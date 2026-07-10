@@ -3,6 +3,7 @@
 // name), so they all process through `applyAdjustments` — no forked math. Spec
 // 04 will add curves/levels by extending `AdjustmentSpec`, not this list.
 import { DEFAULT_ADJUST, FILTER_PRESETS, type AdjustmentSpec, type Adjustments } from "./adjust";
+import { EXTRA_LABELS, isExtraSpec } from "./adjust-extra";
 
 export interface AdjustmentType {
   /** Stable id used by the menu action + history label. */
@@ -40,6 +41,7 @@ export function specFromPreset(name: string): AdjustmentSpec {
 export function specLabel(spec: AdjustmentSpec): string {
   if (spec.type === "levels") return "Levels";
   if (spec.type === "curves") return "Curves";
+  if (isExtraSpec(spec)) return EXTRA_LABELS[spec.type];
   if (spec.preset) return spec.preset;
   const p = spec.params;
   // Name it after the dominant non-zero slider group, else "Adjustment".

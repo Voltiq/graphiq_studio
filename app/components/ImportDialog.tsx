@@ -7,6 +7,7 @@ import sizeStyles from "./CanvasSizeDialog.module.scss";
 import type { ImageMetadata } from "../lib/metadata";
 import { WORKING_SPACE_LABELS, type WorkingSpace } from "../lib/colorspace";
 import type { ICCInfo } from "../lib/icc";
+import type { VectorPath } from "../lib/tools";
 
 export type ImportMode = "layers" | "canvas";
 
@@ -43,6 +44,8 @@ export interface ImportItem {
   file?: File;
   /** Embedded ICC profile info (null/absent = untagged). */
   icc?: ICCInfo | null;
+  /** SVG import: the re-renderable vector recipe (null/absent = plain raster). */
+  vector?: VectorPath | null;
 }
 
 function Thumb({ bitmap }: { bitmap: ImageBitmap }) {
@@ -91,6 +94,7 @@ export default function ImportDialog({
   const grownH = Math.max(docHeight, ...items.map((it) => it.bitmap.height));
   // The assign/convert choice only matters when a profile that ISN'T already
   // the working space is embedded (converting sRGB into sRGB is a no-op).
+  const vectorCount = items.filter((it) => it.vector).length;
   const profiled = items.filter((it) => it.icc && it.icc.looksLike !== workingSpace);
   const profileName =
     profiled.length === 1
@@ -155,6 +159,16 @@ export default function ImportDialog({
               </span>
             )}
           </div>
+
+          {vectorCount > 0 && (
+            <p className={styles.note}>
+              {vectorCount === items.length
+                ? items.length === 1
+                  ? "This SVG imports as a vector layer (crisp re-rendering from its paths)."
+                  : "These SVGs import as vector layers (crisp re-rendering from their paths)."
+                : `${vectorCount} of ${items.length} import as vector layers.`}
+            </p>
+          )}
 
           {profileName && (
             <>

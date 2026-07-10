@@ -59,8 +59,9 @@ export interface ShapeGeom {
   apex?: number;
 }
 
-/** The three corners of the triangle in `box` (apex on the top edge at `apex`). */
-function triPoints(box: Rect, apex = 0.5): Pt[] {
+/** The three corners of the triangle in `box` (apex on the top edge at `apex`).
+ *  Exported for the SVG exporter, which mirrors renderShape's exact geometry. */
+export function triPoints(box: Rect, apex = 0.5): Pt[] {
   return [
     { x: box.x + Math.max(0, Math.min(1, apex)) * box.w, y: box.y },
     { x: box.x + box.w, y: box.y + box.h },
@@ -69,7 +70,7 @@ function triPoints(box: Rect, apex = 0.5): Pt[] {
 }
 
 /** The four corners of a trapezoid in `box`: full-width bottom, inset top. */
-function trapPoints(box: Rect, trap: TrapInsets): Pt[] {
+export function trapPoints(box: Rect, trap: TrapInsets): Pt[] {
   const l = Math.max(0, Math.min(0.5, trap.l));
   const r = Math.max(0, Math.min(0.5, trap.r));
   return [
@@ -81,7 +82,7 @@ function trapPoints(box: Rect, trap: TrapInsets): Pt[] {
 }
 
 /** Inradius of a polygon (max inward offset before it collapses). */
-function polyInradius(pts: Pt[]): number {
+export function polyInradius(pts: Pt[]): number {
   let area2 = 0;
   let peri = 0;
   for (let i = 0; i < pts.length; i++) {
@@ -95,7 +96,7 @@ function polyInradius(pts: Pt[]): number {
 
 /** Offset a (convex) polygon inward by `d`, moving each vertex along its
     bisector. Returns null if `d` collapses it. */
-function insetPoly(pts: Pt[], d: number): Pt[] | null {
+export function insetPoly(pts: Pt[], d: number): Pt[] | null {
   const n = pts.length;
   const out: Pt[] = [];
   for (let i = 0; i < n; i++) {

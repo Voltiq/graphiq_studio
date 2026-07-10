@@ -3,6 +3,7 @@ import type { Rect } from "./view";
 import { blendOp, clipGroupsOf, filterMaskKey } from "./layers";
 import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerNode } from "./layers";
 import { applyAdjustments, applyAdjustments16, isDefaultAdjust, type Adjustments } from "./adjust";
+import { applyExtraAdjustment, extraIsDefault, isExtraSpec, type ExtraAdjustment } from "./adjust-extra";
 import { renderShape, type ShapeGeom } from "./shapes";
 import { boxBlurPass, clampi } from "./blur";
 import { fxHash, hasEnabledFx, renderStyled } from "./effects";
@@ -28,10 +29,12 @@ import {
 } from "./filters";
 import {
   adobe16ToSrgbBytes,
+  adobeToSrgbInPlace,
   canvasSpaceOf,
   proofIsIdentity,
   proofTransformInPlace,
   srgbBytesToAdobe16,
+  srgbToAdobeInPlace,
   type ProofTarget,
   type WorkingSpace,
 } from "./colorspace";
@@ -1076,7 +1079,8 @@ export class PaintEngine {
     src: ImageData,
     op:
       | { kind: "sliders"; params: Adjustments }
-      | { kind: "tone"; luts: ToneLUTs; luts16: () => ToneLUTs16 },
+      | { kind: "tone"; luts: ToneLUTs; luts16: () => ToneLUTs16 }
+      | { kind: "extra"; spec: ExtraAdjustment },
     ownSrc = false,
   ): ImageData {
     if (this.ws !== "adobe-rgb") {
@@ -1086,7 +1090,22 @@ export class PaintEngine {
         : new ImageData(new Uint8ClampedArray(src.data), src.width, src.height, {
             colorSpace: this.cs,
           });
+      if (op.kind === "extra") return applyExtraAdjustment(target, op.spec); // in place
       return applyToneLUTs(target, op.luts); // mutates target in place
+    }
+    if (op.kind === "extra") {
+      // The extra types run at 8 bits in the emulated working space (the
+      // pre-16-bit in-place conversion pair) — their 16-bit twins remain a
+      // follow-up, like the filter path.
+      const target = ownSrc
+        ? src
+        : new ImageData(new Uint8ClampedArray(src.data), src.width, src.height, {
+            colorSpace: this.cs,
+          });
+      srgbToAdobeInPlace(target.data);
+      applyExtraAdjustment(target, op.spec);
+      adobeToSrgbInPlace(target.data);
+      return target;
     }
     const wide = srgbBytesToAdobe16(src.data);
     if (op.kind === "sliders") applyAdjustments16(wide, src.width, src.height, op.params);
@@ -3273,11 +3292,15 @@ export class PaintEngine {
         this.curTree !== null &&
         meta.tree === this.curTree &&
         meta.ownSig === this.adjustmentOwnSig(node) &&
+        // Equalize reads the WHOLE image's histogram — a bounded change below
+        // it changes every output pixel, so it can never be region-scoped.
+        node.adjustment.type !== "equalize" &&
         // Tone specs with the GPU pass active take the full path instead: it is
         // already cheap (no readback / JS loop), and patching a GPU product
         // with CPU pixels could seam at the region border (sub-LSB
         // unpremultiply differences on semi-transparent pixels).
-        (node.adjustment.type === "sliders" || !this.gpuAvailable())
+        (!(node.adjustment.type === "levels" || node.adjustment.type === "curves") ||
+          !this.gpuAvailable())
       ) {
         const r = clampRect(meta.dirty, this.w, this.h);
         // Worth it only while the region is clearly smaller than the document.
@@ -3372,8 +3395,14 @@ export class PaintEngine {
           );
       }
     }
-    if (stale && stale.some(Boolean) && node.adjustment.type !== "sliders" && this.gpuAvailable())
-      stale = null; // tone + GPU: rebuild all tiles from one pass, never mix sources
+    const specT = node.adjustment.type;
+    if (
+      stale &&
+      stale.some(Boolean) &&
+      (specT === "equalize" || // whole-image histogram — a tile can't recompute alone
+        ((specT === "levels" || specT === "curves") && this.gpuAvailable()))
+    )
+      stale = null; // rebuild every tile from one full pass, never mix sources
     if (!entry || !stale) {
       // Full rebuild: the existing full-document math leaves the post-state in
       // the accumulator; slice it into (reused) tile canvases.
@@ -3565,18 +3594,8 @@ export class PaintEngine {
     const ox = local ? 0 : r.x;
     const oy = local ? 0 : r.y;
     const spec = node.adjustment;
-    if (spec.type === "sliders" && isDefaultAdjust(spec.params)) return; // neutral → no-op
-    const out = this.applyColorMath(
-      ctx.getImageData(ox, oy, r.w, r.h),
-      spec.type === "sliders"
-        ? { kind: "sliders", params: spec.params }
-        : {
-            kind: "tone",
-            luts: this.toneLUTs(node.id, spec),
-            luts16: () => this.toneLUTs16(node.id, spec),
-          },
-      true,
-    );
+    if (this.specIsNeutral(spec)) return; // neutral → no-op
+    const out = this.applyColorMath(ctx.getImageData(ox, oy, r.w, r.h), this.colorOpFor(node), true);
     const maskAlpha = node.mask?.enabled ? this.maskDisplay(node.id) : null;
     const opacity = Math.max(0, Math.min(1, node.opacity / 100));
     const op = blendOp(node.blend);
@@ -3605,29 +3624,43 @@ export class PaintEngine {
     ctx.globalCompositeOperation = "source-over";
   }
 
+  /** The applyColorMath op for a node's spec (sliders / tone LUTs / extra). */
+  private colorOpFor(node: LayerAdjustment) {
+    const spec = node.adjustment;
+    if (spec.type === "sliders") return { kind: "sliders" as const, params: spec.params };
+    if (isExtraSpec(spec)) return { kind: "extra" as const, spec };
+    return {
+      kind: "tone" as const,
+      luts: this.toneLUTs(node.id, spec),
+      luts16: () => this.toneLUTs16(node.id, spec),
+    };
+  }
+
+  /** True when the spec provably changes nothing (skip the whole pass). */
+  private specIsNeutral(spec: LayerAdjustment["adjustment"]): boolean {
+    if (spec.type === "sliders") return isDefaultAdjust(spec.params);
+    if (isExtraSpec(spec)) return extraIsDefault(spec);
+    return false; // tone specs: identity LUTs are cheap enough
+  }
+
   private applyAdjustmentNode(ctx: CanvasRenderingContext2D, node: LayerAdjustment) {
     const w = this.w;
     const h = this.h;
     if (w < 1 || h < 1) return;
     const spec = node.adjustment;
-    if (spec.type === "sliders" && isDefaultAdjust(spec.params)) return; // neutral → no-op
+    if (this.specIsNeutral(spec)) return; // neutral → no-op
     // Tone specs (Curves/Levels) take the GPU LUT pass when available: the
     // accumulator uploads straight to a texture and the result comes back via
-    // drawImage — no full-document getImageData, no JS per-pixel loop.
-    const gpuOut =
-      spec.type === "sliders" ? null : this.gpuToneRender(ctx.canvas, w, h, this.toneLUTs(node.id, spec));
+    // drawImage — no full-document getImageData, no JS per-pixel loop. The
+    // extra kinds are cross-channel (not per-channel LUTs), so they stay CPU.
+    const toneSpec = spec.type === "levels" || spec.type === "curves" ? spec : null;
+    const gpuOut = toneSpec ? this.gpuToneRender(ctx.canvas, w, h, this.toneLUTs(node.id, toneSpec)) : null;
     const out = gpuOut
       ? null
       : this.applyColorMath(
           ctx.getImageData(0, 0, w, h),
-          spec.type === "sliders"
-            ? { kind: "sliders", params: spec.params } // REUSED slider math
-            : {
-                kind: "tone",
-                luts: this.toneLUTs(node.id, spec),
-                luts16: () => this.toneLUTs16(node.id, spec),
-              },
-          true, // fresh getImageData — the tone path may mutate it in place
+          this.colorOpFor(node),
+          true, // fresh getImageData — the tone/extra paths may mutate it in place
         );
     const maskAlpha = node.mask?.enabled ? this.maskDisplay(node.id) : null;
     const opacity = Math.max(0, Math.min(1, node.opacity / 100));

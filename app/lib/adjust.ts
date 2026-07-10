@@ -1,4 +1,5 @@
 import type { ToneAdjustment } from "./tone";
+import type { ExtraAdjustment } from "./adjust-extra";
 
 export interface Adjustments {
   // Light
@@ -20,11 +21,14 @@ export interface Adjustments {
 }
 
 /** What a non-destructive adjustment layer carries. A discriminated union: the
- *  slider/preset bundle (routed through `applyAdjustments`) plus the tone tools
- *  (Curves / Levels, routed through precompiled LUTs in `tone.ts`). */
+ *  slider/preset bundle (routed through `applyAdjustments`), the tone tools
+ *  (Curves / Levels, precompiled LUTs in `tone.ts`), and the extra types
+ *  (Hue/Sat, Selective Color, Gradient Map, Channel Mixer, Color Lookup,
+ *  Invert, Equalize — `adjust-extra.ts`). */
 export type AdjustmentSpec =
   | { type: "sliders"; preset?: string; params: Adjustments }
-  | ToneAdjustment;
+  | ToneAdjustment
+  | ExtraAdjustment;
 
 export const DEFAULT_ADJUST: Adjustments = {
   exposure: 0,
