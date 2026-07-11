@@ -38,7 +38,7 @@ This document is written so someone **without the code** understands exactly wha
 | Gradient | `G` | Linear/radial, draggable re-editable on-canvas control + multi-stop editor; `Esc` keeps the fill and hides the controls. |
 | Blur | `R` | Blur brush with an on-canvas brush-ring cursor (coverage-mask model). |
 | Dodge / Burn | `O` | Tonal range (shadows/mids/highlights) + exposure. |
-| Text | `T` | On-canvas editor; rasterises on commit but stays re-editable as a vector; optional anti-alias on rasterise. |
+| Text | `T` | On-canvas WYSIWYG editor with **rich runs** — select a range and change its font, size, colour, bold/italic/underline/strike independently (a bare caret still styles the whole block); **left/centre/right/justify** paragraph alignment plus tracking + leading controls; rasterises on commit but stays re-editable as a vector (runs included, `.gproj`-persisted, SVG-exported per segment); optional anti-alias. |
 | Pen | `P` | Bezier paths (anchors with handles), taper/bend stroke. |
 | Shape | `U` | Rectangle / ellipse / triangle / trapezoid, kept as re-editable vectors (fill, stroke, radius, apex/corner geometry). |
 | Hand / Zoom | `H` / `Z` | Pan / zoom. |

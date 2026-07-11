@@ -233,7 +233,26 @@ export const DEFAULT_BLUR: BlurSettings = {
 };
 
 /** Text tool: paragraph alignment. */
-export type TextAlign = "left" | "center" | "right";
+export type TextAlign = "left" | "center" | "right" | "justify";
+
+/** Character-level style one rich-text run carries (block-level properties —
+ *  align, leading, tracking — stay on the text block itself). */
+export interface TextRunStyle {
+  fontFamily: string;
+  fontSize: number;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strike: boolean;
+  /** Fill colour, #rrggbbaa. */
+  color: string;
+}
+
+/** One run of a rich text block: `len` characters (of the block's flat text,
+ *  newlines included) sharing one style. Runs cover the text exactly. */
+export interface TextRun extends TextRunStyle {
+  len: number;
+}
 
 /** Text tool settings (a styled live editor that rasterizes onto a layer). */
 export interface TextSettings {
@@ -306,6 +325,10 @@ export interface VectorText {
   tracking: number;
   color: string;
   antialias: boolean;
+  /** Rich runs (mixed fonts/sizes/colours). Absent = uniform block using the
+   *  fields above; when present, runs cover `text` exactly and the flat
+   *  fontFamily/size/bold/… fields are the base (caret) style. */
+  runs?: TextRun[];
   /** Rasterized bounds (doc px), for hit-testing the re-edit double-click. */
   bbox: { x: number; y: number; w: number; h: number };
 }

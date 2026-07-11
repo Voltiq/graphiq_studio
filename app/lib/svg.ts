@@ -17,6 +17,7 @@
 
 import { clamp, parseColor, toHex8 } from "./color";
 import type { LayerNode } from "./layers";
+import { baseRunStyle, layoutRuns } from "./richtext";
 import { insetPoly, polyInradius, trapPoints, triPoints } from "./shapes";
 import type {
   VectorData,
@@ -698,6 +699,56 @@ function textLayout(v: VectorText): { lines: { text: string; x: number; y: numbe
 function emitText(v: VectorText, indent: string): string {
   const layout = textLayout(v);
   if (!layout) return "";
+  // Rich runs / justification: lay out with the shared engine and emit one
+  // absolutely-positioned <text> per segment (per-run style).
+  if ((v.runs?.length ?? 0) > 0 || v.align === "justify") {
+    if (!measureCtx) return "";
+    const ctx = measureCtx;
+    const lsCtx = ctx as CanvasRenderingContext2D & { letterSpacing: string };
+    const fontMetrics = new Map<string, { ascent: number; descent: number }>();
+    const rich = layoutRuns(
+      v.text,
+      v.runs,
+      baseRunStyle(v),
+      v.boxW,
+      v.lineHeight,
+      v.align,
+      (text, st) => {
+        const font = `${st.italic ? "italic " : ""}${st.bold ? "700" : "400"} ${st.fontSize}px ${st.fontFamily}`;
+        ctx.font = font;
+        if ("letterSpacing" in ctx) lsCtx.letterSpacing = `${v.tracking}px`;
+        let met = fontMetrics.get(font);
+        if (!met) {
+          const m = ctx.measureText("Mg");
+          met = {
+            ascent: m.fontBoundingBoxAscent || m.actualBoundingBoxAscent || st.fontSize * 0.8,
+            descent: m.fontBoundingBoxDescent || m.actualBoundingBoxDescent || st.fontSize * 0.2,
+          };
+          fontMetrics.set(font, met);
+        }
+        return { width: ctx.measureText(text).width, ascent: met.ascent, descent: met.descent };
+      },
+    );
+    let out = "";
+    for (const line of rich.lines) {
+      for (const seg of line.segs) {
+        if (seg.space || !seg.text) continue;
+        const st = seg.style;
+        const fillP = splitPaint(st.color);
+        let styleAttr = `font-family:${st.fontFamily.includes(" ") ? `'${st.fontFamily}'` : st.fontFamily};font-size:${f(st.fontSize)}px`;
+        if (st.bold) styleAttr += ";font-weight:700";
+        if (st.italic) styleAttr += ";font-style:italic";
+        if (v.tracking) styleAttr += `;letter-spacing:${f(v.tracking)}px`;
+        const decoS = [st.underline ? "underline" : "", st.strike ? "line-through" : ""].filter(Boolean).join(" ");
+        if (decoS) styleAttr += `;text-decoration:${decoS}`;
+        let attrs = ` x="${f(v.x + seg.x)}" y="${f(v.y + line.baseline)}" style="${escapeXml(styleAttr)}"`;
+        attrs += fillP ? ` fill="${fillP.color}"` : ` fill="none"`;
+        if (fillP && fillP.opacity < 1) attrs += ` fill-opacity="${f(fillP.opacity)}"`;
+        out += `${indent}<text${attrs}>${escapeXml(seg.text)}</text>\n`;
+      }
+    }
+    return out;
+  }
   const fill = splitPaint(v.color);
   let style = `font-family:${v.fontFamily.includes(" ") ? `'${v.fontFamily}'` : v.fontFamily};font-size:${f(v.fontSize)}px`;
   if (v.bold) style += ";font-weight:700";

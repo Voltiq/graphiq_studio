@@ -45,6 +45,7 @@ import {
   type BlurSettings,
   type HealSettings,
   type RedEyeSettings,
+  type TextRun,
   type CloneSettings,
   type CropSettings,
   type DodgeSettings,
@@ -1772,7 +1773,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setLayerStyleTarget(id);
   };
 
-  type TextGeom = { x: number; y: number; boxW: number | null; value: string };
+  type TextGeom = { x: number; y: number; boxW: number | null; value: string; runs?: TextRun[] };
   const textLayerName = (value: string) => value.trim().split("\n")[0].slice(0, 24) || "Text";
   // Build a render spec from the current text settings + a geometry/value.
   const buildTextSpec = (p: TextGeom): TextRenderSpec => {
@@ -1793,6 +1794,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       tracking: t.tracking,
       color: t.color,
       antialias: t.antialias,
+      runs: p.runs,
     };
   };
   const textVectorOf = (spec: TextRenderSpec): VectorText => ({
@@ -1816,6 +1818,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     tracking: v.tracking,
     color: v.color,
     antialias: v.antialias,
+    runs: v.runs,
   });
 
   // Commit a NEW text block: add a layer named after the text, rasterize it, and
@@ -3869,7 +3872,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         dodge={dodge}
         onDodge={(patch) => setDodge((d) => ({ ...d, ...patch }))}
         text={textSettings}
-        onText={(patch) => setTextSettings((t) => ({ ...t, ...patch }))}
+        onText={(patch) => {
+          // With a live text selection, character-level changes style the
+          // SELECTED range (rich runs); otherwise they set the block/base style.
+          if (viewApiRef.current?.applyTextStyle(patch)) return;
+          setTextSettings((t) => ({ ...t, ...patch }));
+        }}
         crop={cropSettings}
         onCrop={(patch) => setCropSettings((s) => ({ ...s, ...patch }))}
         cropBox={cropBox}

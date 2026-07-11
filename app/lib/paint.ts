@@ -54,6 +54,7 @@ import {
   type ToneLUTs16,
 } from "./tone";
 import { renderPenStroke } from "./pen";
+import { baseRunStyle, layoutRuns, type MeasureFn } from "./richtext";
 import type {
   BlurSettings,
   DodgeSettings,
@@ -62,6 +63,8 @@ import type {
   PenAnchor,
   PenSettings,
   ShapeKind,
+  TextAlign,
+  TextRun,
 } from "./tools";
 
 export interface BrushSettings {
@@ -452,12 +455,15 @@ export interface TextRenderSpec {
   italic: boolean;
   underline: boolean;
   strike: boolean;
-  align: "left" | "center" | "right";
+  align: TextAlign;
   lineHeight: number;
   tracking: number;
   color: string;
   /** Anti-alias edges; false thresholds the alpha to hard 1-bit edges. */
   antialias: boolean;
+  /** Rich runs (mixed fonts/sizes/colours) covering `text` exactly; absent =
+   *  the uniform legacy path using the flat fields above. */
+  runs?: TextRun[];
 }
 
 /** Pre-crop layer pixels + document size, captured so a crop can be undone. */
@@ -4975,10 +4981,57 @@ export class PaintEngine {
     return spec.boxW != null ? paras.flatMap((p) => wrap(p, spec.boxW!)) : paras;
   }
 
+  /** Is a spec on the rich path (mixed runs or justified — laid out by
+   *  richtext.ts) rather than the legacy uniform fast path? */
+  private static isRichSpec(spec: TextRenderSpec): boolean {
+    return (spec.runs?.length ?? 0) > 0 || spec.align === "justify";
+  }
+
+  /** Measurement hook for the rich layout: per-style canvas metrics with the
+   *  block's tracking applied (letterSpacing), font metrics memoized. */
+  private richMeasurer(ctx: CanvasRenderingContext2D, tracking: number): MeasureFn {
+    const fontMetrics = new Map<string, { ascent: number; descent: number }>();
+    const lsCtx = ctx as CanvasRenderingContext2D & { letterSpacing: string };
+    return (text, style) => {
+      const font = `${style.italic ? "italic " : ""}${style.bold ? "700" : "400"} ${style.fontSize}px ${style.fontFamily}`;
+      ctx.font = font;
+      if ("letterSpacing" in ctx) lsCtx.letterSpacing = `${tracking}px`;
+      let met = fontMetrics.get(font);
+      if (!met) {
+        const m = ctx.measureText("Mg");
+        met = {
+          ascent: m.fontBoundingBoxAscent || m.actualBoundingBoxAscent || style.fontSize * 0.8,
+          descent: m.fontBoundingBoxDescent || m.actualBoundingBoxDescent || style.fontSize * 0.2,
+        };
+        fontMetrics.set(font, met);
+      }
+      return { width: ctx.measureText(text).width, ascent: met.ascent, descent: met.descent };
+    };
+  }
+
   /** Bounding box (doc px) the text would rasterize into — for re-edit hit-testing. */
   textBounds(spec: TextRenderSpec): { x: number; y: number; w: number; h: number } {
     if (!this.measureCtx) this.measureCtx = makeCanvas(8, 8).ctx;
     const ctx = this.measureCtx;
+    if (PaintEngine.isRichSpec(spec)) {
+      const layout = layoutRuns(
+        spec.text,
+        spec.runs,
+        baseRunStyle(spec),
+        spec.boxW,
+        spec.lineHeight,
+        spec.align,
+        this.richMeasurer(ctx, spec.tracking),
+      );
+      const w = spec.boxW != null ? spec.boxW : Math.max(1, Math.ceil(layout.maxX - layout.minX));
+      const x = spec.boxW != null ? spec.x : spec.x + layout.minX;
+      return {
+        x: Math.round(x),
+        y: Math.round(spec.y),
+        w: Math.round(w),
+        h: Math.round(Math.max(1, layout.height)),
+      };
+    }
     const lines = this.textLines(ctx, spec);
     let maxW = 0;
     for (const line of lines) maxW = Math.max(maxW, ctx.measureText(line).width);
@@ -5007,10 +5060,41 @@ export class PaintEngine {
     const ctx = this.layer(layerId).ctx;
     ctx.clearRect(0, 0, this.w, this.h);
     ctx.save();
+    if (PaintEngine.isRichSpec(spec)) this.drawRichText(ctx, spec);
+    else this.drawUniformText(ctx, spec);
+    ctx.restore();
+
+    // No anti-aliasing: threshold the rendered alpha to hard 1-bit edges. The
+    // solid value is the colour's own alpha (so text opacity is preserved); edge
+    // pixels (partial coverage) snap to fully on/off at the 50%-coverage line.
+    if (!spec.antialias) {
+      const b = this.textBounds(spec);
+      const pad = Math.ceil(spec.fontSize * 0.5) + 2;
+      const x = Math.max(0, Math.floor(b.x - pad));
+      const y = Math.max(0, Math.floor(b.y - pad));
+      const x1 = Math.min(this.w, Math.ceil(b.x + b.w + pad));
+      const y1 = Math.min(this.h, Math.ceil(b.y + b.h + pad));
+      const rw = x1 - x;
+      const rh = y1 - y;
+      if (rw > 0 && rh > 0) {
+        const ca = Math.round(parseColor(spec.color).a * 255);
+        const t = Math.max(1, ca >> 1);
+        const img = ctx.getImageData(x, y, rw, rh);
+        const d = img.data;
+        for (let i = 3; i < d.length; i += 4) d[i] = d[i] >= t ? ca : 0;
+        ctx.putImageData(img, x, y);
+      }
+    }
+    this.emitChange();
+  }
+
+  /** The legacy uniform-style text body (single font/colour, canvas textAlign
+   *  does the anchoring) — byte-stable for existing text layers. */
+  private drawUniformText(ctx: CanvasRenderingContext2D, spec: TextRenderSpec) {
     const lines = this.textLines(ctx, spec); // sets font + letterSpacing, wraps
     ctx.fillStyle = spec.color;
     ctx.textBaseline = "alphabetic";
-    ctx.textAlign = spec.align;
+    ctx.textAlign = spec.align as CanvasTextAlign; // never "justify" on this path
 
     const m = ctx.measureText("Mg");
     const ascent = m.fontBoundingBoxAscent || m.actualBoundingBoxAscent || spec.fontSize * 0.8;
@@ -5039,30 +5123,46 @@ export class PaintEngine {
         if (spec.strike) ctx.fillRect(left, baseline - ascent * 0.32, w, thickness);
       }
     }
-    ctx.restore();
+  }
 
-    // No anti-aliasing: threshold the rendered alpha to hard 1-bit edges. The
-    // solid value is the colour's own alpha (so text opacity is preserved); edge
-    // pixels (partial coverage) snap to fully on/off at the 50%-coverage line.
-    if (!spec.antialias) {
-      const b = this.textBounds(spec);
-      const pad = Math.ceil(spec.fontSize * 0.5) + 2;
-      const x = Math.max(0, Math.floor(b.x - pad));
-      const y = Math.max(0, Math.floor(b.y - pad));
-      const x1 = Math.min(this.w, Math.ceil(b.x + b.w + pad));
-      const y1 = Math.min(this.h, Math.ceil(b.y + b.h + pad));
-      const rw = x1 - x;
-      const rh = y1 - y;
-      if (rw > 0 && rh > 0) {
-        const ca = Math.round(parseColor(spec.color).a * 255);
-        const t = Math.max(1, ca >> 1);
-        const img = ctx.getImageData(x, y, rw, rh);
-        const d = img.data;
-        for (let i = 3; i < d.length; i += 4) d[i] = d[i] >= t ? ca : 0;
-        ctx.putImageData(img, x, y);
+  /** The rich path: mixed-style runs and/or justification, laid out by
+   *  richtext.ts and painted segment by segment. */
+  private drawRichText(ctx: CanvasRenderingContext2D, spec: TextRenderSpec) {
+    const measure = this.richMeasurer(ctx, spec.tracking);
+    const layout = layoutRuns(
+      spec.text,
+      spec.runs,
+      baseRunStyle(spec),
+      spec.boxW,
+      spec.lineHeight,
+      spec.align,
+      measure,
+    );
+    ctx.textBaseline = "alphabetic";
+    ctx.textAlign = "left"; // segs carry explicit positions
+    const lsCtx = ctx as CanvasRenderingContext2D & { letterSpacing: string };
+    for (const line of layout.lines) {
+      const by = spec.y + line.baseline;
+      for (let i = 0; i < line.segs.length; i++) {
+        const seg = line.segs[i];
+        const st = seg.style;
+        ctx.font = `${st.italic ? "italic " : ""}${st.bold ? "700" : "400"} ${st.fontSize}px ${st.fontFamily}`;
+        if ("letterSpacing" in ctx) lsCtx.letterSpacing = `${spec.tracking}px`;
+        ctx.fillStyle = st.color;
+        if (!seg.space && seg.text) ctx.fillText(seg.text, spec.x + seg.x, by);
+        if (st.underline || st.strike) {
+          // Span to the next segment so justify-stretched gaps stay decorated.
+          const next = line.segs[i + 1];
+          const w = next ? next.x - seg.x : seg.width;
+          if (w > 0) {
+            const met = measure("Mg", st);
+            const th = Math.max(1, st.fontSize / 16);
+            if (st.underline) ctx.fillRect(spec.x + seg.x, by + met.descent * 0.45, w, th);
+            if (st.strike) ctx.fillRect(spec.x + seg.x, by - met.ascent * 0.32, w, th);
+          }
+        }
       }
     }
-    this.emitChange();
   }
 
   // ---- Coverage brushes (blur, dodge/burn) ---------------------------------

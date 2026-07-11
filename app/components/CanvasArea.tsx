@@ -5,6 +5,13 @@ import { Maximize2, Minus, Plus, X } from "lucide-react";
 import styles from "./CanvasArea.module.scss";
 import type { WorkingSpace } from "../lib/colorspace";
 import { checkerCSS, type CheckerColors, type CheckerSize, type MeasureUnit } from "../lib/prefs";
+import { baseRunStyle } from "../lib/richtext";
+import {
+  applyPatchToSelection,
+  seedTextEditor,
+  serializeTextEditor,
+  type TextStylePatch,
+} from "../lib/richtext-dom";
 import type { LassoMode } from "../lib/tools";
 import { clamp, parseColor, toHex8 } from "../lib/color";
 import { clampPan, normalizeRect, type Pan, type Rect } from "../lib/view";
@@ -24,6 +31,7 @@ import type {
   PenSettings,
   SelectResizeMode,
   ShapeKind,
+  TextRun,
   ToolId,
   VectorData,
   VectorShape,
@@ -58,6 +66,9 @@ export interface ViewApi {
   zoomOut: () => void;
   zoom100: () => void;
   fit: () => void;
+  /** Apply a character-style patch to the text editor's SELECTION (true when
+   *  consumed — the caller then leaves the block's base style alone). */
+  applyTextStyle: (patch: TextStylePatch) => boolean;
 }
 
 interface RulerTick {
@@ -434,6 +445,7 @@ function textSpecOf(v: VectorText) {
     tracking: v.tracking,
     color: v.color,
     antialias: v.antialias,
+    runs: v.runs,
   };
 }
 
@@ -648,11 +660,11 @@ export default function CanvasArea({
   /** Patch the text settings (used by the in-editor Ctrl+B/I/U shortcuts). */
   onText: (patch: Partial<TextSettings>) => void;
   /** Commit a finished text block: creates a layer and rasterizes it (Editor). */
-  onPlaceText: (p: { x: number; y: number; boxW: number | null; value: string }) => void;
+  onPlaceText: (p: { x: number; y: number; boxW: number | null; value: string; runs?: TextRun[] }) => void;
   /** Commit a re-edit of an existing text (vector) layer, in place (Editor). */
   onUpdateText: (
     layerId: string,
-    p: { x: number; y: number; boxW: number | null; value: string },
+    p: { x: number; y: number; boxW: number | null; value: string; runs?: TextRun[] },
   ) => void;
   /** Crop tool: the pending crop rectangle (doc coords), null when not cropping. */
   cropBox: Rect | null;
@@ -964,6 +976,10 @@ export default function CanvasArea({
     y: number;
     boxW: number | null;
     value: string;
+    /** Rich runs to seed the editor with (the DOM is the truth afterwards). */
+    runs?: TextRun[];
+    /** Bumped per session open — triggers the one-time editor seeding. */
+    seed: number;
     /** When set, this is a re-edit of an existing vector layer (not a new one). */
     editId?: string;
     /** The layer's original vector, to restore on cancel. */
@@ -981,19 +997,24 @@ export default function CanvasArea({
   onUpdateTextRef.current = onUpdateText;
   const layersHitRef = useRef(layers);
   layersHitRef.current = layers;
-  const textAreaRef = useRef<HTMLTextAreaElement>(null);
+  const textEditRef = useRef<HTMLDivElement>(null);
   const textDownRef = useRef<{ x: number; y: number } | null>(null);
   const textDragRef = useRef<Rect | null>(null);
   // Rasterize the current text block (if it has content) and end the session.
   // A re-edit (editId set) updates that layer in place; otherwise a new layer.
+  // The editor DOM is the truth for content + runs (mixed styles).
   const commitText = useCallback(() => {
     const s = textSessionRef.current;
     if (!s) return;
-    const geom = { x: s.x, y: s.y, boxW: s.boxW, value: s.value };
+    const el = textEditRef.current;
+    const parsed = el
+      ? serializeTextEditor(el, baseRunStyle(textRef.current))
+      : { text: s.value, runs: undefined };
+    const geom = { x: s.x, y: s.y, boxW: s.boxW, value: parsed.text, runs: parsed.runs };
     if (s.editId) {
-      if (s.value.trim()) onUpdateTextRef.current(s.editId, geom);
+      if (parsed.text.trim()) onUpdateTextRef.current(s.editId, geom);
       else if (s.orig) engine.renderText(s.editId, textSpecOf(s.orig)); // empty → keep original
-    } else if (s.value.trim()) {
+    } else if (parsed.text.trim()) {
       onPlaceTextRef.current(geom);
     }
     setTextSession(null);
@@ -1022,7 +1043,16 @@ export default function CanvasArea({
       color: v.color,
     });
     engine.clearLayerPixels(id);
-    setTextSession({ x: v.x, y: v.y, boxW: v.boxW, value: v.text, editId: id, orig: v });
+    setTextSession({
+      x: v.x,
+      y: v.y,
+      boxW: v.boxW,
+      value: v.text,
+      runs: v.runs,
+      seed: Date.now(),
+      editId: id,
+      orig: v,
+    });
   };
   // Topmost visible vector layer of `type` whose bounds contain `pt` (or null).
   const vectorLayerAt = (
@@ -1173,23 +1203,30 @@ export default function CanvasArea({
   useEffect(() => {
     setTextSession(null);
   }, [activeId]);
-  // Focus the overlay editor whenever a new text session opens.
+  // Seed + focus the overlay editor whenever a new text session opens: build
+  // its DOM once from {text, runs} (uncontrolled afterwards — the browser owns
+  // caret, selection and typing), then put the caret at the end.
   useEffect(() => {
-    if (textSession) {
-      const el = textAreaRef.current;
-      if (el) {
-        el.focus();
-        const len = el.value.length;
-        el.setSelectionRange(len, len);
-      }
+    if (!textSession) return;
+    const el = textEditRef.current;
+    if (!el) return;
+    seedTextEditor(el, textSession.value, textSession.runs, baseRunStyle(textRef.current));
+    el.focus();
+    const sel = window.getSelection();
+    if (sel) {
+      const r = document.createRange();
+      r.selectNodeContents(el);
+      r.collapse(false); // caret at the end
+      sel.removeAllRanges();
+      sel.addRange(r);
     }
-    // Only re-focus when a session begins/ends, not on every keystroke.
+    // Only re-seed when a session begins, never on keystrokes / style changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [textSession !== null]);
+  }, [textSession?.seed]);
   // Auto-grow the overlay editor: point text shrink-wraps to its content; a
   // paragraph box keeps its width and grows in height as lines wrap.
   useEffect(() => {
-    const el = textAreaRef.current;
+    const el = textEditRef.current;
     if (!el || !textSession) return;
     if (textSession.boxW == null) {
       el.style.width = "1px";
@@ -4354,8 +4391,8 @@ export default function CanvasArea({
       // A real drag → paragraph box; a click → point text (auto-width).
       const session =
         drag && Math.abs(pt.x - start.x) > 6 && Math.abs(pt.y - start.y) > 6
-          ? { x: drag.x, y: drag.y, boxW: Math.max(24, drag.w), value: "" }
-          : { x: start.x, y: start.y, boxW: null, value: "" };
+          ? { x: drag.x, y: drag.y, boxW: Math.max(24, drag.w), value: "", seed: Date.now() }
+          : { x: start.x, y: start.y, boxW: null, value: "", seed: Date.now() };
       // New text defaults to the primary colour.
       onText({ color: foreground });
       setTextSession(session);
@@ -4702,6 +4739,11 @@ export default function CanvasArea({
       zoomOut: () => step(-1),
       zoom100: () => onZoomChangeRef.current(100),
       fit,
+      applyTextStyle: (patch) => {
+        const el = textEditRef.current;
+        if (!el || !textSessionRef.current) return false;
+        return applyPatchToSelection(el, patch);
+      },
     };
     return () => {
       viewApiRef.current = null;
@@ -4953,13 +4995,25 @@ export default function CanvasArea({
           <canvas ref={gridRef} className={styles.overlay} />
           <canvas ref={overlayRef} className={styles.overlay} />
           {textSession && (
-            <textarea
-              ref={textAreaRef}
+            <div
+              ref={textEditRef}
               className={styles.textInput}
+              contentEditable
+              suppressContentEditableWarning
               spellCheck={false}
-              value={textSession.value}
-              onChange={(e) => setTextSession((sx) => (sx ? { ...sx, value: e.target.value } : sx))}
+              role="textbox"
+              aria-multiline="true"
               onPointerDown={(e) => e.stopPropagation()}
+              onInput={() => {
+                const el = textEditRef.current;
+                setTextSession((sx) => (sx && el ? { ...sx, value: el.innerText } : sx));
+              }}
+              onPaste={(e) => {
+                // Plain text only — foreign HTML must never enter the runs.
+                e.preventDefault();
+                const t = e.clipboardData.getData("text/plain");
+                if (t) document.execCommand("insertText", false, t);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
                   e.preventDefault();
@@ -4972,6 +5026,11 @@ export default function CanvasArea({
                   e.preventDefault();
                   e.stopPropagation();
                   commitText();
+                } else if (e.key === "Enter") {
+                  // Uniform newlines: <br> only, never nested <div> blocks.
+                  e.preventDefault();
+                  e.stopPropagation();
+                  document.execCommand("insertLineBreak");
                 } else if (
                   (e.ctrlKey || e.metaKey) &&
                   !e.altKey &&
@@ -4979,20 +5038,28 @@ export default function CanvasArea({
                 ) {
                   e.preventDefault();
                   e.stopPropagation();
-                  const t = textRef.current;
                   const k = e.key.toLowerCase();
-                  if (k === "b") onTextRef.current({ bold: !t.bold });
-                  else if (k === "i") onTextRef.current({ italic: !t.italic });
-                  else onTextRef.current({ underline: !t.underline });
+                  const el = textEditRef.current;
+                  const patch: TextStylePatch =
+                    k === "b" ? { bold: true } : k === "i" ? { italic: true } : { underline: true };
+                  // A selection styles that range; a bare caret toggles the block.
+                  if (!(el && applyPatchToSelection(el, patch))) {
+                    const t = textRef.current;
+                    if (k === "b") onTextRef.current({ bold: !t.bold });
+                    else if (k === "i") onTextRef.current({ italic: !t.italic });
+                    else onTextRef.current({ underline: !t.underline });
+                  }
                 } else if (
                   (e.ctrlKey || e.metaKey) &&
                   e.shiftKey &&
-                  "lcr".includes(e.key.toLowerCase())
+                  "lcrj".includes(e.key.toLowerCase())
                 ) {
                   e.preventDefault();
                   e.stopPropagation();
                   const k = e.key.toLowerCase();
-                  onTextRef.current({ align: k === "l" ? "left" : k === "c" ? "center" : "right" });
+                  onTextRef.current({
+                    align: k === "l" ? "left" : k === "c" ? "center" : k === "r" ? "right" : "justify",
+                  });
                 } else if (
                   (e.ctrlKey || e.metaKey) &&
                   e.shiftKey &&
@@ -5018,11 +5085,10 @@ export default function CanvasArea({
                 letterSpacing: `${text.tracking}px`,
                 color: text.color,
                 textAlign: text.align,
-                textDecoration:
-                  [text.underline ? "underline" : "", text.strike ? "line-through" : ""]
-                    .filter(Boolean)
-                    .join(" ") || "none",
+                // Decorations live on runs (spans), never on the base — CSS
+                // text-decoration paints through children and can't be undone.
                 whiteSpace: textSession.boxW != null ? "pre-wrap" : "pre",
+                overflowWrap: textSession.boxW != null ? "break-word" : "normal",
               }}
             />
           )}

@@ -6,6 +6,7 @@ import {
   Magnet,
   AlignCenter,
   AlignHorizontalJustifyCenter,
+  AlignJustify,
   AlignLeft,
   AlignRight,
   AlignVerticalJustifyCenter,
@@ -426,6 +427,7 @@ function renderOptions(
               { value: "left", icon: <AlignLeft size={14} />, title: "Align left" },
               { value: "center", icon: <AlignCenter size={14} />, title: "Align center" },
               { value: "right", icon: <AlignRight size={14} />, title: "Align right" },
+              { value: "justify", icon: <AlignJustify size={14} />, title: "Justify" },
             ]}
           />
           <Divider />
