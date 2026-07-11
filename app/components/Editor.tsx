@@ -105,7 +105,7 @@ import LevelsDialog, { type EyedropKind } from "./LevelsDialog";
 import Toast from "./Toast";
 import SaveAsDialog from "./SaveAsDialog";
 import RecentsDialog from "./RecentsDialog";
-import ExportDialog from "./ExportDialog";
+import ExportDialog, { type BatchRun } from "./ExportDialog";
 import ImportDialog, { type ImportItem, type ImportMode, type ImportOptions } from "./ImportDialog";
 import ColorDialog from "./ColorDialog";
 import ProfileCompareDialog from "./ProfileCompareDialog";
@@ -121,6 +121,7 @@ import {
 } from "../lib/project";
 import {
   IMPORT_ACCEPT,
+  availableFormats,
   decodeImageFile,
   p3Supported,
   renderExport,
@@ -128,6 +129,8 @@ import {
   type ExportOptions,
   setRawWorkerEnabled,
 } from "../lib/imageio";
+import { buildZip } from "../lib/zip";
+import { dedupeFilenames, targetFilename } from "../lib/exportpresets";
 import { exportSVG, looksLikeSVG, parseSVGFile, translateVectorPath } from "../lib/svg";
 import { buildPSD, parsePSD, type PsdDocument, type PsdImage, type PsdNode, type PsdOutNode } from "../lib/psd";
 import { addRecent } from "../lib/recents";
@@ -2710,6 +2713,49 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setExportComposite(null);
   };
 
+  // Batch export: encode every target (format + scale + quality) from the same
+  // composite, name each through the shared filename template, and download
+  // them as ONE .zip (store method — the images are already compressed).
+  const doBatchExport = async (run: BatchRun, docName: string) => {
+    const comp = exportComposite;
+    if (!comp || !run.targets.length) return;
+    const fmts = availableFormats();
+    const fmtById = (id: string) => fmts.find((f) => f.id === id) ?? fmts[0];
+    const names: string[] = [];
+    const datas: Uint8Array<ArrayBuffer>[] = [];
+    let failed = 0;
+    for (let i = 0; i < run.targets.length; i++) {
+      const t = run.targets[i];
+      const fmt = fmtById(t.formatId);
+      const blob = await renderExport(comp, {
+        format: fmt,
+        quality: t.quality / 100,
+        scale: t.scalePct / 100,
+        transparent: true, // per-target mattes aren't modelled; alpha formats stay transparent
+        matte: "#ffffffff",
+      });
+      if (!blob) {
+        failed++;
+        continue;
+      }
+      names.push(targetFilename(t, run.template, docName, comp.width, comp.height, i + 1, fmt.ext));
+      datas.push(new Uint8Array(await blob.arrayBuffer()));
+    }
+    if (!datas.length) {
+      showToast("Batch export failed — nothing could be encoded.");
+      return;
+    }
+    const unique = dedupeFilenames(names);
+    const zip = buildZip(unique.map((name, i) => ({ name, data: datas[i] })));
+    downloadBlob(zip, `${(docName.trim() || "export").replace(/\.zip$/i, "")}.zip`);
+    setExportComposite(null);
+    showToast(
+      failed
+        ? `Exported ${datas.length} file${datas.length === 1 ? "" : "s"} — ${failed} failed to encode`
+        : `Exported ${datas.length} file${datas.length === 1 ? "" : "s"} as .zip`,
+    );
+  };
+
   // ---- Print (flatten → browser print dialog) ----
   // Render the active document's composite, then print it from a hidden iframe
   // (avoids popup blockers and prints only the artwork, not the whole app UI).
@@ -4378,6 +4424,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           composite={exportComposite}
           defaultName={active.name}
           onExport={doExport}
+          onBatchExport={doBatchExport}
           onClose={() => setExportComposite(null)}
         />
       )}
