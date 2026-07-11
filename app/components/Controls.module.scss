@@ -14,6 +14,43 @@
   text-align: right;
 }
 
+/* Click-to-type value readout (shared by Slider + the custom sliders in the
+   status bar / Layers panel). The caller's own class supplies font + colour;
+   these add the click affordance and the editing field. */
+.valueClickable {
+  cursor: text;
+  border-radius: var(--r-sm);
+  transition: color var(--t-fast) var(--ease);
+
+  &:hover {
+    color: var(--accent);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+}
+
+.valueInput {
+  width: 46px;
+  padding: 0 3px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
+  outline: none;
+
+  &::-webkit-inner-spin-button,
+  &::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+}
+
 /* -------------------------------- Slider ---------------------------------- */
 .slider {
   display: flex;

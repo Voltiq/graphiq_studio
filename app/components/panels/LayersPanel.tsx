@@ -26,7 +26,7 @@ import {
   Unlink2,
 } from "lucide-react";
 import styles from "../RightDock.module.scss";
-import { Select } from "../Controls";
+import { EditableValue, Select } from "../Controls";
 import { BLEND_MODES, clipGroupsOf, findNode, type LayerNode, type LayersApi } from "../../lib/layers";
 import { hasEnabledFx } from "../../lib/effects";
 import { hasEnabledFilters } from "../../lib/filters";
@@ -134,7 +134,15 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
               style={{ "--pct": `${active.opacity}%` } as React.CSSProperties}
               aria-label="Layer opacity"
             />
-            <span className={styles.opacityValue}>{active.opacity}%</span>
+            <EditableValue
+              className={styles.opacityValue}
+              value={active.opacity}
+              min={0}
+              max={100}
+              display={`${active.opacity}%`}
+              onCommit={(n) => api.update(active.id, { opacity: n })}
+              ariaLabel="Layer opacity percentage"
+            />
           </div>
         </div>
       )}

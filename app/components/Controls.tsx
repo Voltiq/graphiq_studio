@@ -14,6 +14,93 @@ export { Select } from "./Select";
    any real editing logic yet.
    -------------------------------------------------------------------------- */
 
+/**
+ * A numeric readout that turns into a text input when clicked, so any value can
+ * be typed exactly. Snaps the typed value to [min, max] on the step grid (same
+ * granularity as the slider it accompanies). `display` overrides the shown text
+ * (e.g. a "+" prefix, or a "%"/"px" suffix); `className` carries the caller's
+ * text styling so it looks identical to the static readout it replaces.
+ */
+export function EditableValue({
+  value,
+  min,
+  max,
+  step = 1,
+  unit = "",
+  display,
+  onCommit,
+  className = "",
+  title = "Click to type a value",
+  ariaLabel,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  unit?: string;
+  display?: string;
+  onCommit: (n: number) => void;
+  className?: string;
+  title?: string;
+  ariaLabel?: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  const begin = () => {
+    setDraft(String(value));
+    setEditing(true);
+  };
+  const commit = () => {
+    setEditing(false);
+    let n = parseFloat(draft);
+    if (Number.isNaN(n)) return; // invalid → keep the current value
+    n = Math.max(min, Math.min(max, n));
+    // Snap to the slider's step grid (relative to min) so typed and dragged
+    // values share the same granularity; trim float dust from the multiply.
+    if (step > 0) n = Number((min + Math.round((n - min) / step) * step).toFixed(6));
+    onCommit(n);
+  };
+
+  if (editing) {
+    return (
+      <input
+        className={`${styles.valueInput} ${className}`}
+        autoFocus
+        inputMode="decimal"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={(e) => e.currentTarget.select()}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          // Keep the keys local: don't trip tool shortcuts or dialog Escape.
+          e.stopPropagation();
+          if (e.key === "Enter") e.currentTarget.blur();
+          else if (e.key === "Escape") setEditing(false);
+        }}
+        aria-label={ariaLabel ?? "Value"}
+      />
+    );
+  }
+  return (
+    <span
+      className={`${styles.valueClickable} ${className}`}
+      role="button"
+      tabIndex={0}
+      title={title}
+      onClick={begin}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          begin();
+        }
+      }}
+    >
+      {display ?? `${value}${unit}`}
+    </span>
+  );
+}
+
 export function Slider({
   label,
   min = 0,
@@ -57,11 +144,17 @@ export function Slider({
     >
       <div className={styles.sliderHead}>
         <span className={styles.label}>{label}</span>
-        <span className={styles.value}>
-          {bipolar && v > 0 ? "+" : ""}
-          {v}
-          {unit}
-        </span>
+        <EditableValue
+          className={styles.value}
+          value={v}
+          min={min}
+          max={max}
+          step={step}
+          unit={unit}
+          display={`${bipolar && v > 0 ? "+" : ""}${v}${unit}`}
+          onCommit={set}
+          ariaLabel={`${label} value`}
+        />
       </div>
       <input
         type="range"

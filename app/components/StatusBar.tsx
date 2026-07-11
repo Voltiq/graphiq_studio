@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { BoxSelect, Check, CircleDashed, MousePointer2 } from "lucide-react";
 import styles from "./StatusBar.module.scss";
+import { EditableValue } from "./Controls";
 import { WORKING_SPACE_LABELS, type WorkingSpace } from "../lib/colorspace";
 import type { MeasureUnit } from "../lib/prefs";
 import { getTool, type ToolId } from "../lib/tools";
@@ -154,7 +155,15 @@ export default function StatusBar({
             onChange={(e) => onZoomChange(Number(e.target.value))}
             aria-label="Zoom"
           />
-          <span className={styles.mono}>{zoom}%</span>
+          <EditableValue
+            className={styles.mono}
+            value={zoom}
+            min={12}
+            max={10000}
+            display={`${zoom}%`}
+            onCommit={onZoomChange}
+            ariaLabel="Zoom percentage"
+          />
         </div>
       </div>
     </footer>
