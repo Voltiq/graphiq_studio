@@ -33,6 +33,9 @@ export default function RestoreDialog({
     day: "2-digit",
     month: "short",
   });
+  const count = snap.docs.length;
+  const primary = snap.docs[Math.min(snap.activeIndex, count - 1)]?.name ?? snap.docs[0]?.name ?? "Untitled";
+  const label = count > 1 ? `${primary} + ${count - 1} more document${count - 1 === 1 ? "" : "s"}` : primary;
 
   return (
     <div className={styles.overlay} onMouseDown={onDiscard}>
@@ -57,14 +60,14 @@ export default function RestoreDialog({
             <div className={styles.meta}>
               <div className={styles.dim}>
                 <History size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
-                {snap.name}
+                {label}
               </div>
               <div className={styles.sub}>Autosaved {when} — the app didn&apos;t close cleanly.</div>
             </div>
           </div>
           <span className={styles.note}>
-            Restore opens the snapshot as a document; Discard deletes it. Autosave runs every few
-            minutes (Settings ▸ Preferences ▸ Editing).
+            Restore reopens {count > 1 ? "these documents" : "this document"}; Discard deletes the
+            snapshot. Autosave runs every few minutes (Settings ▸ Preferences ▸ Editing).
           </span>
         </div>
         <footer className={styles.foot}>

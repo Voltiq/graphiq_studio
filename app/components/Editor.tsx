@@ -23,6 +23,7 @@ import {
   readAutosave,
   wasUncleanExit,
   writeAutosave,
+  type AutosaveDoc,
   type AutosaveSnapshot,
 } from "../lib/autosave";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
@@ -530,7 +531,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const cropSettingsRef = useRef(cropSettings);
   const blurRef = useRef(blur);
   const textSettingsRef = useRef(textSettings);
+  const docsRef = useRef(docs);
+  const pendingLoadsRef = useRef(pendingLoads);
   activeIdRef.current = activeId;
+  docsRef.current = docs;
+  pendingLoadsRef.current = pendingLoads;
   selRef.current = active.selection;
   activeLayerRef.current = active.activeLayerId;
   activeDocRef.current = active;
@@ -2315,6 +2320,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const idx = docs.findIndex((d) => d.id === id);
     const next = docs.filter((d) => d.id !== id);
     setDocs(next);
+    docJsonCache.current.delete(id);
     if (id === activeId) setActiveId(next[Math.min(idx, next.length - 1)].id);
   };
 
@@ -2336,26 +2342,37 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const doRedo = () => paintRef.current?.redo();
 
   // ---- Project save (.gproj — layers, groups & full state) ----
-  // Reads from refs so it also works from the one-time keydown listener.
-  const buildProjectBlob = (): Blob => {
-    const d = activeDocRef.current;
+  // Serialize ANY open document to `.gproj` JSON. The engine keeps every
+  // materialized document's layer + mask canvases (globally-unique ids, sized
+  // per-document), so pixels resolve for inactive tabs too — which is what
+  // lets autosave snapshot all of them. History labels are engine-global, so
+  // only the active document carries them (the rest get empty display-only
+  // metadata; the undo stack was never file-replayable regardless).
+  const serializeDocToJSON = (d: Doc): string => {
+    const isActive = d.id === activeIdRef.current;
     const project = serializeProject(
       {
         name: d.name,
         width: d.width,
         height: d.height,
+        dpi: d.dpi,
         layers: d.layers,
         activeLayerId: d.activeLayerId,
         selectedLayerIds: d.selectedLayerIds,
         selection: d.selection,
       },
       { foreground: fgRef.current, background: bgRef.current },
-      { labels: historyRef.current.items.map((i) => i.label), index: historyRef.current.index },
+      isActive
+        ? { labels: historyRef.current.items.map((i) => i.label), index: historyRef.current.index }
+        : { labels: [], index: 0 },
       (id) => paintRef.current?.getLayerImage(id) ?? null,
       (id) => paintRef.current?.getMaskImage(id) ?? null,
     );
-    return new Blob([JSON.stringify(project)], { type: "application/json" });
+    return JSON.stringify(project);
   };
+  // Reads from refs so it also works from the one-time keydown listener.
+  const buildProjectBlob = (): Blob =>
+    new Blob([serializeDocToJSON(activeDocRef.current)], { type: "application/json" });
 
   // ---- Autosave / crash recovery + the status bar's save indicator ----------
   const [saveState, setSaveState] = useState<{ label: string; ok: boolean }>({
@@ -2364,6 +2381,30 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   });
   const autosaveDirtyRef = useRef(false); // history moved since the last write
   const [restoreSnap, setRestoreSnap] = useState<AutosaveSnapshot | null>(null);
+  // Per-document `.gproj` JSON, so a snapshot covers EVERY open tab, not just
+  // the active one. A document is (re)serialized when it's active (each tick)
+  // and when you switch away from it — it can't change while inactive — and is
+  // seeded from its file/snapshot JSON on load so a never-viewed tab (its
+  // pixels still queued, not yet in the engine) still restores.
+  const docJsonCache = useRef(new Map<string, AutosaveDoc>());
+  const prevAutoActiveRef = useRef(activeId);
+
+  // Refresh a document's cached JSON when you leave it (last chance — it's
+  // frozen while inactive). Skips documents whose pixels haven't materialized
+  // (still in pendingLoads); those keep their seeded JSON.
+  useEffect(() => {
+    const prev = prevAutoActiveRef.current;
+    prevAutoActiveRef.current = activeId;
+    if (prev === activeId) return;
+    const leaving = docsRef.current.find((d) => d.id === prev);
+    if (leaving && !pendingLoadsRef.current.some((p) => p.docId === prev)) {
+      try {
+        docJsonCache.current.set(prev, { json: serializeDocToJSON(leaving), name: leaving.name });
+      } catch {
+        /* keep the prior cache entry */
+      }
+    }
+  }, [activeId]);
 
   // Heartbeat: detect an unclean exit and offer the last snapshot for restore.
   useEffect(() => {
@@ -2375,15 +2416,30 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     return () => window.removeEventListener("pagehide", onHide);
   }, []);
 
-  // Periodic snapshot (only when something changed since the last one).
+  // Periodic snapshot of ALL open documents (only when something changed since
+  // the last write). Refreshes the active document from the engine, keeps the
+  // cached JSON for the rest, prunes closed tabs, and writes them in tab order.
   useEffect(() => {
     const mins = prefs.autosaveMinutes;
     if (!mins) return;
     const id = window.setInterval(async () => {
       if (!autosaveDirtyRef.current) return;
       try {
-        const json = await buildProjectBlob().text();
-        await writeAutosave({ json, name: activeDocRef.current.name, savedAt: Date.now() });
+        const docsNow = docsRef.current;
+        const active = activeDocRef.current;
+        docJsonCache.current.set(active.id, { json: serializeDocToJSON(active), name: active.name });
+        const openIds = new Set(docsNow.map((d) => d.id));
+        for (const k of [...docJsonCache.current.keys()]) if (!openIds.has(k)) docJsonCache.current.delete(k);
+        const entries: AutosaveDoc[] = [];
+        let activeIndex = 0;
+        for (const d of docsNow) {
+          const cached = docJsonCache.current.get(d.id);
+          if (!cached) continue;
+          if (d.id === active.id) activeIndex = entries.length;
+          entries.push(cached);
+        }
+        if (!entries.length) return;
+        await writeAutosave({ docs: entries, activeIndex, savedAt: Date.now() });
         autosaveDirtyRef.current = false;
         setSaveState({
           label: `Autosaved ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
@@ -2484,7 +2540,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   // Rebuild a document from a parsed .gproj file. Layer ids are remapped to fresh
   // ones so a loaded project never collides with already-open documents.
-  const loadProject = (p: ProjectFile) => {
+  const loadProject = (p: ProjectFile, activate = true): string => {
     commitFloatIfAny(); // merge any floating paste on the current doc first
     const idMap = new Map<string, string>();
     const images: { id: string; data: string }[] = [];
@@ -2584,10 +2640,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       selectionPivot: null,
     };
     setDocs((ds) => [...ds, doc]);
-    setActiveId(docId);
+    if (activate) setActiveId(docId);
     if (p.foreground) setForeground(p.foreground);
     if (p.background) setBackground(p.background);
     setPendingLoads((ls) => [...ls, { docId, images, masks }]);
+    // Seed the autosave cache from the file JSON so a never-viewed restored tab
+    // still snapshots correctly (refreshed from the engine once it goes active).
+    docJsonCache.current.set(docId, { json: JSON.stringify(p), name: doc.name });
+    return docId;
   };
 
   // Parse + validate .gproj text and load it. Returns whether it succeeded.
@@ -2613,6 +2673,26 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     e.target.value = ""; // let the same file be re-opened later
     if (!file) return;
     if (loadProjectText(await file.text())) addRecent(file.name, { blob: file });
+  };
+
+  // Restore a crash snapshot: open every document it holds and activate the one
+  // that was active. Returns how many opened (0 = nothing valid).
+  const restoreSnapshot = (snap: AutosaveSnapshot): number => {
+    const ids: string[] = [];
+    for (const entry of snap.docs) {
+      try {
+        const parsed = JSON.parse(entry.json);
+        const fmt = parsed?.format;
+        if ((fmt === "graphiq-project" || fmt === "aperture-project") && Array.isArray(parsed.layers)) {
+          ids.push(loadProject(parsed as ProjectFile, false));
+        }
+      } catch {
+        /* skip a corrupt entry, keep the rest */
+      }
+    }
+    if (!ids.length) return 0;
+    setActiveId(ids[Math.min(snap.activeIndex, ids.length - 1)] ?? ids[0]);
+    return ids.length;
   };
 
   // ---- Export (flatten → image file) ----
@@ -4096,10 +4176,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         <RestoreDialog
           snap={restoreSnap}
           onRestore={() => {
-            const ok = loadProjectText(restoreSnap.json);
+            const n = restoreSnapshot(restoreSnap);
             setRestoreSnap(null);
             void clearAutosave();
-            if (!ok) showToast("Couldn't restore the autosaved session.");
+            if (!n) showToast("Couldn't restore the autosaved session.");
           }}
           onDiscard={() => {
             setRestoreSnap(null);
