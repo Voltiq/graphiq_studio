@@ -26,17 +26,6 @@ function segments(anchors: PenAnchor[], closed: boolean): [PenAnchor, PenAnchor]
   return segs;
 }
 
-/** Trace a path into `ctx` as connected cubic beziers (no fill/stroke). */
-export function penPath(ctx: CanvasRenderingContext2D, anchors: PenAnchor[], closed: boolean) {
-  if (anchors.length < 2) return;
-  ctx.beginPath();
-  ctx.moveTo(anchors[0].x, anchors[0].y);
-  for (const [a, b] of segments(anchors, closed)) {
-    ctx.bezierCurveTo(a.ox, a.oy, b.ix, b.iy, b.x, b.y);
-  }
-  if (closed) ctx.closePath();
-}
-
 /**
  * Sample a path into points carrying a unit tangent, the bezier's own curvature,
  * and a global t. Tangents come from point central differences (well-defined at

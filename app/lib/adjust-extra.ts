@@ -203,43 +203,8 @@ const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 /** Rec.709 luma of byte channels (0..255). */
 const lumaOf = (r: number, g: number, b: number): number => 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
-/** RGB bytes → h (0..360), s (0..1), l (0..1). */
-function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
-  r /= 255;
-  g /= 255;
-  b /= 255;
-  const mx = Math.max(r, g, b);
-  const mn = Math.min(r, g, b);
-  const l = (mx + mn) / 2;
-  const d = mx - mn;
-  if (d === 0) return [0, 0, l];
-  const s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
-  let h: number;
-  if (mx === r) h = ((g - b) / d) % 6;
-  else if (mx === g) h = (b - r) / d + 2;
-  else h = (r - g) / d + 4;
-  h *= 60;
-  if (h < 0) h += 360;
-  return [h, s, l];
-}
-
-/** h (0..360), s (0..1), l (0..1) → RGB bytes (unclamped floats). */
-function hslToRgb(h: number, s: number, l: number): [number, number, number] {
-  const c = (1 - Math.abs(2 * l - 1)) * s;
-  const hp = (((h % 360) + 360) % 360) / 60;
-  const x = c * (1 - Math.abs((hp % 2) - 1));
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  if (hp < 1) [r, g] = [c, x];
-  else if (hp < 2) [r, g] = [x, c];
-  else if (hp < 3) [g, b] = [c, x];
-  else if (hp < 4) [g, b] = [x, c];
-  else if (hp < 5) [r, b] = [x, c];
-  else [r, b] = [c, x];
-  const m = l - c / 2;
-  return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
-}
+// (RGB↔HSL math is inlined scalar inside hueSatBytes — the per-pixel tuple
+// returns of the old helper pair were a measurable allocation cost there.)
 
 // ---------------------------------------------------------------------------
 // Per-type byte cores
@@ -313,9 +278,26 @@ export function hueSatBytes(d: Uint8ClampedArray, spec: HueSatAdjustment): void 
     r: ranges[i + 1] ?? { hue: 0, sat: 0, light: 0 },
   })).filter((b) => b.r.hue || b.r.sat || b.r.light);
   const masterActive = !!(master.hue || master.sat || master.light);
+  // HSL round-trip inlined scalar — this loop runs per pixel of the document.
   for (let i = 0; i < d.length; i += 4) {
     if (d[i + 3] === 0) continue;
-    let [h, s, l] = rgbToHsl(d[i], d[i + 1], d[i + 2]);
+    const rn = d[i] / 255;
+    const gn = d[i + 1] / 255;
+    const bn = d[i + 2] / 255;
+    const mx = Math.max(rn, gn, bn);
+    const mn = Math.min(rn, gn, bn);
+    let l = (mx + mn) / 2;
+    const dd = mx - mn;
+    let h = 0;
+    let s = 0;
+    if (dd !== 0) {
+      s = l > 0.5 ? dd / (2 - mx - mn) : dd / (mx + mn);
+      if (mx === rn) h = ((gn - bn) / dd) % 6;
+      else if (mx === gn) h = (bn - rn) / dd + 2;
+      else h = (rn - gn) / dd + 4;
+      h *= 60;
+      if (h < 0) h += 360;
+    }
     let dh = masterActive ? master.hue : 0;
     let ds = masterActive ? master.sat : 0;
     let dl = masterActive ? master.light : 0;
@@ -335,10 +317,35 @@ export function hueSatBytes(d: Uint8ClampedArray, spec: HueSatAdjustment): void 
     s = clamp01(dsn >= 0 ? s + (1 - s) * dsn : s * (1 + dsn));
     const dln = Math.max(-100, Math.min(100, dl)) / 100;
     l = clamp01(dln >= 0 ? l + (1 - l) * dln : l * (1 + dln));
-    const [r, g, b] = hslToRgb(h, s, l);
-    d[i] = clamp255(Math.round(r));
-    d[i + 1] = clamp255(Math.round(g));
-    d[i + 2] = clamp255(Math.round(b));
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const hp = (((h % 360) + 360) % 360) / 60;
+    const x = c * (1 - Math.abs((hp % 2) - 1));
+    let r1 = 0;
+    let g1 = 0;
+    let b1 = 0;
+    if (hp < 1) {
+      r1 = c;
+      g1 = x;
+    } else if (hp < 2) {
+      r1 = x;
+      g1 = c;
+    } else if (hp < 3) {
+      g1 = c;
+      b1 = x;
+    } else if (hp < 4) {
+      g1 = x;
+      b1 = c;
+    } else if (hp < 5) {
+      r1 = x;
+      b1 = c;
+    } else {
+      r1 = c;
+      b1 = x;
+    }
+    const m = l - c / 2;
+    d[i] = clamp255(Math.round((r1 + m) * 255));
+    d[i + 1] = clamp255(Math.round((g1 + m) * 255));
+    d[i + 2] = clamp255(Math.round((b1 + m) * 255));
   }
 }
 
@@ -359,6 +366,26 @@ export function selectiveWeights(r: number, g: number, b: number): number[] {
   ];
 }
 
+/** One range's membership weight — same math as selectiveWeights, evaluated
+ *  only for the ranges a spec actually uses (no 9-slot array per pixel). */
+function selectiveWeightOf(idx: number, r: number, g: number, b: number): number {
+  switch (idx) {
+    case 0: return Math.max(0, r - Math.max(g, b)) / 255; // reds
+    case 1: return Math.max(0, Math.min(r, g) - b) / 255; // yellows
+    case 2: return Math.max(0, g - Math.max(r, b)) / 255; // greens
+    case 3: return Math.max(0, Math.min(g, b) - r) / 255; // cyans
+    case 4: return Math.max(0, b - Math.max(r, g)) / 255; // blues
+    case 5: return Math.max(0, Math.min(r, b) - g) / 255; // magentas
+    case 6: return Math.max(0, 2 * Math.min(r, g, b) - 255) / 255; // whites
+    case 7: {
+      const mx = Math.max(r, g, b);
+      const mn = Math.min(r, g, b);
+      return Math.max(0, 1 - (Math.abs(mx - 128) + Math.abs(mn - 128)) / 255); // neutrals
+    }
+    default: return Math.max(0, 255 - 2 * Math.max(r, g, b)) / 255; // blacks
+  }
+}
+
 export function selectiveColorBytes(d: Uint8ClampedArray, spec: SelectiveColorAdjustment): void {
   // Pre-resolve the active ranges once.
   const active: { idx: number; c: number; m: number; y: number; k: number }[] = [];
@@ -373,12 +400,11 @@ export function selectiveColorBytes(d: Uint8ClampedArray, spec: SelectiveColorAd
     const r = d[i];
     const g = d[i + 1];
     const b = d[i + 2];
-    const w = selectiveWeights(r, g, b);
     let dr = 0;
     let dg = 0;
     let db = 0;
     for (const a of active) {
-      const wt = w[a.idx];
+      const wt = selectiveWeightOf(a.idx, r, g, b);
       if (wt <= 0) continue;
       // +cyan removes red (adds its complement); +black darkens every channel.
       dr -= (a.c + a.k) * wt * (rel ? r : 255);
@@ -391,33 +417,43 @@ export function selectiveColorBytes(d: Uint8ClampedArray, spec: SelectiveColorAd
   }
 }
 
+/** Pre-sorted, pre-parsed sampler over a stop list — the LUT build samples 256
+ *  times, so sorting the stops and parsing the colours must happen ONCE, not
+ *  per sample. */
+function stopSampler(stops: GradientStop[]): (t: number) => [number, number, number] {
+  const sorted = [...stops]
+    .sort((a, b) => a.pos - b.pos)
+    .map((s) => ({ pos: s.pos, c: parseColor(s.color) }));
+  return (t: number): [number, number, number] => {
+    if (!sorted.length) return [0, 0, 0];
+    const first = sorted[0];
+    if (t <= first.pos) return [first.c.r, first.c.g, first.c.b];
+    for (let i = 1; i < sorted.length; i++) {
+      if (t <= sorted[i].pos) {
+        const a = sorted[i - 1].c;
+        const b = sorted[i].c;
+        const span = sorted[i].pos - sorted[i - 1].pos;
+        const f = span > 0 ? (t - sorted[i - 1].pos) / span : 1;
+        return [a.r + (b.r - a.r) * f, a.g + (b.g - a.g) * f, a.b + (b.b - a.b) * f];
+      }
+    }
+    const c = sorted[sorted.length - 1].c;
+    return [c.r, c.g, c.b];
+  };
+}
+
 /** Sample a stop list at t (0..1) — sRGB lerp between neighbouring stops. */
 export function sampleStops(stops: GradientStop[], t: number): [number, number, number] {
-  const sorted = [...stops].sort((a, b) => a.pos - b.pos);
-  if (!sorted.length) return [0, 0, 0];
-  if (t <= sorted[0].pos) {
-    const c = parseColor(sorted[0].color);
-    return [c.r, c.g, c.b];
-  }
-  for (let i = 1; i < sorted.length; i++) {
-    if (t <= sorted[i].pos) {
-      const a = parseColor(sorted[i - 1].color);
-      const b = parseColor(sorted[i].color);
-      const span = sorted[i].pos - sorted[i - 1].pos;
-      const f = span > 0 ? (t - sorted[i - 1].pos) / span : 1;
-      return [a.r + (b.r - a.r) * f, a.g + (b.g - a.g) * f, a.b + (b.b - a.b) * f];
-    }
-  }
-  const c = parseColor(sorted[sorted.length - 1].color);
-  return [c.r, c.g, c.b];
+  return stopSampler(stops)(t);
 }
 
 /** The 256-entry RGB lookup a gradient-map spec compiles to. */
 export function gradientMapLUT(spec: GradientMapAdjustment): Uint8ClampedArray {
   const lut = new Uint8ClampedArray(256 * 3);
+  const sample = stopSampler(spec.stops);
   for (let v = 0; v < 256; v++) {
     const t = spec.reverse ? 1 - v / 255 : v / 255;
-    const [r, g, b] = sampleStops(spec.stops, t);
+    const [r, g, b] = sample(t);
     lut[v * 3] = r;
     lut[v * 3 + 1] = g;
     lut[v * 3 + 2] = b;
@@ -438,15 +474,18 @@ export function gradientMapBytes(d: Uint8ClampedArray, spec: GradientMapAdjustme
 
 export function channelMixerBytes(d: Uint8ClampedArray, spec: ChannelMixerAdjustment): void {
   const rows = spec.mono ? [spec.r, spec.r, spec.r] : [spec.r, spec.g, spec.b];
-  const m = rows.map((c) => [c.r / 100, c.g / 100, c.b / 100, (c.k / 100) * 255]);
+  // Twelve hoisted scalars — no nested array indexing inside the pixel loop.
+  const m00 = rows[0].r / 100, m01 = rows[0].g / 100, m02 = rows[0].b / 100, m03 = (rows[0].k / 100) * 255;
+  const m10 = rows[1].r / 100, m11 = rows[1].g / 100, m12 = rows[1].b / 100, m13 = (rows[1].k / 100) * 255;
+  const m20 = rows[2].r / 100, m21 = rows[2].g / 100, m22 = rows[2].b / 100, m23 = (rows[2].k / 100) * 255;
   for (let i = 0; i < d.length; i += 4) {
     if (d[i + 3] === 0) continue;
     const r = d[i];
     const g = d[i + 1];
     const b = d[i + 2];
-    d[i] = clamp255(Math.round(r * m[0][0] + g * m[0][1] + b * m[0][2] + m[0][3]));
-    d[i + 1] = clamp255(Math.round(r * m[1][0] + g * m[1][1] + b * m[1][2] + m[1][3]));
-    d[i + 2] = clamp255(Math.round(r * m[2][0] + g * m[2][1] + b * m[2][2] + m[2][3]));
+    d[i] = clamp255(Math.round(r * m00 + g * m01 + b * m02 + m03));
+    d[i + 1] = clamp255(Math.round(r * m10 + g * m11 + b * m12 + m13));
+    d[i + 2] = clamp255(Math.round(r * m20 + g * m21 + b * m22 + m23));
   }
 }
 
@@ -456,7 +495,8 @@ export function colorLookupBytes(d: Uint8ClampedArray, spec: ColorLookupAdjustme
   if (n < 2 || spec.table.length < n * n * n * 3) return;
   const t = spec.table;
   const scale = (n - 1) / 255;
-  const idx = (x: number, y: number, z: number) => ((z * n + y) * n + x) * 3;
+  const n3 = n * 3; // +1 in y
+  const nn3 = n * n * 3; // +1 in z
   for (let i = 0; i < d.length; i += 4) {
     if (d[i + 3] === 0) continue;
     const fx = d[i] * scale;
@@ -468,15 +508,24 @@ export function colorLookupBytes(d: Uint8ClampedArray, spec: ColorLookupAdjustme
     const dx = fx - x0;
     const dy = fy - y0;
     const dz = fz - z0;
+    // The 8 cell-corner offsets, computed once per pixel (not per channel).
+    const i000 = ((z0 * n + y0) * n + x0) * 3;
+    const i100 = i000 + 3;
+    const i010 = i000 + n3;
+    const i110 = i010 + 3;
+    const i001 = i000 + nn3;
+    const i101 = i001 + 3;
+    const i011 = i001 + n3;
+    const i111 = i011 + 3;
     for (let ch = 0; ch < 3; ch++) {
-      const c000 = t[idx(x0, y0, z0) + ch];
-      const c100 = t[idx(x0 + 1, y0, z0) + ch];
-      const c010 = t[idx(x0, y0 + 1, z0) + ch];
-      const c110 = t[idx(x0 + 1, y0 + 1, z0) + ch];
-      const c001 = t[idx(x0, y0, z0 + 1) + ch];
-      const c101 = t[idx(x0 + 1, y0, z0 + 1) + ch];
-      const c011 = t[idx(x0, y0 + 1, z0 + 1) + ch];
-      const c111 = t[idx(x0 + 1, y0 + 1, z0 + 1) + ch];
+      const c000 = t[i000 + ch];
+      const c100 = t[i100 + ch];
+      const c010 = t[i010 + ch];
+      const c110 = t[i110 + ch];
+      const c001 = t[i001 + ch];
+      const c101 = t[i101 + ch];
+      const c011 = t[i011 + ch];
+      const c111 = t[i111 + ch];
       const c00 = c000 + (c100 - c000) * dx;
       const c10 = c010 + (c110 - c010) * dx;
       const c01 = c001 + (c101 - c001) * dx;
@@ -518,12 +567,9 @@ export function applyExtraAdjustment(img: ImageData, spec: ExtraAdjustment): Ima
   return img;
 }
 
-/** Is a spec's math strictly per-pixel (safe for region/tile recompute)?
- *  Equalize reads the whole image's histogram, so a rect-bounded change below
- *  it changes EVERY output pixel. */
-export function extraIsPerPixel(spec: ExtraAdjustment): boolean {
-  return spec.type !== "equalize";
-}
+// (Region/tile safety note: every extra kind is strictly per-pixel EXCEPT
+// Equalize, whose whole-image histogram the engine special-cases directly —
+// see paint.ts drawAdjustment/drawAdjustmentTiled.)
 
 // ---------------------------------------------------------------------------
 // .cube LUT parsing

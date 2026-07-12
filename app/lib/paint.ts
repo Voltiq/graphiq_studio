@@ -3808,8 +3808,20 @@ export class PaintEngine {
     const g = new Array<number>(256).fill(0);
     const b = new Array<number>(256).fill(0);
     if (this.w < 1 || this.h < 1) return { r, g, b };
-    const full = this.mk(this.w, this.h, true);
+    // Same frame setup as composite()/exportComposite(): the per-frame key memo
+    // must not leak across states — this runs from a debounced timer, which can
+    // fire with NO composite in between (e.g. a background tab suspends rAF but
+    // not timeouts), and a stale memoized key would validate a stale cache hit.
+    this.keyMemo.clear();
+    this.frameProtect.clear();
+    this.liveBypass = this.computeLiveBypass(tree);
     this.curTree = tree;
+    // Reused accumulator — this recomputes on every (debounced) content change,
+    // so a fresh doc-sized canvas per call was pure allocation churn.
+    const full = this.adjBuf("hist", true);
+    full.ctx.globalAlpha = 1;
+    full.ctx.globalCompositeOperation = "source-over";
+    full.ctx.clearRect(0, 0, this.w, this.h);
     this.drawStack(full.ctx, tree);
     full.ctx.globalAlpha = 1;
     full.ctx.globalCompositeOperation = "source-over";

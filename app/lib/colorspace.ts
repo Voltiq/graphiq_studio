@@ -31,10 +31,6 @@ export const WORKING_SPACE_LABELS: Record<WorkingSpace, string> = {
   "adobe-rgb": "Adobe RGB (1998)",
 };
 
-export function isWorkingSpace(v: unknown): v is WorkingSpace {
-  return v === "srgb" || v === "display-p3" || v === "adobe-rgb";
-}
-
 // ---- Matrices -------------------------------------------------------------
 
 type Mat3 = [number, number, number, number, number, number, number, number, number];

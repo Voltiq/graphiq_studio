@@ -32,8 +32,6 @@ export interface ToneLUTs {
 
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
-export const CHANNEL_KEYS: ChannelKey[] = ["rgb", "r", "g", "b"];
-
 /** Neutral Levels params (identity). */
 export const IDENTITY_LEVELS: ChannelParams = {
   inBlack: 0,

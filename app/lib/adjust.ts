@@ -78,9 +78,8 @@ export function filterToAdjust(name: string): Adjustments {
 // ---- Filter preset files (.gifp = one preset, .gifpack = a bundle) ----
 export const FILTER_EXT = "gifp";
 export const FILTER_PACK_EXT = "gifpack";
-// Pre-rename extensions — old files still import.
-export const LEGACY_FILTER_EXT = "aifp";
-export const LEGACY_FILTER_PACK_EXT = "aifpack";
+// Pre-rename .aifp/.aifpack files still import — the picker accepts them
+// directly (AdjustmentsPanel's accept/regex), no constants needed here.
 const ADJUST_KEYS = Object.keys(DEFAULT_ADJUST) as (keyof Adjustments)[];
 
 /** Clamp arbitrary parsed data into a valid Adjustments (unknown keys dropped). */
@@ -170,29 +169,50 @@ export function adjustToThumbFilter(a: Adjustments): string {
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
-/** A small 3×3 box blur over RGB (alpha copied) — used for sharpen / noise. */
+/** A small 3×3 box blur over RGB (alpha copied) — used for sharpen / noise.
+ *  Interior pixels (all nine taps in bounds) take a branch-free fast path;
+ *  only the 1-px border runs the bounds-checked average — byte-identical to
+ *  checking every tap, just without ~8 comparisons per channel-pixel. */
 function blur3(d: Uint8ClampedArray, w: number, h: number): Uint8ClampedArray {
   const o = new Uint8ClampedArray(d.length);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      for (let c = 0; c < 3; c++) {
-        let sum = 0;
-        let n = 0;
-        for (let dy = -1; dy <= 1; dy++) {
-          const yy = y + dy;
-          if (yy < 0 || yy >= h) continue;
-          for (let dx = -1; dx <= 1; dx++) {
-            const xx = x + dx;
-            if (xx < 0 || xx >= w) continue;
-            sum += d[(yy * w + xx) * 4 + c];
-            n++;
-          }
-        }
-        o[i + c] = sum / n;
-      }
+  const w4 = w * 4;
+  for (let y = 1; y < h - 1; y++) {
+    let i = (y * w + 1) * 4;
+    for (let x = 1; x < w - 1; x++, i += 4) {
+      const a = i - w4;
+      const b = i + w4;
+      o[i] = (d[a - 4] + d[a] + d[a + 4] + d[i - 4] + d[i] + d[i + 4] + d[b - 4] + d[b] + d[b + 4]) / 9;
+      o[i + 1] = (d[a - 3] + d[a + 1] + d[a + 5] + d[i - 3] + d[i + 1] + d[i + 5] + d[b - 3] + d[b + 1] + d[b + 5]) / 9;
+      o[i + 2] = (d[a - 2] + d[a + 2] + d[a + 6] + d[i - 2] + d[i + 2] + d[i + 6] + d[b - 2] + d[b + 2] + d[b + 6]) / 9;
       o[i + 3] = d[i + 3];
     }
+  }
+  const edge = (x: number, y: number) => {
+    const i = (y * w + x) * 4;
+    for (let c = 0; c < 3; c++) {
+      let sum = 0;
+      let n = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          sum += d[(yy * w + xx) * 4 + c];
+          n++;
+        }
+      }
+      o[i + c] = sum / n;
+    }
+    o[i + 3] = d[i + 3];
+  };
+  for (let x = 0; x < w; x++) {
+    edge(x, 0);
+    if (h > 1) edge(x, h - 1);
+  }
+  for (let y = 1; y < h - 1; y++) {
+    edge(0, y);
+    if (w > 1) edge(w - 1, y);
   }
   return o;
 }
@@ -200,29 +220,48 @@ function blur3(d: Uint8ClampedArray, w: number, h: number): Uint8ClampedArray {
 /** Apply tonal / colour / detail adjustments, returning a new ImageData in the
     given colour space (must match the target canvas to avoid a conversion). */
 /** 3×3 box blur over RGB for an RGBA16 buffer (alpha copied) — the 16-bit twin
- *  of blur3, used by applyAdjustments16's noise/sharpen tail. */
+ *  of blur3 (same interior fast path / bounds-checked border split), used by
+ *  applyAdjustments16's noise/sharpen tail. */
 function blur3_16(d: Uint16Array, w: number, h: number): Uint16Array {
   const o = new Uint16Array(d.length);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * w + x) * 4;
-      for (let c = 0; c < 3; c++) {
-        let sum = 0;
-        let n = 0;
-        for (let dy = -1; dy <= 1; dy++) {
-          const yy = y + dy;
-          if (yy < 0 || yy >= h) continue;
-          for (let dx = -1; dx <= 1; dx++) {
-            const xx = x + dx;
-            if (xx < 0 || xx >= w) continue;
-            sum += d[(yy * w + xx) * 4 + c];
-            n++;
-          }
-        }
-        o[i + c] = sum / n + 0.5;
-      }
+  const w4 = w * 4;
+  for (let y = 1; y < h - 1; y++) {
+    let i = (y * w + 1) * 4;
+    for (let x = 1; x < w - 1; x++, i += 4) {
+      const a = i - w4;
+      const b = i + w4;
+      o[i] = (d[a - 4] + d[a] + d[a + 4] + d[i - 4] + d[i] + d[i + 4] + d[b - 4] + d[b] + d[b + 4]) / 9 + 0.5;
+      o[i + 1] = (d[a - 3] + d[a + 1] + d[a + 5] + d[i - 3] + d[i + 1] + d[i + 5] + d[b - 3] + d[b + 1] + d[b + 5]) / 9 + 0.5;
+      o[i + 2] = (d[a - 2] + d[a + 2] + d[a + 6] + d[i - 2] + d[i + 2] + d[i + 6] + d[b - 2] + d[b + 2] + d[b + 6]) / 9 + 0.5;
       o[i + 3] = d[i + 3];
     }
+  }
+  const edge = (x: number, y: number) => {
+    const i = (y * w + x) * 4;
+    for (let c = 0; c < 3; c++) {
+      let sum = 0;
+      let n = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          sum += d[(yy * w + xx) * 4 + c];
+          n++;
+        }
+      }
+      o[i + c] = sum / n + 0.5;
+    }
+    o[i + 3] = d[i + 3];
+  };
+  for (let x = 0; x < w; x++) {
+    edge(x, 0);
+    if (h > 1) edge(x, h - 1);
+  }
+  for (let y = 1; y < h - 1; y++) {
+    edge(0, y);
+    if (w > 1) edge(w - 1, y);
   }
   return o;
 }
