@@ -10,7 +10,9 @@ import RightDock, { type PanelVisibility } from "./RightDock";
 import StatusBar from "./StatusBar";
 import CanvasSizeDialog, { type CanvasSize } from "./CanvasSizeDialog";
 import PasteDialog, { type PasteDest } from "./PasteDialog";
-import PreferencesDialog from "./PreferencesDialog";
+import PreferencesDialog, { type PrefsTab } from "./PreferencesDialog";
+import HelpDialog, { type HelpStart } from "./HelpDialog";
+import AboutDialog from "./AboutDialog";
 import TooltipHost from "./Tooltip";
 import { type ProofTarget, type WorkingSpace } from "../lib/colorspace";
 import { extractICCProfile } from "../lib/icc";
@@ -300,6 +302,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [cropBox, setCropBox] = useState<Rect | null>(null);
   const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFS);
   const [prefsOpen, setPrefsOpen] = useState(false);
+  // Preferences section to open on — Settings ▸ Performance / Scratch disks
+  // deep-link their tabs; plain Preferences… re-opens wherever you last were.
+  const [prefsTab, setPrefsTab] = useState<PrefsTab>("appearance");
+  const openPrefs = (tab?: PrefsTab) => {
+    if (tab) setPrefsTab(tab);
+    setPrefsOpen(true);
+  };
+  // Help window (Getting started / Documentation) + About.
+  const [helpOpen, setHelpOpen] = useState<HelpStart | null>(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [trimOpen, setTrimOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef(0);
@@ -3508,6 +3520,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       const id = activeDocRef.current.activeLayerId;
       if (id) openFiltersOp(id);
     } else if (actionId === "shortcuts") setShortcutsOpen(true);
+    else if (actionId === "prefs-performance") openPrefs("performance");
+    else if (actionId === "prefs-storage") openPrefs("storage");
+    else if (actionId === "help-start") setHelpOpen("start");
+    else if (actionId === "help-docs") setHelpOpen("docs");
+    else if (actionId === "about") setAboutOpen(true);
     else if (actionId === "edit-caf") contentAwareFillOp();
   };
 
@@ -4218,6 +4235,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
       {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
 
+      {helpOpen && <HelpDialog start={helpOpen} onClose={() => setHelpOpen(null)} />}
+
+      {aboutOpen && (
+        <AboutDialog
+          onOpenGuide={() => setHelpOpen("start")}
+          onOpenShortcuts={() => setShortcutsOpen(true)}
+          onClose={() => setAboutOpen(false)}
+        />
+      )}
+
       {restoreSnap && (
         <RestoreDialog
           snap={restoreSnap}
@@ -4251,6 +4278,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           prefs={prefs}
           onChange={updatePrefs}
           getCacheStats={() => paintRef.current?.renderCacheStats() ?? null}
+          initialTab={prefsTab}
+          onTabChange={setPrefsTab}
           onClose={() => setPrefsOpen(false)}
         />
       )}

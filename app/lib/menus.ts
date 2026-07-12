@@ -165,17 +165,17 @@ export const MENUS: Menu[] = [
       { label: "Preferences…", shortcut: "Ctrl+,", action: "preferences" },
       { label: "Color management…", action: "color-manage", separatorAfter: true },
       { label: "Keyboard shortcuts…", action: "shortcuts", separatorAfter: true },
-      { label: "Performance" },
-      { label: "Scratch disks" },
+      { label: "Performance…", action: "prefs-performance" },
+      { label: "Scratch disks / storage…", action: "prefs-storage" },
     ],
   },
   {
     label: "Help",
     items: [
-      { label: "Getting started" },
-      { label: "Documentation" },
+      { label: "Getting started", action: "help-start" },
+      { label: "Documentation", action: "help-docs" },
       { label: "Keyboard shortcuts", action: "shortcuts", separatorAfter: true },
-      { label: "About Graphiq Studio" },
+      { label: "About Graphiq Studio", action: "about" },
     ],
   },
 ];

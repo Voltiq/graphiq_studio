@@ -748,3 +748,117 @@
     border-radius: calc(var(--r-md) - 3px);
   }
 }
+
+/* ---------------- Help window (Getting started + Documentation) ------------ */
+/* Multi-line documentation entries: title + body prose (+ optional key chip). */
+.docList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.docEntry {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+
+  &:hover {
+    background: var(--wash);
+  }
+
+  .kbdChip {
+    margin-top: 1px;
+  }
+}
+
+.docText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+
+  strong {
+    font-size: 12px;
+    font-weight: var(--weight-medium);
+    color: var(--text);
+  }
+
+  em {
+    font-style: normal;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--text-2);
+  }
+}
+
+/* Step number for the Getting-started walkthrough. */
+.guideNum {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  color: var(--accent-contrast);
+  background: var(--accent);
+}
+
+/* ---------------- About dialog --------------------------------------------- */
+.aboutBrand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: var(--sp-3);
+}
+
+.aboutLogo {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+
+  img {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+}
+
+.aboutName {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  strong {
+    font-size: 16px;
+    font-weight: var(--weight-semibold);
+    color: var(--text);
+
+    em {
+      font-style: normal;
+      color: var(--accent);
+    }
+  }
+}
+
+.aboutVersion {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.aboutBlurb {
+  margin: 0 0 var(--sp-4);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
