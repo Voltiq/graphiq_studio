@@ -26,7 +26,7 @@ This document is written so someone **without the code** understands exactly wha
 |---|---|---|
 | Move | `V` | Move layer pixels or a floating selection. |
 | Rectangular Marquee | `M` | **Rectangle / ellipse / triangle** region shapes (`Shift+M` cycles); hold `Shift` for a 1:1 square/circle; the triangle's apex follows the drag direction and has an adjustable, live-updating apex position. |
-| Lasso | `L` | **Freehand / Polygonal / Magnetic** modes (`Shift+L` cycles). Polygonal: click vertices, rubber-band edge, close on double-click/start-click/Enter, Backspace undoes a point. Magnetic: points snap to a Sobel edge map of the composite. |
+| Lasso | `L` | **Freehand / Polygonal / Magnetic** modes (`Shift+L` cycles). Polygonal: click vertices, rubber-band edge, close on double-click/start-click/Enter, Backspace undoes a point. Magnetic: points snap to a **per-channel edge field** of the composite (catches colour edges a luma map misses; noise-suppressed, per-image normalized) with a **zoom-aware ~28-screen-px reach** and a direction-aware search that prefers the contour being followed (continuity + gradient-orientation coherence) over parallel or crossing edges. |
 | Magic Wand | `W` | Contiguous or global colour selection; tolerance, sample-all-layers. |
 | Crop | `C` | Aspect presets, grid overlay, straighten, shield. |
 | Eyedropper | `I` | Sample colour; configurable sample radius. |

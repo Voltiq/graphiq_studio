@@ -5,6 +5,7 @@ import { Maximize2, Minus, Plus, X } from "lucide-react";
 import styles from "./CanvasArea.module.scss";
 import type { WorkingSpace } from "../lib/colorspace";
 import { checkerCSS, type CheckerColors, type CheckerSize, type MeasureUnit } from "../lib/prefs";
+import { buildEdgeField, snapPoint, type EdgeField } from "../lib/magnetic";
 import { baseRunStyle } from "../lib/richtext";
 import {
   applyPatchToSelection,
@@ -779,17 +780,24 @@ export default function CanvasArea({
   // Polygonal lasso: committed vertices + the rubber-band cursor position.
   const polyRef = useRef<{ pts: { x: number; y: number }[]; op: SelOp } | null>(null);
   const polyHoverRef = useRef<{ x: number; y: number } | null>(null);
-  // Magnetic lasso: Sobel edge-magnitude map of the composite, built at stroke
-  // start (downscaled to a cap so big documents stay fast).
-  const edgeMapRef = useRef<{ w: number; h: number; sx: number; sy: number; mag: Uint8ClampedArray } | null>(null);
+  // Magnetic lasso: per-channel-Sobel edge field of the composite, built at
+  // stroke start (downscaled to a cap so big documents stay fast). The
+  // detection + snap logic is the pure lib magnetic.ts (Node-verified) —
+  // this component only handles readback, scaling and per-stroke state.
+  const edgeMapRef = useRef<{ field: EdgeField; sx: number; sy: number } | null>(null);
+  // Per-stroke snap context: the last SNAPPED point (field px + gradient
+  // direction) for continuity/coherence, and the last RAW cursor for the
+  // travel direction. Reset at stroke start.
+  const magneticPrevRef = useRef<{ x: number; y: number; theta: number } | null>(null);
+  const magneticRawRef = useRef<{ x: number; y: number } | null>(null);
 
-  /** Grayscale Sobel magnitude of the flattened composite (capped resolution). */
+  /** Build the edge field from the flattened composite (capped resolution). */
   const buildEdgeMap = () => {
     const comp = engine.exportComposite(layersRef.current);
     const cap = 1400;
     const scale = Math.min(1, cap / Math.max(comp.width, comp.height, 1));
-    const w = Math.max(2, Math.round(comp.width * scale));
-    const h = Math.max(2, Math.round(comp.height * scale));
+    const w = Math.max(4, Math.round(comp.width * scale));
+    const h = Math.max(4, Math.round(comp.height * scale));
     const cv = document.createElement("canvas");
     cv.width = w;
     cv.height = h;
@@ -797,65 +805,41 @@ export default function CanvasArea({
     cx.imageSmoothingEnabled = true;
     cx.drawImage(comp, 0, 0, w, h);
     const d = cx.getImageData(0, 0, w, h).data;
-    const lum = new Float32Array(w * h);
-    for (let i = 0; i < w * h; i++)
-      lum[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
-    const mag = new Uint8ClampedArray(w * h);
-    for (let y = 1; y < h - 1; y++)
-      for (let x = 1; x < w - 1; x++) {
-        const i = y * w + x;
-        const gx =
-          -lum[i - w - 1] - 2 * lum[i - 1] - lum[i + w - 1] +
-          lum[i - w + 1] + 2 * lum[i + 1] + lum[i + w + 1];
-        const gy =
-          -lum[i - w - 1] - 2 * lum[i - w] - lum[i - w + 1] +
-          lum[i + w - 1] + 2 * lum[i + w] + lum[i + w + 1];
-        mag[i] = Math.min(255, (Math.abs(gx) + Math.abs(gy)) / 3);
-      }
-    edgeMapRef.current = { w, h, sx: w / comp.width, sy: h / comp.height, mag };
+    edgeMapRef.current = { field: buildEdgeField(d, w, h), sx: w / comp.width, sy: h / comp.height };
+    magneticPrevRef.current = null;
+    magneticRawRef.current = null;
   };
 
-  // Magnetic snap search width, in DOCUMENT pixels — the cursor pulls to a
-  // strong edge anywhere within this radius, so the line snaps even when it's
-  // drawn some distance off the edge.
-  const MAGNETIC_DOC_RADIUS = 30;
+  // Snap reach is SCREEN-space (like a cursor affordance): ~28 screen px of
+  // pull regardless of zoom, so a subject outlined at fit-to-screen zoom snaps
+  // from just as far as one at 100%. Clamped in doc px so extreme zooms stay sane.
+  const MAGNETIC_SCREEN_RADIUS = 28;
 
-  /** Snap a doc-space point to the strongest nearby edge (magnetic lasso).
-   *  Searches a window ~MAGNETIC_DOC_RADIUS doc-px wide and picks the highest
-   *  edge magnitude, with only a gentle distance penalty so a clearly stronger
-   *  edge several pixels away still wins. Falls back to the raw cursor when
-   *  nothing edge-like is nearby. */
+  /** Snap a doc-space point to the best nearby edge (magnetic lasso). The pure
+   *  search (anisotropic band + continuity + orientation coherence) lives in
+   *  magnetic.ts; here: coordinate scaling, the zoom-aware radius, and the
+   *  per-stroke direction/previous-point context. */
   const snapToEdge = (pt: { x: number; y: number }) => {
     const m = edgeMapRef.current;
     if (!m) return pt;
-    const mx = Math.round(pt.x * m.sx);
-    const my = Math.round(pt.y * m.sy);
-    const R = Math.max(4, Math.min(40, Math.round(MAGNETIC_DOC_RADIUS * m.sx)));
-    let best = -Infinity;
-    let bx = mx;
-    let by = my;
-    let bmag = 0;
-    for (let dy = -R; dy <= R; dy++) {
-      const y = my + dy;
-      if (y < 1 || y >= m.h - 1) continue;
-      const row = y * m.w;
-      for (let dx = -R; dx <= R; dx++) {
-        const x = mx + dx;
-        if (x < 1 || x >= m.w - 1) continue;
-        const mag = m.mag[row + x];
-        // Gentle falloff: distance costs ~0.9 magnitude per map px, so a strong
-        // edge (say 120) still beats a bland patch under the cursor.
-        const score = mag - 0.9 * Math.hypot(dx, dy);
-        if (score > best) {
-          best = score;
-          bx = x;
-          by = y;
-          bmag = mag;
-        }
-      }
-    }
-    if (bmag < 16) return pt; // no real edge in range — follow the cursor
-    return { x: bx / m.sx, y: by / m.sy };
+    const fx = pt.x * m.sx;
+    const fy = pt.y * m.sy;
+    const docR = Math.max(10, Math.min(96, MAGNETIC_SCREEN_RADIUS / Math.max(0.05, scaleRef.current)));
+    const r = Math.max(4, Math.min(72, Math.round(docR * m.sx)));
+    const raw = magneticRawRef.current;
+    const dirX = raw ? fx - raw.x * m.sx : undefined;
+    const dirY = raw ? fy - raw.y * m.sy : undefined;
+    const stepFree = raw ? Math.max(3, Math.hypot((pt.x - raw.x) * m.sx, (pt.y - raw.y) * m.sy)) : 8;
+    const s = snapPoint(m.field, fx, fy, {
+      r,
+      dirX,
+      dirY,
+      prev: magneticPrevRef.current,
+      stepFree,
+    });
+    magneticRawRef.current = { x: pt.x, y: pt.y };
+    if (s.snapped) magneticPrevRef.current = { x: s.x, y: s.y, theta: s.theta };
+    return { x: s.x / m.sx, y: s.y / m.sy };
   };
 
   /** Close + commit the polygonal lasso (Enter / double-click / click-on-start). */
@@ -4584,7 +4568,9 @@ export default function CanvasArea({
       const pts = lassoRef.current;
       const mode = lassoModeRef.current;
       lassoRef.current = null;
-      edgeMapRef.current = null; // free the magnetic edge map
+      edgeMapRef.current = null; // free the magnetic edge field
+      magneticPrevRef.current = null;
+      magneticRawRef.current = null;
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       // Close the polygon (straight start↔end edge) and rasterize it to a region,
