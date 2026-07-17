@@ -19,6 +19,7 @@ export default function TopBar({
   canUndo = false,
   canRedo = false,
   checks,
+  shortcutLabels,
 }: {
   onMenuAction?: (action: string) => void;
   onSelectTool?: (id: ToolId) => void;
@@ -29,7 +30,16 @@ export default function TopBar({
   canRedo?: boolean;
   /** Action ids that are checkable toggles → current on/off state. */
   checks?: Record<string, boolean>;
+  /** Effective shortcut labels from the registry ("menu:<action>"/"tool:<id>"
+   *  → "Ctrl+Z"; "" = unbound). Menus/palette show THESE, so remaps are live. */
+  shortcutLabels?: Record<string, string>;
 }) {
+  // The registry's effective label, falling back to the static default.
+  const keyFor = (kind: "menu" | "tool", id: string, fallback?: string): string | undefined => {
+    const v = shortcutLabels?.[`${kind}:${id}`];
+    if (v === undefined) return fallback;
+    return v || undefined; // "" = explicitly unbound → show nothing
+  };
   const [open, setOpen] = useState<string | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
 
@@ -43,7 +53,7 @@ export default function TopBar({
         key: `tool:${t.id}`,
         label: t.name,
         sub: "Tool",
-        shortcut: t.shortcut,
+        shortcut: keyFor("tool", t.id, t.shortcut),
         icon: t.icon,
         run: () => onSelectTool?.(t.id),
       });
@@ -56,7 +66,7 @@ export default function TopBar({
           key: `menu:${action}:${item.label}`,
           label: item.label.replace(/…$/, ""),
           sub: `${menu.label} menu`,
-          shortcut: item.shortcut,
+          shortcut: keyFor("menu", action, item.shortcut),
           action,
           run: () => onMenuAction?.(action),
         });
@@ -64,7 +74,7 @@ export default function TopBar({
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [shortcutLabels]);
 
   // Ctrl+K opens the palette (the chip in the pill advertises it).
   useEffect(() => {
@@ -146,9 +156,12 @@ export default function TopBar({
                           )}
                           {item.label}
                         </span>
-                        {item.shortcut && (
-                          <span className={styles.shortcut}>{item.shortcut}</span>
-                        )}
+                        {(() => {
+                          const k = item.action
+                            ? keyFor("menu", item.action, item.shortcut)
+                            : item.shortcut;
+                          return k ? <span className={styles.shortcut}>{k}</span> : null;
+                        })()}
                       </button>
                       {item.separatorAfter && <div className={styles.menuSep} />}
                     </div>

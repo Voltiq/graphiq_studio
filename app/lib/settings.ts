@@ -13,6 +13,7 @@
  *  import path writes nothing outside this list). */
 export const SETTINGS_KEYS: readonly string[] = [
   "graphiq:preferences", // the Preferences dialog model
+  "graphiq:shortcuts", // keyboard-shortcut remaps (shortcuts.ts overrides)
   "graphiq:tool-settings", // options-bar state per tool, colours, marquee shape
   "graphiq:panel-order", // right-dock panel order
   "graphiq:panel-open", // right-dock collapsed state

@@ -1,21 +1,30 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Search, X } from "lucide-react";
+import { RotateCcw, Search, X } from "lucide-react";
 import styles from "./PreferencesDialog.module.scss";
-import { MENUS } from "../lib/menus";
-import { TOOL_GROUPS } from "../lib/tools";
+import {
+  effectiveLabel,
+  eventToBinding,
+  formatBinding,
+  type ShortcutDef,
+  type ShortcutOverrides,
+} from "../lib/shortcuts";
 
 interface Row {
   name: string;
   keys: string;
+  /** Registry id when the row is remappable (curated gestures have none). */
+  id?: string;
+  customized?: boolean;
+  remappable?: boolean;
 }
 interface Section {
   title: string;
   rows: Row[];
 }
 
-/** Canvas / panel interactions that live outside the menu bar. Curated — only
+/** Canvas / panel interactions that live outside the registry. Curated — only
  *  what actually exists (keep in sync when adding gestures). */
 const CANVAS_SHORTCUTS: Section[] = [
   {
@@ -39,6 +48,7 @@ const CANVAS_SHORTCUTS: Section[] = [
       { name: "Paint with the secondary colour", keys: "Right-drag" },
       { name: "Clone Stamp: set the source point", keys: "Alt+Click" },
       { name: "Commit a pen path", keys: "Enter / Double-click" },
+      { name: "Brush-style tools: size / hardness / strength", keys: "[ ] / { } / 0–9" },
       { name: "Curves: nudge the selected point (×10)", keys: "Arrows (Shift)" },
       { name: "Curves: remove a point", keys: "Right-click / ⌫" },
     ],
@@ -54,27 +64,73 @@ const CANVAS_SHORTCUTS: Section[] = [
   },
 ];
 
-/** Build the full registry: tools, every menu item that carries a shortcut,
- *  then the curated canvas/panel gestures. */
-function buildSections(): Section[] {
-  const tools: Section = {
-    title: "Tools",
-    rows: TOOL_GROUPS.flat().map((t) => ({ name: t.name, keys: t.shortcut })),
-  };
-  const menus: Section[] = MENUS.map((m) => ({
-    title: `${m.label} menu`,
-    rows: m.items
-      .filter((it) => it.shortcut)
-      .map((it) => ({ name: it.label.replace(/…$/, ""), keys: it.shortcut! })),
-  })).filter((s) => s.rows.length > 0);
-  return [tools, ...menus, ...CANVAS_SHORTCUTS];
-}
-
-export default function ShortcutsDialog({ onClose }: { onClose: () => void }) {
+/**
+ * The Keyboard Shortcuts window — a searchable cheat-sheet generated from the
+ * shortcut REGISTRY, and the place to REMAP: click a key chip, press the new
+ * keys (Backspace unbinds, Esc cancels), reset per-row or all at once.
+ */
+export default function ShortcutsDialog({
+  defs,
+  overrides,
+  onRebind,
+  onResetAll,
+  onClose,
+}: {
+  defs: ShortcutDef[];
+  overrides: ShortcutOverrides;
+  /** string = bind, null = unbind, undefined = restore the default. */
+  onRebind: (id: string, value: string | null | undefined) => void;
+  onResetAll: () => void;
+  onClose: () => void;
+}) {
   const [query, setQuery] = useState("");
-  const sections = useMemo(buildSections, []);
+  const [capturingId, setCapturingId] = useState<string | null>(null);
+  const customizedCount = Object.keys(overrides).length;
 
+  const sections = useMemo<Section[]>(() => {
+    const groups = new Map<string, Row[]>();
+    for (const d of defs) {
+      const row: Row = {
+        name: d.label,
+        keys: effectiveLabel(d, overrides),
+        id: d.id,
+        customized: d.id in overrides,
+        remappable: d.remappable,
+      };
+      const list = groups.get(d.group);
+      if (list) list.push(row);
+      else groups.set(d.group, [row]);
+    }
+    return [...[...groups.entries()].map(([title, rows]) => ({ title, rows })), ...CANVAS_SHORTCUTS];
+  }, [defs, overrides]);
+
+  // While capturing: swallow every keydown (capture phase) and record it.
   useEffect(() => {
+    if (!capturingId) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (e.key === "Escape") {
+        setCapturingId(null);
+        return;
+      }
+      if (e.key === "Backspace" || e.key === "Delete") {
+        onRebind(capturingId, null); // explicitly unbound
+        setCapturingId(null);
+        return;
+      }
+      const b = eventToBinding(e);
+      if (!b) return; // bare modifier — keep waiting
+      onRebind(capturingId, formatBinding(b));
+      setCapturingId(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [capturingId, onRebind]);
+
+  // Esc closes the dialog (only when not capturing — capture handles its own).
+  useEffect(() => {
+    if (capturingId) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -84,7 +140,7 @@ export default function ShortcutsDialog({ onClose }: { onClose: () => void }) {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
+  }, [onClose, capturingId]);
 
   const q = query.trim().toLowerCase();
   const filtered = sections
@@ -124,6 +180,10 @@ export default function ShortcutsDialog({ onClose }: { onClose: () => void }) {
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
+          <p className={styles.sectionHint}>
+            Click a key to remap it — press the new keys, Backspace to unbind, Esc to cancel.
+            Grey rows are fixed gestures.
+          </p>
 
           {filtered.map((s) => (
             <section key={s.title} className={styles.section}>
@@ -131,8 +191,38 @@ export default function ShortcutsDialog({ onClose }: { onClose: () => void }) {
               <div className={styles.shortcutList}>
                 {s.rows.map((r) => (
                   <div key={`${s.title}|${r.name}`} className={styles.shortcutRow}>
-                    <span className={styles.shortcutName}>{r.name}</span>
-                    <span className={styles.kbdChip}>{r.keys}</span>
+                    <span className={styles.shortcutName}>
+                      {r.name}
+                      {r.customized && <span className={styles.customDot} title="Customized" />}
+                    </span>
+                    {r.id && r.remappable ? (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        {r.customized && (
+                          <button
+                            type="button"
+                            className={styles.chipReset}
+                            title="Restore the default"
+                            aria-label={`Restore default for ${r.name}`}
+                            onClick={() => onRebind(r.id!, undefined)}
+                          >
+                            <RotateCcw size={11} />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className={`${styles.kbdChip} ${styles.kbdChipBtn}`}
+                          data-capturing={capturingId === r.id}
+                          onClick={() => setCapturingId(capturingId === r.id ? null : r.id!)}
+                          title="Click, then press the new shortcut"
+                        >
+                          {capturingId === r.id ? "Press keys…" : r.keys || "—"}
+                        </button>
+                      </span>
+                    ) : (
+                      <span className={styles.kbdChip} data-fixed={!r.id || undefined}>
+                        {r.keys || "—"}
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -141,7 +231,19 @@ export default function ShortcutsDialog({ onClose }: { onClose: () => void }) {
           {!filtered.length && <div className={styles.noResults}>No shortcuts match “{query}”.</div>}
         </div>
 
-        <footer className={styles.foot}>
+        <footer className={styles.foot} style={{ justifyContent: "flex-start" }}>
+          <button
+            type="button"
+            className={styles.btn}
+            disabled={!customizedCount}
+            onClick={() => {
+              if (window.confirm("Restore every keyboard shortcut to its default?")) onResetAll();
+            }}
+          >
+            Reset all shortcuts
+            {customizedCount ? ` (${customizedCount} changed)` : ""}
+          </button>
+          <span style={{ flex: 1 }} />
           <button type="button" className={`${styles.btn} ${styles.primary}`} onClick={onClose}>
             Done
           </button>

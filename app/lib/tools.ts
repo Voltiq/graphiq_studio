@@ -560,15 +560,9 @@ export const SAMPLE_SIZE_PX: Record<string, number> = {
 };
 export const SAMPLE_SCOPE_OPTIONS = ["All layers", "Current layer"];
 
-/** Map a single keyboard letter to a tool id (first match wins for dupes). */
-export const TOOL_BY_KEY: Record<string, ToolId> = (() => {
-  const m: Record<string, ToolId> = {};
-  for (const t of ALL_TOOLS) {
-    const k = t.shortcut.toLowerCase();
-    if (!(k in m)) m[k] = t.id;
-  }
-  return m;
-})();
+// (TOOL_BY_KEY was retired 2026-07 — tool keys now dispatch through the
+// shortcut registry in shortcuts.ts, which preserves its first-match-wins
+// rule for duplicate letters and adds user remapping.)
 
 export const getTool = (id: ToolId): Tool =>
   ALL_TOOLS.find((t) => t.id === id) ?? ALL_TOOLS[0];

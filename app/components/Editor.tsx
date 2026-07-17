@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./Editor.module.scss";
 import TopBar from "./TopBar";
 import Toolbar from "./Toolbar";
@@ -41,7 +41,6 @@ import {
   DEFAULT_TEXT,
   DEFAULT_TOOL,
   SAMPLE_SIZE_PX,
-  TOOL_BY_KEY,
   cropAspect,
   type BlurFxScope,
   type BlurFxSettings,
@@ -157,6 +156,19 @@ import {
   type PathSelectOp,
   type SavedPath,
 } from "../lib/paths";
+import {
+  buildDispatchIndex,
+  buildShortcutDefs,
+  canonicalBinding,
+  conflictOf,
+  effectiveLabel,
+  eventToBinding,
+  formatBinding,
+  loadShortcutOverrides,
+  parseShortcut,
+  saveShortcutOverrides,
+  type ShortcutOverrides,
+} from "../lib/shortcuts";
 import {
   DEFAULT_ADJUST,
   filterToAdjust,
@@ -1768,6 +1780,56 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const clearLayerStyleOp = (id: string) => fxStructural(id, undefined, "Clear Layer Style");
 
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // ---- Shortcut registry (single source of truth + user remaps) -------------
+  const [shortcutOverrides, setShortcutOverrides] = useState<ShortcutOverrides>({});
+  useEffect(() => setShortcutOverrides(loadShortcutOverrides()), []); // client store
+  const shortcutOverridesRef = useRef<ShortcutOverrides>({});
+  shortcutOverridesRef.current = shortcutOverrides;
+  const shortcutDefs = useMemo(() => buildShortcutDefs(), []);
+  // canonical binding → defs, consulted by the one-time keydown listener.
+  const shortcutIndexRef = useRef(new Map<string, ReturnType<typeof buildShortcutDefs>>());
+  shortcutIndexRef.current = useMemo(
+    () => buildDispatchIndex(shortcutDefs, shortcutOverrides),
+    [shortcutDefs, shortcutOverrides],
+  );
+  // Effective display labels for menus / palette / shortcuts window.
+  const shortcutLabels = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const d of shortcutDefs) out[d.id] = effectiveLabel(d, shortcutOverrides);
+    return out;
+  }, [shortcutDefs, shortcutOverrides]);
+
+  /** Remap one shortcut. `undefined` restores the default, `null` unbinds, a
+   *  string binds it (stealing the key from a remappable current owner). */
+  const rebindShortcut = (id: string, value: string | null | undefined) => {
+    const prev = shortcutOverridesRef.current;
+    const next: ShortcutOverrides = { ...prev };
+    if (value === undefined) {
+      delete next[id];
+    } else if (value === null) {
+      next[id] = null;
+    } else {
+      const b = parseShortcut(value);
+      if (!b) return;
+      const other = conflictOf(shortcutDefs, prev, id, b);
+      if (other) {
+        if (!other.remappable) {
+          showToast(`${formatBinding(b)} is reserved for “${other.label}”.`);
+          return;
+        }
+        next[other.id] = null; // steal — one binding, one command
+        showToast(`${formatBinding(b)} moved here from “${other.label}”.`);
+      }
+      next[id] = value;
+    }
+    saveShortcutOverrides(next);
+    setShortcutOverrides(next);
+  };
+  const resetAllShortcuts = () => {
+    saveShortcutOverrides({});
+    setShortcutOverrides({});
+  };
 
   // ---- Smart filters (Spec 07) ---------------------------------------------
   const [filterTarget, setFilterTarget] = useState<string | null>(null);
@@ -4104,108 +4166,38 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         }
       }
 
-      if (e.ctrlKey && e.altKey && key === "c") {
-        e.preventDefault();
-        openSizeDialog("canvas");
-      } else if (e.ctrlKey && e.altKey && key === "i") {
-        e.preventDefault();
-        openSizeDialog("image");
-      } else if (e.ctrlKey && e.altKey && key === "r") {
-        e.preventDefault();
-        cropToSelection();
-      } else if (e.ctrlKey && e.altKey && key === "m") {
-        e.preventDefault();
-        setTrimOpen(true);
-      } else if (e.ctrlKey && e.altKey && key === "g") {
-        e.preventDefault();
-        toggleClippingMask(); // Ctrl+Alt+G — Photoshop's Create/Release Clipping Mask
-      } else if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "F6") {
-        e.preventDefault();
-        setSelectModify("feather");
-      } else if (e.shiftKey && !e.ctrlKey && !e.altKey && e.key === "F5") {
-        e.preventDefault();
-        contentAwareFillOp();
-      } else if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === ",") {
-        // Ctrl+K now focuses the command search (TopBar owns that listener).
-        e.preventDefault();
-        setPrefsOpen(true);
-      } else if (e.ctrlKey && !e.shiftKey && key === "n") {
-        // Browsers reserve Ctrl+N (new window) and won't let a normal tab
-        // preventDefault it, so Ctrl+Alt+N is the reliable "new canvas". The
-        // plain Ctrl+N branch still works where it's allowed (e.g. PWA window).
+      // Registry dispatch: every menu / tool / command shortcut resolves
+      // through the ONE registry (defaults from menus.ts + tools.ts, plus the
+      // user's remaps) — so remapping really re-routes, unbinding really
+      // disables, and menu shortcut labels can never lie about the handler.
+      const binding = eventToBinding(e);
+      if (binding) {
+        const hits = shortcutIndexRef.current.get(canonicalBinding(binding));
+        if (hits) {
+          for (const d of hits) {
+            // Copy/cut fall through without a selection so the browser's own
+            // text copy keeps working outside the canvas (old behaviour).
+            if ((d.id === "menu:edit-copy" || d.id === "menu:edit-cut") && !selRef.current.length)
+              continue;
+            e.preventDefault();
+            if (d.id.startsWith("tool:")) setTool(d.id.slice(5) as ToolId);
+            else if (d.id === "cmd:swap-colors") swapColors();
+            else handleMenuActionRef.current(d.id.slice(5));
+            return;
+          }
+        }
+      }
+
+      if (e.ctrlKey && !e.altKey && !e.shiftKey && key === "n") {
+        // Legacy nicety kept OUTSIDE the registry: browsers reserve Ctrl+N, so
+        // the registered binding is Ctrl+Alt+N — but where a plain Ctrl+N does
+        // reach us (e.g. a PWA window), honour it too.
         e.preventDefault();
         requestNewDoc();
-      } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === "s") {
-        e.preventDefault();
-        setSaveAsOpen(true);
-      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === "s") {
-        e.preventDefault();
-        saveProject();
-      } else if (e.ctrlKey && !e.altKey && key === "o") {
-        e.preventDefault();
-        openProject();
-      } else if (e.ctrlKey && !e.altKey && (key === "=" || key === "+")) {
-        e.preventDefault();
-        viewApiRef.current?.zoomIn();
-      } else if (e.ctrlKey && !e.altKey && key === "-") {
-        e.preventDefault();
-        viewApiRef.current?.zoomOut();
-      } else if (e.ctrlKey && !e.altKey && key === "0") {
-        e.preventDefault();
-        viewApiRef.current?.fit();
-      } else if (e.ctrlKey && !e.altKey && key === "1") {
-        e.preventDefault();
-        viewApiRef.current?.zoom100();
-      } else if (e.ctrlKey && !e.altKey && key === "'") {
-        e.preventDefault();
-        persistView({ grid: !viewSettingsRef.current.grid });
-      } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === "e") {
-        e.preventDefault();
-        openExport();
-      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === "p") {
-        // Print the canvas (not the browser's print-the-whole-page default).
-        e.preventDefault();
-        printCanvas();
-      } else if (e.ctrlKey && e.altKey && key === "t") {
-        // Browser-safe (Ctrl+T is reserved): Ctrl+Alt+T = Free Transform (content),
-        // Ctrl+Alt+Shift+T = Transform Selection (outline only).
-        e.preventDefault();
-        enterTransform(!e.shiftKey);
-      } else if (e.ctrlKey && e.altKey && key === "y") {
-        e.preventDefault();
-        if (e.shiftKey) setGamutWarn((g) => !g);
-        else setProofColors((p) => !p);
-      } else if (e.ctrlKey && key === "y") {
+      } else if (e.ctrlKey && !e.altKey && !e.shiftKey && key === "y") {
+        // Legacy redo alias (the registered binding is Ctrl+Shift+Z).
         e.preventDefault();
         doRedo();
-      } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === "z") {
-        e.preventDefault();
-        doRedo();
-      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === "z") {
-        e.preventDefault();
-        doUndo();
-      } else if (e.ctrlKey && !e.altKey && key === "c" && selRef.current.length) {
-        e.preventDefault();
-        copySelection();
-      } else if (e.ctrlKey && !e.altKey && key === "x" && selRef.current.length) {
-        e.preventDefault();
-        cutSelection();
-      } else if (e.ctrlKey && !e.altKey && key === "a") {
-        // Select the whole canvas (not the browser's "select all text").
-        e.preventDefault();
-        selectAll();
-      } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === "d") {
-        e.preventDefault();
-        reselect();
-      } else if (e.ctrlKey && !e.shiftKey && !e.altKey && key === "d") {
-        e.preventDefault();
-        deselect();
-      } else if (e.ctrlKey && e.shiftKey && !e.altKey && key === "i") {
-        e.preventDefault();
-        invertSelection();
-      } else if (!e.ctrlKey && !e.altKey && !e.metaKey && key === "x") {
-        e.preventDefault();
-        swapColors();
       } else if (e.code === "Escape") {
         // Exiting the selection merges a floating paste down.
         if (paintRef.current?.isFloating()) {
@@ -4276,11 +4268,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
               : "Triangular marquee",
         );
       } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
-        // Single-key tool shortcuts (V move, M marquee, B brush, …).
-        const id = TOOL_BY_KEY[e.key.toLowerCase()];
-        if (id) {
+        // Shifted tool letters (Shift+B etc.) still reach a tool bound to the
+        // bare letter — the registry pass above requires exact modifiers, and
+        // the Shift+L/M cycles just had their chance.
+        const bare = canonicalBinding({ ctrl: false, alt: false, shift: false, key: e.key.toLowerCase() });
+        const tool = shortcutIndexRef.current.get(bare)?.find((d) => d.id.startsWith("tool:"));
+        if (tool) {
           e.preventDefault();
-          setTool(id);
+          setTool(tool.id.slice(5) as ToolId);
         }
       }
     };
@@ -4298,6 +4293,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       <TopBar
         onMenuAction={handleMenuAction}
         onSelectTool={setTool}
+        shortcutLabels={shortcutLabels}
         initialTheme={initialTheme}
         onUndo={doUndo}
         onRedo={doRedo}
@@ -4592,7 +4588,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         />
       )}
 
-      {shortcutsOpen && <ShortcutsDialog onClose={() => setShortcutsOpen(false)} />}
+      {shortcutsOpen && (
+        <ShortcutsDialog
+          defs={shortcutDefs}
+          overrides={shortcutOverrides}
+          onRebind={rebindShortcut}
+          onResetAll={resetAllShortcuts}
+          onClose={() => setShortcutsOpen(false)}
+        />
+      )}
 
       {helpOpen && <HelpDialog start={helpOpen} onClose={() => setHelpOpen(null)} />}
 
