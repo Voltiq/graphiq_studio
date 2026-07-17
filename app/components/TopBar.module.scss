@@ -225,79 +225,8 @@
   }
 }
 
-.searchWrap {
-  position: relative;
-}
-
-/* Results — overlay surface, hanging right-aligned off the pill. */
-.searchResults {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  min-width: 300px;
-  max-height: 340px;
-  overflow-y: auto;
-  padding: 5px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
-  z-index: 90;
-  animation: dropIn var(--t-short) var(--ease);
-  transform-origin: top right;
-}
-
-.searchItem {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 9px;
-  font-size: 12px;
-  border-radius: var(--r-md);
-  color: var(--text);
-  text-align: left;
-  transition: background var(--t-fast) var(--ease);
-
-  /* Keyboard highlight + hover share one look (hover moves the highlight). */
-  &[data-active="true"] {
-    background: var(--wash-2);
-  }
-}
-
-.searchIcon {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  flex-shrink: 0;
-  color: var(--text-3);
-}
-
-.searchLabel {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.searchSub {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-size: 12px;
-  color: var(--text-3);
-}
-
-.searchEmpty {
-  padding: 10px 9px;
-  font-size: 12px;
-  color: var(--text-3);
-}
-
-/* Magiq search: a container-filled field with a quiet Ctrl+K key chip.
-   Widens when it has focus — space is given when it's wanted. */
+/* Magiq search pill — now a BUTTON that opens the command palette (Ctrl+K).
+   (The old inline results dropdown moved into CommandPalette.module.scss.) */
 .search {
   display: flex;
   align-items: center;
@@ -309,28 +238,26 @@
   border: 1px solid var(--border);
   color: var(--text-2);
   transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
 
-  &:focus-within {
+.searchButton {
+  cursor: pointer;
+  font: inherit;
+
+  &:hover {
+    border-color: var(--border-strong);
+    background: var(--wash);
+  }
+
+  &:focus-visible {
     border-color: var(--focus-color);
-  }
-
-  input {
-    width: 132px;
-    background: none;
-    border: none;
     outline: none;
-    font-size: 12px;
-    color: var(--text);
-    transition: width var(--t-slow) var(--ease);
-
-    &:focus {
-      width: 196px;
-    }
-
-    &::placeholder {
-      color: var(--text-3);
-    }
   }
+}
+
+.searchHint {
+  font-size: 12px;
+  color: var(--text-3);
 }
 
 .searchKbd {

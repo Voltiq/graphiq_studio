@@ -1,0 +1,185 @@
+/* Command palette (Ctrl+K) — a top-centred, keyboard-first search overlay. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 240; /* above panels/menus, below nothing that matters */
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 11vh;
+  background: var(--blanket);
+  animation: fade var(--t-fast) var(--ease);
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.palette {
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  animation: drop var(--t-med) var(--ease-pop);
+}
+
+@keyframes drop {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.inputRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 14px;
+  height: 46px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+
+  input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    background: none;
+    border: none;
+    outline: none;
+    font-size: 14px;
+    color: var(--text);
+
+    &::placeholder {
+      color: var(--text-3);
+    }
+  }
+}
+
+.kbd {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 3px 5px;
+}
+
+.list {
+  max-height: min(52vh, 430px);
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.groupLabel {
+  padding: 8px 10px 4px;
+  font-size: 10.5px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--r-md);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+
+  &[data-active="true"] {
+    background: var(--accent);
+    color: var(--accent-contrast);
+
+    .sub,
+    .shortcut,
+    .icon,
+    .checkDot {
+      color: inherit;
+      opacity: 0.85;
+    }
+
+    .hl {
+      color: inherit;
+    }
+  }
+}
+
+.icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  color: var(--text-3);
+}
+
+.label {
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hl {
+  font-weight: var(--weight-semibold);
+  color: var(--accent);
+}
+
+.sub {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.shortcut {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* On/off state for checkable commands (Window ▸ panel toggles). */
+.checkDot {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  color: var(--text-3);
+}
+
+.empty {
+  padding: 18px 14px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  text-align: center;
+}

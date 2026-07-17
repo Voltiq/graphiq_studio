@@ -19,6 +19,10 @@ interface Section {
  *  what actually exists (keep in sync when adding gestures). */
 const CANVAS_SHORTCUTS: Section[] = [
   {
+    title: "Application",
+    rows: [{ name: "Command palette (search tools & menus)", keys: "Ctrl+K" }],
+  },
+  {
     title: "Canvas & selections",
     rows: [
       { name: "Zoom at the cursor", keys: "Ctrl+Wheel" },

@@ -279,7 +279,7 @@ export const TOPICS: HelpTopic[] = [
         title: "Workspace",
         entries: [
           { title: "Panels", body: "Color, Adjustments, Properties, Layers, History, Navigator, Channels and Metadata — toggle them in the Window menu, drag their headers to reorder the dock, collapse what you don't need, or reset the workspace." },
-          { title: "Command search", body: "Ctrl+K focuses the top-bar search: every tool and menu command is one keystroke away.", keys: "Ctrl+K" },
+          { title: "Command palette", body: "Ctrl+K (or the top-bar search pill) opens the command palette: fuzzy-search every tool and menu command — \"exp svg\" finds Export SVG — with your recently used commands ready when the query is empty.", keys: "Ctrl+K" },
           { title: "History", body: "The History panel lists undoable steps — click any entry to jump. The in-memory cap is set in Preferences ▸ Performance.", keys: "Ctrl+Z" },
         ],
       },
