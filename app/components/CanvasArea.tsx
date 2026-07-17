@@ -590,6 +590,10 @@ export default function CanvasArea({
   onPick,
   tonePick,
   onTonePick,
+  curveTarget,
+  onCurveTargetStart,
+  onCurveTargetDrag,
+  onCurveTargetEnd,
   pendingPaste,
   onPasteDone,
   pendingLoads,
@@ -705,6 +709,11 @@ export default function CanvasArea({
   /** While a Levels eyedropper is armed, the next canvas click samples a colour. */
   tonePick: boolean;
   onTonePick: (rgb: { r: number; g: number; b: number }) => void;
+  /** Curves targeted adjustment armed: click-drag on the image drives the curve. */
+  curveTarget: boolean;
+  onCurveTargetStart: (rgb: { r: number; g: number; b: number }) => void;
+  onCurveTargetDrag: (dy: number) => void;
+  onCurveTargetEnd: () => void;
   pendingPaste: PendingPaste | null;
   onPasteDone: () => void;
   pendingLoads: PendingLoad[];
@@ -1158,6 +1167,8 @@ export default function CanvasArea({
   selPivotRef.current = selectionPivot;
   // Cursor override driven by hovering the selection (resize / rotate / anchor).
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
+  // Curves targeted-adjustment drag: the pointer's clientY at drag start.
+  const curveDragYRef = useRef<number | null>(null);
   // Viewport pixel size, tracked so the rulers can lay out their ticks.
   const [vpSize, setVpSize] = useState({ w: 0, h: 0 });
   const pickingRef = useRef(false);
@@ -3518,6 +3529,20 @@ export default function CanvasArea({
       }
       return;
     }
+    // Curves targeted adjustment: sample the tone under the cursor, then a
+    // vertical drag moves the curve point at that tone (Editor does the math).
+    if (curveTarget) {
+      e.preventDefault();
+      const p = toDoc(e);
+      const hex = engine.sampleColor(Math.floor(p.x), Math.floor(p.y), 1, true, activeLayerId);
+      if (hex) {
+        const c = parseColor(hex);
+        viewRef.current?.setPointerCapture(e.pointerId);
+        curveDragYRef.current = e.clientY;
+        onCurveTargetStart({ r: c.r, g: c.g, b: c.b });
+      }
+      return;
+    }
     if (tool === "zoom") {
       // Left click zooms in, right click (or Alt) zooms out — toward the cursor.
       e.preventDefault();
@@ -3961,6 +3986,11 @@ export default function CanvasArea({
         : null,
     );
 
+    if (curveDragYRef.current !== null) {
+      onCurveTargetDrag(e.clientY - curveDragYRef.current);
+      return;
+    }
+
     if (handRef.current) {
       // Pan: offset the canvas by the drag delta from the press point.
       const h = handRef.current;
@@ -4368,6 +4398,13 @@ export default function CanvasArea({
     engine.moveStroke(p.x, p.y);
   };
   const onCanvasPointerUp = (e: React.PointerEvent) => {
+    if (curveDragYRef.current !== null) {
+      curveDragYRef.current = null;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      onCurveTargetEnd();
+      return;
+    }
     if (handRef.current) {
       handRef.current = null;
       setHoverCursor(null);
@@ -4905,7 +4942,9 @@ export default function CanvasArea({
               height={height}
               style={{
                 cursor:
-                  hoverCursor ??
+                  curveTarget
+                    ? "crosshair"
+                    : hoverCursor ??
                   (tool === "move"
                     ? "move"
                     : tool === "hand"

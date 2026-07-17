@@ -172,10 +172,15 @@ import NewDocDialog from "./NewDocDialog";
 import RestoreDialog from "./RestoreDialog";
 import {
   autoLevels,
+  buildCurvesLUTs,
+  curveLUT,
+  curveSampler,
   defaultCurves,
   defaultLevels,
   solveGrayPoint,
+  type ChannelKey,
   type ChannelParams,
+  type CurvePoint,
   type ToneAdjustment,
 } from "../lib/tone";
 import { extractMetadata, type ImageMetadata } from "../lib/metadata";
@@ -1601,6 +1606,77 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     }
     onToneChange({ type: "levels", channels });
   };
+
+  // ---- Curves targeted adjustment (click-drag the image to move the curve
+  //      point at the sampled tone) ------------------------------------------
+  const [curveTarget, setCurveTarget] = useState(false);
+  const curveChannelRef = useRef<ChannelKey>("rgb"); // dialog's active channel
+  const curveDragRef = useRef<{ ch: ChannelKey; x: number; y0: number } | null>(null);
+
+  /** Recover the PRE-curve value: nearest input whose LUT output matches the
+   *  sampled (displayed) byte. A nearest-value scan is robust for any curve
+   *  shape (rising, falling, plateaus) at 256 steps. */
+  const invertLut = (lut: Uint8ClampedArray, v: number): number => {
+    let best = 0;
+    let bd = Infinity;
+    for (let i = 0; i < 256; i++) {
+      const d = Math.abs(lut[i] - v);
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    }
+    return best;
+  };
+
+  const onCurveTargetStart = (rgb: { r: number; g: number; b: number }) => {
+    if (!toneSpec || toneSpec.type !== "curves") return;
+    const ch = curveChannelRef.current;
+    // The view shows channel(master(raw)) — invert the effective LUTs to get
+    // the raw tone, then map to the domain the edited curve actually sees:
+    // raw for the master, master(raw) for a colour channel.
+    const eff = buildCurvesLUTs(toneSpec);
+    const raw = {
+      r: invertLut(eff.r, Math.round(rgb.r)),
+      g: invertLut(eff.g, Math.round(rgb.g)),
+      b: invertLut(eff.b, Math.round(rgb.b)),
+    };
+    const x =
+      ch === "rgb"
+        ? Math.round(0.299 * raw.r + 0.587 * raw.g + 0.114 * raw.b)
+        : curveLUT(toneSpec.channels.rgb)[ch === "r" ? raw.r : ch === "g" ? raw.g : raw.b];
+    const pts = toneSpec.channels[ch];
+    const near = pts.find((p) => Math.abs(p.x - x) <= 6);
+    if (near) {
+      curveDragRef.current = { ch, x: near.x, y0: near.y };
+      return;
+    }
+    // New point ON the current curve, so nothing jumps until the drag moves.
+    const y = Math.max(0, Math.min(255, Math.round(curveSampler(pts)(x))));
+    const next: CurvePoint[] = [...pts.map((p) => ({ ...p })), { x, y }].sort((a, b) => a.x - b.x);
+    curveDragRef.current = { ch, x, y0: y };
+    onToneChange({ ...toneSpec, channels: { ...toneSpec.channels, [ch]: next } });
+  };
+
+  const onCurveTargetDrag = (dy: number) => {
+    const s = curveDragRef.current;
+    if (!s || !toneSpec || toneSpec.type !== "curves") return;
+    const y = Math.max(0, Math.min(255, Math.round(s.y0 - dy))); // up = brighter
+    const pts = toneSpec.channels[s.ch].map((p) => (p.x === s.x ? { ...p, y } : p));
+    onToneChange({ ...toneSpec, channels: { ...toneSpec.channels, [s.ch]: pts } });
+  };
+
+  const onCurveTargetEnd = () => {
+    curveDragRef.current = null;
+  };
+
+  // Leaving the tone editor (or switching its target) disarms the mode.
+  useEffect(() => {
+    setCurveTarget(false);
+    curveDragRef.current = null;
+    curveChannelRef.current = "rgb";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toneKey]);
 
   // ---- Layer effects (styles) ----------------------------------------------
   const [layerStyleTarget, setLayerStyleTarget] = useState<string | null>(null);
@@ -4299,6 +4375,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onPick={setPaintColor}
           tonePick={!!tonePick}
           onTonePick={onTonePicked}
+          curveTarget={curveTarget}
+          onCurveTargetStart={onCurveTargetStart}
+          onCurveTargetDrag={onCurveTargetDrag}
+          onCurveTargetEnd={onCurveTargetEnd}
           pendingPaste={pendingPaste}
           onPasteDone={() => setPendingPaste(null)}
           pendingLoads={pendingLoads}
@@ -4566,6 +4646,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onChange={onToneChange}
           onDone={onToneDone}
           onCancel={onToneCancel}
+          targeting={curveTarget}
+          onToggleTarget={() => setCurveTarget((t) => !t)}
+          onChannel={(c) => {
+            curveChannelRef.current = c;
+          }}
           doneLabel={toneEdit.mode === "dest" ? "Apply" : "Done"}
           cancelLabel={toneEdit.mode === "dest" ? "Cancel" : "Close"}
         />

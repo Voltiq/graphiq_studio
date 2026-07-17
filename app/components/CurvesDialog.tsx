@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Minus, RotateCcw, X } from "lucide-react";
+import { Crosshair, Minus, RotateCcw, X } from "lucide-react";
 import styles from "./CurvesDialog.module.scss";
 import { Select } from "./Controls";
 import type { ChannelHistogram } from "../lib/paint";
@@ -49,6 +49,9 @@ export default function CurvesDialog({
   onChange,
   onDone,
   onCancel,
+  targeting,
+  onToggleTarget,
+  onChannel,
   doneLabel,
   cancelLabel,
 }: {
@@ -57,6 +60,11 @@ export default function CurvesDialog({
   onChange: (spec: CurvesSpec) => void;
   onDone: () => void;
   onCancel: () => void;
+  /** Targeted adjustment armed: drags on the image drive the active channel. */
+  targeting: boolean;
+  onToggleTarget: () => void;
+  /** Reports channel-tab switches (the targeted adjustment edits this channel). */
+  onChannel: (ch: ChannelKey) => void;
   doneLabel: string;
   cancelLabel: string;
 }) {
@@ -79,12 +87,14 @@ export default function CurvesDialog({
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopImmediatePropagation();
-        onCancel();
+        // Esc steps out of targeting first; a second Esc closes the dialog.
+        if (targeting) onToggleTarget();
+        else onCancel();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onCancel]);
+  }, [onCancel, targeting, onToggleTarget]);
 
   // ---- draw the graph (theme-aware: ink colours come from the live tokens) ----
   useEffect(() => {
@@ -313,11 +323,19 @@ export default function CurvesDialog({
   const presetValue = matchPreset(points);
 
   return (
-    <div className={styles.overlay} onMouseDown={onCancel}>
+    <div
+      className={styles.overlay}
+      data-targeting={targeting}
+      // While targeting, the blanket stops intercepting the canvas (clicks fall
+      // through everywhere except the dialog itself, which re-enables events).
+      style={targeting ? { pointerEvents: "none", background: "transparent", backdropFilter: "none" } : undefined}
+      onMouseDown={targeting ? undefined : onCancel}
+    >
       <div
         className={styles.dialog}
+        data-targeting={targeting}
         role="dialog"
-        aria-modal="true"
+        aria-modal={!targeting}
         aria-label="Curves"
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
@@ -348,6 +366,7 @@ export default function CurvesDialog({
                     setCh(c.key);
                     setSel(0);
                     setHover(-1);
+                    onChannel(c.key);
                   }}
                 >
                   <span className={styles.chipDot} />
@@ -360,6 +379,19 @@ export default function CurvesDialog({
             <button
               type="button"
               className={styles.ghostBtn}
+              data-active={targeting}
+              onClick={onToggleTarget}
+              title={
+                targeting
+                  ? "Targeted adjustment is on — drag on the image to shape the curve (Esc exits)"
+                  : "Targeted adjustment: click-drag on the image to move the curve at that tone"
+              }
+            >
+              <Crosshair size={12} /> Target
+            </button>
+            <button
+              type="button"
+              className={styles.ghostBtn}
               onClick={() => {
                 setChannel(IDENTITY_CURVE.map((p) => ({ ...p })));
                 setSel(0);
@@ -369,6 +401,12 @@ export default function CurvesDialog({
               <RotateCcw size={12} /> Reset
             </button>
           </div>
+          {targeting && (
+            <p className={styles.targetHint}>
+              Drag up or down on the image to brighten or darken the{" "}
+              {CHANNELS.find((c) => c.key === ch)!.label} curve at that tone — Esc to finish.
+            </p>
+          )}
 
           {/* Preset — full-width row so the dropdown never clips */}
           <div className={styles.presetRow}>

@@ -460,3 +460,32 @@
     border-color: transparent;
   }
 }
+
+/* ---------------- Targeted adjustment (drag-on-image) mode ------------------ */
+/* While targeting, the blanket is gone (inline style) and the dialog docks to
+   the right edge so the picture stays visible and clickable. The dialog itself
+   re-enables pointer events — channel chips / Reset / Done keep working. */
+.overlay[data-targeting="true"] {
+  place-items: center end;
+  padding-right: 16px;
+}
+
+.dialog[data-targeting="true"] {
+  pointer-events: auto;
+  opacity: 0.96;
+  box-shadow: var(--shadow);
+}
+
+/* The Target toggle lights up solid-accent while armed (Magiq active style). */
+.ghostBtn[data-active="true"] {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.targetHint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--accent);
+}

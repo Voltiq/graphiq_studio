@@ -171,7 +171,7 @@ export const TOPICS: HelpTopic[] = [
       {
         title: "Tone tools",
         entries: [
-          { title: "Curves", body: "Monotone-smooth curve per channel over a histogram backdrop; click to add points, drag or arrow-key to move them, right-click to remove. Presets included.", keys: "Arrows" },
+          { title: "Curves", body: "Monotone-smooth curve per channel over a histogram backdrop; click to add points, drag or arrow-key to move them, right-click to remove. Presets included — and the Target toggle lets you drag directly on the image to shape the curve at the tone under the cursor.", keys: "Arrows" },
           { title: "Levels", body: "Input black/gamma/white and output range per channel, black/grey/white-point eyedroppers, and an Auto contrast stretch." },
           { title: "LUT round-trip", body: "Import any .cube 3D LUT as a Color Lookup layer; export your current adjustment stack (or the panel's sliders) as a .cube at 17/33/65 points to use elsewhere." },
         ],

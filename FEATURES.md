@@ -251,7 +251,7 @@ Honest list of what is **partial, deferred, or absent**:
 
 **Non-destructive stack gaps**
 - **Filter-mask move:** the smart-filter mask always tracks its layer through canvas transforms; there is no unlinked per-mask move (the layer mask has one via the link toggle).
-- **Curves "targeted on-canvas adjustment"** (click-drag the image to move the curve node at the sampled tone) is **not** implemented (it was optional in the spec).
+- **Curves targeted adjustment** (the optional spec item) is now implemented: the Curves dialog's **Target** toggle lets you click-drag on the image to shape the active channel's curve at the sampled tone — the dialog docks aside, the sampled value is **inverted through the current LUTs** so the point lands at the pre-curve tone, and dragging up/down moves its output. Honest limit: the sample reads the flattened view, so layers/effects *above* a curves adjustment node can skew the recovered tone.
 - **Gradient stroke effect:** the engine can render a gradient-filled stroke, but the Layer Style dialog exposes Stroke as **colour-only** (the Gradient *Overlay* has a 2-stop editor).
 - **Clip edge case:** a clipped layer sitting directly above a **non-clipped adjustment layer** is treated as **inert** rather than clipping to the pixel base *below* the adjustment (a rare configuration; the spec permitted "inert" as a fallback).
 - **Channels-panel mask channel** and an **options-bar "Mask" pill** were deferred (the Layers-panel active-surface ring is the indicator instead).
