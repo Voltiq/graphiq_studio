@@ -228,7 +228,7 @@ export const TOPICS: HelpTopic[] = [
         entries: [
           { title: ".gproj projects", body: "The native format saves every document exactly: layers, groups, masks, adjustment layers, styles, smart filters, selection and history labels. Save uses your name; Save As picks a location with the system dialog.", keys: "Ctrl+S" },
           { title: "Recents", body: "Saved and opened projects are remembered — File ▸ Open recent re-opens them, straight from disk on browsers that allow it." },
-          { title: "Autosave & crash recovery", body: "Every open document is snapshotted on an interval (Preferences ▸ Editing). If the app closes uncleanly, the next launch offers to restore all of them." },
+          { title: "Autosave & crash recovery", body: "Every open document is snapshotted on an interval (Preferences ▸ Files). If the app closes uncleanly, the next launch offers to restore all of them." },
         ],
       },
       {

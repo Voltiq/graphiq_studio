@@ -67,7 +67,7 @@ export default function RestoreDialog({
           </div>
           <span className={styles.note}>
             Restore reopens {count > 1 ? "these documents" : "this document"}; Discard deletes the
-            snapshot. Autosave runs every few minutes (Settings ▸ Preferences ▸ Editing).
+            snapshot. Autosave runs every few minutes (Settings ▸ Preferences ▸ Files).
           </span>
         </div>
         <footer className={styles.foot}>

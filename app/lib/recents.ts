@@ -21,7 +21,15 @@ const LEGACY_DB_NAME = "aperture-editor"; // pre-rebrand store, still read as a 
 const DB_VERSION = 1;
 const META = "recent-meta";
 const PAYLOAD = "recent-payload";
-const MAX_RECENTS = 8;
+
+// Preferences ▸ Files "Recent files" — applied by Editor on pref change; the
+// list trims as entries are ADDED, so shrinking takes effect on the next save.
+let recentsLimit = 8;
+
+/** Set how many recents survive the post-add trim (clamped to 1–20). */
+export function setRecentsLimit(n: number): void {
+  recentsLimit = Math.max(1, Math.min(20, Math.round(n) || 8));
+}
 
 const supported = () => typeof indexedDB !== "undefined";
 
@@ -111,11 +119,11 @@ export async function addRecent(
     tx.objectStore(PAYLOAD).put(value, id);
     await txDone(tx);
 
-    // Keep only the most-recent MAX_RECENTS.
+    // Keep only the most-recent `recentsLimit` entries.
     const remaining = (
       (await reqValue(db.transaction(META, "readonly").objectStore(META).getAll())) as RecentMeta[]
     ).sort((a, b) => b.savedAt - a.savedAt);
-    const extra = remaining.slice(MAX_RECENTS);
+    const extra = remaining.slice(recentsLimit);
     if (extra.length) {
       const tx2 = db.transaction([META, PAYLOAD], "readwrite");
       for (const m of extra) {

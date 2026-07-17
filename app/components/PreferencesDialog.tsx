@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Check,
   ClipboardPaste,
+  FolderOpen,
   Gauge,
   Grid2x2,
   HardDrive,
@@ -27,6 +28,7 @@ import {
   type Preferences,
 } from "../lib/prefs";
 import { downloadSettings, importSettings, resetSettings } from "../lib/settings";
+import { availableFormats } from "../lib/imageio";
 import { clearAutosave } from "../lib/autosave";
 import { clearRecents, listRecents } from "../lib/recents";
 import {
@@ -81,6 +83,7 @@ export type PrefsTab =
   | "appearance"
   | "pasting"
   | "editing"
+  | "files"
   | "units"
   | "transparency"
   | "performance"
@@ -91,6 +94,7 @@ const TABS: { id: Tab; label: string; icon: typeof Palette }[] = [
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "pasting", label: "Pasting", icon: ClipboardPaste },
   { id: "editing", label: "Editing", icon: SlidersHorizontal },
+  { id: "files", label: "Files", icon: FolderOpen },
   { id: "units", label: "Units & rulers", icon: Ruler },
   { id: "transparency", label: "Transparency", icon: Grid2x2 },
   { id: "performance", label: "Performance", icon: Gauge },
@@ -180,6 +184,8 @@ export default function PreferencesDialog({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
+  // Files ▸ Export defaults: only formats this browser can actually encode.
+  const [exportFormats] = useState(() => availableFormats());
   const importInputRef = useRef<HTMLInputElement>(null);
   const [theme, setTheme] = useState<Theme>(() => currentTheme(initialTheme));
   const [accent, setAccent] = useState<Accent>(() => liveAccent());
@@ -425,31 +431,6 @@ export default function PreferencesDialog({
                       onChange={(v) => onChange({ gradientSnap: v })}
                     />
                   </div>
-                  <div className={styles.row}>
-                    <div className={styles.rowText}>
-                      <strong>Share saved gradients</strong>
-                      <em>Layer styles use the same saved &amp; imported presets as the gradient tool</em>
-                    </div>
-                    <Toggle
-                      label=""
-                      checked={prefs.sharedGradients}
-                      onChange={(v) => onChange({ sharedGradients: v })}
-                    />
-                  </div>
-                </section>
-                <section className={styles.section}>
-                  <span className={styles.groupLabel}>Autosave</span>
-                  <p className={styles.sectionHint}>
-                    Snapshots the project so an unexpected exit can be restored. 0 turns it off.
-                  </p>
-                  <Slider
-                    label="Interval"
-                    min={0}
-                    max={10}
-                    unit=" min"
-                    value={prefs.autosaveMinutes}
-                    onChange={(n) => onChange({ autosaveMinutes: n })}
-                  />
                 </section>
                 <section className={styles.section}>
                   <span className={styles.groupLabel}>History</span>
@@ -497,6 +478,84 @@ export default function PreferencesDialog({
                         aria-label="Default copyright notice"
                       />
                     </div>
+                  </div>
+                </section>
+              </>
+            )}
+
+            {tab === "files" && (
+              <>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Autosave</span>
+                  <p className={styles.sectionHint}>
+                    Snapshots every open document so an unexpected exit can be restored. 0 turns
+                    it off.
+                  </p>
+                  <Slider
+                    label="Interval"
+                    min={0}
+                    max={10}
+                    unit=" min"
+                    value={prefs.autosaveMinutes}
+                    onChange={(n) => onChange({ autosaveMinutes: n })}
+                  />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Export defaults</span>
+                  <p className={styles.sectionHint}>
+                    What Export As opens with — format and quality stay fully editable in the
+                    dialog each time.
+                  </p>
+                  <OptionList
+                    options={exportFormats.map((f) => ({
+                      value: f.id,
+                      title: `${f.label} (.${f.ext})`,
+                      desc: f.lossy
+                        ? `Lossy — opens at the default quality below${f.alpha ? ", supports transparency" : ""}`
+                        : "Lossless, supports transparency",
+                    }))}
+                    value={
+                      exportFormats.some((f) => f.id === prefs.defaultExportFormatId)
+                        ? prefs.defaultExportFormatId
+                        : exportFormats[0].id
+                    }
+                    onPick={(v) => onChange({ defaultExportFormatId: v })}
+                  />
+                  <Slider
+                    label="Default quality"
+                    min={1}
+                    max={100}
+                    unit="%"
+                    value={prefs.defaultExportQuality}
+                    onChange={(n) => onChange({ defaultExportQuality: n })}
+                  />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Recent files</span>
+                  <p className={styles.sectionHint}>
+                    How many projects File ▸ Open recent remembers. Shrinking applies as new
+                    entries are added; the Storage tab can clear the list entirely.
+                  </p>
+                  <Slider
+                    label="Remembered projects"
+                    min={4}
+                    max={20}
+                    value={prefs.recentsLimit}
+                    onChange={(n) => onChange({ recentsLimit: n })}
+                  />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Libraries</span>
+                  <div className={styles.row}>
+                    <div className={styles.rowText}>
+                      <strong>Share saved gradients</strong>
+                      <em>Layer styles use the same saved &amp; imported presets as the gradient tool</em>
+                    </div>
+                    <Toggle
+                      label=""
+                      checked={prefs.sharedGradients}
+                      onChange={(v) => onChange({ sharedGradients: v })}
+                    />
                   </div>
                 </section>
               </>

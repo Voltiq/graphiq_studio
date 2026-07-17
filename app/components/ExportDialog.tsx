@@ -37,6 +37,8 @@ export default function ExportDialog({
   composite,
   defaultName,
   meta,
+  initialFormatId,
+  initialQuality,
   onExport,
   onBatchExport,
   onClose,
@@ -45,14 +47,21 @@ export default function ExportDialog({
   defaultName: string;
   /** Document metadata available for embedding (null = nothing to embed). */
   meta: ExportMetadata | null;
+  /** Preferences ▸ Files export defaults (unknown/unencodable ids fall back). */
+  initialFormatId?: string;
+  initialQuality?: number;
   onExport: (opts: ExportOptions, filename: string, embedMeta: boolean) => void;
   onBatchExport: (run: BatchRun, docName: string) => Promise<void>;
   onClose: () => void;
 }) {
   const [formats] = useState(() => availableFormats());
   const [mode, setMode] = useState<"single" | "batch">("single");
-  const [format, setFormat] = useState<ExportFormat>(formats[0]);
-  const [quality, setQuality] = useState(92);
+  const [format, setFormat] = useState<ExportFormat>(
+    () => formats.find((f) => f.id === initialFormatId) ?? formats[0],
+  );
+  const [quality, setQuality] = useState(() =>
+    Math.max(1, Math.min(100, Math.round(initialQuality ?? 92) || 92)),
+  );
   const [transparent, setTransparent] = useState(true);
   const [matte, setMatte] = useState("#ffffffff");
   const [scalePct, setScalePct] = useState(100);

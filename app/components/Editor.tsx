@@ -135,7 +135,7 @@ import { buildZip } from "../lib/zip";
 import { dedupeFilenames, targetFilename } from "../lib/exportpresets";
 import { exportSVG, looksLikeSVG, parseSVGFile, translateVectorPath } from "../lib/svg";
 import { buildPSD, parsePSD, type PsdDocument, type PsdImage, type PsdNode, type PsdOutNode } from "../lib/psd";
-import { addRecent } from "../lib/recents";
+import { addRecent, setRecentsLimit } from "../lib/recents";
 import {
   DEFAULT_ADJUST,
   filterToAdjust,
@@ -2492,6 +2492,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setRawWorkerEnabled(prefs.useWorkers);
   }, [prefs.useWorkers]);
 
+  // Recent-files length -> the recents store's post-add trim.
+  useEffect(() => {
+    setRecentsLimit(prefs.recentsLimit);
+  }, [prefs.recentsLimit]);
+
   const markSaved = (label: string) => {
     autosaveDirtyRef.current = false;
     setSaveState({ label, ok: true });
@@ -4517,6 +4522,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           composite={exportComposite}
           defaultName={active.name}
           meta={exportMetaFor(active)}
+          initialFormatId={prefs.defaultExportFormatId}
+          initialQuality={prefs.defaultExportQuality}
           onExport={doExport}
           onBatchExport={doBatchExport}
           onClose={() => setExportComposite(null)}

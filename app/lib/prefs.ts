@@ -105,6 +105,14 @@ export interface Preferences {
   authorName: string;
   /** Default copyright notice (EXIF Copyright / dc:rights) — same fallback rule. */
   copyrightNotice: string;
+  /** Export As opens with this format preselected (falls back to PNG when the
+   *  browser can't encode it). */
+  defaultExportFormatId: string;
+  /** Export As opens with this quality (lossy formats), 1–100. */
+  defaultExportQuality: number;
+  /** How many projects File ▸ Open recent remembers (older entries drop as new
+   *  ones are added). */
+  recentsLimit: number;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -129,6 +137,9 @@ export const DEFAULT_PREFS: Preferences = {
   checkerB: "#cccccc",
   authorName: "",
   copyrightNotice: "",
+  defaultExportFormatId: "png",
+  defaultExportQuality: 92,
+  recentsLimit: 8,
 };
 
 const KEY = "graphiq:preferences";
