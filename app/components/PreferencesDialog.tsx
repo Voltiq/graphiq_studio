@@ -865,10 +865,10 @@ export default function PreferencesDialog({
                   </div>
                   <div className={styles.row}>
                     <div className={styles.rowText}>
-                      <strong>Saved presets &amp; swatches</strong>
+                      <strong>Saved presets, swatches &amp; actions</strong>
                       <em>
                         {store
-                          ? `Gradients, swatches, adjustment looks and export presets — ${store.presets ? `~${fmtBytes(store.presets)}` : "none saved"}`
+                          ? `Gradients, swatches, adjustment looks, export presets and recorded actions — ${store.presets ? `~${fmtBytes(store.presets)}` : "none saved"}`
                           : "…"}
                       </em>
                     </div>
@@ -877,7 +877,7 @@ export default function PreferencesDialog({
                       className={styles.btn}
                       disabled={!store?.presets}
                       onClick={() => {
-                        if (!window.confirm("Delete every saved preset?\n\nGradient presets, colour swatches, saved adjustment looks and export presets are removed. Built-in presets remain; open documents are untouched.")) return;
+                        if (!window.confirm("Delete every saved preset?\n\nGradient presets, colour swatches, saved adjustment looks, export presets and recorded actions are removed. Built-in presets remain; open documents are untouched.")) return;
                         clearPresets();
                         void loadStore();
                       }}

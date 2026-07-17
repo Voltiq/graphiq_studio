@@ -278,7 +278,8 @@ export const TOPICS: HelpTopic[] = [
       {
         title: "Workspace",
         entries: [
-          { title: "Panels", body: "Color, Adjustments, Properties, Layers, History, Navigator, Channels and Metadata — toggle them in the Window menu, drag their headers to reorder the dock, collapse what you don't need, or reset the workspace." },
+          { title: "Panels", body: "Color, Adjustments, Properties, Layers, History, Actions, Navigator, Channels and Metadata — toggle them in the Window menu, drag their headers to reorder the dock, collapse what you don't need, or reset the workspace." },
+          { title: "Actions (macros)", body: "The Actions panel records sequences of document commands — layer ops, rotates, preset adjustments, effects — and replays them in one click or with an assigned F-key (F2–F10). Commands that open a dialog, and tool strokes, aren't captured." },
           { title: "Command palette", body: "Ctrl+K (or the top-bar search pill) opens the command palette: fuzzy-search every tool and menu command — \"exp svg\" finds Export SVG — with your recently used commands ready when the query is empty.", keys: "Ctrl+K" },
           { title: "History", body: "The History panel lists undoable steps — click any entry to jump. The in-memory cap is set in Preferences ▸ Performance.", keys: "Ctrl+Z" },
         ],

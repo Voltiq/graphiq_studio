@@ -20,6 +20,7 @@ export const PRESET_KEYS: readonly string[] = [
   "graphiq:gradient-presets-fx",
   "graphiq:adjust-presets", // AdjustmentsPanel's saved filters
   "graphiq:export-presets",
+  "graphiq:actions", // Actions panel macros
   "aperture:swatches",
   "aperture:gradient-presets",
   "aperture:adjust-presets",

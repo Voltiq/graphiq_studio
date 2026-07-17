@@ -153,6 +153,7 @@ export const MENUS: Menu[] = [
       { label: "Properties", action: "window-properties" },
       { label: "Layers", action: "window-layers" },
       { label: "History", action: "window-history" },
+      { label: "Actions", action: "window-actions" },
       { label: "Navigator", action: "window-navigator" },
       { label: "Channels", action: "window-channels" },
       { label: "Metadata", separatorAfter: true, action: "window-metadata" },

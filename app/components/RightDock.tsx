@@ -14,6 +14,7 @@ import {
   Settings2,
   SlidersHorizontal,
   Trash2,
+  Zap,
 } from "lucide-react";
 import styles from "./RightDock.module.scss";
 import Panel from "./Panel";
@@ -25,6 +26,8 @@ import NavigatorPanel from "./panels/NavigatorPanel";
 import ChannelsPanel from "./panels/ChannelsPanel";
 import MetadataPanel from "./panels/MetadataPanel";
 import PropertiesPanel from "./panels/PropertiesPanel";
+import ActionsPanel from "./panels/ActionsPanel";
+import type { ActionsApi } from "../lib/actions";
 import type { NavigatorView } from "../lib/view";
 import type { LayersApi } from "../lib/layers";
 import type { EngineHandle, HistorySummary } from "../lib/paint";
@@ -38,6 +41,7 @@ export type PanelVisibility = {
   properties: boolean;
   layers: boolean;
   history: boolean;
+  actions: boolean;
   navigator: boolean;
   channels: boolean;
   metadata: boolean;
@@ -51,6 +55,7 @@ type PanelId =
   | "properties"
   | "layers"
   | "history"
+  | "actions"
   | "metadata";
 const DEFAULT_ORDER: PanelId[] = [
   "navigator",
@@ -60,6 +65,7 @@ const DEFAULT_ORDER: PanelId[] = [
   "properties",
   "layers",
   "history",
+  "actions",
   "metadata",
 ];
 const ORDER_KEY = "graphiq:panel-order";
@@ -76,6 +82,7 @@ const DEFAULT_OPEN: Record<PanelId, boolean> = {
   properties: true,
   layers: true,
   history: false,
+  actions: false,
   metadata: false,
 };
 
@@ -150,6 +157,8 @@ interface Props {
   /** Write an edit from the panel's editable fields (description/artist/copyright)
    *  into the active document's metadata. */
   onEditMeta: (patch: Partial<ImageMetadata>) => void;
+  /** Macro recorder state + verbs for the Actions panel. */
+  actionsApi: ActionsApi;
   docDpi?: number;
 }
 
@@ -200,6 +209,7 @@ export default function RightDock({
   colorSpace,
   imageMeta,
   onEditMeta,
+  actionsApi,
   docDpi = 300,
 }: Props) {
   const [order, setOrder] = useState<PanelId[]>(DEFAULT_ORDER);
@@ -352,6 +362,12 @@ export default function RightDock({
               onJump={onHistoryJump}
               maxRows={maxHistoryRows}
             />
+          </Panel>
+        ) : null;
+      case "actions":
+        return panels.actions ? (
+          <Panel key="actions" title="Actions" icon={Zap} {...dp}>
+            <ActionsPanel api={actionsApi} />
           </Panel>
         ) : null;
       case "metadata":

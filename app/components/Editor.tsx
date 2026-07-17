@@ -137,6 +137,16 @@ import { exportSVG, looksLikeSVG, parseSVGFile, translateVectorPath } from "../l
 import { buildPSD, parsePSD, type PsdDocument, type PsdImage, type PsdNode, type PsdOutNode } from "../lib/psd";
 import { addRecent, setRecentsLimit } from "../lib/recents";
 import {
+  actionLabel,
+  freshActionId,
+  isRecordable,
+  loadActions,
+  saveActions,
+  PLAYBACK_STEP_MS,
+  type ActionsApi,
+  type SavedAction,
+} from "../lib/actions";
+import {
   DEFAULT_ADJUST,
   filterToAdjust,
   isDefaultAdjust,
@@ -209,6 +219,7 @@ const ALL_PANELS: PanelVisibility = {
   properties: true,
   layers: true,
   history: true,
+  actions: true,
   navigator: true,
   channels: true,
   metadata: true,
@@ -220,6 +231,7 @@ const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
   "window-properties": "properties",
   "window-layers": "layers",
   "window-history": "history",
+  "window-actions": "actions",
   "window-navigator": "navigator",
   "window-channels": "channels",
   "window-metadata": "metadata",
@@ -3515,7 +3527,87 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "view-gamut") setGamutWarn((g) => !g);
   };
 
+  // ---- Actions (macro recorder — Actions panel + F-key playback) ------------
+  const [savedActions, setSavedActions] = useState<SavedAction[]>([]);
+  const [recordingId, setRecordingId] = useState<string | null>(null);
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const savedActionsRef = useRef<SavedAction[]>([]);
+  savedActionsRef.current = savedActions;
+  const recordingIdRef = useRef<string | null>(null);
+  recordingIdRef.current = recordingId;
+  const playingRef = useRef(false);
+  useEffect(() => setSavedActions(loadActions()), []); // client-only store
+  const updateActions = (fn: (list: SavedAction[]) => SavedAction[]) =>
+    setSavedActions((list) => {
+      const next = fn(list);
+      saveActions(next);
+      return next;
+    });
+
+  // Playback dispatches through the LATEST handleMenuAction — each step's state
+  // must commit (and re-point the refs the handlers read) before the next one,
+  // hence the ref + the per-step delay.
+  const handleMenuActionRef = useRef<(id: string) => void>(() => {});
+  const playAction = async (id: string) => {
+    const act = savedActionsRef.current.find((a) => a.id === id);
+    if (!act || !act.steps.length || playingRef.current || recordingIdRef.current) return;
+    playingRef.current = true;
+    setPlayingId(id);
+    try {
+      for (const step of act.steps) {
+        handleMenuActionRef.current(step.action);
+        await new Promise((r) => setTimeout(r, PLAYBACK_STEP_MS));
+      }
+    } finally {
+      playingRef.current = false;
+      setPlayingId(null);
+    }
+    showToast(`Played “${act.name}” (${act.steps.length} step${act.steps.length === 1 ? "" : "s"})`);
+  };
+  const playActionRef = useRef(playAction);
+  playActionRef.current = playAction;
+
+  const actionsApi: ActionsApi = {
+    actions: savedActions,
+    recordingId,
+    playingId,
+    record: (name) => {
+      if (playingRef.current) return;
+      const id = freshActionId();
+      updateActions((ls) => [...ls, { id, name, fkey: null, steps: [] }]);
+      setRecordingId(id);
+    },
+    stop: () => setRecordingId(null),
+    play: (id) => void playAction(id),
+    remove: (id) => {
+      if (recordingIdRef.current === id) setRecordingId(null);
+      updateActions((ls) => ls.filter((a) => a.id !== id));
+    },
+    rename: (id, name) => updateActions((ls) => ls.map((a) => (a.id === id ? { ...a, name } : a))),
+    setFKey: (id, fkey) =>
+      updateActions((ls) =>
+        // One action per key: assigning steals the key from any other action.
+        ls.map((a) => (a.id === id ? { ...a, fkey } : fkey && a.fkey === fkey ? { ...a, fkey: null } : a)),
+      ),
+    removeStep: (id, index) =>
+      updateActions((ls) =>
+        ls.map((a) => (a.id === id ? { ...a, steps: a.steps.filter((_, i) => i !== index) } : a)),
+      ),
+  };
+
   const handleMenuAction = (actionId: string) => {
+    // Recording: log replay-safe commands into the armed action (never while
+    // playing back — a played action must not append to itself).
+    if (recordingIdRef.current && !playingRef.current && isRecordable(actionId)) {
+      const rid = recordingIdRef.current;
+      updateActions((ls) =>
+        ls.map((a) =>
+          a.id === rid
+            ? { ...a, steps: [...a.steps, { action: actionId, label: actionLabel(actionId) }] }
+            : a,
+        ),
+      );
+    }
     const al = active.activeLayerId;
     if (actionId === "canvas-size") openSizeDialog("canvas");
     else if (actionId === "image-size") openSizeDialog("image");
@@ -3595,6 +3687,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "about") setAboutOpen(true);
     else if (actionId === "edit-caf") contentAwareFillOp();
   };
+  handleMenuActionRef.current = handleMenuAction;
 
   const swapColors = () => {
     const f = fgRef.current;
@@ -3702,6 +3795,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           (t.tagName === "INPUT" &&
             /^(?:text|number|search|email|url|password|tel|)$/i.test((t as HTMLInputElement).type)));
       if (typing) return;
+
+      // Actions panel F-key playback (F2–F10, unmodified — F1/F5/F11/F12 stay
+      // with the browser and are never assignable).
+      if (/^F[2-9]$|^F10$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        const act = savedActionsRef.current.find((a) => a.fkey === e.key);
+        if (act) {
+          e.preventDefault();
+          void playActionRef.current(act.id);
+          return;
+        }
+      }
 
       // Match the produced character (e.key), not the physical position (e.code),
       // so letter shortcuts are correct on QWERTZ/AZERTY etc. (Z/Y aren't swapped).
@@ -4028,6 +4132,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           "window-properties": panels.properties,
           "window-layers": panels.layers,
           "window-history": panels.history,
+          "window-actions": panels.actions,
           "window-navigator": panels.navigator,
           "window-channels": panels.channels,
           "window-metadata": panels.metadata,
@@ -4259,6 +4364,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           colorSpace={colorSpace}
           imageMeta={active.metadata ?? null}
           onEditMeta={updateDocMetadata}
+          actionsApi={actionsApi}
           docDpi={active.dpi ?? 300}
         />
       </div>
