@@ -137,6 +137,7 @@ export const TOPICS: HelpTopic[] = [
         entries: [
           { title: "Layers, groups, adjustments", body: "Pixel layers hold paint; groups nest and composite as one; adjustment layers re-process everything below them. Each row has visibility, blend mode and opacity." },
           { title: "Organising", body: "Drag rows to reorder (into or out of groups), double-click names to rename, Ctrl/Shift-click for multi-selection, Ctrl+G to group. Merge down (Ctrl+E), merge selection, or flatten the image." },
+          { title: "Labels & filtering", body: "Tag layers with one of seven colour labels from the right-click menu, then use the panel's filter row to find layers by name, kind (layer/group/adjustment) or label — matches stay bright, their surroundings dim, and reordering pauses until the filter is cleared." },
           { title: "Clipping masks", body: "Alt-click a row (or Ctrl+Alt+G) to clip a layer to the alpha of the layer below — it only shows where the base has pixels. Runs of clipped layers share one base.", keys: "Ctrl+Alt+G" },
         ],
       },

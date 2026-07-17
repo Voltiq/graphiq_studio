@@ -2661,6 +2661,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         const fx = n.effects ? { effects: n.effects } : {};
         const clip = n.clipped ? { clipped: true } : {};
         const flt = n.filters?.length ? { filters: n.filters } : {};
+        const lbl = n.label ? { label: n.label } : {}; // v10 colour label
         // v8: filter mask meta + grayscale (restored under filterMaskKey(new id)).
         const fmMeta =
           n.type !== "adjustment" && n.filterMask
@@ -2688,6 +2689,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             ...clip,
             ...flt,
             ...fmMeta,
+            ...lbl,
             children: remap(n.children),
           };
         }
@@ -2706,6 +2708,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             clipped: !!n.clipped,
             ...mask,
             ...fx,
+            ...lbl,
           };
         }
         const id = nextLeafId();
@@ -2726,6 +2729,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           ...clip,
           ...flt,
           ...fmMeta,
+          ...lbl,
         };
       });
 

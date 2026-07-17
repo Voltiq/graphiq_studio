@@ -100,7 +100,7 @@ export function serializeProject(
 ): ProjectFile {
   return {
     format: "graphiq-project",
-    version: 9, // v9 adds document metadata (EXIF fields; v8 added filter masks)
+    version: 10, // v10 adds node colour labels (v9 metadata, v8 filter masks)
     name: doc.name,
     width: doc.width,
     height: doc.height,

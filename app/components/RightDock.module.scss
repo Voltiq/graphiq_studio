@@ -1409,6 +1409,146 @@
   }
 }
 
+/* ---------------- Layers panel: filter row + colour labels ------------------ */
+.layerFilter {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.layerFilterBox {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 7px;
+  background: var(--wash);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-3);
+
+  &:focus-within {
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
+  }
+
+  input {
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
+    outline: none;
+    font-size: 12px;
+    color: var(--text);
+
+    &::placeholder {
+      color: var(--text-3);
+    }
+  }
+
+  button {
+    display: grid;
+    place-items: center;
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--text-3);
+    cursor: pointer;
+
+    &:hover {
+      color: var(--text);
+    }
+  }
+}
+
+.labelFilterRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 2px;
+}
+
+.labelFilterDot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+
+  &:hover {
+    opacity: 0.85;
+  }
+
+  &[data-active="true"] {
+    opacity: 1;
+    box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--accent);
+  }
+}
+
+/* Small per-row label indicator, before the name block. */
+.labelDot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+/* Visible-but-not-matching rows under an active filter. */
+.layerItem[data-dim="true"] {
+  opacity: 0.45;
+}
+
+/* Context-menu label swatches. */
+.menuLabelRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 6px;
+}
+
+.menuLabelDot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  padding: 0;
+  cursor: pointer;
+
+  &:hover {
+    transform: scale(1.15);
+  }
+
+  &[data-active="true"] {
+    box-shadow: 0 0 0 2px var(--surface-3), 0 0 0 3.5px var(--accent);
+  }
+}
+
+.menuLabelNone {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: none;
+  padding: 0;
+  color: var(--text-3);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--text);
+  }
+
+  &[data-active="true"] {
+    box-shadow: 0 0 0 2px var(--surface-3), 0 0 0 3.5px var(--accent);
+  }
+}
+
 /* ---------------- Actions panel (macro recorder) ---------------------------- */
 .actions {
   display: flex;

@@ -4,7 +4,7 @@ A browser-based, **fully client-side** raster photo editor with a non-destructiv
 
 **Stack:** Next.js 16 (App Router) · React 19 (with the React Compiler) · TypeScript (strict) · SCSS modules · `lucide-react` icons. **No image-processing libraries** — every pixel operation (compositing, blending, blurs, filters, tone curves, selections, layer effects, history) is hand-written against the Canvas 2D API and `ImageData`.
 
-**Status:** the destructive editor (19 tools, 19 blend modes, selections, live sessions, colour management) plus the **full non-destructive stack** — layer **masks**, **adjustment layers**, **layer effects**, **Curves & Levels**, **clipping masks**, **smart filters**, and the **render-graph cache**. Project files (`.gproj`, formerly `.aproj` — old files still open) are at **format version 9** (v8 filter masks, v9 document metadata). See [Part 3 — Known limitations](#part-3--known-limitations--not-yet-implemented) for what's partial or absent.
+**Status:** the destructive editor (19 tools, 19 blend modes, selections, live sessions, colour management) plus the **full non-destructive stack** — layer **masks**, **adjustment layers**, **layer effects**, **Curves & Levels**, **clipping masks**, **smart filters**, and the **render-graph cache**. Project files (`.gproj`, formerly `.aproj` — old files still open) are at **format version 10** (v8 filter masks, v9 document metadata, v10 colour labels). See [Part 3 — Known limitations](#part-3--known-limitations--not-yet-implemented) for what's partial or absent.
 
 This document is written so someone **without the code** understands exactly what exists, what works, **how** it works, and what does not.
 
@@ -60,6 +60,7 @@ All Options-Bar settings, the foreground/background colours, and the marquee sha
 - A **tree** of three node kinds: **pixel layers** (`LayerLeaf`), **groups** (`LayerGroup`, nestable folders), and **adjustment layers** (`LayerAdjustment`, pixel-less — see below).
 - Per-node **visibility, opacity (0–100), blend mode** (19 modes), an optional **mask**, optional **layer effects**, and a **clipped** flag.
 - **New / Duplicate / Delete / Group (`Ctrl+G`) / Ungroup / Merge Down (`Ctrl+E`) / Flatten**. Drag to reorder (can re-parent across groups). Multi-select. Inline rename.
+- **Colour labels + filter row:** tag any node with one of **seven colour labels** (right-click menu swatches, applies to the whole selection, shown as a dot on the row, saved in `.gproj` v10) and filter the panel by **name, kind and label** — matches stay bright while their ancestors dim for context, a matching group reveals its contents (even inside collapsed groups), and drag-reorder pauses while a filter is active so hidden hierarchy can't be rearranged blind.
 - Group **opacity/blend/mask** apply to the *merged* group result (isolated grouping), exactly like Photoshop.
 
 ## The non-destructive stack

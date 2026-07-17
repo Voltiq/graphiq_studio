@@ -24,6 +24,23 @@ export function filterMaskKey(id: string): string {
   return "fm:" + id;
 }
 
+/** Colour-label tags for panel organization (filterable; persisted in .gproj). */
+export type LayerLabel = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
+
+export const LAYER_LABELS: { id: LayerLabel; color: string; name: string }[] = [
+  { id: "red", color: "#ef4444", name: "Red" },
+  { id: "orange", color: "#f97316", name: "Orange" },
+  { id: "yellow", color: "#eab308", name: "Yellow" },
+  { id: "green", color: "#22c55e", name: "Green" },
+  { id: "blue", color: "#3b82f6", name: "Blue" },
+  { id: "purple", color: "#a855f7", name: "Purple" },
+  { id: "gray", color: "#9ca3af", name: "Gray" },
+];
+
+/** Display colour of a label id ("" for none/unknown). */
+export const labelColor = (l: LayerLabel | undefined): string =>
+  LAYER_LABELS.find((x) => x.id === l)?.color ?? "";
+
 export interface LayerBase {
   id: string;
   name: string;
@@ -31,6 +48,8 @@ export interface LayerBase {
   /** 0–100 */
   opacity: number;
   blend: string;
+  /** Colour label (organization only — never affects rendering). */
+  label?: LayerLabel;
   /** Present ⇒ the layer carries a raster mask (pixels held by the engine). */
   mask?: MaskMeta;
   /** Non-destructive layer effects (drop shadow, glow, stroke, …); rendered at
@@ -83,6 +102,7 @@ export type Layer = LayerLeaf;
 export type LayerPatch = Partial<
   Pick<LayerBase, "name" | "visible" | "opacity" | "blend">
 > & {
+  label?: LayerLabel | undefined;
   expanded?: boolean;
   vector?: VectorData;
   mask?: MaskMeta | undefined;
@@ -349,6 +369,60 @@ export function clipGroupsOf(children: LayerNode[]): ClipGroup[] {
     units.push({ base, members });
   }
   return units;
+}
+
+// ---- Layers-panel search / filter (pure — Node-testable) --------------------
+
+/** Panel filter state: name substring, node kind, and colour labels (OR'd). */
+export interface LayerFilter {
+  query: string;
+  kind: "all" | "layer" | "group" | "adjustment";
+  labels: LayerLabel[];
+}
+
+export const EMPTY_LAYER_FILTER: LayerFilter = { query: "", kind: "all", labels: [] };
+
+export const layerFilterActive = (f: LayerFilter): boolean =>
+  !!f.query.trim() || f.kind !== "all" || f.labels.length > 0;
+
+/**
+ * Resolve a filter against the tree. `match` = nodes satisfying every criterion
+ * (name AND kind AND label). `visible` additionally includes every ancestor of
+ * a match (so hierarchy stays readable) and every descendant of a match (a
+ * matching group shows its contents) — the panel dims visible non-matches.
+ * An inactive filter returns null (show everything, dim nothing).
+ */
+export function filterLayerTree(
+  nodes: LayerNode[],
+  f: LayerFilter,
+): { match: Set<string>; visible: Set<string> } | null {
+  if (!layerFilterActive(f)) return null;
+  const q = f.query.trim().toLowerCase();
+  const wantLabels = new Set(f.labels);
+  const match = new Set<string>();
+  const visible = new Set<string>();
+  const matches = (n: LayerNode): boolean =>
+    (!q || n.name.toLowerCase().includes(q)) &&
+    (f.kind === "all" || n.type === f.kind) &&
+    (wantLabels.size === 0 || (!!n.label && wantLabels.has(n.label)));
+  const markSubtree = (n: LayerNode) => {
+    visible.add(n.id);
+    if (n.type === "group") for (const c of n.children) markSubtree(c);
+  };
+  // Returns whether this subtree contains a match (to reveal ancestors).
+  const walk = (n: LayerNode): boolean => {
+    const self = matches(n);
+    if (self) {
+      match.add(n.id);
+      markSubtree(n); // a matching group reveals its contents
+    }
+    let below = false;
+    if (n.type === "group") for (const c of n.children) below = walk(c) || below;
+    if (self || below) visible.add(n.id);
+    return self || below;
+  };
+  for (const n of nodes) walk(n);
+  return { match, visible };
 }
 
 /** Visible row ids in order (children of collapsed groups omitted). */

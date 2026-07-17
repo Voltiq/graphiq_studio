@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDownToLine,
@@ -21,13 +21,28 @@ import {
   Pencil,
   Plus,
   FlaskConical,
+  Search,
   Sparkles,
   Trash2,
   Unlink2,
+  X,
 } from "lucide-react";
 import styles from "../RightDock.module.scss";
 import { EditableValue, Select } from "../Controls";
-import { BLEND_MODES, clipGroupsOf, findNode, type LayerNode, type LayersApi } from "../../lib/layers";
+import {
+  BLEND_MODES,
+  clipGroupsOf,
+  EMPTY_LAYER_FILTER,
+  filterLayerTree,
+  findNode,
+  labelColor,
+  layerFilterActive,
+  LAYER_LABELS,
+  type LayerFilter,
+  type LayerLabel,
+  type LayerNode,
+  type LayersApi,
+} from "../../lib/layers";
 import { hasEnabledFx } from "../../lib/effects";
 import { hasEnabledFilters } from "../../lib/filters";
 
@@ -36,12 +51,29 @@ interface Row {
   node: LayerNode;
   depth: number;
   clip: ClipRole;
+  /** Visible-but-not-matching under an active filter (rendered dimmed). */
+  dim: boolean;
 }
+
+const KIND_OPTIONS = ["All kinds", "Layers", "Groups", "Adjustments"] as const;
+const KIND_BY_OPTION: Record<string, LayerFilter["kind"]> = {
+  "All kinds": "all",
+  Layers: "layer",
+  Groups: "group",
+  Adjustments: "adjustment",
+};
 
 /** Flatten the tree into display rows, hiding the children of collapsed groups.
  *  Each row carries its clip role within its parent (resolved by clipGroupsOf): a
- *  clip-group `base` (underlined) or a clipped `member` (indented with an elbow). */
-function flattenRows(nodes: LayerNode[], depth = 0): Row[] {
+ *  clip-group `base` (underlined) or a clipped `member` (indented with an elbow).
+ *  Under an active filter, only `vis.visible` rows appear (non-matches dimmed) —
+ *  and matched rows inside COLLAPSED groups are revealed so a search always
+ *  shows its hits. */
+function flattenRows(
+  nodes: LayerNode[],
+  vis: { match: Set<string>; visible: Set<string> } | null,
+  depth = 0,
+): Row[] {
   const role = new Map<string, ClipRole>();
   for (const g of clipGroupsOf(nodes)) {
     if (g.members.length) {
@@ -51,8 +83,10 @@ function flattenRows(nodes: LayerNode[], depth = 0): Row[] {
   }
   const out: Row[] = [];
   for (const n of nodes) {
-    out.push({ node: n, depth, clip: role.get(n.id) ?? "none" });
-    if (n.type === "group" && n.expanded) out.push(...flattenRows(n.children, depth + 1));
+    if (vis && !vis.visible.has(n.id)) continue;
+    out.push({ node: n, depth, clip: role.get(n.id) ?? "none", dim: !!vis && !vis.match.has(n.id) });
+    if (n.type === "group" && (n.expanded || (vis && !vis.match.has(n.id))))
+      out.push(...flattenRows(n.children, vis, depth + 1));
   }
   return out;
 }
@@ -110,7 +144,35 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
     setMenu(null);
   };
 
-  const rows = flattenRows(layers);
+  // ---- Search / filter row (name + kind + colour label) ---------------------
+  const [filter, setFilter] = useState<LayerFilter>(EMPTY_LAYER_FILTER);
+  const filterActive = layerFilterActive(filter);
+  const vis = useMemo(() => filterLayerTree(layers, filter), [layers, filter]);
+  const toggleLabelFilter = (l: LayerLabel) =>
+    setFilter((f) => ({
+      ...f,
+      labels: f.labels.includes(l) ? f.labels.filter((x) => x !== l) : [...f.labels, l],
+    }));
+  // Any labels in use? (the colour-dot strip only appears when relevant)
+  const anyLabels = useMemo(() => {
+    let found = false;
+    const walk = (ns: LayerNode[]) => {
+      for (const n of ns) {
+        if (n.label) found = true;
+        if (n.type === "group") walk(n.children);
+      }
+    };
+    walk(layers);
+    return found;
+  }, [layers]);
+
+  // Apply a colour label to every selected node (menu acts on the selection).
+  const applyLabel = (l: LayerLabel | undefined) => {
+    const ids = selectedLayerIds.length ? selectedLayerIds : menu ? [menu.node.id] : [];
+    for (const id of ids) api.update(id, { label: l });
+  };
+
+  const rows = flattenRows(layers, vis);
   const multi = selectedLayerIds.length > 1;
 
   return (
@@ -147,9 +209,56 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
         </div>
       )}
 
+      <div className={styles.layerFilter}>
+        <div className={styles.layerFilterBox}>
+          <Search size={12} />
+          <input
+            value={filter.query}
+            placeholder="Filter layers…"
+            aria-label="Filter layers by name"
+            onChange={(e) => setFilter((f) => ({ ...f, query: e.target.value }))}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setFilter(EMPTY_LAYER_FILTER);
+              e.stopPropagation(); // keep single-letter tool shortcuts out
+            }}
+          />
+          {filterActive && (
+            <button
+              type="button"
+              onClick={() => setFilter(EMPTY_LAYER_FILTER)}
+              aria-label="Clear layer filter"
+              title="Clear filter"
+            >
+              <X size={11} />
+            </button>
+          )}
+        </div>
+        <Select
+          options={[...KIND_OPTIONS]}
+          value={KIND_OPTIONS.find((o) => KIND_BY_OPTION[o] === filter.kind) ?? "All kinds"}
+          onChange={(o) => setFilter((f) => ({ ...f, kind: KIND_BY_OPTION[o] ?? "all" }))}
+        />
+      </div>
+      {(anyLabels || filter.labels.length > 0) && (
+        <div className={styles.labelFilterRow} aria-label="Filter by colour label">
+          {LAYER_LABELS.map((l) => (
+            <button
+              key={l.id}
+              type="button"
+              className={styles.labelFilterDot}
+              data-active={filter.labels.includes(l.id)}
+              style={{ background: l.color }}
+              title={`Show ${l.name.toLowerCase()}-labelled layers`}
+              aria-pressed={filter.labels.includes(l.id)}
+              onClick={() => toggleLabelFilter(l.id)}
+            />
+          ))}
+        </div>
+      )}
+
       {rows.length > 0 ? (
         <ul className={styles.layerList}>
-          {rows.map(({ node: l, depth, clip }) => {
+          {rows.map(({ node: l, depth, clip, dim }) => {
             const isGroup = l.type === "group";
             const isAdjustment = l.type === "adjustment";
             return (
@@ -159,9 +268,10 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                 data-selected={selected.has(l.id)}
                 data-active={l.id === activeLayerId}
                 data-hidden={!l.visible}
+                data-dim={dim}
                 data-dragging={l.id === dragId}
                 style={{ paddingLeft: 8 + depth * 14 + (clip === "member" ? 14 : 0) } as React.CSSProperties}
-                draggable={editingId !== l.id}
+                draggable={editingId !== l.id && !filterActive}
                 onClick={(e) => onRowClick(e, l.id)}
                 onContextMenu={(e) => openMenu(e, l)}
                 onDragStart={(e) => {
@@ -170,6 +280,9 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                 }}
                 onDragOver={(e) => {
                   e.preventDefault();
+                  // Reordering with parts of the tree hidden would be blind —
+                  // clear the filter to rearrange.
+                  if (filterActive) return;
                   if (dragId && dragId !== l.id) {
                     const r = e.currentTarget.getBoundingClientRect();
                     const before = e.clientY - r.top < r.height / 2;
@@ -322,6 +435,13 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                     )}
                   </button>
                 )}
+                {l.label && (
+                  <span
+                    className={styles.labelDot}
+                    style={{ background: labelColor(l.label) }}
+                    title={`${LAYER_LABELS.find((x) => x.id === l.label)?.name ?? ""} label`}
+                  />
+                )}
                 <div className={styles.layerMeta}>
                   {editingId === l.id ? (
                     <input
@@ -385,6 +505,16 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
             );
           })}
         </ul>
+      ) : filterActive ? (
+        <div className={styles.layersEmpty}>
+          <span className={styles.layersEmptyIcon}>
+            <Search size={20} />
+          </span>
+          <p>No layers match</p>
+          <span className={styles.layersEmptyHint}>
+            Adjust the filter above, or clear it to see every layer.
+          </span>
+        </div>
       ) : (
         <div className={styles.layersEmpty}>
           <span className={styles.layersEmptyIcon}>
@@ -455,6 +585,28 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
             <button type="button" onClick={() => run(() => startRename(menu.node))}>
               <Pencil size={13} /> Rename
             </button>
+            <div className={styles.menuLabelRow} aria-label="Colour label">
+              <button
+                type="button"
+                className={styles.menuLabelNone}
+                data-active={!menu.node.label}
+                title="No label"
+                onClick={() => run(() => applyLabel(undefined))}
+              >
+                <X size={10} />
+              </button>
+              {LAYER_LABELS.map((l) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  className={styles.menuLabelDot}
+                  data-active={menu.node.label === l.id}
+                  style={{ background: l.color }}
+                  title={`${l.name} label${multi ? " (all selected)" : ""}`}
+                  onClick={() => run(() => applyLabel(l.id))}
+                />
+              ))}
+            </div>
             <button type="button" onClick={() => run(api.duplicate)}>
               <Copy size={13} /> {multi ? "Duplicate layers" : "Duplicate"}
             </button>
