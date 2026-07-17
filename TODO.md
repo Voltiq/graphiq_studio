@@ -10,7 +10,7 @@ Legend: `[ ]` open · `[~]` partially exists (noted).
 
 - [x] **Linked-mask move** — done: a whole-layer Move now shifts a linked mask with the pixels, folded into the same one-step undo.
 - [x] **Blur / Dodge-Burn on masks** — done: both brushes target the mask when it's the active surface (mask-surface history entries, live alpha rederive).
-- [ ] **Smart-filter stack mask** — one grayscale mask confining a layer's whole filter stack. *Assessed 2026-07: this is a mini-spec, not polish — it needs a second mask surface per layer (engine maps, `ActiveSurface` kind, history surface, serializer, panel thumbnail + paint routing). Do it as its own task.*
+- [x] **Smart-filter stack mask** — done 2026-07 (this line was a stale duplicate; see the completed entry in §Roadmap below, item 2). Every part of the 2026-07 assessment shipped: engine mask surface under `fm:<id>` reusing the whole layer-mask machinery, `ActiveSurface` gained `"filterMask"`, history's mask surface covers it, `.gproj` v8 serializes `filterMaskImage`, and both the Layers-panel flask chip (click = paint, Shift-click = enable/disable) and the Smart Filters dialog (Add / From Selection / Delete) manage it. Verified in code 2026-07-12. Still open (tracked separately): unlinked filter-mask move.
 - [ ] **Per-filter drag-reorder** in the Smart Filters dialog (Up/Down buttons exist; drag would match the Layers panel).
 - [ ] **On-canvas anchor drag for smart blurs** (zoom/spin/tilt-shift smart filters use X/Y sliders; the destructive Blur Gallery already has preview-dragging — share it).
 - [ ] **Curves targeted adjustment** — click-drag on the image to move the curve point at the sampled tone (the eyedropper pick-mode plumbing from Levels can be reused).
