@@ -1,5 +1,6 @@
 import { filterMaskKey } from "./layers";
 import type { LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers";
+import type { ImageMetadata } from "./metadata";
 import type { Rect } from "./view";
 
 /** Graphiq project file extension (keeps layers, groups & settings; lossless). */
@@ -39,6 +40,9 @@ export interface ProjectFile {
   /** History labels + position. The full undo stack isn't replayable from a file
       (entries hold live callbacks); this is metadata for display / future use. */
   history: { labels: string[]; index: number };
+  /** Source-image / authoring metadata (v9) — EXIF fields shown in the Metadata
+   *  panel and embedded on export. Absent in older files. */
+  metadata?: ImageMetadata | null;
   savedAt: string;
 }
 
@@ -61,6 +65,7 @@ export interface ProjectInput {
   activeLayerId: string | null;
   selectedLayerIds: string[];
   selection: Rect[];
+  metadata?: ImageMetadata | null;
 }
 
 function serializeNode(
@@ -95,7 +100,7 @@ export function serializeProject(
 ): ProjectFile {
   return {
     format: "graphiq-project",
-    version: 8, // v8 adds filterMaskImage + node.filterMask (Spec 07 addendum)
+    version: 9, // v9 adds document metadata (EXIF fields; v8 added filter masks)
     name: doc.name,
     width: doc.width,
     height: doc.height,
@@ -107,6 +112,7 @@ export function serializeProject(
     selection: doc.selection,
     layers: doc.layers.map((n) => serializeNode(n, getImage, getMask)),
     history,
+    metadata: doc.metadata ?? null,
     savedAt: new Date().toISOString(),
   };
 }

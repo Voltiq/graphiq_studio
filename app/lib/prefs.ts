@@ -100,6 +100,11 @@ export interface Preferences {
   /** Custom checkerboard pair — base colour (a) and square colour (b). */
   checkerA: string;
   checkerB: string;
+  /** Default attribution embedded in exported images (EXIF Artist / dc:creator)
+   *  when the document doesn't set its own in the Metadata panel. "" = none. */
+  authorName: string;
+  /** Default copyright notice (EXIF Copyright / dc:rights) — same fallback rule. */
+  copyrightNotice: string;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -122,6 +127,8 @@ export const DEFAULT_PREFS: Preferences = {
   checkerColors: "auto",
   checkerA: "#ffffff",
   checkerB: "#cccccc",
+  authorName: "",
+  copyrightNotice: "",
 };
 
 const KEY = "graphiq:preferences";

@@ -1,10 +1,54 @@
 "use client";
 
-import { type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { WorkingSpace } from "../../lib/colorspace";
 import { ExternalLink } from "lucide-react";
 import styles from "../RightDock.module.scss";
 import { formatBytes, type ImageMetadata } from "../../lib/metadata";
+
+/** Editable metadata row: commits on blur / Enter, Escape reverts. The draft
+ *  re-syncs whenever the underlying value changes (document switch, undo). */
+function EditRow({
+  label,
+  value,
+  placeholder,
+  onCommit,
+}: {
+  label: string;
+  value: string | undefined;
+  placeholder: string;
+  onCommit: (v: string) => void;
+}) {
+  const [draft, setDraft] = useState(value ?? "");
+  useEffect(() => setDraft(value ?? ""), [value]);
+  const commit = () => {
+    const v = draft.trim();
+    if (v !== (value ?? "")) onCommit(v);
+  };
+  return (
+    <div className={styles.metaRow}>
+      <span className={styles.metaKey}>{label}</span>
+      <input
+        className={styles.metaInput}
+        value={draft}
+        placeholder={placeholder}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            commit();
+            (e.target as HTMLInputElement).blur();
+          } else if (e.key === "Escape") {
+            setDraft(value ?? "");
+            (e.target as HTMLInputElement).blur();
+          }
+          e.stopPropagation(); // keep single-letter tool shortcuts out
+        }}
+        aria-label={label}
+      />
+    </div>
+  );
+}
 
 /** Reduce w:h to a small integer ratio for display (e.g. 3:2). */
 function aspectRatio(w: number, h: number): string {
@@ -52,6 +96,7 @@ export default function MetadataPanel({
   dpi = 300,
   colorSpace,
   meta,
+  onEdit,
 }: {
   name: string;
   width: number;
@@ -59,6 +104,8 @@ export default function MetadataPanel({
   dpi?: number;
   colorSpace: WorkingSpace;
   meta: ImageMetadata | null;
+  /** Writes description/artist/copyright edits into the document's metadata. */
+  onEdit: (patch: Partial<ImageMetadata>) => void;
 }) {
   const megapixels = ((width * height) / 1e6).toFixed(width * height >= 1e7 ? 0 : 1);
   const camera = [meta?.make, meta?.model].filter(Boolean).join(" ") || undefined;
@@ -77,8 +124,6 @@ export default function MetadataPanel({
     meta &&
     (meta.dateTaken || meta.focalLength || meta.focalLength35 || meta.fNumber || meta.exposure || meta.iso)
   );
-  const hasAuthoring = !!(meta?.artist || meta?.copyright);
-
   return (
     <div className={styles.metadata}>
       <Section title="Document">
@@ -122,9 +167,28 @@ export default function MetadataPanel({
         <Row label="ISO" value={meta?.iso} />
       </Section>
 
-      <Section title="Authoring" show={hasAuthoring}>
-        <Row label="Artist" value={meta?.artist} />
-        <Row label="Copyright" value={meta?.copyright} />
+      <Section title="Authoring">
+        <EditRow
+          label="Description"
+          value={meta?.description}
+          placeholder="Add a description…"
+          onCommit={(v) => onEdit({ description: v })}
+        />
+        <EditRow
+          label="Artist"
+          value={meta?.artist}
+          placeholder="Add an author…"
+          onCommit={(v) => onEdit({ artist: v })}
+        />
+        <EditRow
+          label="Copyright"
+          value={meta?.copyright}
+          placeholder="© …"
+          onCommit={(v) => onEdit({ copyright: v })}
+        />
+        <p className={styles.metaHint} style={{ margin: "4px 0 0" }}>
+          Embedded as EXIF/XMP when exporting JPEG, PNG or WebP.
+        </p>
       </Section>
 
       {meta?.gps ? (

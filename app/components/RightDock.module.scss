@@ -1217,6 +1217,35 @@
   word-break: break-word;
 }
 
+/* Editable metadata field (Description / Artist / Copyright) — quiet until
+   focused, then the standard input treatment. */
+.metaInput {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11.5px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  outline: none;
+
+  &::placeholder {
+    color: var(--text-3);
+  }
+
+  &:hover {
+    border-color: var(--border);
+  }
+
+  &:focus {
+    background: var(--surface);
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
+  }
+}
+
 .metaLink {
   display: inline-flex;
   align-items: center;

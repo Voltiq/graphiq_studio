@@ -147,6 +147,9 @@ interface Props {
   docName: string;
   colorSpace: WorkingSpace;
   imageMeta: ImageMetadata | null;
+  /** Write an edit from the panel's editable fields (description/artist/copyright)
+   *  into the active document's metadata. */
+  onEditMeta: (patch: Partial<ImageMetadata>) => void;
   docDpi?: number;
 }
 
@@ -196,6 +199,7 @@ export default function RightDock({
   docName,
   colorSpace,
   imageMeta,
+  onEditMeta,
   docDpi = 300,
 }: Props) {
   const [order, setOrder] = useState<PanelId[]>(DEFAULT_ORDER);
@@ -360,6 +364,7 @@ export default function RightDock({
               dpi={docDpi}
               colorSpace={colorSpace}
               meta={imageMeta}
+              onEdit={onEditMeta}
             />
           </Panel>
         ) : null;

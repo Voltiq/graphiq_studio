@@ -17,6 +17,7 @@ import {
   type BatchTarget,
   type ExportPreset,
 } from "../lib/exportpresets";
+import { embedMetadata, hasExportableMetadata, type ExportMetadata } from "../lib/metadata-write";
 
 /** Bytes → a short human size ("820 KB", "1.4 MB"). */
 function fmtSize(n: number): string {
@@ -28,18 +29,23 @@ function fmtSize(n: number): string {
 export interface BatchRun {
   targets: BatchTarget[];
   template: string;
+  /** Embed EXIF/XMP metadata into each target (JPEG/PNG/WebP). */
+  embedMeta: boolean;
 }
 
 export default function ExportDialog({
   composite,
   defaultName,
+  meta,
   onExport,
   onBatchExport,
   onClose,
 }: {
   composite: HTMLCanvasElement;
   defaultName: string;
-  onExport: (opts: ExportOptions, filename: string) => void;
+  /** Document metadata available for embedding (null = nothing to embed). */
+  meta: ExportMetadata | null;
+  onExport: (opts: ExportOptions, filename: string, embedMeta: boolean) => void;
   onBatchExport: (run: BatchRun, docName: string) => Promise<void>;
   onClose: () => void;
 }) {
@@ -61,6 +67,21 @@ export default function ExportDialog({
   // Batch state.
   const [targets, setTargets] = useState<BatchTarget[]>(() => defaultBatchTargets());
   const [template, setTemplate] = useState("{name}");
+
+  // Metadata embedding (EXIF/XMP into JPEG/PNG/WebP; AVIF has no writer).
+  const [embedMeta, setEmbedMeta] = useState(true);
+  const metaSummary = useMemo(() => {
+    if (!meta) return "";
+    const parts: string[] = [];
+    if (meta.artist) parts.push("author");
+    if (meta.copyright) parts.push("copyright");
+    if (meta.description) parts.push("description");
+    if (meta.make || meta.model) parts.push("camera");
+    if (meta.dateTakenRaw) parts.push("capture date");
+    if (meta.gps) parts.push("location");
+    if (meta.dpi) parts.push(`${meta.dpi} ppi`);
+    return parts.join(" · ");
+  }, [meta]);
 
   const formatById = (id: string) => formats.find((f) => f.id === id) ?? formats[0];
 
@@ -85,13 +106,23 @@ export default function ExportDialog({
     let cancelled = false;
     setEstimating(true);
     const id = window.setTimeout(async () => {
-      const blob = await renderExport(composite, {
+      let blob = await renderExport(composite, {
         format,
         quality: quality / 100,
         scale: scalePct / 100,
         transparent,
         matte,
       });
+      // The estimate stays exact: include the embedded EXIF/XMP bytes too.
+      if (blob && embedMeta && meta) {
+        blob = await embedMetadata(
+          blob,
+          format.id,
+          meta,
+          Math.max(1, Math.round(composite.width * (scalePct / 100))),
+          Math.max(1, Math.round(composite.height * (scalePct / 100))),
+        );
+      }
       if (cancelled) return;
       setEstSize(blob ? blob.size : null);
       setEstimating(false);
@@ -100,7 +131,7 @@ export default function ExportDialog({
       cancelled = true;
       window.clearTimeout(id);
     };
-  }, [composite, format, quality, scalePct, transparent, matte, mode]);
+  }, [composite, format, quality, scalePct, transparent, matte, mode, embedMeta, meta]);
 
   const applyPreset = (p: ExportPreset) => {
     setFormat(formatById(p.formatId));
@@ -186,7 +217,7 @@ export default function ExportDialog({
     if (!targets.length || running) return;
     setRunning(true);
     try {
-      await onBatchExport({ targets, template }, name || defaultName);
+      await onBatchExport({ targets, template, embedMeta }, name || defaultName);
     } finally {
       setRunning(false);
     }
@@ -202,7 +233,7 @@ export default function ExportDialog({
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === "Escape") onClose();
-          if (e.key === "Enter" && mode === "single") onExport(opts(), name);
+          if (e.key === "Enter" && mode === "single") onExport(opts(), name, embedMeta);
         }}
       >
         <header className={styles.head}>
@@ -236,6 +267,18 @@ export default function ExportDialog({
               { value: "batch", text: "Batch" },
             ]}
           />
+
+          {meta && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <Toggle label="Embed metadata (EXIF/XMP)" checked={embedMeta} onChange={setEmbedMeta} />
+              {embedMeta && (
+                <p className={styles.note} style={{ margin: 0 }}>
+                  {hasExportableMetadata(meta) ? metaSummary : `resolution (${meta.dpi ?? 300} ppi) + creator tool`}
+                  {" — JPEG, PNG & WebP (AVIF not supported)"}
+                </p>
+              )}
+            </div>
+          )}
 
           {mode === "single" ? (
             <>
@@ -440,7 +483,7 @@ export default function ExportDialog({
             Cancel
           </button>
           {mode === "single" ? (
-            <button type="button" className={`${styles.btn} ${styles.primary}`} onClick={() => onExport(opts(), name)}>
+            <button type="button" className={`${styles.btn} ${styles.primary}`} onClick={() => onExport(opts(), name, embedMeta)}>
               Export
             </button>
           ) : (

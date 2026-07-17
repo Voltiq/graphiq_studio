@@ -464,6 +464,41 @@ export default function PreferencesDialog({
                     onChange={(n) => onChange({ maxHistory: n })}
                   />
                 </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Attribution</span>
+                  <p className={styles.sectionHint}>
+                    Embedded in exported images (EXIF/XMP) when a document doesn&apos;t set its
+                    own author or copyright in the Metadata panel. Leave blank for none.
+                  </p>
+                  <div className={styles.row}>
+                    <div className={styles.rowText}>
+                      <strong>Author</strong>
+                      <em>EXIF Artist / XMP dc:creator</em>
+                    </div>
+                    <div className={styles.searchBox} style={{ width: 190, padding: "0 10px" }}>
+                      <input
+                        value={prefs.authorName}
+                        placeholder="Your name"
+                        onChange={(e) => onChange({ authorName: e.target.value })}
+                        aria-label="Default author name"
+                      />
+                    </div>
+                  </div>
+                  <div className={styles.row}>
+                    <div className={styles.rowText}>
+                      <strong>Copyright notice</strong>
+                      <em>EXIF Copyright / XMP dc:rights</em>
+                    </div>
+                    <div className={styles.searchBox} style={{ width: 190, padding: "0 10px" }}>
+                      <input
+                        value={prefs.copyrightNotice}
+                        placeholder="© 2026 Your name"
+                        onChange={(e) => onChange({ copyrightNotice: e.target.value })}
+                        aria-label="Default copyright notice"
+                      />
+                    </div>
+                  </div>
+                </section>
               </>
             )}
 

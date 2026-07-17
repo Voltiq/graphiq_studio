@@ -10,6 +10,7 @@ export interface ImageMetadata {
   fileType: string; // mime
   lastModified: number; // ms epoch
   // --- EXIF (all optional; present only when found) ---
+  description?: string; // ImageDescription — editable in the Metadata panel
   make?: string;
   model?: string;
   lensModel?: string;
@@ -21,10 +22,19 @@ export interface ImageMetadata {
   focalLength35?: string; // 35mm-equivalent, e.g. "75 mm"
   orientation?: number;
   software?: string;
-  artist?: string;
-  copyright?: string;
+  artist?: string; // editable in the Metadata panel
+  copyright?: string; // editable in the Metadata panel
   dpi?: number; // from XResolution when given in inches
   gps?: { lat: number; lon: number };
+  // --- Raw (unformatted) twins used by the EXIF WRITER (metadata-write.ts).
+  // The display fields above are formatted/locale strings and can't round-trip;
+  // these carry the numeric truth. Absent in metadata captured before they
+  // existed — the writer simply skips what it doesn't have.
+  dateTakenRaw?: string; // EXIF "YYYY:MM:DD HH:MM:SS"
+  exposureTime?: number; // seconds
+  fNumberValue?: number;
+  focalLengthMm?: number;
+  focalLength35Mm?: number;
 }
 
 // EXIF field-type → byte size.
@@ -119,14 +129,29 @@ function dataOff(s: Safe, tiff: number, e: IfdEntry, le: boolean): number {
   return size <= 4 ? e.valOff : tiff + s.u32(e.valOff, le);
 }
 
+// EXIF "ASCII" is 7-bit by spec, but real writers (cameras, phones, and our
+// own metadata-write.ts) put UTF-8 in it. Decode strictly as UTF-8 first —
+// pure ASCII is identical either way — and fall back to Latin-1 for the rare
+// legacy file with genuine high-bit single-byte text.
+const utf8Strict = typeof TextDecoder !== "undefined" ? new TextDecoder("utf-8", { fatal: true }) : null;
+
 function readAscii(s: Safe, tiff: number, e: IfdEntry, le: boolean): string {
   const o = dataOff(s, tiff, e, le);
-  let str = "";
+  const bytes: number[] = [];
   for (let i = 0; i < e.count; i++) {
     const c = s.u8(o + i);
     if (c === 0) break;
-    str += String.fromCharCode(c);
+    bytes.push(c);
   }
+  if (utf8Strict) {
+    try {
+      return utf8Strict.decode(new Uint8Array(bytes)).trim();
+    } catch {
+      /* not valid UTF-8 — treat as Latin-1 below */
+    }
+  }
+  let str = "";
+  for (const c of bytes) str += String.fromCharCode(c);
   return str.trim();
 }
 
@@ -179,6 +204,7 @@ function parseExif(s: Safe, meta: ImageMetadata) {
     return v || undefined;
   };
 
+  meta.description = ascii(ifd0, 0x010e);
   meta.make = ascii(ifd0, 0x010f);
   meta.model = ascii(ifd0, 0x0110);
   meta.software = ascii(ifd0, 0x0131);
@@ -199,14 +225,23 @@ function parseExif(s: Safe, meta: ImageMetadata) {
   if (exifPtr) {
     const exif = readIfd(s, tiff, readUint(s, tiff, exifPtr, le), le);
     meta.lensModel = ascii(exif, 0xa434);
+    const rawDate = ascii(exif, 0x9003) ?? ascii(exif, 0x9004);
+    if (rawDate) meta.dateTakenRaw = rawDate;
     meta.dateTaken =
       formatExifDate(ascii(exif, 0x9003) ?? "") ?? formatExifDate(ascii(exif, 0x9004) ?? "");
     const expo = exif.get(0x829a);
-    if (expo) meta.exposure = formatExposure(readRational(s, tiff, expo, le));
+    if (expo) {
+      const t = readRational(s, tiff, expo, le);
+      if (t > 0) meta.exposureTime = t;
+      meta.exposure = formatExposure(t);
+    }
     const fnum = exif.get(0x829d);
     if (fnum) {
       const f = readRational(s, tiff, fnum, le);
-      if (f > 0) meta.fNumber = `f/${Number(f.toFixed(1))}`;
+      if (f > 0) {
+        meta.fNumberValue = f;
+        meta.fNumber = `f/${Number(f.toFixed(1))}`;
+      }
     }
     const iso = exif.get(0x8827);
     if (iso) {
@@ -216,12 +251,18 @@ function parseExif(s: Safe, meta: ImageMetadata) {
     const fl = exif.get(0x920a);
     if (fl) {
       const v = readRational(s, tiff, fl, le);
-      if (v > 0) meta.focalLength = `${Math.round(v)} mm`;
+      if (v > 0) {
+        meta.focalLengthMm = v;
+        meta.focalLength = `${Math.round(v)} mm`;
+      }
     }
     const fl35 = exif.get(0xa405);
     if (fl35) {
       const v = readUint(s, tiff, fl35, le);
-      if (v > 0) meta.focalLength35 = `${v} mm`;
+      if (v > 0) {
+        meta.focalLength35Mm = v;
+        meta.focalLength35 = `${v} mm`;
+      }
     }
   }
 

@@ -169,6 +169,7 @@ import {
   type ToneAdjustment,
 } from "../lib/tone";
 import { extractMetadata, type ImageMetadata } from "../lib/metadata";
+import { embedMetadata, type ExportMetadata } from "../lib/metadata-write";
 
 interface PasteSrc {
   source: ImageBitmap | HTMLCanvasElement;
@@ -2375,6 +2376,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         activeLayerId: d.activeLayerId,
         selectedLayerIds: d.selectedLayerIds,
         selection: d.selection,
+        metadata: d.metadata ?? null,
       },
       { foreground: fgRef.current, background: bgRef.current },
       isActive
@@ -2653,6 +2655,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       selection: p.selection ?? [],
       selectionAngle: 0,
       selectionPivot: null,
+      metadata: p.metadata ?? null, // v9; absent in older files
     };
     setDocs((ds) => [...ds, doc]);
     if (activate) setActiveId(docId);
@@ -2715,9 +2718,59 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const composite = paintRef.current?.exportComposite(activeDocRef.current.layers);
     if (composite) setExportComposite(composite);
   };
-  const doExport = async (opts: ExportOptions, filename: string) => {
+
+  // Edit description/artist/copyright from the Metadata panel. A document with
+  // no source metadata gets a minimal stub so authoring fields work everywhere.
+  const updateDocMetadata = (patch: Partial<ImageMetadata>) => {
+    patchActiveDoc((d) => ({
+      ...d,
+      metadata: {
+        ...(d.metadata ?? {
+          fileName: d.name,
+          fileSize: 0,
+          fileType: "",
+          lastModified: Date.now(),
+        }),
+        ...patch,
+      },
+    }));
+  };
+
+  /** What an export of `d` would embed: the document's own metadata (raw EXIF
+   *  twins) with the Preferences attribution as fallback, plus the doc's ppi. */
+  const exportMetaFor = (d: Doc): ExportMetadata => {
+    const m = d.metadata;
+    const p = prefsRef.current;
+    return {
+      description: m?.description || undefined,
+      artist: m?.artist || p.authorName.trim() || undefined,
+      copyright: m?.copyright || p.copyrightNotice.trim() || undefined,
+      make: m?.make,
+      model: m?.model,
+      lensModel: m?.lensModel,
+      dateTakenRaw: m?.dateTakenRaw,
+      exposureTime: m?.exposureTime,
+      fNumberValue: m?.fNumberValue,
+      iso: m?.iso,
+      focalLengthMm: m?.focalLengthMm,
+      focalLength35Mm: m?.focalLength35Mm,
+      gps: m?.gps,
+      dpi: d.dpi ?? 300,
+    };
+  };
+
+  const doExport = async (opts: ExportOptions, filename: string, embedMeta: boolean) => {
     if (!exportComposite) return;
-    const blob = await renderExport(exportComposite, opts);
+    let blob = await renderExport(exportComposite, opts);
+    if (blob && embedMeta) {
+      blob = await embedMetadata(
+        blob,
+        opts.format.id,
+        exportMetaFor(activeDocRef.current),
+        Math.max(1, Math.round(exportComposite.width * opts.scale)),
+        Math.max(1, Math.round(exportComposite.height * opts.scale)),
+      );
+    }
     if (blob) {
       const base = filename.trim() || activeDocRef.current.name;
       await saveImageBlob(blob, `${base}.${opts.format.ext}`, opts.format);
@@ -2736,16 +2789,26 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const names: string[] = [];
     const datas: Uint8Array<ArrayBuffer>[] = [];
     let failed = 0;
+    const meta = run.embedMeta ? exportMetaFor(activeDocRef.current) : null;
     for (let i = 0; i < run.targets.length; i++) {
       const t = run.targets[i];
       const fmt = fmtById(t.formatId);
-      const blob = await renderExport(comp, {
+      let blob = await renderExport(comp, {
         format: fmt,
         quality: t.quality / 100,
         scale: t.scalePct / 100,
         transparent: true, // per-target mattes aren't modelled; alpha formats stay transparent
         matte: "#ffffffff",
       });
+      if (blob && meta) {
+        blob = await embedMetadata(
+          blob,
+          fmt.id,
+          meta,
+          Math.max(1, Math.round(comp.width * (t.scalePct / 100))),
+          Math.max(1, Math.round(comp.height * (t.scalePct / 100))),
+        );
+      }
       if (!blob) {
         failed++;
         continue;
@@ -4190,6 +4253,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           docName={active.name}
           colorSpace={colorSpace}
           imageMeta={active.metadata ?? null}
+          onEditMeta={updateDocMetadata}
           docDpi={active.dpi ?? 300}
         />
       </div>
@@ -4452,6 +4516,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         <ExportDialog
           composite={exportComposite}
           defaultName={active.name}
+          meta={exportMetaFor(active)}
           onExport={doExport}
           onBatchExport={doBatchExport}
           onClose={() => setExportComposite(null)}
