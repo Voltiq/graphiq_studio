@@ -223,6 +223,18 @@ export interface EngineHandle {
     angle?: number,
     pivot?: { x: number; y: number } | null,
   ) => CopyResult | null;
+  /** Rasterize a polygon into selection rects + ants (Paths panel). */
+  lassoSelect: (points: { x: number; y: number }[]) => WandSelection | null;
+  /** Combine two selections at the pixel level (add/subtract). */
+  combineSelection: (base: Rect[], region: Rect[], mode: "add" | "subtract") => WandSelection | null;
+  /** Stroke a pen path onto a layer as one undoable "Path" step (Paths panel). */
+  strokePath: (
+    layerId: string,
+    anchors: PenAnchor[],
+    closed: boolean,
+    settings: PenSettings,
+    color: string,
+  ) => void;
   isFloating: () => boolean;
   commitFloat: () => void;
   discardFloat: () => void;

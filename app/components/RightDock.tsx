@@ -28,6 +28,9 @@ import MetadataPanel from "./panels/MetadataPanel";
 import PropertiesPanel from "./panels/PropertiesPanel";
 import ActionsPanel from "./panels/ActionsPanel";
 import type { ActionsApi } from "../lib/actions";
+import PathsPanel from "./panels/PathsPanel";
+import type { PathsApi } from "../lib/paths";
+import { Spline } from "lucide-react";
 import type { NavigatorView } from "../lib/view";
 import type { LayersApi } from "../lib/layers";
 import type { EngineHandle, HistorySummary } from "../lib/paint";
@@ -40,6 +43,7 @@ export type PanelVisibility = {
   adjustments: boolean;
   properties: boolean;
   layers: boolean;
+  paths: boolean;
   history: boolean;
   actions: boolean;
   navigator: boolean;
@@ -54,6 +58,7 @@ type PanelId =
   | "adjustments"
   | "properties"
   | "layers"
+  | "paths"
   | "history"
   | "actions"
   | "metadata";
@@ -64,6 +69,7 @@ const DEFAULT_ORDER: PanelId[] = [
   "adjustments",
   "properties",
   "layers",
+  "paths",
   "history",
   "actions",
   "metadata",
@@ -81,6 +87,7 @@ const DEFAULT_OPEN: Record<PanelId, boolean> = {
   adjustments: true,
   properties: true,
   layers: true,
+  paths: false,
   history: false,
   actions: false,
   metadata: false,
@@ -159,6 +166,8 @@ interface Props {
   onEditMeta: (patch: Partial<ImageMetadata>) => void;
   /** Macro recorder state + verbs for the Actions panel. */
   actionsApi: ActionsApi;
+  /** Stored pen paths + verbs for the Paths panel. */
+  pathsApi: PathsApi;
   docDpi?: number;
 }
 
@@ -210,6 +219,7 @@ export default function RightDock({
   imageMeta,
   onEditMeta,
   actionsApi,
+  pathsApi,
   docDpi = 300,
 }: Props) {
   const [order, setOrder] = useState<PanelId[]>(DEFAULT_ORDER);
@@ -362,6 +372,12 @@ export default function RightDock({
               onJump={onHistoryJump}
               maxRows={maxHistoryRows}
             />
+          </Panel>
+        ) : null;
+      case "paths":
+        return panels.paths ? (
+          <Panel key="paths" title="Paths" icon={Spline} {...dp}>
+            <PathsPanel api={pathsApi} />
           </Panel>
         ) : null;
       case "actions":

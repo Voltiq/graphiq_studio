@@ -215,6 +215,7 @@ export const TOPICS: HelpTopic[] = [
         title: "Vector layers",
         entries: [
           { title: "Shapes and pen paths", body: "Shape and pen layers keep their geometry too — reselect them to move handles, restyle fill/stroke or adjust the stroke profile, then commit again." },
+          { title: "Paths panel", body: "Committed pen paths land in the Paths panel as the Work Path; save them to keep them, then turn any path into a selection (Ctrl adds, Alt subtracts, Ctrl+Alt intersects), stroke or fill it onto the active layer, or load it back into the Pen tool. Stored paths save with the project." },
           { title: "SVG in and out", body: "Imported SVGs become vector-path layers that re-rasterize sharply at any size (features outside the supported subset fall back to a raster copy, honestly labelled). File ▸ Export SVG writes vector/text layers back out as SVG." },
         ],
       },
@@ -279,7 +280,7 @@ export const TOPICS: HelpTopic[] = [
       {
         title: "Workspace",
         entries: [
-          { title: "Panels", body: "Color, Adjustments, Properties, Layers, History, Actions, Navigator, Channels and Metadata — toggle them in the Window menu, drag their headers to reorder the dock, collapse what you don't need, or reset the workspace." },
+          { title: "Panels", body: "Color, Adjustments, Properties, Layers, Paths, History, Actions, Navigator, Channels and Metadata — toggle them in the Window menu, drag their headers to reorder the dock, collapse what you don't need, or reset the workspace." },
           { title: "Actions (macros)", body: "The Actions panel records sequences of document commands — layer ops, rotates, preset adjustments, effects — and replays them in one click or with an assigned F-key (F2–F10). Commands that open a dialog, and tool strokes, aren't captured." },
           { title: "Command palette", body: "Ctrl+K (or the top-bar search pill) opens the command palette: fuzzy-search every tool and menu command — \"exp svg\" finds Export SVG — with your recently used commands ready when the query is empty.", keys: "Ctrl+K" },
           { title: "History", body: "The History panel lists undoable steps — click any entry to jump. The in-memory cap is set in Preferences ▸ Performance.", keys: "Ctrl+Z" },

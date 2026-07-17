@@ -51,6 +51,7 @@ import {
   type TextRun,
   type CloneSettings,
   type CropSettings,
+  type PenAnchor,
   type DodgeSettings,
   type TextSettings,
   type VectorText,
@@ -147,6 +148,16 @@ import {
   type SavedAction,
 } from "../lib/actions";
 import {
+  cloneAnchors,
+  coercePaths,
+  freshPathId,
+  samplePathPolygon,
+  WORK_PATH_ID,
+  type PathsApi,
+  type PathSelectOp,
+  type SavedPath,
+} from "../lib/paths";
+import {
   DEFAULT_ADJUST,
   filterToAdjust,
   isDefaultAdjust,
@@ -213,6 +224,8 @@ interface Doc {
   metadata?: ImageMetadata | null;
   /** Pixels per inch — physical-unit rulers/readouts + true-size print. */
   dpi?: number;
+  /** Stored pen paths (Paths panel; "work" = the latest Pen-tool commit). */
+  paths?: SavedPath[];
 }
 
 /** A layer selection: the primary (active) id plus the full selected set. */
@@ -223,6 +236,7 @@ const ALL_PANELS: PanelVisibility = {
   adjustments: true,
   properties: true,
   layers: true,
+  paths: true,
   history: true,
   actions: true,
   navigator: true,
@@ -235,6 +249,7 @@ const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
   "window-adjustments": "adjustments",
   "window-properties": "properties",
   "window-layers": "layers",
+  "window-paths": "paths",
   "window-history": "history",
   "window-actions": "actions",
   "window-navigator": "navigator",
@@ -2465,6 +2480,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         selectedLayerIds: d.selectedLayerIds,
         selection: d.selection,
         metadata: d.metadata ?? null,
+        paths: d.paths ?? [],
       },
       { foreground: fgRef.current, background: bgRef.current },
       isActive
@@ -2753,6 +2769,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       selectionAngle: 0,
       selectionPivot: null,
       metadata: p.metadata ?? null, // v9; absent in older files
+      paths: coercePaths(p.paths), // v11; absent in older files
     };
     setDocs((ds) => [...ds, doc]);
     if (activate) setActiveId(docId);
@@ -3675,6 +3692,86 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       ),
   };
 
+  // ---- Paths panel (stored pen paths — Work Path + saved copies) ------------
+  const patchPaths = (fn: (list: SavedPath[]) => SavedPath[]) =>
+    patchActiveDoc((d) => ({ ...d, paths: fn(d.paths ?? []) }));
+  /** Every pen commit lands here (CanvasArea onPenPathCommit): the Photoshop-
+   *  style Work Path — replaced each time, Save duplicates it to keep it. */
+  const storeWorkPath = (anchors: PenAnchor[], closed: boolean) =>
+    patchPaths((list) => [
+      { id: WORK_PATH_ID, name: "Work Path", anchors: cloneAnchors(anchors), closed },
+      ...list.filter((x) => x.id !== WORK_PATH_ID),
+    ]);
+  const pathById = (id: string) => (activeDocRef.current.paths ?? []).find((x) => x.id === id);
+  /** Rasterize a path to selection rects via the lasso pipeline (open paths
+   *  close with a straight chord, exactly like the lasso's auto-close). */
+  const pathRegion = (p: SavedPath) => {
+    const poly = samplePathPolygon(p.anchors, p.closed);
+    return poly.length >= 3 ? (paintRef.current?.lassoSelect(poly) ?? null) : null;
+  };
+
+  const pathsApi: PathsApi = {
+    paths: active.paths ?? [],
+    toSelection: (id, op: PathSelectOp) => {
+      const p = pathById(id);
+      const eng = paintRef.current;
+      if (!p || !eng) return;
+      const sel = pathRegion(p);
+      if (!sel || !sel.rects.length) {
+        showToast("The path encloses no area.");
+        return;
+      }
+      const cur = activeDocRef.current.selection;
+      if (op === "new" || !cur.length) {
+        commitSelection("Path to Selection", sel.rects);
+      } else if (op === "add" || op === "subtract") {
+        const combined = eng.combineSelection(cur, sel.rects, op);
+        commitSelection(
+          op === "add" ? "Add Path to Selection" : "Subtract Path from Selection",
+          combined?.rects ?? [],
+        );
+      } else {
+        // intersect: A ∩ B = A − (A − B), built from the existing subtract.
+        const aMinusB = eng.combineSelection(cur, sel.rects, "subtract");
+        const inter = eng.combineSelection(cur, aMinusB?.rects ?? [], "subtract");
+        commitSelection("Intersect Path with Selection", inter?.rects ?? []);
+      }
+    },
+    stroke: (id) => {
+      const p = pathById(id);
+      if (!p || !paintRef.current) return;
+      paintRef.current.strokePath(ensureLayer(), cloneAnchors(p.anchors), p.closed, pen, paintColor);
+    },
+    fill: (id) => {
+      const p = pathById(id);
+      const eng = paintRef.current;
+      if (!p || !eng) return;
+      const sel = pathRegion(p);
+      if (!sel || !sel.rects.length) {
+        showToast("The path encloses no area.");
+        return;
+      }
+      eng.fillSelection(ensureLayer(), sel.rects, paintColor);
+    },
+    edit: (id) => {
+      const p = pathById(id);
+      if (!p) return;
+      setTool("pen");
+      viewApiRef.current?.loadPenPath(cloneAnchors(p.anchors), p.closed);
+    },
+    save: (id) => {
+      const p = pathById(id);
+      if (!p) return;
+      const named = (activeDocRef.current.paths ?? []).filter((x) => x.id !== WORK_PATH_ID);
+      patchPaths((list) => [
+        ...list,
+        { id: freshPathId(), name: `Path ${named.length + 1}`, anchors: cloneAnchors(p.anchors), closed: p.closed },
+      ]);
+    },
+    rename: (id, name) => patchPaths((list) => list.map((x) => (x.id === id ? { ...x, name } : x))),
+    remove: (id) => patchPaths((list) => list.filter((x) => x.id !== id)),
+  };
+
   const handleMenuAction = (actionId: string) => {
     // Recording: log replay-safe commands into the armed action (never while
     // playing back — a played action must not append to itself).
@@ -4211,6 +4308,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           "window-adjustments": panels.adjustments,
           "window-properties": panels.properties,
           "window-layers": panels.layers,
+          "window-paths": panels.paths,
           "window-history": panels.history,
           "window-actions": panels.actions,
           "window-navigator": panels.navigator,
@@ -4383,6 +4481,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onCurveTargetStart={onCurveTargetStart}
           onCurveTargetDrag={onCurveTargetDrag}
           onCurveTargetEnd={onCurveTargetEnd}
+          onPenPathCommit={storeWorkPath}
           pendingPaste={pendingPaste}
           onPasteDone={() => setPendingPaste(null)}
           pendingLoads={pendingLoads}
@@ -4449,6 +4548,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           imageMeta={active.metadata ?? null}
           onEditMeta={updateDocMetadata}
           actionsApi={actionsApi}
+          pathsApi={pathsApi}
           docDpi={active.dpi ?? 300}
         />
       </div>

@@ -70,6 +70,9 @@ export interface ViewApi {
   /** Apply a character-style patch to the text editor's SELECTION (true when
    *  consumed — the caller then leaves the block's base style alone). */
   applyTextStyle: (patch: TextStylePatch) => boolean;
+  /** Load a stored path into the Pen tool as the live editing path (Paths
+   *  panel ▸ Edit). The caller switches the tool to "pen". */
+  loadPenPath: (anchors: PenAnchor[], closed: boolean) => void;
 }
 
 interface RulerTick {
@@ -595,6 +598,7 @@ export default function CanvasArea({
   onCurveTargetStart,
   onCurveTargetDrag,
   onCurveTargetEnd,
+  onPenPathCommit,
   pendingPaste,
   onPasteDone,
   pendingLoads,
@@ -715,6 +719,8 @@ export default function CanvasArea({
   onCurveTargetStart: (rgb: { r: number; g: number; b: number }) => void;
   onCurveTargetDrag: (dy: number) => void;
   onCurveTargetEnd: () => void;
+  /** A pen path was committed (baked) — the Paths panel stores it as Work Path. */
+  onPenPathCommit: (anchors: PenAnchor[], closed: boolean) => void;
   pendingPaste: PendingPaste | null;
   onPasteDone: () => void;
   pendingLoads: PendingLoad[];
@@ -2689,6 +2695,12 @@ export default function CanvasArea({
       eraseSelection: (layerId, rects, angle, pivot, label, feather) =>
         engine.eraseSelection(layerId, rects, angle, pivot, label, feather),
       copyRegion: (rects, angle, pivot) => engine.copyRegion(rects, angle, pivot),
+      lassoSelect: (points) => engine.lassoSelect(points),
+      combineSelection: (base, region, mode) => engine.combineSelection(base, region, mode),
+      strokePath: (layerId, anchors, closed, settings, color) => {
+        engine.livePath(layerId, anchors, closed, settings, color);
+        engine.endPath(); // bakes + journals the tight "Path" entry
+      },
       isFloating: () => engine.isFloating,
       commitFloat: () => engine.commitFloat(),
       discardFloat: () => engine.discardFloat(),
@@ -3300,6 +3312,9 @@ export default function CanvasArea({
   // Commit (bake) the live pen path and drop the editing state. Also clears a
   // single-anchor path, which never started an engine session to commit.
   const finishPenPath = () => {
+    // Hand the committed geometry up (Paths panel "Work Path") BEFORE clearing.
+    const p = penPathRef.current;
+    if (p && p.anchors.length >= 2) onPenPathCommit(p.anchors, p.closed);
     engine.endPath();
     penPathRef.current = null;
     penDragRef.current = null;
@@ -4766,6 +4781,17 @@ export default function CanvasArea({
         const el = textEditRef.current;
         if (!el || !textSessionRef.current) return false;
         return applyPatchToSelection(el, patch);
+      },
+      loadPenPath: (anchors, closed) => {
+        if (anchors.length < 2) return;
+        finishPenPath(); // commit any path already in progress first
+        penPathRef.current = {
+          anchors: anchors.map((a) => ({ ...a })),
+          closed,
+          layerId: ensureLayer(),
+        };
+        renderPenLive();
+        ensureAnts();
       },
     };
     return () => {

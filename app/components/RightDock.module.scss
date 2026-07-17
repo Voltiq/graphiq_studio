@@ -1549,6 +1549,66 @@
   }
 }
 
+/* ---------------- Paths panel ----------------------------------------------- */
+.pathList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pathItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: var(--r-md);
+
+  &:hover {
+    background: var(--wash);
+  }
+}
+
+.pathThumb {
+  flex-shrink: 0;
+  width: 34px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--wash);
+  color: var(--text-2);
+
+  svg {
+    width: 28px;
+    height: 20px;
+    display: block;
+  }
+}
+
+.pathName {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+
+  em {
+    font-style: normal;
+    font-size: 10.5px;
+    color: var(--text-3);
+  }
+
+  &[data-work="true"] {
+    font-style: italic; /* Photoshop-style: the transient Work Path reads as such */
+  }
+}
+
 /* ---------------- Actions panel (macro recorder) ---------------------------- */
 .actions {
   display: flex;
