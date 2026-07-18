@@ -11,3 +11,15 @@
   display: flex;
   min-height: 0;
 }
+
+/* Interface scale: zoom the chrome, never the canvas. `.app`'s other children
+   are the top/options/status bars plus every dialog overlay; inside `.body`
+   the first/last children are the toolbar and the right dock — the middle
+   child (CanvasArea) stays at 100% so document pixels render exactly.
+   Body-portalled popups (menus, selects, tooltips) opt in via their own
+   classes. */
+.app > :not(.body),
+.body > :first-child,
+.body > :last-child {
+  zoom: var(--ui-zoom, 1);
+}

@@ -256,6 +256,7 @@
 
 /* Portalled popup — surface-overlay + shadow-overlay, radius-large (menus). */
 .selectMenu {
+  zoom: var(--ui-zoom, 1); /* body-portalled — opts into the interface scale */
   z-index: 200;
   min-width: 150px;
   max-height: 300px;

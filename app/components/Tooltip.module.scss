@@ -2,6 +2,7 @@
    body-small, 240px max width. Rises toward its anchor. */
 .tip {
   position: fixed;
+  zoom: var(--ui-zoom, 1); /* body-portalled — opts into the interface scale */
   z-index: 10000; /* above dialogs, docks, colour picker, etc. */
   max-width: 240px;
   padding: 4px 6px;

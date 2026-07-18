@@ -18,6 +18,7 @@ import styles from "./PreferencesDialog.module.scss";
 import { applyTheme, currentTheme, resolvedDark } from "./ThemeToggle";
 import { Slider, Toggle } from "./Controls";
 import { ACCENTS, ACCENT_COOKIE, DEFAULT_ACCENT, isAccent, type Accent, type Theme } from "../lib/theme";
+import { UI_SCALES, applyUiScale, liveUiScale, type UiScale } from "../lib/ui-scale";
 import {
   checkerCSS,
   type CheckerColors,
@@ -50,6 +51,20 @@ const THEME_OPTIONS: { id: Theme; name: string }[] = [
   { id: "dark", name: "Dark" },
   { id: "system", name: "Match system" },
 ];
+
+/** Interface-scale choices (ui-scale.ts owns the zoom factors). */
+const SCALE_OPTIONS: { value: UiScale; title: string; desc: string }[] = UI_SCALES.map((s) => ({
+  value: s.id,
+  title: `${s.label} — ${Math.round(s.zoom * 100)}%`,
+  desc:
+    s.id === "compact"
+      ? "Denser bars, panels and menus — more room for the canvas"
+      : s.id === "comfortable"
+        ? "Slightly larger controls and text"
+        : s.id === "large"
+          ? "Largest controls — for high-resolution displays"
+          : "The standard Graphiq Studio size",
+}));
 
 function liveAccent(): Accent {
   if (typeof document !== "undefined") {
@@ -189,6 +204,7 @@ export default function PreferencesDialog({
   const importInputRef = useRef<HTMLInputElement>(null);
   const [theme, setTheme] = useState<Theme>(() => currentTheme(initialTheme));
   const [accent, setAccent] = useState<Accent>(() => liveAccent());
+  const [uiScale, setUiScale] = useState<UiScale>(() => liveUiScale());
   const dark = resolvedDark(theme);
 
   const pickTheme = (t: Theme) => {
@@ -198,6 +214,10 @@ export default function PreferencesDialog({
   const pickAccent = (a: Accent) => {
     setAccent(a);
     applyAccent(a);
+  };
+  const pickUiScale = (s: UiScale) => {
+    setUiScale(s);
+    applyUiScale(s);
   };
 
   // Live cache stats while the Performance tab is visible (1s cadence).
@@ -325,6 +345,15 @@ export default function PreferencesDialog({
                       </button>
                     ))}
                   </div>
+                </section>
+
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Interface scale</span>
+                  <OptionList options={SCALE_OPTIONS} value={uiScale} onPick={pickUiScale} />
+                  <p className={styles.sectionHint}>
+                    Scales the bars, panels, menus and dialogs. The canvas view is never
+                    scaled — document pixels always render exactly.
+                  </p>
                 </section>
 
                 <section className={styles.section}>

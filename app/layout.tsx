@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { getServerAccent, getServerTheme } from "./lib/theme.server";
+import { getServerAccent, getServerTheme, getServerUiScale } from "./lib/theme.server";
 import "./globals.scss";
 
 // Self-hosted Atlassian Sans / Atlassian Mono (variable TTFs in app/fonts) —
@@ -57,12 +57,14 @@ export default async function RootLayout({
 }>) {
   const theme = await getServerTheme();
   const accent = await getServerAccent();
+  const uiScale = await getServerUiScale();
 
   return (
     <html
       lang="en"
       data-theme={theme}
       data-accent={accent}
+      data-uiscale={uiScale}
       data-motion="on"
       className={`${atlassianSans.variable} ${atlassianMono.variable}`}
       suppressHydrationWarning

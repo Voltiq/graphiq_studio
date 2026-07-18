@@ -29,6 +29,23 @@
    =========================================================================== */
 
 :root {
+  /* Interface scale (Preferences ▸ Appearance, `data-uiscale` cookie/attr):
+     CSS-zooms the chrome — top/options/status bars, toolbar, dock, dialogs,
+     portalled popups — while the canvas viewport stays 100% so document
+     pixels are never resampled. Popup placement math divides by uiZoom()
+     (app/lib/ui-scale.ts) — these factors MUST match UI_SCALES there. */
+  --ui-zoom: 1;
+
+  &[data-uiscale="compact"] {
+    --ui-zoom: 0.9;
+  }
+  &[data-uiscale="comfortable"] {
+    --ui-zoom: 1.1;
+  }
+  &[data-uiscale="large"] {
+    --ui-zoom: 1.25;
+  }
+
   /* Radii — ADS t-shirt scale by component class:
      xs 2px kbd/badges · sm 4px lozenges/tooltips · md 6px buttons/inputs/menus
      lg 8px cards/wells · xl 12px modals */

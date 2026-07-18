@@ -2,7 +2,7 @@
 //
 // "Settings" = configuration only: the Preferences model, tool options, panel
 // layout/visibility, view toggles, working colour space, proof target, and the
-// theme/accent cookies. Deliberately EXCLUDED (user content, not settings):
+// theme/accent/UI-scale cookies. Deliberately EXCLUDED (user content, not settings):
 // saved gradient presets, swatches, adjustment presets, the recent-files list,
 // and autosave snapshots (crash-recovery data).
 //
@@ -24,7 +24,7 @@ export const SETTINGS_KEYS: readonly string[] = [
 ];
 
 /** Cookie-based settings (server-rendered on boot to avoid theme flash). */
-const SETTINGS_COOKIES: readonly string[] = ["pe-theme", "pe-accent"];
+const SETTINGS_COOKIES: readonly string[] = ["pe-theme", "pe-accent", "pe-uiscale"];
 
 const ONE_YEAR = 60 * 60 * 24 * 365;
 

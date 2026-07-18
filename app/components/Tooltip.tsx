@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import styles from "./Tooltip.module.scss";
+import { uiZoom } from "../lib/ui-scale";
 
 const TIP_ATTR = "data-tip";
 
@@ -121,16 +122,20 @@ export default function TooltipHost() {
     }
     const el = tipRef.current;
     if (!el) return;
-    const tw = el.offsetWidth;
-    const th = el.offsetHeight;
+    // The tip is UI-scale-zoomed: offset sizes are local px (×z to compare
+    // against viewport coords), and style offsets render ×z (÷z on write).
+    const z = uiZoom();
+    const tw = el.offsetWidth * z;
+    const th = el.offsetHeight * z;
     const gap = 8;
     const margin = 6;
     const place: "top" | "bottom" =
       anchor.bottom + gap + th + margin > window.innerHeight && anchor.top - gap - th - margin > 0
         ? "top"
         : "bottom";
-    const left = Math.max(margin, Math.min(anchor.cx - tw / 2, window.innerWidth - tw - margin));
-    const top = place === "bottom" ? anchor.bottom + gap : anchor.top - gap - th;
+    const left =
+      Math.max(margin, Math.min(anchor.cx - tw / 2, window.innerWidth - tw - margin)) / z;
+    const top = (place === "bottom" ? anchor.bottom + gap : anchor.top - gap - th) / z;
     setPos({ left, top, place });
   }, [anchor]);
 

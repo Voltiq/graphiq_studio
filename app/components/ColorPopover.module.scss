@@ -5,6 +5,7 @@
 
 .popover {
   position: absolute;
+  zoom: var(--ui-zoom, 1); /* body-portalled — opts into the interface scale */
   /* Portalled to <body>, so it must out-rank dialogs (200) and the dock (300) it
      can be opened from — stays below tooltips (10000). */
   z-index: 9000;

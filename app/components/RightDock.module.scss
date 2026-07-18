@@ -730,6 +730,7 @@
 /* Context menu — overlay surface, neutral hovers, red danger. */
 .layerMenu {
   position: fixed;
+  zoom: var(--ui-zoom, 1); /* body-portalled — opts into the interface scale */
   z-index: 301;
   min-width: 196px;
   padding: 5px;

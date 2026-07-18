@@ -7,6 +7,7 @@ import styles from "./GradientControl.module.scss";
 import ColorPopover from "./ColorPopover";
 import { sampleGradient } from "../lib/gradient";
 import { swatchBg } from "../lib/color";
+import { uiZoom } from "../lib/ui-scale";
 import {
   GRADIENT_PRESETS_KEY,
   exportGradients,
@@ -315,10 +316,13 @@ export default function GradientControl({
     }
     const r = swatchRef.current?.getBoundingClientRect();
     if (!r) return;
-    const W = 252;
+    // Zoomed popup: clamp in viewport px (its 252 local px render ×z), then
+    // ÷z because style offsets on a zoomed element render ×z.
+    const z = uiZoom();
+    const W = 252 * z;
     setPos({
-      left: Math.max(8, Math.min(r.left, window.innerWidth - W - 8)),
-      top: r.bottom + 8,
+      left: Math.max(8, Math.min(r.left, window.innerWidth - W - 8)) / z,
+      top: (r.bottom + 8) / z,
     });
   }, [open]);
 

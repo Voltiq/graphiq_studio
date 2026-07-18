@@ -284,6 +284,7 @@ export const TOPICS: HelpTopic[] = [
           { title: "Actions (macros)", body: "The Actions panel records sequences of document commands — layer ops, rotates, preset adjustments, effects — and brush, pencil and eraser strokes (replayed at the recorded spot with the recorded settings), then replays it all in one click or with an assigned F-key (F2–F10). Commands that open a dialog, and other tools' gestures, aren't captured." },
           { title: "Command palette", body: "Ctrl+K (or the top-bar search pill) opens the command palette: fuzzy-search every tool and menu command — \"exp svg\" finds Export SVG — with your recently used commands ready when the query is empty.", keys: "Ctrl+K" },
           { title: "Remappable shortcuts", body: "The Keyboard Shortcuts window (Settings or Help menu) is also where you change bindings: click a key chip, press the new keys — Backspace unbinds, Esc cancels — and the menus and palette update instantly. Reset per shortcut or all at once." },
+          { title: "Interface scale", body: "Preferences ▸ Appearance ▸ Interface scale resizes the bars, panels, menus and dialogs — Compact (90%) through Large (125%). The canvas view is never scaled, so document pixels always render exactly." },
           { title: "History", body: "The History panel lists undoable steps — click any entry to jump. The in-memory cap is set in Preferences ▸ Performance.", keys: "Ctrl+Z" },
         ],
       },

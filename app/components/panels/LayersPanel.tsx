@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import styles from "../RightDock.module.scss";
 import { EditableValue, Select } from "../Controls";
+import { uiZoom } from "../../lib/ui-scale";
 import {
   BLEND_MODES,
   clipGroupsOf,
@@ -104,16 +105,19 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
 
   // Keep the menu fully on screen: clamp to the viewport once its size is known.
   // Runs before paint, so the corrected position is what the user actually sees.
+  // The menu is UI-scale-zoomed: gBCR is viewport px already, but style offsets
+  // on a zoomed element render ×z, so divide when writing them.
   useLayoutEffect(() => {
     if (!menu) return;
     const el = menuRef.current;
     if (!el) return;
     const margin = 8;
+    const z = uiZoom();
     const { width, height } = el.getBoundingClientRect();
     const left = Math.max(margin, Math.min(menu.x, window.innerWidth - width - margin));
     const top = Math.max(margin, Math.min(menu.y, window.innerHeight - height - margin));
-    el.style.left = `${left}px`;
-    el.style.top = `${top}px`;
+    el.style.left = `${left / z}px`;
+    el.style.top = `${top / z}px`;
   }, [menu]);
 
   const startRename = (n: LayerNode) => {

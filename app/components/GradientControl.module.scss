@@ -20,6 +20,7 @@
 
 .popover {
   position: absolute;
+  zoom: var(--ui-zoom, 1); /* body-portalled — opts into the interface scale */
   top: calc(100% + 8px);
   left: 0;
   /* below the (shared) colour picker's z-index so the nested picker shows on top */

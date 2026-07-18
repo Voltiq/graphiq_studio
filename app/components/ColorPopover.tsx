@@ -11,6 +11,7 @@ import {
 import { createPortal } from "react-dom";
 import styles from "./ColorPopover.module.scss";
 import ColorPicker from "./ColorPicker";
+import { uiZoom } from "../lib/ui-scale";
 
 type Align = "bottom-start" | "bottom-end" | "right-start" | "right-end";
 
@@ -51,9 +52,11 @@ export default function ColorPopover({
       const pop = popRef.current;
       const btn = btnRef.current;
       if (!btn) return;
+      // Zoomed popup: viewport-px math throughout, ÷z when writing styles.
+      const z = uiZoom();
       const r = btn.getBoundingClientRect();
-      const pw = pop?.offsetWidth || 248;
-      const ph = pop?.offsetHeight || 320;
+      const pw = (pop?.offsetWidth || 248) * z;
+      const ph = (pop?.offsetHeight || 320) * z;
       const gap = 8;
       const margin = 8;
       let top: number;
@@ -75,8 +78,8 @@ export default function ColorPopover({
           top = r.bottom + gap;
           left = r.left;
       }
-      left = Math.round(Math.min(Math.max(margin, left), window.innerWidth - pw - margin));
-      top = Math.round(Math.min(Math.max(margin, top), window.innerHeight - ph - margin));
+      left = Math.round(Math.min(Math.max(margin, left), window.innerWidth - pw - margin)) / z;
+      top = Math.round(Math.min(Math.max(margin, top), window.innerHeight - ph - margin)) / z;
       setPos((prev) => (prev && prev.top === top && prev.left === left ? prev : { top, left }));
     };
     place();

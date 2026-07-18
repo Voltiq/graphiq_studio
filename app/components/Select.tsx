@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
 import styles from "./Controls.module.scss";
+import { uiZoom } from "../lib/ui-scale";
 
 /**
  * Custom dropdown — a styled trigger + a portalled, frosted-glass popup that
@@ -46,13 +47,16 @@ export function Select({
     const place = () => {
       const btn = btnRef.current;
       if (!btn) return;
+      // The popup is UI-scale-zoomed: rects/client coords are viewport px,
+      // offset sizes are local px (×z), and style offsets render ×z (÷z).
+      const z = uiZoom();
       const r = btn.getBoundingClientRect();
-      const ph = popRef.current?.offsetHeight ?? 0;
+      const ph = (popRef.current?.offsetHeight ?? 0) * z;
       const margin = 8;
       let top = r.bottom + 4;
       if (top + ph > window.innerHeight - margin) top = Math.max(margin, r.top - 4 - ph);
       const left = Math.min(r.left, window.innerWidth - r.width - margin);
-      setPos({ top, left, width: r.width });
+      setPos({ top: top / z, left: left / z, width: r.width / z });
     };
     place();
     window.addEventListener("resize", place);
