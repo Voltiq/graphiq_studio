@@ -391,15 +391,23 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                       className={styles.maskThumb}
                       data-active={l.id === activeLayerId && api.maskSurface === "mask"}
                       data-disabled={!l.mask.enabled}
+                      data-viewing={api.maskViewId === l.id || undefined}
                       title={
                         l.mask.enabled
-                          ? "Layer mask — click to paint it, Shift-click to disable"
+                          ? api.maskViewId === l.id
+                            ? "Viewing the mask — Alt-click (or click a thumbnail) to return"
+                            : "Layer mask — click to paint it, Alt-click to view it on the canvas, Shift-click to disable"
                           : "Layer mask (disabled) — Shift-click to enable"
                       }
                       onClick={(e) => {
                         e.stopPropagation();
                         if (e.shiftKey) {
                           api.toggleMaskEnabled(l.id);
+                          return;
+                        }
+                        if (e.altKey) {
+                          api.select(l.id, "replace");
+                          api.toggleMaskView(l.id);
                           return;
                         }
                         api.select(l.id, "replace");

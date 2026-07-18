@@ -1129,9 +1129,44 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active.activeLayerId, activeId]);
 
+  // Mask VIEW (Alt-click a mask chip / Channels panel): the canvas shows the
+  // mask's grayscale instead of the composite. Session-only, per active doc.
+  const [maskViewId, setMaskViewId] = useState<string | null>(null);
+  const maskViewIdRef = useRef(maskViewId);
+  maskViewIdRef.current = maskViewId;
+  const toggleMaskView = (layerId: string) => {
+    const next = maskViewIdRef.current === layerId ? null : layerId;
+    setMaskViewId(next);
+    paintRef.current?.setMaskView(next);
+    if (next) {
+      // Viewing a mask also targets it for painting (Photoshop behaviour).
+      paintRef.current?.setActiveSurface(layerId, "mask");
+      setPaintSurface(paintRef.current?.getActiveSurface(layerId) ?? "pixels");
+    }
+  };
+  // The view never survives a doc switch (CanvasArea also resets the engine),
+  // and it ends the moment the viewed layer or its mask goes away.
+  useEffect(() => {
+    setMaskViewId(null);
+  }, [activeId]);
+  useEffect(() => {
+    if (!maskViewId) return;
+    const node = findNode(active.layers, maskViewId);
+    if (!node || node.type === "adjustment" || !node.mask) {
+      setMaskViewId(null);
+      paintRef.current?.setMaskView(null);
+    }
+  }, [active.layers, maskViewId]);
+
   const chooseSurface = (layerId: string, surface: ActiveSurface) => {
     paintRef.current?.setActiveSurface(layerId, surface);
     setPaintSurface(paintRef.current?.getActiveSurface(layerId) ?? "pixels");
+    // Choosing any surface other than the viewed mask exits mask view — same
+    // "click a thumbnail to come back" behaviour as Photoshop.
+    if (maskViewIdRef.current && (surface !== "mask" || layerId !== maskViewIdRef.current)) {
+      setMaskViewId(null);
+      paintRef.current?.setMaskView(null);
+    }
   };
 
   const addMaskOp = (init: "reveal" | "hide" | "selection") => {
@@ -2264,6 +2299,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       const n = findNode(active.layers, id);
       if (n?.mask) toggleMaskMeta(id, { linked: !n.mask.linked }, n.mask.linked ? "Unlink Layer Mask" : "Link Layer Mask");
     },
+    maskViewId,
+    toggleMaskView,
     toggleFilterMaskEnabled: (id) => {
       const n = findNode(active.layers, id);
       if (n && n.type !== "adjustment" && n.filterMask) setFilterMaskEnabled(id, !n.filterMask.enabled);

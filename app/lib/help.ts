@@ -146,6 +146,7 @@ export const TOPICS: HelpTopic[] = [
         entries: [
           { title: "Layer masks", body: "Reveal-all, hide-all, or from the selection. Click the mask thumbnail to paint it — black hides, white reveals, grey is partial — with any paint tool including gradients, the blur brush and dodge/burn." },
           { title: "Mask control", body: "Shift-click a mask thumbnail to disable it temporarily; the chain icon unlinks it so layer and mask move independently; Apply bakes it into the layer's alpha." },
+          { title: "Viewing a mask", body: "Alt-click a mask thumbnail to see the mask itself, grayscale, on the canvas — painting still targets it, live. Click any thumbnail (or Alt-click again) to return. The Channels panel's mask row has an eye that does the same, plus a tonal curve of the mask beside R/G/B." },
           { title: "Filter masks", body: "A second mask that confines a layer's smart-filter stack: white = filtered, black = original. Managed from the Smart Filters dialog." },
         ],
       },

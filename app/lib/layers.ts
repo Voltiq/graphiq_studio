@@ -496,6 +496,10 @@ export interface LayersApi {
   applyMask: () => void;
   toggleMaskEnabled: (id: string) => void;
   toggleMaskLinked: (id: string) => void;
+  /** Layer id whose mask is being VIEWED grayscale on the canvas (or null). */
+  maskViewId: string | null;
+  /** Toggle mask view for `id` (Alt-click its mask chip / Channels panel). */
+  toggleMaskView: (id: string) => void;
   /** Enable/disable a node's smart-filter mask (Shift-click on its chip). */
   toggleFilterMaskEnabled: (id: string) => void;
   loadMaskAsSelection: () => void;

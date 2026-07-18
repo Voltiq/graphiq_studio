@@ -873,6 +873,14 @@
   border-color: var(--accent);
 }
 
+/* Mask VIEW mode (Alt-click): the canvas is showing this mask grayscale. */
+.maskThumb[data-viewing="true"] {
+  outline: 2px dashed var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
 /* A layer-mask chip beside the pixel thumbnail (grayscale gradient placeholder). */
 .maskThumb {
   position: relative;
@@ -1166,6 +1174,42 @@
   }
   &[data-channel="b"] {
     --ch: #4688ec;
+  }
+  /* The active layer's mask channel — neutral grayscale. */
+  &[data-channel="m"] {
+    --ch: #cbd2dc;
+  }
+}
+
+/* Mask channel row: curve toggle + the view-on-canvas eye. */
+.channelMaskRow {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.channelView {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+
+  &:hover {
+    color: var(--text);
+    background: var(--wash);
+  }
+
+  &[data-active="true"] {
+    color: var(--accent-contrast);
+    background: var(--accent);
+    border-color: var(--accent);
   }
 }
 

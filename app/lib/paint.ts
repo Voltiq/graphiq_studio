@@ -262,6 +262,10 @@ export interface EngineHandle {
   exportComposite: (tree: LayerNode[]) => HTMLCanvasElement;
   /** Per-channel tonal distribution of the composited canvas. */
   histogram: (tree: LayerNode[]) => ChannelHistogram;
+  /** Tonal distribution of a layer's mask (effective grayscale); null = no mask. */
+  maskHistogram: (id: string, surface?: "mask" | "filterMask") => Uint32Array | null;
+  /** Show a mask grayscale on the canvas instead of the composite (null = off). */
+  setMaskView: (id: string | null, surface?: "mask" | "filterMask") => void;
   /** Subscribe to content changes (returns an unsubscribe fn). */
   subscribe: (cb: () => void) => () => void;
   resizeImage: (w: number, h: number, ids?: string[], smooth?: boolean) => void;
@@ -579,6 +583,9 @@ export class PaintEngine {
   // Reused buffers for the live mask-paint preview (grayscale + derived alpha).
   private maskPrevG: Layer | null = null;
   private maskPrevA: Layer | null = null;
+  // Mask VIEW mode (Alt-click a mask chip / Channels panel): while set, the
+  // view canvas shows this mask's grayscale instead of the composite.
+  private maskView: { id: string; surface: "mask" | "filterMask" } | null = null;
   // Reused scratch for the per-node masked composite (src ⊗ mask alpha).
   private maskTmp: Layer | null = null;
   // Reused buffers for the adjustment-layer composite (offscreen accumulator that
@@ -1556,6 +1563,23 @@ export class PaintEngine {
   /** True when `id` currently carries a mask. */
   hasMask(id: string): boolean {
     return this.masks.has(id);
+  }
+
+  /** Toggle the mask-view render mode (null = back to the normal composite). */
+  setMaskView(id: string | null, surface: "mask" | "filterMask" = "mask") {
+    this.maskView = id ? { id, surface } : null;
+    this.emitChange();
+  }
+
+  /** Tonal distribution of a mask's effective grayscale (R×A/255); null = no mask. */
+  maskHistogram(id: string, surface: "mask" | "filterMask" = "mask"): Uint32Array | null {
+    const key = surface === "filterMask" ? filterMaskKey(id) : id;
+    const mask = this.masks.get(key);
+    if (!mask) return null;
+    const out = new Uint32Array(256);
+    const d = mask.ctx.getImageData(0, 0, this.w, this.h).data;
+    for (let i = 0; i < d.length; i += 4) out[((d[i] * d[i + 3]) / 255) | 0]++;
+    return out;
   }
 
   /** Allocate a grayscale mask for `id`: white (reveal-all), black (hide-all), or
@@ -3896,6 +3920,46 @@ export class PaintEngine {
   composite(tree: LayerNode[]) {
     const ctx = this.vctx;
     if (!ctx) return;
+    if (this.maskView) {
+      // Mask view (Alt-click on a mask chip / Channels panel): the mask's
+      // EFFECTIVE grayscale (R×A/255 — the same math the alpha derivation
+      // uses) replaces the composite; a live stroke targeting this mask
+      // previews through the same drawStroke path the normal view uses.
+      const key =
+        this.maskView.surface === "filterMask" ? filterMaskKey(this.maskView.id) : this.maskView.id;
+      const mask = this.masks.get(key);
+      if (mask) {
+        if (!this.maskPrevG || this.maskPrevG.c.width !== this.w || this.maskPrevG.c.height !== this.h)
+          this.maskPrevG = this.mkMask(true);
+        const g = this.maskPrevG;
+        g.ctx.globalAlpha = 1;
+        g.ctx.globalCompositeOperation = "source-over";
+        g.ctx.clearRect(0, 0, this.w, this.h);
+        g.ctx.drawImage(mask.c, 0, 0);
+        if (
+          this.painting &&
+          this.strokeOnMask &&
+          this.stroke &&
+          this.strokeLayer &&
+          this.maskKeyOf(this.strokeLayer) === key
+        ) {
+          this.drawStroke(g.ctx);
+        }
+        const img = g.ctx.getImageData(0, 0, this.w, this.h);
+        const d = img.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const v = (d[i] * d[i + 3]) / 255;
+          d[i] = v;
+          d[i + 1] = v;
+          d[i + 2] = v;
+          d[i + 3] = 255;
+        }
+        ctx.putImageData(img, 0, 0);
+        this.pendingDirty = null;
+        this.lastTree = tree;
+        return;
+      }
+    }
     // Frame setup for the render graph: fresh key memo + used-entry protection,
     // and the set of live-session layers (+ ancestors) that bypass the cache.
     this.keyMemo.clear();

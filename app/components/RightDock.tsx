@@ -292,7 +292,7 @@ export default function RightDock({
       case "channels":
         return panels.channels ? (
           <Panel key="channels" title="Channels" icon={BarChart3} {...dp}>
-            <ChannelsPanel engineRef={engineRef} tree={layers.layers} />
+            <ChannelsPanel engineRef={engineRef} tree={layers.layers} api={layers} />
           </Panel>
         ) : null;
       case "color":

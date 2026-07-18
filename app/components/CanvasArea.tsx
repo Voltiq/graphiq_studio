@@ -2673,6 +2673,7 @@ export default function CanvasArea({
     engine.setColorSpace(colorSpace); // sets the space + converts existing layers
     engine.setView(v); // recreates vctx in the working space
     engine.setDoc(widthRef.current, heightRef.current, collectLeafIds(layersRef.current));
+    engine.setMaskView(null); // mask view never survives a doc (re)activation
     engine.onChange = scheduleComposite;
     engine.onHistory = (s) => onHistoryRef.current(s);
     engine.onAdjustEnd = () => onAdjustEndRef.current();
@@ -2739,6 +2740,8 @@ export default function CanvasArea({
       setMaskImage: (id, src) => engine.setMaskImage(id, src),
       exportComposite: (tree) => engine.exportComposite(tree),
       histogram: (tree) => engine.histogram(tree),
+      maskHistogram: (id, surface) => engine.maskHistogram(id, surface),
+      setMaskView: (id, surface) => engine.setMaskView(id, surface),
       subscribe: (cb) => engine.addChangeListener(cb),
       resizeImage: (w, h, ids, smooth) => engine.resizeImage(w, h, ids, smooth),
       transformImage: (kind, ids) => engine.transformImage(kind, ids),
