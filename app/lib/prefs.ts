@@ -123,6 +123,13 @@ export interface Preferences {
   pixelGridColor: string;
   /** Snap pull distance in screen px (shape-node symmetry snaps, guides…). */
   snapDistance: number;
+  /** Paint-tool cursor: the size ring (with hardness preview) or a precise
+   *  crosshair only. */
+  paintCursor: "ring" | "precise";
+  /** Draw the small centre crosshair inside the brush ring. */
+  brushCrosshair: boolean;
+  /** Brush ring / crosshair colour (the dark under-stroke stays for contrast). */
+  ringColor: string;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -155,6 +162,9 @@ export const DEFAULT_PREFS: Preferences = {
   gridColor: "#4688ec",
   pixelGridColor: "#808080", // reproduces the historical rgba(128,128,128,…) lines
   snapDistance: 6, // reproduces the historical SNAP_PX
+  paintCursor: "ring",
+  brushCrosshair: true,
+  ringColor: "#ffffff", // reproduces the historical white strokes
 };
 
 const KEY = "graphiq:preferences";

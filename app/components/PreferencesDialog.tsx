@@ -6,6 +6,7 @@ import {
   ClipboardPaste,
   FolderOpen,
   Gauge,
+  Crosshair,
   Grid2x2,
   Grid3x3,
   HardDrive,
@@ -101,6 +102,7 @@ export type PrefsTab =
   | "editing"
   | "files"
   | "guides"
+  | "cursors"
   | "units"
   | "transparency"
   | "performance"
@@ -115,6 +117,7 @@ const TABS: { id: Tab; label: string; icon: typeof Palette }[] = [
   { id: "units", label: "Units & rulers", icon: Ruler },
   { id: "transparency", label: "Transparency", icon: Grid2x2 },
   { id: "guides", label: "Guides & grid", icon: Grid3x3 },
+  { id: "cursors", label: "Cursors", icon: Crosshair },
   { id: "performance", label: "Performance", icon: Gauge },
   { id: "storage", label: "Storage", icon: HardDrive },
 ];
@@ -774,6 +777,97 @@ export default function PreferencesDialog({
                     value={prefs.snapDistance}
                     onChange={(n) => onChange({ snapDistance: n })}
                   />
+                </section>
+              </>
+            )}
+
+            {tab === "cursors" && (
+              <>
+                <p className={styles.paneIntro}>
+                  How the paint tools&apos; cursor draws on the canvas — the ring scales with
+                  zoom and previews the brush&apos;s size and hardness.
+                </p>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Preview</span>
+                  <div className={styles.cursorPreview}>
+                    <svg width="96" height="96" viewBox="0 0 96 96" aria-hidden>
+                      {prefs.paintCursor === "ring" && (
+                        <>
+                          <circle cx="48" cy="48" r="30" fill="none" stroke="rgba(0,0,0,0.45)" strokeWidth="3" />
+                          <circle cx="48" cy="48" r="30" fill="none" stroke={prefs.ringColor} strokeWidth="1.25" opacity="0.95" />
+                          <circle cx="48" cy="48" r="19" fill="none" stroke="rgba(0,0,0,0.35)" strokeWidth="2.5" strokeDasharray="3 3" />
+                          <circle cx="48" cy="48" r="19" fill="none" stroke={prefs.ringColor} strokeWidth="1" opacity="0.8" strokeDasharray="3 3" />
+                        </>
+                      )}
+                      {(prefs.paintCursor === "precise" || prefs.brushCrosshair) && (
+                        <>
+                          <path
+                            d={prefs.paintCursor === "precise" ? "M34 48h28M48 34v28" : "M40 48h16M48 40v16"}
+                            stroke="rgba(0,0,0,0.4)"
+                            strokeWidth="2.5"
+                          />
+                          <path
+                            d={prefs.paintCursor === "precise" ? "M34 48h28M48 34v28" : "M40 48h16M48 40v16"}
+                            stroke={prefs.ringColor}
+                            strokeWidth="1"
+                            opacity="0.92"
+                          />
+                        </>
+                      )}
+                    </svg>
+                  </div>
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Painting cursor</span>
+                  <OptionList
+                    options={[
+                      { value: "ring", title: "Brush ring", desc: "Full-size circle with a dashed hardness ring — what the stroke will cover" },
+                      { value: "precise", title: "Precise crosshair", desc: "A crosshair at the exact centre, no size preview" },
+                    ]}
+                    value={prefs.paintCursor}
+                    onPick={(v) => onChange({ paintCursor: v })}
+                  />
+                  {prefs.paintCursor === "ring" && (
+                    <div className={styles.motionCard}>
+                      <div className={styles.rowText}>
+                        <strong>Crosshair in the ring</strong>
+                        <em>Mark the exact centre inside the brush ring</em>
+                      </div>
+                      <button
+                        type="button"
+                        className={styles.switch}
+                        role="switch"
+                        aria-checked={prefs.brushCrosshair}
+                        aria-label="Crosshair in the ring"
+                        data-on={prefs.brushCrosshair}
+                        onClick={() => onChange({ brushCrosshair: !prefs.brushCrosshair })}
+                      >
+                        <span className={styles.switchThumb} />
+                      </button>
+                    </div>
+                  )}
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Ring colour</span>
+                  <p className={styles.sectionHint}>
+                    Colours the ring, crosshair and the clone tool&apos;s source markers. A dark
+                    under-stroke always stays beneath, so any colour reads on light pixels too.
+                  </p>
+                  <div className={styles.colorWellRow}>
+                    <label className={styles.colorWellLabel}>
+                      <input
+                        type="color"
+                        className={styles.colorWell}
+                        value={prefs.ringColor}
+                        onChange={(e) => onChange({ ringColor: e.target.value })}
+                        aria-label="Ring colour"
+                      />
+                      <span>
+                        Colour
+                        <code>{prefs.ringColor}</code>
+                      </span>
+                    </label>
+                  </div>
                 </section>
               </>
             )}

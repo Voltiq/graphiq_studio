@@ -4713,6 +4713,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           }
           pixelGridColor={prefs.pixelGridColor}
           snapDistance={prefs.snapDistance}
+          cursorPrefs={{
+            mode: prefs.paintCursor,
+            crosshair: prefs.brushCrosshair,
+            ringColor: prefs.ringColor,
+          }}
           viewApiRef={viewApiRef}
           paintRef={paintRef}
           onHistory={setHistory}

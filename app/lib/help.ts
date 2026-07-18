@@ -85,6 +85,7 @@ export const TOPICS: HelpTopic[] = [
         title: "Paint & retouch",
         entries: [
           { title: "Brush / Pencil / Eraser", body: "One brush engine: size, hardness, opacity, flow, blend mode, smoothing. The pencil is always hard-edged and pixel-exact; the eraser removes to transparency.", keys: "B / N / E" },
+          { title: "Paint cursor", body: "Preferences ▸ Cursors switches the brush-family cursor between the size ring (with a dashed hardness preview and an optional centre crosshair) and a precise crosshair, and recolours it — a dark under-stroke keeps it readable on any pixels." },
           { title: "Clone stamp", body: "Alt-click sets the source, then paint copies from it. Aligned keeps the source offset across strokes; sample-all clones from the composite.", keys: "S" },
           { title: "Spot heal", body: "Paint over a blemish — on release it fills with matching texture from the surroundings, tone-blended so no seam shows.", keys: "J" },
           { title: "Red eye", body: "One click on a flash-red pupil neutralizes and darkens it; the blob is found automatically around the click.", keys: "Y" },

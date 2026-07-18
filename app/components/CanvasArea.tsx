@@ -620,6 +620,7 @@ export default function CanvasArea({
   docGrid,
   pixelGridColor,
   snapDistance,
+  cursorPrefs,
   viewApiRef,
   paintRef,
   onHistory,
@@ -752,6 +753,9 @@ export default function CanvasArea({
   pixelGridColor: string;
   /** Snap pull distance in screen px (shape-node symmetry snaps). */
   snapDistance: number;
+  /** Paint-cursor prefs (Preferences ▸ Cursors): ring vs precise, centre
+   *  crosshair, ring colour. */
+  cursorPrefs: { mode: "ring" | "precise"; crosshair: boolean; ringColor: string };
   viewApiRef: RefObject<ViewApi | null>;
   paintRef: RefObject<EngineHandle | null>;
   onHistory: (s: HistorySummary) => void;
@@ -954,6 +958,9 @@ export default function CanvasArea({
   const paintBrushRef = useRef(brush);
   paintBrushRef.current = brush;
   const paintHoverRef = useRef<{ x: number; y: number } | null>(null);
+  // Cursor prefs (ring vs precise, crosshair, colour) for the deps-[] overlay draw.
+  const cursorPrefsRef = useRef(cursorPrefs);
+  cursorPrefsRef.current = cursorPrefs;
   // Blur (focus) brush: latest settings + the hover point for the brush-ring
   // cursor that's drawn on the overlay (so it scales with zoom + shows hardness).
   const blurRef = useRef(blur);
@@ -2027,10 +2034,15 @@ export default function CanvasArea({
       }
     }
 
-    // --- brush-ring cursors (blur + clone) ------------------------------------
+    // --- brush-ring cursors (paint/heal/blur/dodge/clone) ---------------------
     // Drawn on the overlay so they scale with zoom and show the hardness falloff;
-    // the OS cursor is hidden for these tools (see the view canvas style). A small
-    // contrasting cross-hair (dark under white) used as a precise centre marker.
+    // the OS cursor is hidden for these tools (see the view canvas style). The
+    // light strokes take Preferences ▸ Cursors' ring colour; a dark under-stroke
+    // keeps them readable on light pixels either way.
+    const cp = cursorPrefsRef.current;
+    const cm = /^#?([0-9a-f]{6})/i.exec(cp.ringColor);
+    const cn = cm ? parseInt(cm[1], 16) : 0xffffff;
+    const lite = (a: number) => `rgba(${(cn >> 16) & 255},${(cn >> 8) & 255},${cn & 255},${a})`;
     const drawCross = (cxp: number, cyp: number, len: number) => {
       ctx.lineWidth = 2.5;
       ctx.strokeStyle = "rgba(0,0,0,0.4)";
@@ -2042,7 +2054,7 @@ export default function CanvasArea({
         ctx.lineTo(cxp, cyp + len);
         ctx.stroke();
         ctx.lineWidth = 1;
-        ctx.strokeStyle = "rgba(255,255,255,0.92)";
+        ctx.strokeStyle = lite(0.92);
       }
     };
     // A brush ring at full diameter + a dashed inner ring at the hardness radius.
@@ -2053,7 +2065,7 @@ export default function CanvasArea({
       ctx.strokeStyle = "rgba(0,0,0,0.45)";
       ctx.stroke();
       ctx.lineWidth = 1.25;
-      ctx.strokeStyle = "rgba(255,255,255,0.95)";
+      ctx.strokeStyle = lite(0.95);
       ctx.stroke();
       const inner = r * (hardness / 100);
       if (hardness < 100 && inner < r - 1.5 && inner > 0.5) {
@@ -2064,10 +2076,19 @@ export default function CanvasArea({
         ctx.strokeStyle = "rgba(0,0,0,0.35)";
         ctx.stroke();
         ctx.lineWidth = 1;
-        ctx.strokeStyle = "rgba(255,255,255,0.8)";
+        ctx.strokeStyle = lite(0.8);
         ctx.stroke();
         ctx.setLineDash([]);
       }
+    };
+    // The per-tool cursor: precise crosshair, or the ring (+ optional centre).
+    const drawBrushCursor = (hx: number, hy: number, r: number, hardness: number) => {
+      if (cp.mode === "precise") {
+        drawCross(hx, hy, 7);
+        return;
+      }
+      drawRing(hx, hy, r, hardness);
+      if (cp.crosshair) drawCross(hx, hy, 4);
     };
 
     if (
@@ -2077,8 +2098,7 @@ export default function CanvasArea({
       const b = paintBrushRef.current;
       const hx = p.x + paintHoverRef.current.x * s;
       const hy = p.y + paintHoverRef.current.y * s;
-      drawRing(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
-      drawCross(hx, hy, 4);
+      drawBrushCursor(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
     }
 
     if (toolRef.current === "heal") {
@@ -2099,32 +2119,28 @@ export default function CanvasArea({
       if (healHoverRef.current) {
         const hx = p.x + healHoverRef.current.x * s;
         const hy = p.y + healHoverRef.current.y * s;
-        drawRing(hx, hy, hr, healRef.current.hardness);
-        drawCross(hx, hy, 4);
+        drawBrushCursor(hx, hy, hr, healRef.current.hardness);
       }
     }
 
     if (toolRef.current === "redeye" && redEyeHoverRef.current) {
       const hx = p.x + redEyeHoverRef.current.x * s;
       const hy = p.y + redEyeHoverRef.current.y * s;
-      drawRing(hx, hy, Math.max(1, (redEyeRef.current.size / 2) * s), 100);
-      drawCross(hx, hy, 4);
+      drawBrushCursor(hx, hy, Math.max(1, (redEyeRef.current.size / 2) * s), 100);
     }
 
     if (toolRef.current === "blur" && blurHoverRef.current) {
       const b = blurRef.current;
       const hx = p.x + blurHoverRef.current.x * s;
       const hy = p.y + blurHoverRef.current.y * s;
-      drawRing(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
-      drawCross(hx, hy, 4);
+      drawBrushCursor(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
     }
 
     if (toolRef.current === "dodge" && dodgeHoverRef.current) {
       const d = dodgeRef.current;
       const hx = p.x + dodgeHoverRef.current.x * s;
       const hy = p.y + dodgeHoverRef.current.y * s;
-      drawRing(hx, hy, Math.max(1, (d.size / 2) * s), d.hardness);
-      drawCross(hx, hy, 4);
+      drawBrushCursor(hx, hy, Math.max(1, (d.size / 2) * s), d.hardness);
     }
 
     if (toolRef.current === "clone" && cloneHoverRef.current) {
@@ -2147,7 +2163,7 @@ export default function CanvasArea({
         if (paintingRef.current && off) {
           ctx.setLineDash([4, 4]);
           ctx.lineWidth = 1;
-          ctx.strokeStyle = "rgba(255,255,255,0.45)";
+          ctx.strokeStyle = lite(0.45);
           ctx.beginPath();
           ctx.moveTo(sx, sy);
           ctx.lineTo(hx, hy);
@@ -2161,7 +2177,7 @@ export default function CanvasArea({
         ctx.strokeStyle = "rgba(0,0,0,0.45)";
         ctx.stroke();
         ctx.lineWidth = 1.25;
-        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.strokeStyle = lite(0.95);
         ctx.stroke();
         drawCross(sx, sy, 5);
       }
@@ -2174,12 +2190,11 @@ export default function CanvasArea({
         ctx.strokeStyle = "rgba(0,0,0,0.45)";
         ctx.stroke();
         ctx.lineWidth = 1.25;
-        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.strokeStyle = lite(0.95);
         ctx.stroke();
         drawCross(hx, hy, 7);
       } else {
-        drawRing(hx, hy, r, c.hardness);
-        drawCross(hx, hy, 4);
+        drawBrushCursor(hx, hy, r, c.hardness);
       }
     }
 
@@ -2233,6 +2248,12 @@ export default function CanvasArea({
   const ensureAnts = useCallback(() => {
     if (!antsRaf.current) antsRaf.current = requestAnimationFrame(tickAnts);
   }, [tickAnts]);
+
+  // Repaint the hover cursor immediately when its prefs change (otherwise the
+  // new ring style waits for the next pointer move).
+  useEffect(() => {
+    ensureAnts();
+  }, [cursorPrefs, ensureAnts]);
 
   // Keep the overlay loop alive while a crop box is present so it stays drawn and
   // reflects live edits (drag, W/H fields, ratio, straighten).

@@ -752,6 +752,17 @@
   border-radius: var(--r-lg);
 }
 
+/* Cursors tab: the brush-cursor mock over a photo-ish gradient, so the light
+   stroke + dark under-stroke combo can be judged against both. */
+.cursorPreview {
+  display: grid;
+  place-items: center;
+  height: 112px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: linear-gradient(115deg, #f4f0e8 0%, #c9d4dd 34%, #5a7186 68%, #1f2830 100%);
+}
+
 .colorWellRow {
   display: flex;
   gap: var(--sp-4);
