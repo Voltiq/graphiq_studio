@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState, type DragEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
+import { uiZoom } from "../lib/ui-scale";
 import { WORKING_SPACE_LABELS, type WorkingSpace } from "../lib/colorspace";
 import {
   BarChart3,
@@ -51,7 +53,7 @@ export type PanelVisibility = {
   metadata: boolean;
 };
 
-type PanelId =
+export type PanelId =
   | "navigator"
   | "channels"
   | "color"
@@ -76,8 +78,54 @@ const DEFAULT_ORDER: PanelId[] = [
 ];
 const ORDER_KEY = "graphiq:panel-order";
 const OPEN_KEY = "graphiq:panel-open";
+const LAYOUT_KEY = "graphiq:panel-layout"; // dock membership + floating positions
 const LEGACY_ORDER_KEY = "aperture:panel-order"; // pre-rebrand fallbacks
 const LEGACY_OPEN_KEY = "aperture:panel-open";
+
+/** Everything the docking system persists/snapshots (workspaces capture this). */
+export interface DockLayout {
+  /** ONE global panel order — each dock renders its members in this order. */
+  order: PanelId[];
+  /** Panels assigned to the LEFT dock (everything else is right-docked). */
+  left: PanelId[];
+  /** Floating panels and their positions (local px inside the float host). */
+  floats: Partial<Record<PanelId, { x: number; y: number }>>;
+  open: Record<PanelId, boolean>;
+}
+
+/** Imperative capture/apply for workspaces + Reset Workspace (null = defaults). */
+export interface DockApi {
+  capture: () => DockLayout;
+  apply: (layout: DockLayout | null) => void;
+}
+
+const isPanelId = (v: unknown): v is PanelId => (DEFAULT_ORDER as string[]).includes(v as string);
+
+/** Validate a stored/imported layout fragment (unknown ids and junk dropped). */
+function coerceLayout(raw: unknown): { left: PanelId[]; floats: DockLayout["floats"] } {
+  const out: { left: PanelId[]; floats: DockLayout["floats"] } = { left: [], floats: {} };
+  if (!raw || typeof raw !== "object") return out;
+  const o = raw as { left?: unknown; floats?: unknown };
+  if (Array.isArray(o.left)) out.left = o.left.filter(isPanelId);
+  if (o.floats && typeof o.floats === "object") {
+    for (const [id, p] of Object.entries(o.floats as Record<string, { x?: unknown; y?: unknown }>)) {
+      if (isPanelId(id) && p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+        out.floats[id] = { x: Math.max(0, p.x as number), y: Math.max(0, p.y as number) };
+      }
+    }
+  }
+  return out;
+}
+
+function loadLayout(): { left: PanelId[]; floats: DockLayout["floats"] } {
+  if (typeof window === "undefined") return { left: [], floats: {} };
+  try {
+    const raw = window.localStorage.getItem(LAYOUT_KEY);
+    return raw ? coerceLayout(JSON.parse(raw)) : { left: [], floats: {} };
+  } catch {
+    return { left: [], floats: {} };
+  }
+}
 
 /** Default collapsed/expanded state per panel. */
 const DEFAULT_OPEN: Record<PanelId, boolean> = {
@@ -169,6 +217,12 @@ interface Props {
   /** Stored pen paths + verbs for the Paths panel. */
   pathsApi: PathsApi;
   docDpi?: number;
+  /** Portal target for the LEFT dock column (Editor renders the host div). */
+  leftHost?: HTMLElement | null;
+  /** Portal target for floating panels (an overlay above the canvas). */
+  floatHost?: HTMLElement | null;
+  /** Imperative layout capture/apply for workspaces + Reset Workspace. */
+  dockRef?: RefObject<DockApi | null>;
 }
 
 const IconBtn = ({
@@ -221,15 +275,24 @@ export default function RightDock({
   actionsApi,
   pathsApi,
   docDpi = 300,
+  leftHost = null,
+  floatHost = null,
+  dockRef,
 }: Props) {
   const [order, setOrder] = useState<PanelId[]>(DEFAULT_ORDER);
   const [openMap, setOpenMap] = useState<Record<PanelId, boolean>>(DEFAULT_OPEN);
+  const [left, setLeft] = useState<PanelId[]>([]);
+  const [floats, setFloats] = useState<DockLayout["floats"]>({});
+  const [floatTop, setFloatTop] = useState<PanelId | null>(null);
   const [dragId, setDragId] = useState<PanelId | null>(null);
 
   // Load the saved order + open state after mount (avoids a hydration mismatch).
   useEffect(() => {
     setOrder(loadOrder());
     setOpenMap(loadOpen());
+    const l = loadLayout();
+    setLeft(l.left);
+    setFloats(l.floats);
   }, []);
   // Persist whenever they change.
   useEffect(() => {
@@ -246,8 +309,91 @@ export default function RightDock({
       /* ignore */
     }
   }, [openMap]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LAYOUT_KEY, JSON.stringify({ left, floats }));
+    } catch {
+      /* ignore */
+    }
+  }, [left, floats]);
+
+  // Workspaces + Reset Workspace drive the whole layout through this handle.
+  if (dockRef) {
+    dockRef.current = {
+      capture: () => ({ order, left, floats, open: openMap }),
+      apply: (l) => {
+        if (!l) {
+          setOrder(DEFAULT_ORDER);
+          setOpenMap(DEFAULT_OPEN);
+          setLeft([]);
+          setFloats({});
+          return;
+        }
+        const saved = (l.order ?? []).filter(isPanelId);
+        setOrder([...saved, ...DEFAULT_ORDER.filter((id) => !saved.includes(id))]);
+        const c = coerceLayout(l);
+        setLeft(c.left);
+        setFloats(c.floats);
+        setOpenMap({ ...DEFAULT_OPEN, ...(l.open ?? {}) });
+      },
+    };
+  }
 
   const toggleOpen = (id: PanelId) => setOpenMap((cur) => ({ ...cur, [id]: !cur[id] }));
+
+  const isFloating = (id: PanelId) => !!floats[id];
+  const toggleFloat = (id: PanelId) => {
+    setFloats((cur) => {
+      if (cur[id]) {
+        const next = { ...cur };
+        delete next[id];
+        return next;
+      }
+      // Cascade new floats so stacking several stays readable.
+      const n = Object.keys(cur).length;
+      return { ...cur, [id]: { x: 48 + n * 28, y: 48 + n * 28 } };
+    });
+    setFloatTop(id);
+  };
+
+  // Move a floating panel by its grip (pointer drag; positions are LOCAL px in
+  // the zoomed float host, so viewport deltas divide by the UI zoom).
+  const beginFloatDrag = (e: ReactPointerEvent<HTMLElement>, id: PanelId) => {
+    e.preventDefault();
+    const start = floats[id];
+    if (!start) return;
+    setFloatTop(id);
+    const z = uiZoom();
+    const sx = e.clientX;
+    const sy = e.clientY;
+    const onMove = (ev: PointerEvent) => {
+      setFloats((cur) =>
+        cur[id]
+          ? {
+              ...cur,
+              [id]: {
+                x: Math.max(0, start.x + (ev.clientX - sx) / z),
+                y: Math.max(0, start.y + (ev.clientY - sy) / z),
+              },
+            }
+          : cur,
+      );
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  /** Drop on a dock's empty tail: join that dock at the end of the order. */
+  const moveToDockEnd = (id: PanelId, side: "left" | "right") => {
+    setLeft((cur) =>
+      side === "left" ? (cur.includes(id) ? cur : [...cur, id]) : cur.filter((x) => x !== id),
+    );
+    setOrder((cur) => (cur[cur.length - 1] === id ? cur : [...cur.filter((x) => x !== id), id]));
+  };
 
   const reorder = (from: PanelId, to: PanelId, before: boolean) =>
     setOrder((cur) => {
@@ -262,8 +408,10 @@ export default function RightDock({
       return next;
     });
 
-  // Drag wiring shared by every panel. `draggable`/start/end go on the header
-  // (the handle); `onDragOver` is the section-level drop target that reorders.
+  // Drag wiring shared by every docked panel. `draggable`/start/end go on the
+  // header (the handle); `onDragOver` is the section-level drop target that
+  // reorders — and, when the target sits in the OTHER dock, moves the dragged
+  // panel's membership there first (live cross-dock preview).
   const dragProps = (id: PanelId) => ({
     draggable: true,
     dragging: dragId === id,
@@ -274,6 +422,12 @@ export default function RightDock({
     onDragOver: (e: DragEvent<HTMLElement>) => {
       e.preventDefault();
       if (!dragId || dragId === id) return;
+      const targetLeft = left.includes(id);
+      setLeft((cur) => {
+        const has = cur.includes(dragId);
+        if (targetLeft === has) return cur;
+        return targetLeft ? [...cur, dragId] : cur.filter((x) => x !== dragId);
+      });
       const r = e.currentTarget.getBoundingClientRect();
       reorder(dragId, id, e.clientY - r.top < r.height / 2);
     },
@@ -281,7 +435,15 @@ export default function RightDock({
   });
 
   const panelFor = (id: PanelId): ReactNode => {
-    const dp = { ...dragProps(id), open: openMap[id], onToggle: () => toggleOpen(id) };
+    const floating = isFloating(id);
+    const dp = {
+      // Floating panels move by their grip, not HTML5 DnD.
+      ...(floating ? { draggable: false } : dragProps(id)),
+      open: openMap[id],
+      onToggle: () => toggleOpen(id),
+      floating,
+      onFloat: () => toggleFloat(id),
+    };
     switch (id) {
       case "navigator":
         return panels.navigator ? (
@@ -403,9 +565,63 @@ export default function RightDock({
     }
   };
 
+  const rightIds = order.filter((id) => !left.includes(id) && !isFloating(id));
+  const leftIds = order.filter((id) => left.includes(id) && !isFloating(id));
+  const floatIds = order.filter((id) => isFloating(id));
+
+  /** Drop target for a dock's empty space (also how the left dock starts). */
+  const dropZone = (side: "left" | "right") =>
+    dragId ? (
+      <div
+        className={styles.dockDropZone}
+        onDragOver={(e) => {
+          e.preventDefault();
+          moveToDockEnd(dragId, side);
+        }}
+        onDrop={(e) => e.preventDefault()}
+      />
+    ) : null;
+
   return (
-    <aside className={styles.dock} aria-label="Panels">
-      {order.map((id) => panelFor(id))}
-    </aside>
+    <>
+      <aside className={styles.dock} aria-label="Panels">
+        {rightIds.map((id) => panelFor(id))}
+        {dropZone("right")}
+      </aside>
+      {leftHost &&
+        createPortal(
+          <>
+            {leftIds.map((id) => panelFor(id))}
+            {dropZone("left")}
+          </>,
+          leftHost,
+        )}
+      {floatHost &&
+        createPortal(
+          floatIds.map((id) => {
+            const node = panelFor(id);
+            const pos = floats[id];
+            if (!node || !pos) return null;
+            return (
+              <div
+                key={id}
+                className={styles.floatPanel}
+                style={{ left: pos.x, top: pos.y, zIndex: floatTop === id ? 2 : 1 }}
+                onPointerDown={() => setFloatTop(id)}
+              >
+                <div
+                  className={styles.floatGrip}
+                  title="Drag to move this panel"
+                  onPointerDown={(e) => beginFloatDrag(e, id)}
+                >
+                  <span />
+                </div>
+                {node}
+              </div>
+            );
+          }),
+          floatHost,
+        )}
+    </>
   );
 }

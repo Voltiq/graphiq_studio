@@ -284,7 +284,8 @@ export const TOPICS: HelpTopic[] = [
       {
         title: "Workspace",
         entries: [
-          { title: "Panels", body: "Color, Adjustments, Properties, Layers, Paths, History, Actions, Navigator, Channels and Metadata — toggle them in the Window menu, drag their headers to reorder the dock, collapse what you don't need, or reset the workspace." },
+          { title: "Panels", body: "Color, Adjustments, Properties, Layers, Paths, History, Actions, Navigator, Channels and Metadata — toggle them in the Window menu, drag their headers to reorder or to move them into the second (left) dock, collapse what you don't need, or reset the workspace." },
+          { title: "Floating panels & workspaces", body: "The pin on a panel's header floats it over the canvas — drag it by its grip bar, pin again to dock it back. Window ▸ Workspaces saves the whole layout (visibility, docks, floats, collapsed states) under a name and re-applies it in one click." },
           { title: "Actions (macros)", body: "The Actions panel records sequences of document commands — layer ops, rotates, preset adjustments, effects — and brush, pencil and eraser strokes (replayed at the recorded spot with the recorded settings), then replays it all in one click or with an assigned F-key (F2–F10). Commands that open a dialog, and other tools' gestures, aren't captured." },
           { title: "Command palette", body: "Ctrl+K (or the top-bar search pill) opens the command palette: fuzzy-search every tool and menu command — \"exp svg\" finds Export SVG — with your recently used commands ready when the query is empty.", keys: "Ctrl+K" },
           { title: "Remappable shortcuts", body: "The Keyboard Shortcuts window (Settings or Help menu) is also where you change bindings: click a key chip, press the new keys — Backspace unbinds, Esc cancels — and the menus and palette update instantly. Reset per shortcut or all at once." },

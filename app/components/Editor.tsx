@@ -6,7 +6,8 @@ import TopBar from "./TopBar";
 import Toolbar from "./Toolbar";
 import OptionsBar from "./OptionsBar";
 import CanvasArea, { type ViewApi } from "./CanvasArea";
-import RightDock, { type PanelVisibility } from "./RightDock";
+import RightDock, { type DockApi, type PanelVisibility } from "./RightDock";
+import WorkspacesDialog, { type WorkspaceSnap } from "./WorkspacesDialog";
 import StatusBar from "./StatusBar";
 import CanvasSizeDialog, { type CanvasSize } from "./CanvasSizeDialog";
 import PasteDialog, { type PasteDest } from "./PasteDialog";
@@ -1580,6 +1581,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const cubeTargetRef = useRef<"new" | string | null>(null);
   // Export the current adjustments AS a .cube LUT (File menu / Adjustments panel).
   const [lutExportOpen, setLutExportOpen] = useState(false);
+  const [workspacesOpen, setWorkspacesOpen] = useState(false);
+  // Dock v2 hosts: the left dock column + the floating-panel overlay (panels
+  // portal in from RightDock, which owns the whole layout model).
+  const [leftHost, setLeftHost] = useState<HTMLDivElement | null>(null);
+  const [floatHost, setFloatHost] = useState<HTMLDivElement | null>(null);
+  const dockRef = useRef<DockApi | null>(null);
   const [tiffExportOpen, setTiffExportOpen] = useState(false);
   const [pdfExportOpen, setPdfExportOpen] = useState(false);
   const [hdrMergeOpen, setHdrMergeOpen] = useState(false);
@@ -3739,6 +3746,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const handleWindowAction = (actionId: string) => {
     if (actionId === "window-reset") {
       persistPanels({ ...ALL_PANELS });
+      dockRef.current?.apply(null); // factory dock layout: all right, none floating
       return;
     }
     const id = PANEL_BY_ACTION[actionId];
@@ -4018,6 +4026,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "color-manage") openColorDialog();
     else if (actionId === "color-compare") openCompare();
     else if (actionId === "preferences") setPrefsOpen(true);
+    else if (actionId === "workspaces") setWorkspacesOpen(true);
     else if (actionId.startsWith("window-")) handleWindowAction(actionId);
     else if (actionId.startsWith("view-")) handleViewAction(actionId);
     else if (actionId === "undo") doUndo();
@@ -4530,6 +4539,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             setBackground(foreground);
           }}
         />
+        <div className={styles.leftDock} ref={setLeftHost} aria-label="Left dock" />
         <CanvasArea
           docs={docs}
           activeId={activeId}
@@ -4636,6 +4646,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onAdjustEnd={onAdjustEnd}
           onCursor={emitCursor}
         />
+        {/* Floating-panel overlay — BEFORE RightDock so the dock stays the
+            :last-child that the UI-scale zoom selector targets. */}
+        <div className={styles.floatHost} ref={setFloatHost} />
         <RightDock
           foreground={foreground}
           background={background}
@@ -4684,6 +4697,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           actionsApi={actionsApi}
           pathsApi={pathsApi}
           docDpi={active.dpi ?? 300}
+          leftHost={leftHost}
+          floatHost={floatHost}
+          dockRef={dockRef}
         />
       </div>
       <StatusBar
@@ -4873,6 +4889,18 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           panelAdjust={sliderSpec ? sliderSpec.params : adjust}
           docName={active.name}
           onClose={() => setLutExportOpen(false)}
+        />
+      )}
+      {workspacesOpen && (
+        <WorkspacesDialog
+          capture={() =>
+            ({ panels, dock: dockRef.current?.capture() ?? null }) satisfies WorkspaceSnap
+          }
+          onApply={(ws) => {
+            persistPanels({ ...ALL_PANELS, ...ws.panels });
+            if (ws.dock) dockRef.current?.apply(ws.dock);
+          }}
+          onClose={() => setWorkspacesOpen(false)}
         />
       )}
       {tiffExportOpen && (

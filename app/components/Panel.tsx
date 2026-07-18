@@ -1,7 +1,7 @@
 "use client";
 
 import { type DragEventHandler, type ReactNode } from "react";
-import { ChevronDown, type LucideIcon } from "lucide-react";
+import { ChevronDown, Pin, PinOff, type LucideIcon } from "lucide-react";
 import styles from "./RightDock.module.scss";
 
 export default function Panel({
@@ -17,6 +17,8 @@ export default function Panel({
   onDragOver,
   onDragEnd,
   onDrop,
+  floating,
+  onFloat,
 }: {
   title: string;
   icon: LucideIcon;
@@ -32,6 +34,9 @@ export default function Panel({
   onDragOver?: DragEventHandler<HTMLElement>;
   onDragEnd?: DragEventHandler<HTMLElement>;
   onDrop?: DragEventHandler<HTMLElement>;
+  /** Float/dock toggle (the pin button). */
+  floating?: boolean;
+  onFloat?: () => void;
 }) {
   return (
     <section
@@ -66,7 +71,20 @@ export default function Panel({
           <Icon size={14} />
           <span>{title}</span>
         </button>
-        {actions && <div className={styles.panelActions}>{actions}</div>}
+        <div className={styles.panelActions}>
+          {actions}
+          {onFloat && (
+            <button
+              type="button"
+              className={styles.headBtn}
+              title={floating ? "Dock this panel back" : "Float this panel over the canvas"}
+              aria-label={floating ? `Dock ${title}` : `Float ${title}`}
+              onClick={onFloat}
+            >
+              {floating ? <Pin size={13} /> : <PinOff size={13} />}
+            </button>
+          )}
+        </div>
       </header>
       {open && <div className={styles.panelBody}>{children}</div>}
     </section>

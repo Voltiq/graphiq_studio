@@ -15,8 +15,10 @@ export const SETTINGS_KEYS: readonly string[] = [
   "graphiq:preferences", // the Preferences dialog model
   "graphiq:shortcuts", // keyboard-shortcut remaps (shortcuts.ts overrides)
   "graphiq:tool-settings", // options-bar state per tool, colours, marquee shape
-  "graphiq:panel-order", // right-dock panel order
-  "graphiq:panel-open", // right-dock collapsed state
+  "graphiq:panel-order", // global panel order (both docks render from it)
+  "graphiq:panel-open", // panel collapsed state
+  "graphiq:panel-layout", // dock membership (left/right) + floating positions
+  "graphiq:workspaces", // named workspace snapshots
   "pe-view", // rulers / grid / snap
   "pe-panels", // Window-menu panel visibility
   "pe-colorspace", // working colour space

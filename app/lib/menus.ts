@@ -163,6 +163,7 @@ export const MENUS: Menu[] = [
       { label: "Navigator", action: "window-navigator" },
       { label: "Channels", action: "window-channels" },
       { label: "Metadata", separatorAfter: true, action: "window-metadata" },
+      { label: "Workspaces…", action: "workspaces" },
       { label: "Reset workspace", action: "window-reset" },
     ],
   },

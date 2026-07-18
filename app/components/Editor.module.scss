@@ -7,9 +7,40 @@
 }
 
 .body {
+  position: relative; /* anchors the floating-panel host */
   flex: 1;
   display: flex;
   min-height: 0;
+}
+
+/* Second (left) dock column — panels portal in from RightDock's layout model.
+   Collapses away entirely while unused. */
+.leftDock {
+  width: var(--dock-w);
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  z-index: 30;
+
+  &:empty {
+    display: none;
+  }
+}
+
+/* Floating-panel overlay: above canvas + docks, below dialogs/menus. */
+.floatHost {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+
+  > * {
+    pointer-events: auto;
+  }
 }
 
 /* Interface scale: zoom the chrome, never the canvas. `.app`'s other children
@@ -20,6 +51,8 @@
    classes. */
 .app > :not(.body),
 .body > :first-child,
-.body > :last-child {
+.body > :last-child,
+.body > .leftDock,
+.body > .floatHost {
   zoom: var(--ui-zoom, 1);
 }
