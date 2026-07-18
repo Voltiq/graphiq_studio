@@ -24,6 +24,7 @@ export const MENUS: Menu[] = [
       { label: "Save as…", shortcut: "Ctrl+Shift+S", separatorAfter: true, action: "save-as" },
       { label: "Import…", action: "import" },
       { label: "Merge to HDR…", action: "merge-hdr" },
+      { label: "Batch process…", action: "batch-process" },
       { label: "Export as…", shortcut: "Ctrl+Shift+E", action: "export-as" },
       { label: "Export PSD (layered)…", action: "export-psd" },
       { label: "Export TIFF…", action: "export-tiff" },

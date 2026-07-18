@@ -193,6 +193,7 @@ import ExportLutDialog from "./ExportLutDialog";
 import ExportTiffDialog from "./ExportTiffDialog";
 import ExportPdfDialog from "./ExportPdfDialog";
 import HdrMergeDialog from "./HdrMergeDialog";
+import BatchDialog from "./BatchDialog";
 import HdrExportDialog from "./HdrExportDialog";
 import type { HdrImage } from "../lib/hdr";
 import { DEFAULT_FX, type FxKey, type LayerEffects } from "../lib/effects";
@@ -1584,6 +1585,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // Export the current adjustments AS a .cube LUT (File menu / Adjustments panel).
   const [lutExportOpen, setLutExportOpen] = useState(false);
   const [workspacesOpen, setWorkspacesOpen] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(false);
   // Dock v2 hosts: the left dock column + the floating-panel overlay (panels
   // portal in from RightDock, which owns the whole layout model).
   const [leftHost, setLeftHost] = useState<HTMLDivElement | null>(null);
@@ -3473,6 +3475,57 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setPendingLoads((ls) => [...ls, ...entries]);
   };
 
+  // ---- Batch processing (§14): run one file through the live app ----------
+  // Opens the file as a TEMPORARY document, optionally replays a saved action
+  // on it (through the exact playback path — menu commands + strokes), and
+  // returns the flattened composite. The temp doc closes and the previously
+  // active document comes back, whatever happened.
+  const batchRunFile = async (file: File, actionId: string | null): Promise<HTMLCanvasElement | null> => {
+    const bitmap = await decodeImageFile(file);
+    if (!bitmap) return null;
+    const prevId = activeIdRef.current;
+    const seq = (seqRef.current += 1);
+    const docId = `doc-${seq}`;
+    const lid = nextLeafId();
+    setDocs((ds) => [
+      ...ds,
+      {
+        id: docId,
+        name: stripExt(file.name),
+        width: bitmap.width,
+        height: bitmap.height,
+        layers: [
+          { id: lid, type: "layer", name: stripExt(file.name), visible: true, opacity: 100, blend: "Normal" },
+        ],
+        activeLayerId: lid,
+        selectedLayerIds: [lid],
+        selection: [],
+        selectionAngle: 0,
+        selectionPivot: null,
+        metadata: null,
+      },
+    ]);
+    setActiveId(docId);
+    setPendingLoads((ls) => [...ls, { docId, images: [{ id: lid, source: bitmap }] }]);
+    try {
+      // Wait until CanvasArea consumed the load (the engine holds the pixels).
+      const deadline = Date.now() + 8000;
+      for (;;) {
+        if (activeIdRef.current === docId && !pendingLoadsRef.current.some((p) => p.docId === docId)) break;
+        if (Date.now() > deadline) return null;
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      await new Promise((r) => setTimeout(r, 60)); // let the engine draw + refs settle
+      if (actionId) await playActionRef.current(actionId);
+      return paintRef.current?.exportComposite(activeDocRef.current.layers) ?? null;
+    } finally {
+      setDocs((ds) => ds.filter((d) => d.id !== docId));
+      docJsonCache.current.delete(docId);
+      setActiveId(prevId);
+      bitmap.close();
+    }
+  };
+
   // New document from a Merge-to-HDR result — one pixel layer with the
   // tone-mapped bytes, plus the float radiance kept on the doc (in memory)
   // for HDR tone mapping / HDR PNG export.
@@ -4014,6 +4067,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "export-tiff") setTiffExportOpen(true);
     else if (actionId === "export-pdf") setPdfExportOpen(true);
     else if (actionId === "merge-hdr") setHdrMergeOpen(true);
+    else if (actionId === "batch-process") setBatchOpen(true);
     else if (actionId === "hdr-tone") {
       if (activeDocRef.current.hdr) setHdrToneOpen(true);
       else
@@ -4927,6 +4981,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       )}
       {hdrMergeOpen && (
         <HdrMergeDialog mode="merge" onCreate={createHdrDoc} onClose={() => setHdrMergeOpen(false)} />
+      )}
+      {batchOpen && (
+        <BatchDialog actions={savedActions} runFile={batchRunFile} onClose={() => setBatchOpen(false)} />
       )}
       {hdrToneOpen && active.hdr && (
         <HdrMergeDialog
