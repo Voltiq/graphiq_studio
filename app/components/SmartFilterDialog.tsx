@@ -119,6 +119,35 @@ export default function SmartFilterDialog({
   const [selId, setSelId] = useState<string | null>(filters.length ? filters[filters.length - 1].id : null);
   const sel = filters.find((f) => f.id === selId) ?? (filters.length ? filters[filters.length - 1] : null);
 
+  // Drag-reorder: the order previews in LOCAL state while dragging and commits
+  // as ONE "Reorder Smart Filters" step on drop (the Up/Down buttons remain).
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragList, setDragList] = useState<SmartFilter[] | null>(null);
+  const shown = dragList ?? filters;
+  const finishDrag = () => {
+    if (dragList && dragList.some((f, i) => f.id !== filters[i]?.id)) {
+      onCommit(dragList, "Reorder Smart Filters");
+    }
+    setDragId(null);
+    setDragList(null);
+  };
+  const dragOverRow = (targetId: string, before: boolean) => {
+    setDragList((ls) => {
+      const cur = ls ?? filters;
+      const from = cur.findIndex((x) => x.id === dragId);
+      const to = cur.findIndex((x) => x.id === targetId);
+      if (from < 0 || to < 0) return ls;
+      // The list DISPLAYS reversed (top = end of array), so "above the target"
+      // in display space means AFTER it in the array.
+      let insert = before ? to + 1 : to;
+      const next = [...cur];
+      const [moved] = next.splice(from, 1);
+      if (from < insert) insert--;
+      next.splice(insert, 0, moved);
+      return next.every((x, i) => x.id === cur[i].id) ? ls : next;
+    });
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -383,8 +412,8 @@ export default function SmartFilterDialog({
 
         <div className={styles.layout}>
           <div className={styles.list} role="listbox" aria-label="Smart filters">
-            <span className={styles.listLabel}>Stack (top renders last)</span>
-            {[...filters].reverse().map((f) => {
+            <span className={styles.listLabel}>Stack (top renders last — drag to reorder)</span>
+            {[...shown].reverse().map((f) => {
               const Icon = FILTER_ICONS[f.type];
               return (
                 <div
@@ -392,9 +421,34 @@ export default function SmartFilterDialog({
                   className={styles.fxRow}
                   data-sel={sel?.id === f.id}
                   data-on={f.enabled}
+                  data-dragging={dragId === f.id || undefined}
                   role="option"
                   aria-selected={sel?.id === f.id}
                   tabIndex={0}
+                  draggable
+                  onDragStart={(e) => {
+                    setDragId(f.id);
+                    setSelId(f.id);
+                    e.dataTransfer.setData("text/plain", f.id);
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => {
+                    if (!dragId || dragId === f.id) return;
+                    e.preventDefault();
+                    const r = e.currentTarget.getBoundingClientRect();
+                    dragOverRow(f.id, e.clientY - r.top < r.height / 2);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    finishDrag();
+                  }}
+                  onDragEnd={(e) => {
+                    // Esc / drop outside cancels: discard the preview order.
+                    if (e.dataTransfer.dropEffect === "none") {
+                      setDragId(null);
+                      setDragList(null);
+                    } else finishDrag();
+                  }}
                   onClick={() => setSelId(f.id)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {

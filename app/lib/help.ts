@@ -192,7 +192,7 @@ export const TOPICS: HelpTopic[] = [
       {
         title: "Smart filters",
         entries: [
-          { title: "A non-destructive stack", body: "Per layer or group: Blur (the gallery's kinds), Unsharp Mask, Add Noise, Mosaic, Distort (twirl/pinch/wave) and Stylize (find edges/emboss/posterize/threshold). Each entry has its own blend mode, opacity, enable toggle and position in the stack." },
+          { title: "A non-destructive stack", body: "Per layer or group: Blur (the gallery's kinds), Unsharp Mask, Add Noise, Mosaic, Distort (twirl/pinch/wave) and Stylize (find edges/emboss/posterize/threshold). Each entry has its own blend mode, opacity and enable toggle — drag rows to reorder the stack (or use Up/Down); the drop commits one undo step." },
           { title: "Editing & baking", body: "Re-open the stack from the flask icon on the layer row. A filter mask confines the whole stack; Apply bakes it into pixels as one undoable step. Large documents preview at half resolution while you drag, then refine." },
           { title: "Liquify", body: "Not available yet — it's the one remaining Effects-menu stub." },
         ],

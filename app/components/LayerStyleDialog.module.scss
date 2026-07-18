@@ -216,6 +216,12 @@
   color: var(--text-3);
 }
 
+/* Being drag-reordered — same dim treatment as the Layers panel. */
+.fxRow[data-dragging="true"] {
+  opacity: 0.4;
+  background: var(--surface-3);
+}
+
 /* ------------------------------ Control pane ------------------------------ */
 .pane {
   flex: 1;
