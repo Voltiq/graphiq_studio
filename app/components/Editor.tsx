@@ -194,6 +194,7 @@ import ExportTiffDialog from "./ExportTiffDialog";
 import ExportPdfDialog from "./ExportPdfDialog";
 import HdrMergeDialog from "./HdrMergeDialog";
 import BatchDialog from "./BatchDialog";
+import { buildScriptingApi, type ScriptingDeps } from "../lib/scripting";
 import HdrExportDialog from "./HdrExportDialog";
 import type { HdrImage } from "../lib/hdr";
 import { DEFAULT_FX, type FxKey, type LayerEffects } from "../lib/effects";
@@ -4492,6 +4493,34 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // The active tool's brush dynamics (brush / pencil / eraser are independent).
   const activeBrush = tool === "eraser" ? eraser : tool === "pencil" ? pencil : brush;
   const setActiveBrush = tool === "eraser" ? setEraser : tool === "pencil" ? setPencil : setBrush;
+
+  // ---- Scripting hook (§14): window.graphiq for the dev console ------------
+  // The API object installs once; every call reads this ref, which re-points
+  // at fresh render-scope functions/state each render — console snippets
+  // always see the live editor. Everything routes through the same journaled
+  // paths as the UI (menu dispatch, LayersApi, action playback, compositor).
+  const scriptDepsRef = useRef<ScriptingDeps | null>(null);
+  useEffect(() => {
+    window.graphiq = buildScriptingApi(scriptDepsRef);
+    console.info("Graphiq scripting hook ready — try graphiq.help() in this console.");
+    return () => {
+      delete window.graphiq;
+    };
+  }, []);
+  scriptDepsRef.current = {
+    docs,
+    activeId,
+    setActiveId,
+    handleMenuAction,
+    layersApi,
+    foreground,
+    setForeground,
+    setSelection,
+    savedActions,
+    playAction,
+    engineRef: paintRef,
+    activeLayers: active.layers,
+  };
 
   return (
     <div className={styles.app}>
