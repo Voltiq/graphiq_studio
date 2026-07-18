@@ -256,6 +256,7 @@ type Sel = { active: string | null; selected: string[] };
 
 const ALL_PANELS: PanelVisibility = {
   color: true,
+  swatches: true,
   adjustments: true,
   properties: true,
   layers: true,
@@ -269,6 +270,7 @@ const ALL_PANELS: PanelVisibility = {
 /** Window-menu action id → panel key. */
 const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
   "window-color": "color",
+  "window-swatches": "swatches",
   "window-adjustments": "adjustments",
   "window-properties": "properties",
   "window-layers": "layers",
@@ -4446,6 +4448,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         canRedo={history.index < history.items.length - 1}
         checks={{
           "window-color": panels.color,
+          "window-swatches": panels.swatches,
           "window-adjustments": panels.adjustments,
           "window-properties": panels.properties,
           "window-layers": panels.layers,

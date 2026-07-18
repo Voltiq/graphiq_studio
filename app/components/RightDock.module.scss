@@ -1277,6 +1277,84 @@
   }
 }
 
+/* -------------------------------- Swatches -------------------------------- */
+.swatchesPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.swToolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.swToolbarSpacer {
+  flex: 1;
+}
+
+.swGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.swGroupHead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.swGroupName {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  white-space: nowrap;
+
+  em {
+    font-style: normal;
+    font-size: 10.5px;
+    color: var(--text-3);
+  }
+}
+
+.swGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-left: 21px; /* aligns under the group name, past the caret */
+}
+
+.swCell {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-strong);
+  transition: transform var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+
+  &:hover {
+    transform: scale(1.12);
+    border-color: var(--accent);
+  }
+
+  &[data-selected="true"] {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+}
+
+.swHint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+
 /* -------------------------------- Metadata -------------------------------- */
 .metadata {
   display: flex;

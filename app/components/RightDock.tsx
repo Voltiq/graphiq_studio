@@ -15,12 +15,14 @@ import {
   Plus,
   Settings2,
   SlidersHorizontal,
+  SwatchBook,
   Trash2,
   Zap,
 } from "lucide-react";
 import styles from "./RightDock.module.scss";
 import Panel from "./Panel";
 import ColorPanel from "./panels/ColorPanel";
+import SwatchesPanel from "./panels/SwatchesPanel";
 import AdjustmentsPanel from "./panels/AdjustmentsPanel";
 import LayersPanel from "./panels/LayersPanel";
 import HistoryPanel from "./panels/HistoryPanel";
@@ -42,6 +44,7 @@ import type { ImageMetadata } from "../lib/metadata";
 
 export type PanelVisibility = {
   color: boolean;
+  swatches: boolean;
   adjustments: boolean;
   properties: boolean;
   layers: boolean;
@@ -57,6 +60,7 @@ export type PanelId =
   | "navigator"
   | "channels"
   | "color"
+  | "swatches"
   | "adjustments"
   | "properties"
   | "layers"
@@ -68,6 +72,7 @@ const DEFAULT_ORDER: PanelId[] = [
   "navigator",
   "channels",
   "color",
+  "swatches",
   "adjustments",
   "properties",
   "layers",
@@ -132,6 +137,7 @@ const DEFAULT_OPEN: Record<PanelId, boolean> = {
   navigator: true,
   channels: false,
   color: true,
+  swatches: false,
   adjustments: true,
   properties: true,
   layers: true,
@@ -473,6 +479,18 @@ export default function RightDock({
               onBackground={onBackground}
               active={activeSlot}
               onActive={onActiveSlot}
+            />
+          </Panel>
+        ) : null;
+      case "swatches":
+        return panels.swatches ? (
+          <Panel key="swatches" title="Swatches" icon={SwatchBook} {...dp}>
+            <SwatchesPanel
+              foreground={foreground}
+              onForeground={onForeground}
+              engineRef={engineRef}
+              tree={layers.layers}
+              docName={docName}
             />
           </Panel>
         ) : null;
