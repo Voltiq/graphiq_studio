@@ -189,6 +189,9 @@ import {
 } from "../lib/adjust-extra";
 import AdjustmentExtraDialog from "./AdjustmentExtraDialog";
 import ExportLutDialog from "./ExportLutDialog";
+import HdrMergeDialog from "./HdrMergeDialog";
+import HdrExportDialog from "./HdrExportDialog";
+import type { HdrImage } from "../lib/hdr";
 import { DEFAULT_FX, type FxKey, type LayerEffects } from "../lib/effects";
 import { defaultFilter, filterLabel, type FilterType, type SmartFilter } from "../lib/filters";
 import SmartFilterDialog from "./SmartFilterDialog";
@@ -240,6 +243,9 @@ interface Doc {
   dpi?: number;
   /** Stored pen paths (Paths panel; "work" = the latest Pen-tool commit). */
   paths?: SavedPath[];
+  /** 32-bit float radiance source (Merge to HDR) — IN MEMORY only, never
+   *  serialized (.gproj/autosave keep the tone-mapped pixels instead). */
+  hdr?: HdrImage | null;
 }
 
 /** A layer selection: the primary (active) id plus the full selected set. */
@@ -1537,6 +1543,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const cubeTargetRef = useRef<"new" | string | null>(null);
   // Export the current adjustments AS a .cube LUT (File menu / Adjustments panel).
   const [lutExportOpen, setLutExportOpen] = useState(false);
+  const [hdrMergeOpen, setHdrMergeOpen] = useState(false);
+  const [hdrToneOpen, setHdrToneOpen] = useState(false);
+  const [hdrExportOpen, setHdrExportOpen] = useState(false);
 
   const addExtraAdjustment = (type: string) => {
     if (type === "colorlookup") {
@@ -3407,6 +3416,41 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setPendingLoads((ls) => [...ls, ...entries]);
   };
 
+  // New document from a Merge-to-HDR result — one pixel layer with the
+  // tone-mapped bytes, plus the float radiance kept on the doc (in memory)
+  // for HDR tone mapping / HDR PNG export.
+  const createHdrDoc = (r: { name: string; canvas: HTMLCanvasElement; hdr: HdrImage }) => {
+    const seq = (seqRef.current += 1);
+    const docId = `doc-${seq}`;
+    const lid = nextLeafId();
+    setDocs((ds) => [
+      ...ds,
+      {
+        id: docId,
+        name: r.name,
+        width: r.canvas.width,
+        height: r.canvas.height,
+        layers: [
+          { id: lid, type: "layer", name: "HDR merge", visible: true, opacity: 100, blend: "Normal" },
+        ],
+        activeLayerId: lid,
+        selectedLayerIds: [lid],
+        selection: [],
+        selectionAngle: 0,
+        selectionPivot: null,
+        metadata: null,
+        hdr: r.hdr,
+      },
+    ]);
+    setActiveId(docId);
+    setPendingLoads((ls) => [...ls, { docId, images: [{ id: lid, source: r.canvas }] }]);
+  };
+
+  // Re-render the active layer from the doc's float source — one undo step.
+  const applyHdrTone = (canvas: HTMLCanvasElement) => {
+    paintRef.current?.applyLayerImage(ensureLayer(), canvas, "HDR Tone Mapping");
+  };
+
   // Serialize the document's vector-bearing layers (shape / text / imported
   // SVG) to a standalone .svg download. Raster/adjustment layers, masks and
   // layer effects have no vector source — they're skipped and reported.
@@ -3909,7 +3953,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "export-svg") exportVectorSVG();
     else if (actionId === "export-psd") exportPSD();
     else if (actionId === "export-lut") setLutExportOpen(true);
-    else if (actionId === "print") printCanvas();
+    else if (actionId === "merge-hdr") setHdrMergeOpen(true);
+    else if (actionId === "hdr-tone") {
+      if (activeDocRef.current.hdr) setHdrToneOpen(true);
+      else
+        showToast(
+          "No HDR source — this works on documents created via File ▸ Merge to HDR (the float map lives in memory, not in .gproj).",
+        );
+    } else if (actionId === "export-hdr") {
+      if (activeDocRef.current.hdr) setHdrExportOpen(true);
+      else showToast("No HDR source — export true HDR from a document created via File ▸ Merge to HDR.");
+    } else if (actionId === "print") printCanvas();
     else if (actionId === "effect-blur") openBlurFx();
     else if (actionId === "color-manage") openColorDialog();
     else if (actionId === "color-compare") openCompare();
@@ -4770,6 +4824,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           docName={active.name}
           onClose={() => setLutExportOpen(false)}
         />
+      )}
+      {hdrMergeOpen && (
+        <HdrMergeDialog mode="merge" onCreate={createHdrDoc} onClose={() => setHdrMergeOpen(false)} />
+      )}
+      {hdrToneOpen && active.hdr && (
+        <HdrMergeDialog
+          mode="retone"
+          hdr={active.hdr}
+          docName={active.name}
+          onApply={applyHdrTone}
+          onClose={() => setHdrToneOpen(false)}
+        />
+      )}
+      {hdrExportOpen && active.hdr && (
+        <HdrExportDialog hdr={active.hdr} docName={active.name} onClose={() => setHdrExportOpen(false)} />
       )}
       {extraEdit && extraSpec && (
         <AdjustmentExtraDialog

@@ -261,6 +261,8 @@ export const TOPICS: HelpTopic[] = [
           { title: "Working space", body: "sRGB, Display P3 (wide gamut, on supporting browsers) or Adobe RGB — the latter is an emulated maths space: pixels stay on an sRGB canvas while adjustments run in Adobe primaries through a 16-bit pipeline." },
           { title: "Soft proofing", body: "Proof colors simulates the target space on the view only; Gamut warning paints out-of-gamut pixels grey. Configure the target in Settings ▸ Color management.", keys: "Ctrl+Alt+Y" },
           { title: "Compare profiles", body: "View ▸ Compare color profiles shows the same composite interpreted under different spaces side by side." },
+          { title: "Merge to HDR", body: "File ▸ Merge to HDR combines 2+ bracketed exposures (tripod-aligned, same size; EV auto-read from EXIF) into a 32-bit float radiance map, tone-mapped into a new document. The float source stays with the document in memory — re-tone-map any time via Image ▸ HDR tone mapping without stacking loss." },
+          { title: "HDR export", body: "File ▸ Export HDR PNG writes the float source as a 16-bit Rec.2100 PNG (PQ or HLG, cICP-tagged) — on HDR displays its highlights really glow. The float map isn't saved into .gproj, so keep the export if you need the HDR later." },
         ],
       },
     ],

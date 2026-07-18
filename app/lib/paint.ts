@@ -257,6 +257,8 @@ export interface EngineHandle {
   getMaskImage: (id: string) => string | null;
   setMaskImage: (id: string, source: CanvasImageSource) => void;
   setLayerImage: (id: string, source: CanvasImageSource, x?: number, y?: number) => void;
+  /** Replace a layer's pixels as one undoable history step (HDR re-tonemap…). */
+  applyLayerImage: (id: string, source: CanvasImageSource, label: string) => void;
   exportComposite: (tree: LayerNode[]) => HTMLCanvasElement;
   /** Per-channel tonal distribution of the composited canvas. */
   histogram: (tree: LayerNode[]) => ChannelHistogram;
@@ -2845,6 +2847,21 @@ export class PaintEngine {
     l.ctx.clearRect(0, 0, this.w, this.h);
     l.ctx.drawImage(source, x, y);
     this.bumpPixel(id);
+    this.emitChange();
+  }
+
+  /** Like setLayerImage, but journaled as ONE undoable whole-layer pixel step
+   *  (HDR re-tonemap and other "replace the layer with a computed image" ops). */
+  applyLayerImage(id: string, source: CanvasImageSource, label: string) {
+    this.wandSrc = null;
+    const l = this.layer(id);
+    const before = l.ctx.getImageData(0, 0, this.w, this.h);
+    l.ctx.globalAlpha = 1;
+    l.ctx.globalCompositeOperation = "source-over";
+    l.ctx.clearRect(0, 0, this.w, this.h);
+    l.ctx.drawImage(source, 0, 0);
+    const after = l.ctx.getImageData(0, 0, this.w, this.h);
+    this.pushEntry(id, { x: 0, y: 0, w: this.w, h: this.h }, before, after, label);
     this.emitChange();
   }
 
