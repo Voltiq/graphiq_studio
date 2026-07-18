@@ -247,7 +247,7 @@ export const TOPICS: HelpTopic[] = [
         entries: [
           { title: "Export As", body: "PNG, JPEG, WebP and AVIF (as the browser supports), with quality, scale, transparency/matte controls and a live file-size estimate that really encodes.", keys: "Ctrl+Shift+E" },
           { title: "Presets & batch", body: "Save your export settings as presets; Batch mode encodes several sizes/formats in one go with filename templates ({name}, {w}, {h}, {scale}, {n}) and downloads a single zip." },
-          { title: "PSD, TIFF, SVG, LUT, print", body: "Export a layered PSD for other editors, a Deflate-compressed 8/16-bit TIFF, an SVG of the vector layers, a .cube LUT of your adjustments — and Print is true-size, honouring the document's ppi." },
+          { title: "PSD, TIFF, PDF, SVG, LUT, print", body: "Export a layered PSD for other editors, a Deflate-compressed 8/16-bit TIFF, a single-page PDF (image-size or paper size with margins, JPEG or lossless), an SVG of the vector layers, a .cube LUT of your adjustments — and Print is true-size, honouring the document's ppi." },
         ],
       },
     ],

@@ -190,6 +190,7 @@ import {
 import AdjustmentExtraDialog from "./AdjustmentExtraDialog";
 import ExportLutDialog from "./ExportLutDialog";
 import ExportTiffDialog from "./ExportTiffDialog";
+import ExportPdfDialog from "./ExportPdfDialog";
 import HdrMergeDialog from "./HdrMergeDialog";
 import HdrExportDialog from "./HdrExportDialog";
 import type { HdrImage } from "../lib/hdr";
@@ -1545,6 +1546,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // Export the current adjustments AS a .cube LUT (File menu / Adjustments panel).
   const [lutExportOpen, setLutExportOpen] = useState(false);
   const [tiffExportOpen, setTiffExportOpen] = useState(false);
+  const [pdfExportOpen, setPdfExportOpen] = useState(false);
   const [hdrMergeOpen, setHdrMergeOpen] = useState(false);
   const [hdrToneOpen, setHdrToneOpen] = useState(false);
   const [hdrExportOpen, setHdrExportOpen] = useState(false);
@@ -3963,6 +3965,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "export-psd") exportPSD();
     else if (actionId === "export-lut") setLutExportOpen(true);
     else if (actionId === "export-tiff") setTiffExportOpen(true);
+    else if (actionId === "export-pdf") setPdfExportOpen(true);
     else if (actionId === "merge-hdr") setHdrMergeOpen(true);
     else if (actionId === "hdr-tone") {
       if (activeDocRef.current.hdr) setHdrToneOpen(true);
@@ -4841,6 +4844,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           dpi={active.dpi ?? 300}
           getComposite={() => paintRef.current?.exportComposite(active.layers) ?? null}
           onClose={() => setTiffExportOpen(false)}
+        />
+      )}
+      {pdfExportOpen && (
+        <ExportPdfDialog
+          docName={active.name}
+          docDpi={active.dpi ?? 300}
+          width={active.width}
+          height={active.height}
+          author={active.metadata?.artist || prefs.authorName || ""}
+          getComposite={() => paintRef.current?.exportComposite(active.layers) ?? null}
+          onClose={() => setPdfExportOpen(false)}
         />
       )}
       {hdrMergeOpen && (

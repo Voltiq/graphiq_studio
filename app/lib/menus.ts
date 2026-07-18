@@ -27,6 +27,7 @@ export const MENUS: Menu[] = [
       { label: "Export as…", shortcut: "Ctrl+Shift+E", action: "export-as" },
       { label: "Export PSD (layered)…", action: "export-psd" },
       { label: "Export TIFF…", action: "export-tiff" },
+      { label: "Export PDF…", action: "export-pdf" },
       { label: "Export SVG (vector layers)…", action: "export-svg" },
       { label: "Export LUT (.cube)…", action: "export-lut" },
       { label: "Export HDR PNG…", separatorAfter: true, action: "export-hdr" },
