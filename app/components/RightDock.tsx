@@ -35,7 +35,7 @@ import type { ActionsApi } from "../lib/actions";
 import PathsPanel from "./panels/PathsPanel";
 import type { PathsApi } from "../lib/paths";
 import { Spline } from "lucide-react";
-import type { NavigatorView } from "../lib/view";
+import type { NavigatorView, Rect } from "../lib/view";
 import type { LayersApi } from "../lib/layers";
 import type { EngineHandle, HistorySummary } from "../lib/paint";
 import type { Adjustments } from "../lib/adjust";
@@ -211,6 +211,10 @@ interface Props {
   onExportLut: () => void;
   /** Imperative engine handle, for the live channels histogram. */
   engineRef: RefObject<EngineHandle | null>;
+  /** Active selection — the Channels histogram scopes to it when present. */
+  selection: Rect[];
+  selectionAngle: number;
+  selectionPivot: { x: number; y: number } | null;
   /** Active document facts for the Metadata panel. */
   docName: string;
   colorSpace: WorkingSpace;
@@ -274,6 +278,9 @@ export default function RightDock({
   onExportLut,
   panels,
   engineRef,
+  selection,
+  selectionAngle,
+  selectionPivot,
   docName,
   colorSpace,
   imageMeta,
@@ -460,7 +467,14 @@ export default function RightDock({
       case "channels":
         return panels.channels ? (
           <Panel key="channels" title="Channels" icon={BarChart3} {...dp}>
-            <ChannelsPanel engineRef={engineRef} tree={layers.layers} api={layers} />
+            <ChannelsPanel
+              engineRef={engineRef}
+              tree={layers.layers}
+              api={layers}
+              selection={selection}
+              selectionAngle={selectionAngle}
+              selectionPivot={selectionPivot}
+            />
           </Panel>
         ) : null;
       case "color":

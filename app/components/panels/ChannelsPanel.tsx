@@ -5,15 +5,20 @@ import { Eye, EyeOff } from "lucide-react";
 import styles from "../RightDock.module.scss";
 import type { ChannelHistogram, EngineHandle } from "../../lib/paint";
 import { findNode, type LayerNode, type LayersApi } from "../../lib/layers";
+import type { Rect } from "../../lib/view";
 
 const CANVAS_H = 132;
 const CHANNELS = [
   { key: "r", label: "Red", rgb: "248, 113, 113" },
   { key: "g", label: "Green", rgb: "74, 222, 128" },
   { key: "b", label: "Blue", rgb: "96, 165, 250" },
+  { key: "l", label: "Lum", rgb: "226, 232, 240" },
 ] as const;
 
 type ChannelKey = (typeof CHANNELS)[number]["key"];
+
+/** Clipped-pixel share above which the warning lights up. */
+const CLIP_WARN = 0.005;
 
 /**
  * Live RGB histogram of the composited canvas. Subscribes to the engine's
@@ -27,10 +32,17 @@ export default function ChannelsPanel({
   engineRef,
   tree,
   api,
+  selection,
+  selectionAngle,
+  selectionPivot,
 }: {
   engineRef: RefObject<EngineHandle | null>;
   tree: LayerNode[];
   api: LayersApi;
+  /** Active selection — when present the histogram scopes to it. */
+  selection: Rect[];
+  selectionAngle: number;
+  selectionPivot: { x: number; y: number } | null;
 }) {
   const [hist, setHist] = useState<ChannelHistogram | null>(null);
   const [maskHist, setMaskHist] = useState<Uint32Array | null>(null);
@@ -38,6 +50,7 @@ export default function ChannelsPanel({
     r: true,
     g: true,
     b: true,
+    l: false,
   });
   const [maskOn, setMaskOn] = useState(true);
   const [width, setWidth] = useState(0);
@@ -52,12 +65,22 @@ export default function ChannelsPanel({
   treeRef.current = tree;
   const maskIdRef = useRef(maskLayerId);
   maskIdRef.current = maskLayerId;
+  const selRef = useRef({ selection, selectionAngle, selectionPivot });
+  selRef.current = { selection, selectionAngle, selectionPivot };
   const timerRef = useRef(0);
 
   const compute = useCallback(() => {
     const eng = engineRef.current;
     if (!eng) return;
-    setHist(eng.histogram(treeRef.current));
+    const s = selRef.current;
+    setHist(
+      eng.histogram(
+        treeRef.current,
+        s.selection.length ? s.selection : null,
+        s.selectionAngle,
+        s.selectionPivot,
+      ),
+    );
     setMaskHist(maskIdRef.current ? eng.maskHistogram(maskIdRef.current) : null);
   }, [engineRef]);
 
@@ -98,10 +121,10 @@ export default function ChannelsPanel({
 
   // Recompute on layer add/remove/visibility/opacity/blend changes & doc switch
   // (these change the tree reference but don't fire a pixel-content change),
-  // and when the mask channel's target (active layer / its mask) changes.
+  // when the mask channel's target changes, and when the selection moves.
   useEffect(() => {
     schedule();
-  }, [tree, maskLayerId, schedule]);
+  }, [tree, maskLayerId, selection, selectionAngle, selectionPivot, schedule]);
 
   // Track the available width so the graph fills the panel crisply.
   useEffect(() => {
@@ -158,8 +181,7 @@ export default function ChannelsPanel({
       ctx.stroke();
     }
 
-    const active = CHANNELS.filter((c) => enabled[c.key]);
-    if (!hist || !active.length) return;
+    if (!hist) return;
 
     // Normalize to the tallest bin across ALL channels (not just the visible
     // ones), ignoring the pure black/white extremes so one spike can't flatten
@@ -171,9 +193,7 @@ export default function ChannelsPanel({
       for (let i = 1; i < 255; i++) if (arr[i] > max) max = arr[i];
     }
 
-    ctx.globalCompositeOperation = "lighter";
-    for (const c of active) {
-      const arr = hist[c.key];
+    const curve = (arr: number[] | Uint32Array, rgb: string, fillA: number) => {
       ctx.beginPath();
       ctx.moveTo(0, CANVAS_H);
       for (let i = 0; i < 256; i++) {
@@ -183,20 +203,67 @@ export default function ChannelsPanel({
       }
       ctx.lineTo(width, CANVAS_H);
       ctx.closePath();
-      ctx.fillStyle = `rgba(${c.rgb}, 0.45)`;
+      ctx.fillStyle = `rgba(${rgb}, ${fillA})`;
       ctx.fill();
-      ctx.strokeStyle = `rgba(${c.rgb}, 0.95)`;
+      ctx.strokeStyle = `rgba(${rgb}, 0.95)`;
       ctx.lineWidth = 1;
       ctx.stroke();
-    }
+    };
+
+    // Luminosity draws source-over BENEATH the additive RGB curves — adding
+    // white into the mix would blow the overlaps out.
+    if (enabled.l) curve(hist.l, "226, 232, 240", 0.3);
+    const activeRgb = CHANNELS.filter((c) => c.key !== "l" && enabled[c.key]);
+    ctx.globalCompositeOperation = "lighter";
+    for (const c of activeRgb) curve(hist[c.key], c.rgb, 0.45);
     ctx.globalCompositeOperation = "source-over";
   }, [hist, maskHist, maskOn, enabled, width]);
+
+  // Clipping shares: worst clipped fraction at bin 0 / bin 255 across the
+  // enabled channels (luminosity when nothing is on). Every channel counts the
+  // same opaque-pixel population, so one total serves them all.
+  let clip: { lo: number; hi: number } | null = null;
+  if (hist) {
+    const arrs = CHANNELS.filter((c) => enabled[c.key]).map((c) => hist[c.key]);
+    const use = arrs.length ? arrs : [hist.l];
+    let total = 0;
+    for (const v of hist.l) total += v;
+    if (total > 0) {
+      clip = {
+        lo: Math.max(...use.map((a) => a[0])) / total,
+        hi: Math.max(...use.map((a) => a[255])) / total,
+      };
+    }
+  }
+  const pct = (v: number) => (v >= 0.1 ? `${Math.round(v * 100)}%` : `${(v * 100).toFixed(1)}%`);
+  const selActive = selection.length > 0;
 
   return (
     <div className={styles.channels}>
       <div className={styles.channelGraph} ref={wrapRef}>
         <canvas ref={canvasRef} style={{ width: "100%", height: CANVAS_H }} />
+        {selActive && (
+          <span className={styles.channelSelBadge} title="Histogram of the selected pixels only">
+            Selection
+          </span>
+        )}
       </div>
+      {clip && (
+        <div className={styles.channelClipRow}>
+          <span
+            data-warn={clip.lo > CLIP_WARN || undefined}
+            title="Share of pixels clipped to pure black (over the enabled channels)"
+          >
+            ◢ shadows {pct(clip.lo)}
+          </span>
+          <span
+            data-warn={clip.hi > CLIP_WARN || undefined}
+            title="Share of pixels clipped to pure white (over the enabled channels)"
+          >
+            highlights {pct(clip.hi)} ◣
+          </span>
+        </div>
+      )}
       <div className={styles.channelToggles}>
         {CHANNELS.map((c) => (
           <button

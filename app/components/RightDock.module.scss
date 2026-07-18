@@ -1188,6 +1188,33 @@
   gap: var(--sp-2);
 }
 
+/* "Selection" badge over the graph while the histogram is selection-scoped. */
+.channelSelBadge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: var(--weight-medium);
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-radius: var(--r-pill);
+  pointer-events: none;
+}
+
+/* Clipped-pixel shares under the graph; warn tint above the threshold. */
+.channelClipRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--text-3);
+
+  [data-warn] {
+    color: var(--danger);
+    font-weight: var(--weight-medium);
+  }
+}
+
 .channelToggle {
   flex: 1;
   display: inline-flex;
@@ -1238,6 +1265,10 @@
   }
   &[data-channel="b"] {
     --ch: #4688ec;
+  }
+  /* Luminosity — near-white. */
+  &[data-channel="l"] {
+    --ch: #e2e8f0;
   }
   /* The active layer's mask channel — neutral grayscale. */
   &[data-channel="m"] {

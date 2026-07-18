@@ -196,6 +196,8 @@ export interface ChannelHistogram {
   r: number[];
   g: number[];
   b: number[];
+  /** Luminosity (Rec.709 weights) bins. */
+  l: number[];
 }
 
 export interface EngineHandle {
@@ -260,8 +262,14 @@ export interface EngineHandle {
   /** Replace a layer's pixels as one undoable history step (HDR re-tonemap…). */
   applyLayerImage: (id: string, source: CanvasImageSource, label: string) => void;
   exportComposite: (tree: LayerNode[]) => HTMLCanvasElement;
-  /** Per-channel tonal distribution of the composited canvas. */
-  histogram: (tree: LayerNode[]) => ChannelHistogram;
+  /** Per-channel + luminosity tonal distribution of the composited canvas —
+   *  scoped to the selection when one is passed. */
+  histogram: (
+    tree: LayerNode[],
+    sel?: Rect[] | null,
+    selAngle?: number,
+    selPivot?: { x: number; y: number } | null,
+  ) => ChannelHistogram;
   /** Tonal distribution of a layer's mask (effective grayscale); null = no mask. */
   maskHistogram: (id: string, surface?: "mask" | "filterMask") => Uint32Array | null;
   /** Show a mask grayscale on the canvas instead of the composite (null = off). */
@@ -3863,16 +3871,24 @@ export class PaintEngine {
   }
 
   /**
-   * Per-channel tonal distribution of the composited canvas (256 bins each).
-   * Fully transparent pixels are skipped. The composite is read back at a
-   * capped resolution so the scan stays fast on large documents — the shape of
-   * the distribution is what the panel displays, so downsampling is harmless.
+   * Per-channel + luminosity tonal distribution of the composited canvas (256
+   * bins each). Fully transparent pixels are skipped; with a selection, only
+   * pixels inside it count (the mask downsamples with the composite). The
+   * composite is read back at a capped resolution so the scan stays fast on
+   * large documents — the shape of the distribution is what the panel
+   * displays, so downsampling is harmless.
    */
-  histogram(tree: LayerNode[]): ChannelHistogram {
+  histogram(
+    tree: LayerNode[],
+    sel: Rect[] | null = null,
+    selAngle = 0,
+    selPivot: { x: number; y: number } | null = null,
+  ): ChannelHistogram {
     const r = new Array<number>(256).fill(0);
     const g = new Array<number>(256).fill(0);
     const b = new Array<number>(256).fill(0);
-    if (this.w < 1 || this.h < 1) return { r, g, b };
+    const l = new Array<number>(256).fill(0);
+    if (this.w < 1 || this.h < 1) return { r, g, b, l };
     // Same frame setup as composite()/exportComposite(): the per-frame key memo
     // must not leak across states — this runs from a debounced timer, which can
     // fire with NO composite in between (e.g. a background tab suspends rAF but
@@ -3893,7 +3909,9 @@ export class PaintEngine {
 
     const cap = 480;
     const scale = Math.min(1, cap / Math.max(this.w, this.h));
+    const maskCanvas = sel?.length ? this.selectionMask(sel, selAngle, selPivot, 0) : null;
     let data: Uint8ClampedArray;
+    let mask: Uint8ClampedArray | null = null;
     if (scale < 1) {
       const sw = Math.max(1, Math.round(this.w * scale));
       const sh = Math.max(1, Math.round(this.h * scale));
@@ -3902,16 +3920,30 @@ export class PaintEngine {
       small.ctx.imageSmoothingQuality = "low";
       small.ctx.drawImage(full.c, 0, 0, sw, sh);
       data = small.ctx.getImageData(0, 0, sw, sh).data;
+      if (maskCanvas) {
+        const sm = this.mk(sw, sh, true);
+        sm.ctx.imageSmoothingEnabled = true;
+        sm.ctx.drawImage(maskCanvas, 0, 0, sw, sh);
+        mask = sm.ctx.getImageData(0, 0, sw, sh).data;
+      }
     } else {
       data = full.ctx.getImageData(0, 0, this.w, this.h).data;
+      if (maskCanvas) {
+        mask = maskCanvas.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
+      }
     }
     for (let i = 0; i < data.length; i += 4) {
       if (data[i + 3] === 0) continue; // ignore fully transparent pixels
-      r[data[i]]++;
-      g[data[i + 1]]++;
-      b[data[i + 2]]++;
+      if (mask && mask[i + 3] < 128) continue; // outside the selection
+      const R = data[i];
+      const G = data[i + 1];
+      const B = data[i + 2];
+      r[R]++;
+      g[G]++;
+      b[B]++;
+      l[Math.round(0.2126 * R + 0.7152 * G + 0.0722 * B)]++;
     }
-    return { r, g, b };
+    return { r, g, b, l };
   }
 
   /** Composite the layer tree (bottom→top, nested groups) onto the view canvas.

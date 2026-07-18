@@ -4754,6 +4754,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           actionsApi={actionsApi}
           pathsApi={pathsApi}
           docDpi={active.dpi ?? 300}
+          selection={active.selection}
+          selectionAngle={active.selectionAngle}
+          selectionPivot={active.selectionPivot}
           leftHost={leftHost}
           floatHost={floatHost}
           dockRef={dockRef}

@@ -2739,7 +2739,7 @@ export default function CanvasArea({
       getMaskImage: (id) => engine.getMaskImage(id),
       setMaskImage: (id, src) => engine.setMaskImage(id, src),
       exportComposite: (tree) => engine.exportComposite(tree),
-      histogram: (tree) => engine.histogram(tree),
+      histogram: (tree, sel, selAngle, selPivot) => engine.histogram(tree, sel, selAngle, selPivot),
       maskHistogram: (id, surface) => engine.maskHistogram(id, surface),
       setMaskView: (id, surface) => engine.setMaskView(id, surface),
       subscribe: (cb) => engine.addChangeListener(cb),
