@@ -145,6 +145,7 @@ export const MENUS: Menu[] = [
       { label: "100%", shortcut: "Ctrl+1", separatorAfter: true, action: "view-100" },
       { label: "Show rulers", action: "view-rulers" },
       { label: "Pixel grid", shortcut: "Ctrl+'", action: "view-grid" },
+      { label: "Document grid", action: "view-docgrid" },
       { label: "Snap", separatorAfter: true, action: "view-snap" },
       { label: "Proof colors", shortcut: "Ctrl+Alt+Y", action: "view-proof" },
       { label: "Gamut warning", shortcut: "Ctrl+Alt+Shift+Y", action: "view-gamut", separatorAfter: true },

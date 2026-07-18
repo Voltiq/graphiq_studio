@@ -617,6 +617,9 @@ export default function CanvasArea({
   lassoMode = "free",
   showGrid,
   snap,
+  docGrid,
+  pixelGridColor,
+  snapDistance,
   viewApiRef,
   paintRef,
   onHistory,
@@ -743,6 +746,12 @@ export default function CanvasArea({
   lassoMode?: LassoMode;
   showGrid: boolean;
   snap: boolean;
+  /** Document grid overlay (View ▸ Document grid) — null = hidden. */
+  docGrid: { spacing: number; subdivisions: number; color: string } | null;
+  /** Pixel-grid line colour (Preferences ▸ Guides & grid). */
+  pixelGridColor: string;
+  /** Snap pull distance in screen px (shape-node symmetry snaps). */
+  snapDistance: number;
   viewApiRef: RefObject<ViewApi | null>;
   paintRef: RefObject<EngineHandle | null>;
   onHistory: (s: HistorySummary) => void;
@@ -2892,8 +2901,9 @@ export default function CanvasArea({
     scheduleComposite();
   }, [layers, activeLayerId, scheduleComposite]);
 
-  // Pixel grid: 1px-cell lines over the artwork, drawn in screen space and kept
-  // in sync with pan/zoom. Only shown when zoomed in enough to be useful.
+  // Grid overlays, drawn in screen space and kept in sync with pan/zoom:
+  // the DOCUMENT grid (configurable spacing/subdivisions/colour, any zoom)
+  // beneath the PIXEL grid (1px cells, only readable when zoomed right in).
   useEffect(() => {
     const ov = gridRef.current;
     const vp = viewportRef.current;
@@ -2905,7 +2915,6 @@ export default function CanvasArea({
     }
     ctx.clearRect(0, 0, ov.width, ov.height);
     const s = zoom / 100;
-    if (!showGrid || s < 4) return; // a pixel grid only reads as a grid when zoomed in
     const x0 = Math.max(0, Math.floor(-pan.x / s));
     const x1 = Math.min(width, Math.ceil((ov.width - pan.x) / s));
     const y0 = Math.max(0, Math.floor(-pan.y / s));
@@ -2915,21 +2924,54 @@ export default function CanvasArea({
     const bottom = Math.round(pan.y + y1 * s);
     const left = Math.round(pan.x + x0 * s);
     const right = Math.round(pan.x + x1 * s);
-    ctx.strokeStyle = "rgba(128,128,128,0.55)";
+    const hexRgb = (hex: string): string => {
+      const m = /^#?([0-9a-f]{6})/i.exec(hex);
+      const n = m ? parseInt(m[1], 16) : 0x808080;
+      return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+    };
     ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let dx = x0; dx <= x1; dx++) {
-      const sx = Math.round(pan.x + dx * s) + 0.5;
-      ctx.moveTo(sx, top);
-      ctx.lineTo(sx, bottom);
+
+    if (docGrid && docGrid.spacing >= 1) {
+      const rgb = hexRgb(docGrid.color);
+      // Lines vanish when denser than ~4 screen px — a solid wash helps nobody.
+      const lines = (step: number, alpha: number) => {
+        if (step * s < 4) return;
+        ctx.strokeStyle = `rgba(${rgb}, ${alpha})`;
+        ctx.beginPath();
+        for (let gx = Math.ceil(x0 / step) * step; gx <= x1; gx += step) {
+          const sx = Math.round(pan.x + gx * s) + 0.5;
+          ctx.moveTo(sx, top);
+          ctx.lineTo(sx, bottom);
+        }
+        for (let gy = Math.ceil(y0 / step) * step; gy <= y1; gy += step) {
+          const sy = Math.round(pan.y + gy * s) + 0.5;
+          ctx.moveTo(left, sy);
+          ctx.lineTo(right, sy);
+        }
+        ctx.stroke();
+      };
+      const sub = Math.max(1, Math.round(docGrid.subdivisions));
+      if (sub > 1) lines(docGrid.spacing / sub, 0.22);
+      lines(docGrid.spacing, 0.55);
     }
-    for (let dy = y0; dy <= y1; dy++) {
-      const sy = Math.round(pan.y + dy * s) + 0.5;
-      ctx.moveTo(left, sy);
-      ctx.lineTo(right, sy);
+
+    if (showGrid && s >= 4) {
+      // Pixel grid only reads as a grid when zoomed in.
+      ctx.strokeStyle = `rgba(${hexRgb(pixelGridColor)}, 0.55)`;
+      ctx.beginPath();
+      for (let dx = x0; dx <= x1; dx++) {
+        const sx = Math.round(pan.x + dx * s) + 0.5;
+        ctx.moveTo(sx, top);
+        ctx.lineTo(sx, bottom);
+      }
+      for (let dy = y0; dy <= y1; dy++) {
+        const sy = Math.round(pan.y + dy * s) + 0.5;
+        ctx.moveTo(left, sy);
+        ctx.lineTo(right, sy);
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
-  }, [pan, zoom, vpSize, showGrid, width, height]);
+  }, [pan, zoom, vpSize, showGrid, docGrid, pixelGridColor, width, height]);
 
   const toDoc = (e: React.PointerEvent) => {
     const v = viewRef.current!;
@@ -4340,7 +4382,8 @@ export default function CanvasArea({
         lx = piv.x + (p.x - piv.x) * c - (p.y - piv.y) * sn;
       }
       const sc = zoomRef.current / 100;
-      const SNAP_PX = 6;
+      const SNAP_PX = snapDistance; // Preferences ▸ Guides & grid
+
       let snapped = false;
       if (nodeDragRef.current === "apex") {
         // Triangle apex: slide along the top edge, snapping to centre (isosceles).

@@ -278,7 +278,7 @@ export const TOPICS: HelpTopic[] = [
         title: "Viewing",
         entries: [
           { title: "Zoom & pan", body: "Ctrl+Wheel zooms at the cursor, wheel pans, Ctrl+0 fits, Ctrl+1 shows actual pixels. Each document tab keeps its own view.", keys: "Ctrl+0" },
-          { title: "Rulers, grid, snap", body: "Rulers tick in px, inches or centimetres (Preferences ▸ Units & rulers, using the document's resolution); the pixel grid appears at high zoom; snapping helps align drags.", keys: "Ctrl+'" },
+          { title: "Rulers, grids, snap", body: "Rulers tick in px, inches or centimetres (Preferences ▸ Units & rulers); the pixel grid appears at high zoom, and View ▸ Document grid overlays a configurable grid — spacing, subdivisions, colours and the snap distance live in Preferences ▸ Guides & grid.", keys: "Ctrl+'" },
           { title: "Transparency checkerboard", body: "The pattern behind transparent pixels is configurable in Preferences ▸ Transparency (size and colours)." },
         ],
       },

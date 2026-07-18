@@ -420,9 +420,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [showGrid, setShowGrid] = useState(false);
   const [snap, setSnap] = useState(true);
   const viewApiRef = useRef<ViewApi | null>(null);
+  const [showDocGrid, setShowDocGrid] = useState(false);
   // Current view toggles, reachable from the one-time keydown listener.
-  const viewSettingsRef = useRef({ rulers: true, grid: false, snap: true });
-  viewSettingsRef.current = { rulers: showRulers, grid: showGrid, snap };
+  const viewSettingsRef = useRef({ rulers: true, grid: false, snap: true, docgrid: false });
+  viewSettingsRef.current = { rulers: showRulers, grid: showGrid, snap, docgrid: showDocGrid };
   const [colorSpace, setColorSpaceState] = useState<WorkingSpace>("srgb");
   // Soft proofing (view-only): Ctrl+Alt+Y simulate, Ctrl+Alt+Shift+Y gamut warn.
   const [proofColors, setProofColors] = useState(false);
@@ -3815,15 +3816,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       if (typeof v.rulers === "boolean") setShowRulers(v.rulers);
       if (typeof v.grid === "boolean") setShowGrid(v.grid);
       if (typeof v.snap === "boolean") setSnap(v.snap);
+      if (typeof v.docgrid === "boolean") setShowDocGrid(v.docgrid);
     } catch {
       /* ignore */
     }
   }, []);
-  const persistView = (patch: { rulers?: boolean; grid?: boolean; snap?: boolean }) => {
+  const persistView = (patch: { rulers?: boolean; grid?: boolean; snap?: boolean; docgrid?: boolean }) => {
     const next = { ...viewSettingsRef.current, ...patch };
     setShowRulers(next.rulers);
     setShowGrid(next.grid);
     setSnap(next.snap);
+    setShowDocGrid(next.docgrid);
     try {
       localStorage.setItem("pe-view", JSON.stringify(next));
     } catch {
@@ -3838,6 +3841,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "view-100") viewApiRef.current?.zoom100();
     else if (actionId === "view-rulers") persistView({ rulers: !v.rulers });
     else if (actionId === "view-grid") persistView({ grid: !v.grid });
+    else if (actionId === "view-docgrid") persistView({ docgrid: !v.docgrid });
     else if (actionId === "view-snap") persistView({ snap: !v.snap });
     else if (actionId === "view-proof") setProofColors((p) => !p);
     else if (actionId === "view-gamut") setGamutWarn((g) => !g);
@@ -4514,6 +4518,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           "window-metadata": panels.metadata,
           "view-rulers": showRulers,
           "view-grid": showGrid,
+          "view-docgrid": showDocGrid,
           "view-proof": proofColors,
           "view-gamut": gamutWarn,
           "view-snap": snap,
@@ -4697,6 +4702,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           checkerB={prefs.checkerB}
           showGrid={showGrid}
           snap={snap}
+          docGrid={
+            showDocGrid
+              ? {
+                  spacing: prefs.gridSpacing,
+                  subdivisions: prefs.gridSubdivisions,
+                  color: prefs.gridColor,
+                }
+              : null
+          }
+          pixelGridColor={prefs.pixelGridColor}
+          snapDistance={prefs.snapDistance}
           viewApiRef={viewApiRef}
           paintRef={paintRef}
           onHistory={setHistory}

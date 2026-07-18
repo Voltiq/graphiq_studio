@@ -7,6 +7,7 @@ import {
   FolderOpen,
   Gauge,
   Grid2x2,
+  Grid3x3,
   HardDrive,
   Palette,
   Ruler,
@@ -99,6 +100,7 @@ export type PrefsTab =
   | "pasting"
   | "editing"
   | "files"
+  | "guides"
   | "units"
   | "transparency"
   | "performance"
@@ -112,6 +114,7 @@ const TABS: { id: Tab; label: string; icon: typeof Palette }[] = [
   { id: "files", label: "Files", icon: FolderOpen },
   { id: "units", label: "Units & rulers", icon: Ruler },
   { id: "transparency", label: "Transparency", icon: Grid2x2 },
+  { id: "guides", label: "Guides & grid", icon: Grid3x3 },
   { id: "performance", label: "Performance", icon: Gauge },
   { id: "storage", label: "Storage", icon: HardDrive },
 ];
@@ -683,6 +686,94 @@ export default function PreferencesDialog({
                       </label>
                     </div>
                   )}
+                </section>
+              </>
+            )}
+
+            {tab === "guides" && (
+              <>
+                <p className={styles.paneIntro}>
+                  The document grid and pixel grid overlays, and how strongly things snap.
+                  Toggle the grids from the View menu; these settings shape them.
+                </p>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Document grid</span>
+                  <p className={styles.sectionHint}>
+                    View ▸ Document grid draws a gridline every {prefs.gridSpacing} px with
+                    {" "}{prefs.gridSubdivisions > 1 ? `${prefs.gridSubdivisions} subdivisions` : "no subdivisions"} —
+                    lines hide automatically when the zoom would mush them together.
+                  </p>
+                  <Slider
+                    label="Gridline every"
+                    min={8}
+                    max={256}
+                    step={8}
+                    unit=" px"
+                    value={prefs.gridSpacing}
+                    onChange={(n) => onChange({ gridSpacing: n })}
+                  />
+                  <Slider
+                    label="Subdivisions"
+                    min={1}
+                    max={8}
+                    step={1}
+                    value={prefs.gridSubdivisions}
+                    onChange={(n) => onChange({ gridSubdivisions: n })}
+                  />
+                  <div className={styles.colorWellRow}>
+                    <label className={styles.colorWellLabel}>
+                      <input
+                        type="color"
+                        className={styles.colorWell}
+                        value={prefs.gridColor}
+                        onChange={(e) => onChange({ gridColor: e.target.value })}
+                        aria-label="Document grid colour"
+                      />
+                      <span>
+                        Grid colour
+                        <code>{prefs.gridColor}</code>
+                      </span>
+                    </label>
+                  </div>
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Pixel grid</span>
+                  <p className={styles.sectionHint}>
+                    The 1-pixel cell lines (View ▸ Pixel grid, Ctrl+&apos;) that appear from
+                    400% zoom.
+                  </p>
+                  <div className={styles.colorWellRow}>
+                    <label className={styles.colorWellLabel}>
+                      <input
+                        type="color"
+                        className={styles.colorWell}
+                        value={prefs.pixelGridColor}
+                        onChange={(e) => onChange({ pixelGridColor: e.target.value })}
+                        aria-label="Pixel grid colour"
+                      />
+                      <span>
+                        Line colour
+                        <code>{prefs.pixelGridColor}</code>
+                      </span>
+                    </label>
+                  </div>
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Snapping</span>
+                  <p className={styles.sectionHint}>
+                    How close (in screen pixels) a handle has to get before it snaps — the
+                    shape tools&apos; symmetry snaps use this. Selections snapping to whole
+                    pixels is the on/off View ▸ Snap toggle, not a distance.
+                  </p>
+                  <Slider
+                    label="Snap distance"
+                    min={2}
+                    max={16}
+                    step={1}
+                    unit=" px"
+                    value={prefs.snapDistance}
+                    onChange={(n) => onChange({ snapDistance: n })}
+                  />
                 </section>
               </>
             )}

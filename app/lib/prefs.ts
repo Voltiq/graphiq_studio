@@ -113,6 +113,16 @@ export interface Preferences {
   /** How many projects File ▸ Open recent remembers (older entries drop as new
    *  ones are added). */
   recentsLimit: number;
+  /** Document grid (View ▸ Document grid): gridline spacing in document px. */
+  gridSpacing: number;
+  /** Fainter subdivision lines between gridlines (1 = none). */
+  gridSubdivisions: number;
+  /** Document-grid line colour (subdivisions draw the same hue, fainter). */
+  gridColor: string;
+  /** Pixel-grid line colour (the 1px cells shown at high zoom). */
+  pixelGridColor: string;
+  /** Snap pull distance in screen px (shape-node symmetry snaps, guides…). */
+  snapDistance: number;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -140,6 +150,11 @@ export const DEFAULT_PREFS: Preferences = {
   defaultExportFormatId: "png",
   defaultExportQuality: 92,
   recentsLimit: 8,
+  gridSpacing: 64,
+  gridSubdivisions: 4,
+  gridColor: "#4688ec",
+  pixelGridColor: "#808080", // reproduces the historical rgba(128,128,128,…) lines
+  snapDistance: 6, // reproduces the historical SNAP_PX
 };
 
 const KEY = "graphiq:preferences";
