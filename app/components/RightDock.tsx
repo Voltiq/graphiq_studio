@@ -616,7 +616,7 @@ export default function RightDock({
 
   return (
     <>
-      <aside className={styles.dock} aria-label="Panels">
+      <aside className={styles.dock} aria-label="Panels" data-tour="dock">
         {rightIds.map((id) => panelFor(id))}
         {dropZone("right")}
       </aside>

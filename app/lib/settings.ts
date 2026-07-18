@@ -23,6 +23,7 @@ export const SETTINGS_KEYS: readonly string[] = [
   "pe-panels", // Window-menu panel visibility
   "pe-colorspace", // working colour space
   "pe-proof-target", // soft-proof target
+  "graphiq:welcomed", // first-run tour seen (reset ⇒ the tour greets again)
 ];
 
 /** Cookie-based settings (server-rendered on boot to avoid theme flash). */

@@ -106,7 +106,7 @@ export default function TopBar({
   }, [open]);
 
   return (
-    <header className={styles.topbar}>
+    <header className={styles.topbar} data-tour="topbar">
       <div className={styles.brand}>
         <span className={styles.logo}>
           {/* eslint-disable-next-line @next/next/no-img-element */}

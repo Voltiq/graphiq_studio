@@ -4925,7 +4925,7 @@ export default function CanvasArea({
   };
 
   return (
-    <section className={styles.canvasArea}>
+    <section className={styles.canvasArea} data-tour="canvas">
       <div className={styles.tabs}>
         {docs.map((d) =>
           editingTabId === d.id ? (

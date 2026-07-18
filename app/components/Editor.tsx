@@ -195,6 +195,7 @@ import ExportPdfDialog from "./ExportPdfDialog";
 import HdrMergeDialog from "./HdrMergeDialog";
 import BatchDialog from "./BatchDialog";
 import { buildScriptingApi, type ScriptingDeps } from "../lib/scripting";
+import TourOverlay from "./TourOverlay";
 import HdrExportDialog from "./HdrExportDialog";
 import type { HdrImage } from "../lib/hdr";
 import { DEFAULT_FX, type FxKey, type LayerEffects } from "../lib/effects";
@@ -3477,6 +3478,134 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setPendingLoads((ls) => [...ls, ...entries]);
   };
 
+  // ---- Onboarding (§11): interactive tour + sample document ----------------
+  const [tourStep, setTourStep] = useState<number | null>(null);
+  // First run: greet with the tour's welcome card (Skip marks it seen too).
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem("graphiq:welcomed")) setTourStep(0);
+    } catch {
+      /* storage unavailable — never nag */
+    }
+  }, []);
+  const closeTour = () => {
+    setTourStep(null);
+    try {
+      localStorage.setItem("graphiq:welcomed", "1");
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // A small layered scene to poke at: procedural pixels (no assets), loaded
+  // through the same PendingLoad machinery every import uses.
+  const openSampleDoc = () => {
+    const W = 1600;
+    const H = 1000;
+    const mk = (draw: (ctx: CanvasRenderingContext2D) => void): HTMLCanvasElement => {
+      const c = document.createElement("canvas");
+      c.width = W;
+      c.height = H;
+      const ctx = c.getContext("2d");
+      if (ctx) draw(ctx);
+      return c;
+    };
+    const bg = mk((ctx) => {
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, "#1c2f52");
+      g.addColorStop(0.55, "#4a5f8f");
+      g.addColorStop(1, "#e9a06b");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+      const sun = ctx.createRadialGradient(W * 0.72, H * 0.68, 20, W * 0.72, H * 0.68, 340);
+      sun.addColorStop(0, "rgba(255,214,150,0.9)");
+      sun.addColorStop(1, "rgba(255,214,150,0)");
+      ctx.fillStyle = sun;
+      ctx.fillRect(0, 0, W, H);
+    });
+    const shapes = mk((ctx) => {
+      const blob = (x: number, y: number, r: number, fill: string) => {
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle = fill;
+        ctx.fill();
+      };
+      ctx.globalAlpha = 0.85;
+      blob(W * 0.22, H * 0.34, 130, "#5eead4");
+      blob(W * 0.34, H * 0.62, 90, "#f472b6");
+      blob(W * 0.55, H * 0.3, 70, "#facc15");
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "rgba(255,255,255,0.85)";
+      ctx.lineWidth = 10;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(W * 0.14, H * 0.8);
+      ctx.bezierCurveTo(W * 0.32, H * 0.62, W * 0.52, H * 0.92, W * 0.7, H * 0.72);
+      ctx.stroke();
+    });
+    const head = mk((ctx) => {
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.font = "600 84px system-ui, sans-serif";
+      ctx.shadowColor = "rgba(0,0,0,0.35)";
+      ctx.shadowBlur = 24;
+      ctx.fillText("Welcome to Graphiq Studio", W / 2, H * 0.17);
+      ctx.shadowBlur = 0;
+      ctx.font = "400 34px system-ui, sans-serif";
+      ctx.fillStyle = "rgba(255,255,255,0.8)";
+      ctx.fillText("Poke the layers, try the brushes, break nothing — Ctrl+Z has you.", W / 2, H * 0.235);
+    });
+    const seq = (seqRef.current += 1);
+    const docId = `doc-${seq}`;
+    const headId = nextLeafId();
+    const groupId = nextLeafId();
+    const shapesId = nextLeafId();
+    const bgId = nextLeafId();
+    setDocs((ds) => [
+      ...ds,
+      {
+        id: docId,
+        name: "Sample document",
+        width: W,
+        height: H,
+        layers: [
+          { id: headId, type: "layer", name: "Headline", visible: true, opacity: 100, blend: "Normal", label: "yellow" },
+          {
+            id: groupId,
+            type: "group",
+            name: "Artwork",
+            visible: true,
+            opacity: 100,
+            blend: "Normal",
+            expanded: true,
+            children: [
+              { id: shapesId, type: "layer", name: "Floating shapes", visible: true, opacity: 92, blend: "Normal", label: "green" },
+            ],
+          },
+          { id: bgId, type: "layer", name: "Sky", visible: true, opacity: 100, blend: "Normal" },
+        ],
+        activeLayerId: headId,
+        selectedLayerIds: [headId],
+        selection: [],
+        selectionAngle: 0,
+        selectionPivot: null,
+        metadata: null,
+      },
+    ]);
+    setActiveId(docId);
+    setPendingLoads((ls) => [
+      ...ls,
+      {
+        docId,
+        images: [
+          { id: bgId, source: bg },
+          { id: shapesId, source: shapes },
+          { id: headId, source: head },
+        ],
+      },
+    ]);
+  };
+
   // ---- Batch processing (§14): run one file through the live app ----------
   // Opens the file as a TEMPORARY document, optionally replays a saved action
   // on it (through the exact playback path — menu commands + strokes), and
@@ -4073,6 +4202,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "export-pdf") setPdfExportOpen(true);
     else if (actionId === "merge-hdr") setHdrMergeOpen(true);
     else if (actionId === "batch-process") setBatchOpen(true);
+    else if (actionId === "help-tour") setTourStep(0);
+    else if (actionId === "help-sample") openSampleDoc();
     else if (actionId === "hdr-tone") {
       if (activeDocRef.current.hdr) setHdrToneOpen(true);
       else
@@ -5037,6 +5168,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       )}
       {batchOpen && (
         <BatchDialog actions={savedActions} runFile={batchRunFile} onClose={() => setBatchOpen(false)} />
+      )}
+      {tourStep !== null && (
+        <TourOverlay
+          step={tourStep}
+          onStep={setTourStep}
+          onClose={closeTour}
+          onOpenSample={openSampleDoc}
+        />
       )}
       {hdrToneOpen && active.hdr && (
         <HdrMergeDialog

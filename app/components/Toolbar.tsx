@@ -26,7 +26,7 @@ export default function Toolbar({
   onSwap,
 }: Props) {
   return (
-    <aside className={styles.toolbar} aria-label="Tools">
+    <aside className={styles.toolbar} aria-label="Tools" data-tour="toolbar">
       <div className={styles.tools}>
         {TOOL_GROUPS.map((group, gi) => (
           <div key={gi} className={styles.group}>

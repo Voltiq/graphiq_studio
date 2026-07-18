@@ -98,7 +98,7 @@ export default function StatusBar({
   const sel = selection.length ? selectionInfo(selection) : null;
 
   return (
-    <footer className={styles.statusbar}>
+    <footer className={styles.statusbar} data-tour="status">
       <div className={styles.left}>
         <span className={styles.swatchPip} style={swatchBg(foreground)} />
         <span className={styles.mono}>{toHex6(parseColor(foreground)).toUpperCase()}</span>

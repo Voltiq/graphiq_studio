@@ -1,0 +1,95 @@
+/* Interactive tour: dimmed blanket with a spotlight cutout + a floating card. */
+
+.blanket {
+  position: fixed;
+  inset: 0;
+  z-index: 420; /* above panels/floats/menus, below nothing it needs */
+}
+
+/* The spotlight IS the blanket: a rounded hole whose giant box-shadow dims
+   everything else. For centred steps it collapses to a point mid-screen. */
+.hole {
+  position: fixed;
+  border-radius: 10px;
+  box-shadow: 0 0 0 200vmax color-mix(in srgb, #05070c 62%, transparent);
+  pointer-events: none;
+  transition: left 200ms var(--ease), top 200ms var(--ease), width 200ms var(--ease),
+    height 200ms var(--ease);
+}
+
+:root[data-motion="off"] .hole {
+  transition: none;
+}
+
+.card {
+  position: fixed;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  padding: 14px 16px 12px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: var(--weight-semibold);
+}
+
+.body {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.dots {
+  display: flex;
+  gap: 4px;
+  margin-right: auto;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-strong);
+
+  &[data-on="true"] {
+    background: var(--accent);
+  }
+}
+
+.btn {
+  padding: 5px 11px;
+  font-size: 12px;
+  font-weight: var(--weight-medium);
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    color: var(--text);
+  }
+}
+
+.primary {
+  color: var(--accent-contrast);
+  background: var(--accent);
+
+  &:hover {
+    background: color-mix(in srgb, var(--accent) 88%, #000);
+    color: var(--accent-contrast);
+  }
+}

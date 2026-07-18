@@ -184,6 +184,8 @@ export const MENUS: Menu[] = [
     label: "Help",
     items: [
       { label: "Getting started", action: "help-start" },
+      { label: "Interactive tour", action: "help-tour" },
+      { label: "Open sample document", action: "help-sample", separatorAfter: true },
       { label: "Documentation", action: "help-docs" },
       { label: "Keyboard shortcuts", action: "shortcuts", separatorAfter: true },
       { label: "About Graphiq Studio", action: "about" },

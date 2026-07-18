@@ -215,7 +215,7 @@ export default function OptionsBar({
   const Icon = meta.icon;
 
   return (
-    <div className={styles.optionsbar}>
+    <div className={styles.optionsbar} data-tour="options">
       <div className={styles.toolBadge}>
         <Icon size={16} strokeWidth={2} />
         <span>{meta.name}</span>
