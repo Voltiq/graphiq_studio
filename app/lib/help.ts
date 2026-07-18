@@ -239,6 +239,7 @@ export const TOPICS: HelpTopic[] = [
           { title: "Images", body: "PNG, JPEG, WebP, AVIF, GIF, BMP — everything the browser decodes, with embedded colour profiles honoured. Multiple files import as layers or as separate documents, with placement options." },
           { title: "PSD", body: "Layered Photoshop files open with layers, nested groups, masks, opacity, blend modes, clipping and visibility (8-bit RGB/greyscale; unsupported constructs fall back to the flattened composite, noted on import)." },
           { title: "Camera raw", body: "DNG files are truly developed — demosaic, as-shot white balance, camera colour matrix. Other raw formats (CR2/NEF/ARW/…) open their largest embedded preview." },
+          { title: "TIFF & HEIF", body: "TIFF decodes in-app (8/16-bit, strips or tiles, PackBits/LZW/Deflate, grayscale/palette/RGB(A)) — no browser support needed. HEIC/HEIF opens where the browser ships the codec (Safari does; most others don't), and EXIF is read from HEIF/AVIF either way." },
         ],
       },
       {
@@ -246,7 +247,7 @@ export const TOPICS: HelpTopic[] = [
         entries: [
           { title: "Export As", body: "PNG, JPEG, WebP and AVIF (as the browser supports), with quality, scale, transparency/matte controls and a live file-size estimate that really encodes.", keys: "Ctrl+Shift+E" },
           { title: "Presets & batch", body: "Save your export settings as presets; Batch mode encodes several sizes/formats in one go with filename templates ({name}, {w}, {h}, {scale}, {n}) and downloads a single zip." },
-          { title: "PSD, SVG, LUT, print", body: "Export a layered PSD for other editors, an SVG of the vector layers, a .cube LUT of your adjustments — and Print is true-size, honouring the document's ppi." },
+          { title: "PSD, TIFF, SVG, LUT, print", body: "Export a layered PSD for other editors, a Deflate-compressed 8/16-bit TIFF, an SVG of the vector layers, a .cube LUT of your adjustments — and Print is true-size, honouring the document's ppi." },
         ],
       },
     ],

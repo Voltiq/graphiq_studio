@@ -117,8 +117,17 @@ export const RAW_EXTS = [
   "x3f", "raw", "rwl", "dcr",
 ];
 
-/** `accept` value for the import picker: any browser image type plus RAW + PSD. */
-export const IMPORT_ACCEPT = ["image/*", ".psd", ...RAW_EXTS.map((e) => `.${e}`)].join(",");
+/** `accept` value for the import picker: any browser image type plus RAW, PSD,
+ *  TIFF (hand-written decoder) and HEIF (decoded where the browser can). */
+export const IMPORT_ACCEPT = [
+  "image/*",
+  ".psd",
+  ".tif",
+  ".tiff",
+  ".heic",
+  ".heif",
+  ...RAW_EXTS.map((e) => `.${e}`),
+].join(",");
 
 /**
  * Pull the largest embedded JPEG out of a RAW (or other container) file. RAW
@@ -229,15 +238,29 @@ async function decodeRawDNG(buffer: ArrayBuffer): Promise<ImageBitmap | null> {
  * Decode an image file to a drawable bitmap (null on failure). Honors embedded
  * colour profiles (`colorSpaceConversion: "default"`). TIFF-shaped files try
  * the hand-written DNG decoder first (true raw development: demosaic + as-shot
- * white balance + camera matrix); anything outside that subset — and every
+ * white balance + camera matrix), then the baseline TIFF decoder (browsers
+ * outside Safari can't decode TIFF at all); anything past both — and every
  * other camera RAW — falls back to the embedded JPEG preview, as before.
  */
 export async function decodeImageFile(file: File): Promise<ImageBitmap | null> {
   try {
     const head = new Uint8Array(await file.slice(0, 8).arrayBuffer());
     if (looksLikeTIFF(head)) {
+      // decodeRawDNG transfers its buffer to the worker — read the file again
+      // for the plain-TIFF attempt.
       const developed = await decodeRawDNG(await file.arrayBuffer());
       if (developed) return developed;
+      const { decodeTiff } = await import("./tiff");
+      const tiff = await decodeTiff(await file.arrayBuffer());
+      if (tiff) {
+        let img: ImageData;
+        try {
+          img = new ImageData(tiff.rgba, tiff.width, tiff.height, { colorSpace: "srgb" });
+        } catch {
+          img = new ImageData(tiff.rgba, tiff.width, tiff.height);
+        }
+        return await createImageBitmap(img);
+      }
     }
   } catch {
     /* fall through to the standard decode paths */

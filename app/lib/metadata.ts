@@ -73,6 +73,24 @@ function locateTiff(s: Safe): number {
   ) {
     return 0;
   }
+  // HEIF/AVIF (ISO-BMFF, "ftyp" at offset 4): the Exif item's payload is a
+  // contiguous "Exif\0\0" + TIFF block — scanning the head window for it is
+  // simpler than walking meta/iinf/iloc boxes and works for both formats.
+  if (s.u32(4, false) === 0x66747970) {
+    for (let i = 8; i + 10 < len; i++) {
+      if (s.u32(i, false) === 0x45786966 && s.u16(i + 4, false) === 0) {
+        const t = i + 6;
+        const b = s.u16(t, false);
+        if (
+          (b === 0x4949 && s.u16(t + 2, true) === 0x2a) ||
+          (b === 0x4d4d && s.u16(t + 2, false) === 0x2a)
+        ) {
+          return t;
+        }
+      }
+    }
+    return -1;
+  }
   // JPEG: walk the marker segments looking for an "Exif\0\0" APP1.
   if (s.u16(0, false) !== 0xffd8) return -1;
   let off = 2;

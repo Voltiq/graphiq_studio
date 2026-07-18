@@ -189,6 +189,7 @@ import {
 } from "../lib/adjust-extra";
 import AdjustmentExtraDialog from "./AdjustmentExtraDialog";
 import ExportLutDialog from "./ExportLutDialog";
+import ExportTiffDialog from "./ExportTiffDialog";
 import HdrMergeDialog from "./HdrMergeDialog";
 import HdrExportDialog from "./HdrExportDialog";
 import type { HdrImage } from "../lib/hdr";
@@ -1543,6 +1544,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const cubeTargetRef = useRef<"new" | string | null>(null);
   // Export the current adjustments AS a .cube LUT (File menu / Adjustments panel).
   const [lutExportOpen, setLutExportOpen] = useState(false);
+  const [tiffExportOpen, setTiffExportOpen] = useState(false);
   const [hdrMergeOpen, setHdrMergeOpen] = useState(false);
   const [hdrToneOpen, setHdrToneOpen] = useState(false);
   const [hdrExportOpen, setHdrExportOpen] = useState(false);
@@ -3302,10 +3304,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         icc: d.icc,
         vector: d.vector,
       }));
-    if (!items.length) {
-      window.alert("Couldn't read the selected image(s).");
-      return;
+    const failed = decoded.filter((d) => d.bitmap === null);
+    if (failed.length) {
+      const heif = failed.some((d) => /\.hei[cf]$/i.test(d.name));
+      window.alert(
+        `Couldn't read: ${failed.map((d) => d.name).join(", ")}.` +
+          (heif
+            ? " HEIF/HEIC decodes only where the browser supports it (Safari does; most others don't ship the codec)."
+            : ""),
+      );
     }
+    if (!items.length) return;
     setImportItems(items);
   };
 
@@ -3953,6 +3962,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "export-svg") exportVectorSVG();
     else if (actionId === "export-psd") exportPSD();
     else if (actionId === "export-lut") setLutExportOpen(true);
+    else if (actionId === "export-tiff") setTiffExportOpen(true);
     else if (actionId === "merge-hdr") setHdrMergeOpen(true);
     else if (actionId === "hdr-tone") {
       if (activeDocRef.current.hdr) setHdrToneOpen(true);
@@ -4823,6 +4833,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           panelAdjust={sliderSpec ? sliderSpec.params : adjust}
           docName={active.name}
           onClose={() => setLutExportOpen(false)}
+        />
+      )}
+      {tiffExportOpen && (
+        <ExportTiffDialog
+          docName={active.name}
+          dpi={active.dpi ?? 300}
+          getComposite={() => paintRef.current?.exportComposite(active.layers) ?? null}
+          onClose={() => setTiffExportOpen(false)}
         />
       )}
       {hdrMergeOpen && (
