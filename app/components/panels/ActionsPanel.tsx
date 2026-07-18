@@ -9,10 +9,11 @@ import { FKEY_CHOICES, type ActionsApi } from "../../lib/actions";
 const NO_KEY = "—";
 
 /**
- * Actions panel: record document menu commands into named, replayable macros
- * (playable from here or an assigned F-key). Recording captures only commands
- * that replay unattended — dialogs, tool strokes and view/window toggles are
- * deliberately not recorded (isRecordable in lib/actions.ts).
+ * Actions panel: record document menu commands AND brush/pencil/eraser strokes
+ * into named, replayable macros (playable from here or an assigned F-key).
+ * Recording captures only steps that replay unattended — dialogs, other tools'
+ * gestures and view/window toggles are deliberately not recorded
+ * (isRecordable in lib/actions.ts; stroke capture in CanvasArea).
  */
 export default function ActionsPanel({ api }: { api: ActionsApi }) {
   const { actions, recordingId, playingId } = api;
@@ -72,9 +73,10 @@ export default function ActionsPanel({ api }: { api: ActionsApi }) {
 
       {actions.length === 0 && !recordingId ? (
         <p className={styles.actionHint}>
-          Record a sequence of document commands — layer ops, image rotates, preset
-          adjustments, effects — then replay it in one click or with an F-key. Commands
-          that need a dialog (and tool strokes) aren&apos;t captured.
+          Record document commands — layer ops, image rotates, preset adjustments,
+          effects — <em>and brush, pencil &amp; eraser strokes</em>, then replay it all in
+          one click or with an F-key. Commands that need a dialog (and other tools&apos;
+          gestures) aren&apos;t captured.
         </p>
       ) : (
         <ul className={styles.actionList}>
@@ -151,7 +153,7 @@ export default function ActionsPanel({ api }: { api: ActionsApi }) {
                   <ol className={styles.actionSteps}>
                     {a.steps.length === 0 && <li className={styles.actionStepEmpty}>No steps yet.</li>}
                     {a.steps.map((s, i) => (
-                      <li key={`${s.action}-${i}`} className={styles.actionStep}>
+                      <li key={`${s.action ?? "stroke"}-${i}`} className={styles.actionStep}>
                         <span className={styles.actionStepNum}>{i + 1}</span>
                         <span className={styles.actionStepLabel}>{s.label}</span>
                         <button

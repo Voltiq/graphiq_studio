@@ -6,6 +6,7 @@ import styles from "./CanvasArea.module.scss";
 import type { WorkingSpace } from "../lib/colorspace";
 import { checkerCSS, type CheckerColors, type CheckerSize, type MeasureUnit } from "../lib/prefs";
 import { buildEdgeField, snapPoint, type EdgeField } from "../lib/magnetic";
+import type { StrokeStep } from "../lib/actions";
 import { baseRunStyle } from "../lib/richtext";
 import {
   applyPatchToSelection,
@@ -599,6 +600,8 @@ export default function CanvasArea({
   onCurveTargetDrag,
   onCurveTargetEnd,
   onPenPathCommit,
+  recordStrokes,
+  onStrokeRecord,
   pendingPaste,
   onPasteDone,
   pendingLoads,
@@ -721,6 +724,9 @@ export default function CanvasArea({
   onCurveTargetEnd: () => void;
   /** A pen path was committed (baked) — the Paths panel stores it as Work Path. */
   onPenPathCommit: (anchors: PenAnchor[], closed: boolean) => void;
+  /** Actions recorder: capture brush/pencil/eraser strokes while armed. */
+  recordStrokes: boolean;
+  onStrokeRecord: (stroke: StrokeStep) => void;
   pendingPaste: PendingPaste | null;
   onPasteDone: () => void;
   pendingLoads: PendingLoad[];
@@ -1159,6 +1165,8 @@ export default function CanvasArea({
   const [hoverCursor, setHoverCursor] = useState<string | null>(null);
   // Curves targeted-adjustment drag: the pointer's clientY at drag start.
   const curveDragYRef = useRef<number | null>(null);
+  // Actions recorder: the in-progress stroke being captured (null = not armed).
+  const strokeRecRef = useRef<StrokeStep | null>(null);
   // Viewport pixel size, tracked so the rulers can lay out their ticks.
   const [vpSize, setVpSize] = useState({ w: 0, h: 0 });
   const pickingRef = useRef(false);
@@ -2701,6 +2709,23 @@ export default function CanvasArea({
         engine.livePath(layerId, anchors, closed, settings, color);
         engine.endPath(); // bakes + journals the tight "Path" entry
       },
+      playStroke: (layerId, toolKind, settings, color, points, sel, angle, pivot) => {
+        if (!points.length) return;
+        engine.beginStroke(
+          layerId,
+          settings,
+          color,
+          points[0].x,
+          points[0].y,
+          toolKind === "eraser" ? "erase" : "paint",
+          sel,
+          angle,
+          pivot,
+          toolKind === "eraser" ? "Erase" : toolKind === "pencil" ? "Pencil" : "Brush",
+        );
+        for (let i = 1; i < points.length; i++) engine.moveStroke(points[i].x, points[i].y);
+        engine.endStroke();
+      },
       isFloating: () => engine.isFloating,
       commitFloat: () => engine.commitFloat(),
       discardFloat: () => engine.discardFloat(),
@@ -3844,6 +3869,10 @@ export default function CanvasArea({
         selectionPivot,
         tool === "eraser" ? "Erase" : tool === "pencil" ? "Pencil" : "Brush",
       );
+      // Actions recorder: snapshot the stroke's settings + gather its raw path.
+      strokeRecRef.current = recordStrokes
+        ? { tool, brush: { ...brush }, color: paintCol, points: [{ x: p.x, y: p.y }] }
+        : null;
     }
     if (tool === "heal") {
       if (!activeLayerId) return; // nothing to heal on an empty doc
@@ -4395,6 +4424,11 @@ export default function CanvasArea({
     if (!paintingRef.current) return;
     const p = toDoc(e);
     engine.moveStroke(p.x, p.y);
+    const rec = strokeRecRef.current;
+    if (rec) {
+      const last = rec.points[rec.points.length - 1];
+      if (Math.hypot(p.x - last.x, p.y - last.y) >= 0.75) rec.points.push({ x: p.x, y: p.y });
+    }
   };
   const onCanvasPointerUp = (e: React.PointerEvent) => {
     if (curveDragYRef.current !== null) {
@@ -4758,6 +4792,10 @@ export default function CanvasArea({
     if (paintingRef.current) {
       engine.endStroke();
       paintingRef.current = false;
+      if (strokeRecRef.current) {
+        onStrokeRecord(strokeRecRef.current);
+        strokeRecRef.current = null;
+      }
     }
     const v = viewRef.current;
     if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);

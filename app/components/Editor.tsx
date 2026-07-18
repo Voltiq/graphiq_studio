@@ -142,9 +142,11 @@ import {
   isRecordable,
   loadActions,
   saveActions,
+  strokeStepLabel,
   PLAYBACK_STEP_MS,
   type ActionsApi,
   type SavedAction,
+  type StrokeStep,
 } from "../lib/actions";
 import {
   cloneAnchors,
@@ -3714,7 +3716,25 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setPlayingId(id);
     try {
       for (const step of act.steps) {
-        handleMenuActionRef.current(step.action);
+        if (step.stroke) {
+          // Recorded paint stroke: replay at the recorded coordinates onto the
+          // CURRENT active layer, clipped to the CURRENT selection (like a
+          // real stroke would be).
+          const s = step.stroke;
+          const d = activeDocRef.current;
+          paintRef.current?.playStroke(
+            ensureLayer(),
+            s.tool,
+            s.brush,
+            s.color,
+            s.points,
+            d.selection.length ? d.selection : null,
+            d.selectionAngle,
+            d.selectionPivot,
+          );
+        } else if (step.action) {
+          handleMenuActionRef.current(step.action);
+        }
         await new Promise((r) => setTimeout(r, PLAYBACK_STEP_MS));
       }
     } finally {
@@ -3725,6 +3745,18 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
   const playActionRef = useRef(playAction);
   playActionRef.current = playAction;
+
+  // CanvasArea reports each finished brush/pencil/eraser stroke while an
+  // action is recording (never during playback — no self-appending).
+  const recordStrokeStep = (s: StrokeStep) => {
+    const rid = recordingIdRef.current;
+    if (!rid || playingRef.current) return;
+    updateActions((ls) =>
+      ls.map((a) =>
+        a.id === rid ? { ...a, steps: [...a.steps, { stroke: s, label: strokeStepLabel(s) }] } : a,
+      ),
+    );
+  };
 
   const actionsApi: ActionsApi = {
     actions: savedActions,
@@ -4478,6 +4510,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onCurveTargetDrag={onCurveTargetDrag}
           onCurveTargetEnd={onCurveTargetEnd}
           onPenPathCommit={storeWorkPath}
+          recordStrokes={!!recordingId}
+          onStrokeRecord={recordStrokeStep}
           pendingPaste={pendingPaste}
           onPasteDone={() => setPendingPaste(null)}
           pendingLoads={pendingLoads}

@@ -235,6 +235,18 @@ export interface EngineHandle {
     settings: PenSettings,
     color: string,
   ) => void;
+  /** Replay a recorded paint stroke (Actions panel) through the live stroke
+   *  pipeline — one undoable step, clipped to the given selection. */
+  playStroke: (
+    layerId: string,
+    tool: "brush" | "pencil" | "eraser",
+    settings: BrushSettings,
+    color: string,
+    points: { x: number; y: number }[],
+    sel: Rect[] | null,
+    angle: number,
+    pivot: { x: number; y: number } | null,
+  ) => void;
   isFloating: () => boolean;
   commitFloat: () => void;
   discardFloat: () => void;

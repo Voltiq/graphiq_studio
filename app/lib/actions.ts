@@ -10,16 +10,36 @@
 // adjustment/tone editors, smart-filter adds — they open their stack dialog),
 // interactive modes (free transform) and UI-only commands (view/window/help)
 // are deliberately excluded — a recorded action must replay unattended.
-// Tool strokes and dialog settings are NOT captured (§14 leftovers).
+// PAINT STROKES (brush/pencil/eraser) ARE captured as StrokeSteps — settings,
+// colour and the raw pointer path — and replay through the engine's stroke
+// pipeline at the recorded coordinates. Other tools' gestures (clone, heal,
+// gradient drags, shapes, text) and dialog settings remain uncaptured.
 
 import { MENUS } from "./menus";
+import type { BrushSettings } from "./paint";
+
+/** A recorded paint stroke (brush / pencil / eraser): the tool's settings and
+ *  colour at record time plus the raw pointer path in DOCUMENT space — replay
+ *  feeds the same points through the engine's stroke pipeline, so smoothing,
+ *  spacing and blending behave exactly as they did live. */
+export interface StrokeStep {
+  tool: "brush" | "pencil" | "eraser";
+  brush: BrushSettings;
+  color: string;
+  points: { x: number; y: number }[];
+}
 
 export interface ActionStep {
-  /** The handleMenuAction id to dispatch. */
-  action: string;
   /** Label at record time (survives menu renames for display). */
   label: string;
+  /** The handleMenuAction id to dispatch (menu-command steps). */
+  action?: string;
+  /** Recorded paint stroke (stroke steps). Exactly one of action/stroke set. */
+  stroke?: StrokeStep;
 }
+
+export const strokeStepLabel = (s: StrokeStep): string =>
+  `${s.tool === "eraser" ? "Eraser" : s.tool === "pencil" ? "Pencil" : "Brush"} stroke (${s.points.length} pts)`;
 
 export interface SavedAction {
   id: string;
@@ -125,6 +145,39 @@ export function freshActionId(): string {
   return `act-${Date.now().toString(36)}-${(actionSeq += 1)}`;
 }
 
+const BRUSH_DEFAULTS: BrushSettings = {
+  size: 24,
+  hardness: 80,
+  opacity: 100,
+  flow: 100,
+  blend: "Normal",
+  smoothing: 20,
+};
+
+/** Validate + normalize a stored stroke step's payload (null = invalid). */
+function coerceStroke(raw: unknown): StrokeStep | null {
+  if (!raw || typeof raw !== "object") return null;
+  const s = raw as Partial<StrokeStep>;
+  if (s.tool !== "brush" && s.tool !== "pencil" && s.tool !== "eraser") return null;
+  if (typeof s.color !== "string" || !Array.isArray(s.points)) return null;
+  const points = s.points.filter(
+    (p): p is { x: number; y: number } =>
+      !!p && typeof p === "object" && Number.isFinite((p as { x: number }).x) && Number.isFinite((p as { y: number }).y),
+  );
+  if (!points.length) return null;
+  const b = (s.brush ?? {}) as Partial<BrushSettings>;
+  const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  const brush: BrushSettings = {
+    size: num(b.size, BRUSH_DEFAULTS.size),
+    hardness: num(b.hardness, BRUSH_DEFAULTS.hardness),
+    opacity: num(b.opacity, BRUSH_DEFAULTS.opacity),
+    flow: num(b.flow, BRUSH_DEFAULTS.flow),
+    blend: typeof b.blend === "string" ? b.blend : BRUSH_DEFAULTS.blend,
+    smoothing: num(b.smoothing, BRUSH_DEFAULTS.smoothing),
+  };
+  return { tool: s.tool, brush, color: s.color, points: points.map((p) => ({ x: p.x, y: p.y })) };
+}
+
 /** Coerce arbitrary parsed data into a valid SavedAction list. */
 export function coerceActions(raw: unknown): SavedAction[] {
   if (!Array.isArray(raw)) return [];
@@ -133,12 +186,19 @@ export function coerceActions(raw: unknown): SavedAction[] {
     if (!a || typeof a !== "object") continue;
     const o = a as Partial<SavedAction>;
     if (typeof o.id !== "string" || typeof o.name !== "string" || !Array.isArray(o.steps)) continue;
-    const steps = o.steps
-      .filter(
-        (s): s is ActionStep =>
-          !!s && typeof s === "object" && typeof (s as ActionStep).action === "string",
-      )
-      .map((s) => ({ action: s.action, label: typeof s.label === "string" ? s.label : s.action }));
+    const steps: ActionStep[] = [];
+    for (const s of o.steps) {
+      if (!s || typeof s !== "object") continue;
+      const st = s as ActionStep;
+      if (typeof st.action === "string") {
+        steps.push({ action: st.action, label: typeof st.label === "string" ? st.label : st.action });
+        continue;
+      }
+      const stroke = coerceStroke(st.stroke);
+      if (stroke) {
+        steps.push({ stroke, label: typeof st.label === "string" ? st.label : strokeStepLabel(stroke) });
+      }
+    }
     const fkey =
       typeof o.fkey === "string" && (FKEY_CHOICES as readonly string[]).includes(o.fkey)
         ? o.fkey
