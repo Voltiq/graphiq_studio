@@ -336,6 +336,12 @@ export function topLevelSelected(nodes: LayerNode[], selected: Set<string>): Lay
 export interface ClipGroup {
   base: LayerNode;
   members: LayerNode[];
+  /** §16.9 edge case — an orphan clipped run: `base` is itself `clipped`, with
+   *  only NON-clipped adjustment layers between it and a pixel node below.
+   *  Every node in the run (base AND members) clips to THIS node's silhouette,
+   *  rendered at the run's own stack position (so the adjustments beneath
+   *  still don't touch the run's pixels — Photoshop semantics). */
+  maskFrom?: LayerNode;
 }
 
 /** Whether a node can anchor a clip group (have members clip to it). Adjustments
@@ -347,9 +353,13 @@ function canBeClipBase(node: LayerNode): boolean {
 /**
  * Partition an ordered child list (index 0 = top … last = bottom) into clip-group
  * draw units, returned in **bottom→top** order. Each unit's `members` are the
- * contiguous `clipped` nodes directly above its base (also bottom→top). A clipped
- * node whose base would be invalid (a non-pixel node, or none — e.g. the bottom
- * layer) is inert: it becomes its own member-less unit and composites normally.
+ * contiguous `clipped` nodes directly above its base (also bottom→top).
+ *
+ * A clipped node stranded above a NON-clipped adjustment (§16.9) walks down
+ * past the adjustment run: if a non-clipped pixel node sits beneath, the whole
+ * stranded run borrows its silhouette via `maskFrom`. A clipped node with no
+ * such base at all (bottom of the list, or only adjustments below) stays
+ * inert: a member-less-style unit that composites normally.
  */
 export function clipGroupsOf(children: LayerNode[]): ClipGroup[] {
   const n = children.length;
@@ -359,14 +369,24 @@ export function clipGroupsOf(children: LayerNode[]): ClipGroup[] {
     if (consumed.has(i)) continue;
     const base = children[i];
     const members: LayerNode[] = [];
+    let maskFrom: LayerNode | undefined;
     if (canBeClipBase(base)) {
       // Collect the contiguous run of clipped nodes directly above this base.
       for (let j = i - 1; j >= 0 && children[j].clipped; j--) {
         members.push(children[j]); // decreasing index ⇒ bottom→top within the group
         consumed.add(j);
       }
+      if (base.clipped) {
+        // Orphan run bottom (a pixel base below would have consumed it) —
+        // walk down past non-clipped adjustments to a borrowable silhouette.
+        let k = i + 1;
+        while (k < n && children[k].type === "adjustment" && !children[k].clipped) k++;
+        if (k > i + 1 && k < n && canBeClipBase(children[k]) && !children[k].clipped) {
+          maskFrom = children[k];
+        }
+      }
     }
-    units.push({ base, members });
+    units.push(maskFrom ? { base, members, maskFrom } : { base, members });
   }
   return units;
 }

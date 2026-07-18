@@ -1,6 +1,6 @@
 ﻿import { parseColor, toHex8 } from "./color";
 import type { Rect } from "./view";
-import { blendOp, clipGroupsOf, filterMaskKey } from "./layers";
+import { blendOp, clipGroupsOf, filterMaskKey, type ClipGroup } from "./layers";
 import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerNode } from "./layers";
 import { applyAdjustments, applyAdjustments16, isDefaultAdjust, type Adjustments } from "./adjust";
 import { applyExtraAdjustment, extraIsDefault, isExtraSpec, type ExtraAdjustment } from "./adjust-extra";
@@ -3363,6 +3363,10 @@ export class PaintEngine {
    *  Every product routes through the render cache (Spec 06). */
   private drawStack(ctx: CanvasRenderingContext2D, nodes: LayerNode[]) {
     for (const unit of clipGroupsOf(nodes)) {
+      if (unit.maskFrom) {
+        this.drawBorrowedClipRun(ctx, unit);
+        continue;
+      }
       if (unit.members.length) {
         this.drawClipGroup(ctx, unit.base, unit.members);
         continue;
@@ -3371,6 +3375,39 @@ export class PaintEngine {
       if (!node.visible) continue;
       if (node.type === "adjustment") this.drawAdjustment(ctx, node, nodes);
       else this.drawNode(ctx, node);
+    }
+  }
+
+  /** §16.9: a clipped run separated from its pixel base by non-clipped
+   *  adjustments. Photoshop semantics: the run renders at its OWN stack
+   *  position (the adjustments beneath never touch its pixels) while every
+   *  node in it clips to the borrowed base's silhouette; each node composites
+   *  in place with its own blend/opacity, so blends interact with the
+   *  already-adjusted backdrop. Deliberately uncached — the node intrinsics
+   *  behind renderNode still cache; assembly is two drawImages per node. */
+  private drawBorrowedClipRun(ctx: CanvasRenderingContext2D, unit: ClipGroup) {
+    const from = unit.maskFrom!;
+    if (!from.visible) return; // hidden base ⇒ clipped content shows nothing
+    const sil = this.renderNode(from);
+    if (!sil) return;
+    for (const m of [unit.base, ...unit.members]) {
+      if (!m.visible) continue;
+      if (m.type === "adjustment") {
+        this.applyAdjustmentNode(ctx, m, sil);
+        continue;
+      }
+      const ms = this.renderNode(m);
+      if (!ms) continue;
+      const { c: tc, ctx: t } = this.mk(this.w, this.h);
+      t.drawImage(ms, 0, 0);
+      t.globalCompositeOperation = "destination-in";
+      t.drawImage(sil, 0, 0);
+      t.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = Math.max(0, Math.min(1, m.opacity / 100));
+      ctx.globalCompositeOperation = blendOp(m.blend);
+      ctx.drawImage(tc, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
     }
   }
 
@@ -3783,7 +3820,11 @@ export class PaintEngine {
     return false; // tone specs: identity LUTs are cheap enough
   }
 
-  private applyAdjustmentNode(ctx: CanvasRenderingContext2D, node: LayerAdjustment) {
+  private applyAdjustmentNode(
+    ctx: CanvasRenderingContext2D,
+    node: LayerAdjustment,
+    clipAlpha: HTMLCanvasElement | null = null,
+  ) {
     const w = this.w;
     const h = this.h;
     if (w < 1 || h < 1) return;
@@ -3805,7 +3846,7 @@ export class PaintEngine {
     const maskAlpha = node.mask?.enabled ? this.maskDisplay(node.id) : null;
     const opacity = Math.max(0, Math.min(1, node.opacity / 100));
     const op = blendOp(node.blend);
-    if (opacity >= 1 && !maskAlpha && op === "source-over") {
+    if (opacity >= 1 && !maskAlpha && !clipAlpha && op === "source-over") {
       // Fast path: full, unmasked, Normal replace.
       if (gpuOut) {
         ctx.globalCompositeOperation = "copy";
@@ -3832,6 +3873,11 @@ export class PaintEngine {
     if (maskAlpha) {
       mod.ctx.globalCompositeOperation = "destination-in";
       mod.ctx.drawImage(maskAlpha, 0, 0);
+    }
+    if (clipAlpha) {
+      // Borrowed-silhouette confinement (§16.9 orphan clipped adjustments).
+      mod.ctx.globalCompositeOperation = "destination-in";
+      mod.ctx.drawImage(clipAlpha, 0, 0);
     }
     mod.ctx.globalCompositeOperation = "source-over";
     tmp.ctx.globalCompositeOperation = "destination-in";

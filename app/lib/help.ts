@@ -150,6 +150,7 @@ export const TOPICS: HelpTopic[] = [
           { title: "Viewing a mask", body: "Alt-click a mask thumbnail to see the mask itself, grayscale, on the canvas — painting still targets it, live. Click any thumbnail (or Alt-click again) to return. The Channels panel's mask row has an eye that does the same, plus a tonal curve of the mask beside R/G/B." },
           { title: "Channels histogram", body: "The Channels panel graphs R/G/B and a Luminosity curve, shows how many pixels clip to pure black or white (red-tinted when above half a percent), and — with an active selection — scopes the whole histogram to just the selected pixels." },
           { title: "Filter masks", body: "A second mask that confines a layer's smart-filter stack: white = filtered, black = original. Managed from the Smart Filters dialog." },
+          { title: "Clipping masks", body: "Ctrl+Alt+G (or Alt-click a layer row) clips a layer to the one below — it shows only within that base's shape. Clipping even works across adjustment layers: the clipped layer reaches down to the pixel layer beneath them, Photoshop-style.", keys: "Ctrl+Alt+G" },
         ],
       },
       {

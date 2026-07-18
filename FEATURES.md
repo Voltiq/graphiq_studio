@@ -96,6 +96,7 @@ These five systems are the heart of the editor. They are all **composite-time**:
 ### 5. Clipping masks
 - Any leaf, group, or adjustment can be **clipped** to the layer directly below it (its *base*): it shows only within the base's silhouette. A **clip group** = a base + the contiguous run of clipped layers above it.
 - Members **blend within the group**; the base's opacity/blend/mask then govern the whole group against the layers below. Toggle with **`Ctrl+Alt+G`**, **Alt-click a layer row**, or the context menu. The Layers panel shows clip groups **indented with a ↳ elbow** under an **underlined base name**.
+- **Clipping through adjustments (Photoshop-faithful):** a clipped layer sitting directly above a *non-clipped* adjustment layer isn't inert — it walks down past the adjustment run and clips to the first pixel layer/group beneath, while still rendering **above** the adjustments (so they affect the base but never the clipped content). Clipped runs, blends against the adjusted backdrop, and clipped adjustments inside such runs all behave; a clipped node with nothing to borrow (bottom of the stack, only adjustments below) stays inert.
 
 ## Adjustments & filters (destructive panel)
 
