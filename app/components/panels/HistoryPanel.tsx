@@ -90,10 +90,17 @@ export default function HistoryPanel({
   const listRef = useRef<HTMLOListElement | null>(null);
 
   // Keep the current step visible as it changes (no-op if already in view).
+  // Scroll ONLY this list — `scrollIntoView` would also nudge every scrollable
+  // ancestor (the whole panel dock), yanking the dock to the History panel on
+  // each step; here we adjust just the list's own scrollTop.
   useEffect(() => {
-    listRef.current
-      ?.querySelector<HTMLElement>('[data-active="true"]')
-      ?.scrollIntoView({ block: "nearest" });
+    const list = listRef.current;
+    const active = list?.querySelector<HTMLElement>('[data-active="true"]');
+    if (!list || !active) return;
+    const lr = list.getBoundingClientRect();
+    const ar = active.getBoundingClientRect();
+    if (ar.top < lr.top) list.scrollTop -= lr.top - ar.top;
+    else if (ar.bottom > lr.bottom) list.scrollTop += ar.bottom - lr.bottom;
   }, [index, items.length]);
 
   const rows = Math.max(3, Math.min(200, Math.round(maxRows) || 25));

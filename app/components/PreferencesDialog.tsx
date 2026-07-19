@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import styles from "./PreferencesDialog.module.scss";
 import { applyTheme, currentTheme, resolvedDark } from "./ThemeToggle";
-import { Slider, Toggle } from "./Controls";
+import { ColorChip, Slider, Toggle } from "./Controls";
 import { ACCENTS, ACCENT_COOKIE, DEFAULT_ACCENT, isAccent, type Accent, type Theme } from "../lib/theme";
 import { UI_SCALES, applyUiScale, liveUiScale, type UiScale } from "../lib/ui-scale";
 import {
@@ -121,6 +121,27 @@ const TABS: { id: Tab; label: string; icon: typeof Palette }[] = [
   { id: "performance", label: "Performance", icon: Gauge },
   { id: "storage", label: "Storage", icon: HardDrive },
 ];
+
+/** A labelled colour input using the app's own colour picker (not the native
+ *  browser one) — shared by the Transparency / Guides / Cursors tabs. */
+function WellColor({
+  label,
+  value,
+  onPick,
+  aria,
+}: {
+  label: string;
+  value: string;
+  onPick: (c: string) => void;
+  aria: string;
+}) {
+  return (
+    <div className={styles.colorWellLabel}>
+      <span>{label}</span>
+      <ColorChip color={value} onChange={onPick} label={aria} />
+    </div>
+  );
+}
 
 const UNIT_OPTIONS: { value: MeasureUnit; title: string; desc: string }[] = [
   { value: "px", title: "Pixels", desc: "Rulers and size readouts in raw pixels" },
@@ -661,32 +682,18 @@ export default function PreferencesDialog({
                   />
                   {prefs.checkerColors === "custom" && (
                     <div className={styles.colorWellRow}>
-                      <label className={styles.colorWellLabel}>
-                        <input
-                          type="color"
-                          className={styles.colorWell}
-                          value={prefs.checkerA}
-                          onChange={(e) => onChange({ checkerA: e.target.value })}
-                          aria-label="Backdrop colour"
-                        />
-                        <span>
-                          Backdrop
-                          <code>{prefs.checkerA}</code>
-                        </span>
-                      </label>
-                      <label className={styles.colorWellLabel}>
-                        <input
-                          type="color"
-                          className={styles.colorWell}
-                          value={prefs.checkerB}
-                          onChange={(e) => onChange({ checkerB: e.target.value })}
-                          aria-label="Square colour"
-                        />
-                        <span>
-                          Squares
-                          <code>{prefs.checkerB}</code>
-                        </span>
-                      </label>
+                      <WellColor
+                        label="Backdrop"
+                        value={prefs.checkerA}
+                        onPick={(c) => onChange({ checkerA: c })}
+                        aria="Backdrop colour"
+                      />
+                      <WellColor
+                        label="Squares"
+                        value={prefs.checkerB}
+                        onPick={(c) => onChange({ checkerB: c })}
+                        aria="Square colour"
+                      />
                     </div>
                   )}
                 </section>
@@ -724,19 +731,12 @@ export default function PreferencesDialog({
                     onChange={(n) => onChange({ gridSubdivisions: n })}
                   />
                   <div className={styles.colorWellRow}>
-                    <label className={styles.colorWellLabel}>
-                      <input
-                        type="color"
-                        className={styles.colorWell}
-                        value={prefs.gridColor}
-                        onChange={(e) => onChange({ gridColor: e.target.value })}
-                        aria-label="Document grid colour"
-                      />
-                      <span>
-                        Grid colour
-                        <code>{prefs.gridColor}</code>
-                      </span>
-                    </label>
+                    <WellColor
+                      label="Grid colour"
+                      value={prefs.gridColor}
+                      onPick={(c) => onChange({ gridColor: c })}
+                      aria="Document grid colour"
+                    />
                   </div>
                 </section>
                 <section className={styles.section}>
@@ -746,19 +746,12 @@ export default function PreferencesDialog({
                     400% zoom.
                   </p>
                   <div className={styles.colorWellRow}>
-                    <label className={styles.colorWellLabel}>
-                      <input
-                        type="color"
-                        className={styles.colorWell}
-                        value={prefs.pixelGridColor}
-                        onChange={(e) => onChange({ pixelGridColor: e.target.value })}
-                        aria-label="Pixel grid colour"
-                      />
-                      <span>
-                        Line colour
-                        <code>{prefs.pixelGridColor}</code>
-                      </span>
-                    </label>
+                    <WellColor
+                      label="Line colour"
+                      value={prefs.pixelGridColor}
+                      onPick={(c) => onChange({ pixelGridColor: c })}
+                      aria="Pixel grid colour"
+                    />
                   </div>
                 </section>
                 <section className={styles.section}>
@@ -854,19 +847,12 @@ export default function PreferencesDialog({
                     under-stroke always stays beneath, so any colour reads on light pixels too.
                   </p>
                   <div className={styles.colorWellRow}>
-                    <label className={styles.colorWellLabel}>
-                      <input
-                        type="color"
-                        className={styles.colorWell}
-                        value={prefs.ringColor}
-                        onChange={(e) => onChange({ ringColor: e.target.value })}
-                        aria-label="Ring colour"
-                      />
-                      <span>
-                        Colour
-                        <code>{prefs.ringColor}</code>
-                      </span>
-                    </label>
+                    <WellColor
+                      label="Colour"
+                      value={prefs.ringColor}
+                      onPick={(c) => onChange({ ringColor: c })}
+                      aria="Ring colour"
+                    />
                   </div>
                 </section>
               </>
