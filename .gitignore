@@ -42,3 +42,7 @@ next-env.d.ts
 
 # claude code (local, machine-specific permissions)
 .claude/settings.local.json
+
+# design reference (local, not part of the repo)
+DESIGN.md
+DESIGN.dark.md
