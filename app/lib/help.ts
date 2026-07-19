@@ -156,7 +156,7 @@ export const TOPICS: HelpTopic[] = [
       {
         title: "Layer styles",
         entries: [
-          { title: "Eight effects", body: "Drop shadow, inner shadow, outer/inner glow, bevel & emboss, colour and gradient overlays, stroke — rendered live from the layer's silhouette, never baked into pixels." },
+          { title: "Eight effects", body: "Drop shadow, inner shadow, outer/inner glow, bevel & emboss, colour and gradient overlays, stroke (solid colour or a multi-stop gradient with reverse and angle) — rendered live from the layer's silhouette, never baked into pixels." },
           { title: "Managing styles", body: "Toggle effects individually in the panel's sub-list; copy, paste and clear whole styles from the layer context menu." },
         ],
       },

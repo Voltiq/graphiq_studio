@@ -38,6 +38,11 @@ export interface StrokeFX {
   fillType: "color" | "gradient";
   color?: string;
   gradient?: GradientStop[];
+  /** Gradient fill: linear angle in degrees (same centred geometry as the
+   *  gradient overlay). ABSENT = the legacy top-left → bottom-right diagonal,
+   *  kept so documents saved before the angle existed render identically. */
+  angle?: number;
+  reverse?: boolean;
 }
 export interface OverlayColorFX {
   enabled: boolean;
@@ -433,15 +438,21 @@ export function renderStyled(src: HTMLCanvasElement, fx: LayerEffects, space: Pr
     const ringMask = alphaMask(ring, w, h);
     const sbuf = mk(w, h, space);
     if (st.fillType === "gradient" && st.gradient && st.gradient.length) {
-      sbuf.ctx.fillStyle = buildCanvasGradient(
-        sbuf.ctx,
-        "linear",
-        { x: 0, y: 0 },
-        { x: w, y: h },
-        0.5,
-        st.gradient,
-        true,
-      );
+      const stops = st.reverse
+        ? st.gradient.map((x) => ({ pos: 1 - x.pos, color: x.color }))
+        : st.gradient;
+      let from = { x: 0, y: 0 };
+      let to = { x: w, y: h }; // legacy diagonal (no angle stored)
+      if (typeof st.angle === "number") {
+        // Same centred linear geometry as the gradient overlay.
+        const rad = (st.angle * Math.PI) / 180;
+        const half = Math.max(w, h) / 2;
+        const cx = w / 2;
+        const cy = h / 2;
+        from = { x: cx - Math.cos(rad) * half, y: cy - Math.sin(rad) * half };
+        to = { x: cx + Math.cos(rad) * half, y: cy + Math.sin(rad) * half };
+      }
+      sbuf.ctx.fillStyle = buildCanvasGradient(sbuf.ctx, "linear", from, to, 0.5, stops, true);
     } else {
       sbuf.ctx.fillStyle = st.color ?? "#ffffff";
     }

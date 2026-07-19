@@ -199,14 +199,57 @@ export default function LayerStyleDialog({
       }
       case "stroke": {
         const st = (fx.stroke ?? DEFAULT_FX.stroke()) as StrokeFX;
+        const strokeFill = st.fillType === "gradient" ? "gradient" : "color";
+        const strokeStops =
+          st.gradient && st.gradient.length
+            ? st.gradient
+            : [
+                { color: st.color ?? "#ffffffff", pos: 0 },
+                { color: "#000000ff", pos: 1 },
+              ];
         return (
           <>
             <Group title="Appearance">
               <Grid>
                 <BlendStack value={st.blendMode} onChange={(v) => set("stroke", { blendMode: v })} />
                 <Slider label="Opacity" min={0} max={100} unit="%" value={st.opacity} onChange={(v) => set("stroke", { opacity: v })} />
-                <ColorStack label="Colour" value={st.color ?? "#ffffff"} onChange={(v) => set("stroke", { fillType: "color", color: v })} />
               </Grid>
+              <Segmented
+                label="Fill"
+                value={strokeFill}
+                onChange={(v) => {
+                  if (v === "gradient") {
+                    // Seed with the current colour so the switch never blanks.
+                    set("stroke", { fillType: "gradient", gradient: strokeStops, angle: st.angle ?? 90 });
+                  } else {
+                    set("stroke", { fillType: "color", color: st.color ?? "#ffffff" });
+                  }
+                }}
+                options={[
+                  { value: "color", text: "Colour" },
+                  { value: "gradient", text: "Gradient" },
+                ]}
+              />
+              {strokeFill === "color" ? (
+                <Grid>
+                  <ColorStack label="Colour" value={st.color ?? "#ffffff"} onChange={(v) => set("stroke", { fillType: "color", color: v })} />
+                </Grid>
+              ) : (
+                <>
+                  <GradientEditor
+                    stops={strokeStops}
+                    onStops={(g) => set("stroke", { fillType: "gradient", gradient: g })}
+                    storageKey={gradientStorageKey}
+                  />
+                  <div className={styles.fieldRow}>
+                    <span className={styles.fieldLabel}>Reverse</span>
+                    <Toggle label="" checked={!!st.reverse} onChange={(v) => set("stroke", { reverse: v })} />
+                  </div>
+                  <Grid>
+                    <Slider label="Angle" min={0} max={360} unit="°" value={st.angle ?? 90} onChange={(v) => set("stroke", { angle: v })} />
+                  </Grid>
+                </>
+              )}
             </Group>
             <Group title="Geometry">
               <Grid>

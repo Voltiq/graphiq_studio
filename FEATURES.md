@@ -84,7 +84,7 @@ These five systems are the heart of the editor. They are all **composite-time**:
 - The destructive Adjustments-panel path (live preview on a pixel layer + the slider set) still exists; a **"Create adjustment layer"** button converts that preview into a node.
 
 ### 3. Layer effects (layer styles)
-- Eight non-destructive effects rendered from the layer's **alpha silhouette** at composite time: **Drop Shadow, Inner Shadow, Outer Glow, Inner Glow, Stroke, Color Overlay, Gradient Overlay, Bevel & Emboss** — each with its own blend mode + opacity.
+- Eight non-destructive effects rendered from the layer's **alpha silhouette** at composite time: **Drop Shadow, Inner Shadow, Outer Glow, Inner Glow, Stroke** (solid colour or a full **multi-stop gradient** with reverse + angle), **Color Overlay, Gradient Overlay, Bevel & Emboss** — each with its own blend mode + opacity.
 - A **Layer Style dialog** (left column = effect checklist, right column = per-effect controls, with a **live document preview**) reusing the app's custom colour picker. **Copy / Paste / Clear Layer Style**; an **fx badge** + footer button + context menu in the Layers panel.
 - Shadows/glows use the **shared separable blur** (the same primitive as the Blur Gallery). Effects render in the correct stacking order and compose with masks, adjustments, opacity, blend, and groups.
 
@@ -265,7 +265,7 @@ Honest list of what is **partial, deferred, or absent**:
 **Non-destructive stack gaps**
 - **Filter-mask move:** the smart-filter mask always tracks its layer through canvas transforms; there is no unlinked per-mask move (the layer mask has one via the link toggle).
 - **Curves targeted adjustment** (the optional spec item) is now implemented: the Curves dialog's **Target** toggle lets you click-drag on the image to shape the active channel's curve at the sampled tone — the dialog docks aside, the sampled value is **inverted through the current LUTs** so the point lands at the pre-curve tone, and dragging up/down moves its output. Honest limit: the sample reads the flattened view, so layers/effects *above* a curves adjustment node can skew the recovered tone.
-- **Gradient stroke effect:** the engine can render a gradient-filled stroke, but the Layer Style dialog exposes Stroke as **colour-only** (the Gradient *Overlay* has a 2-stop editor).
+- **Gradient stroke effect** shipped 2026-07: the Stroke effect's Fill switches between **Colour** and **Gradient** — the full multi-stop gradient editor (same preset library as the Gradient tool), with Reverse and an Angle control (overlay-consistent centred geometry; documents saved before the angle existed keep their original diagonal).
 - **Clip edge case:** a clipped layer sitting directly above a **non-clipped adjustment layer** is treated as **inert** rather than clipping to the pixel base *below* the adjustment (a rare configuration; the spec permitted "inert" as a fallback).
 - An **options-bar "Mask" pill** was deferred (the Layers-panel active-surface ring is the indicator instead); the Channels-panel mask channel + Alt-click mask view shipped 2026-07.
 
