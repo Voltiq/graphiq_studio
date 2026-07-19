@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Check,
   ClipboardPaste,
@@ -121,6 +122,61 @@ const TABS: { id: Tab; label: string; icon: typeof Palette }[] = [
   { id: "performance", label: "Performance", icon: Gauge },
   { id: "storage", label: "Storage", icon: HardDrive },
 ];
+
+/** Custom confirmation modal (replaces window.confirm) — portalled above the
+ *  Preferences dialog. Esc / backdrop cancel; the destructive action is a
+ *  deliberate click (no Enter default), and Cancel takes initial focus. */
+function ConfirmModal({
+  title,
+  body,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation(); // don't let the Preferences dialog also close
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onCancel]);
+
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div className={styles.confirmOverlay} onMouseDown={onCancel}>
+      <div
+        className={styles.confirmDialog}
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={title}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <span className={styles.confirmTitle}>{title}</span>
+        <p className={styles.confirmBody}>{body}</p>
+        <div className={styles.confirmFoot}>
+          <button ref={cancelRef} type="button" className={styles.btn} onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className={`${styles.btn} ${styles.danger}`} onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
 
 /** A labelled colour input using the app's own colour picker (not the native
  *  browser one) — shared by the Transparency / Guides / Cursors tabs. */
@@ -269,6 +325,8 @@ export default function PreferencesDialog({
     presets: number;
   }
   const [store, setStore] = useState<StorageInfo | null>(null);
+  // Restore-defaults confirmation (custom modal, not window.confirm).
+  const [confirmReset, setConfirmReset] = useState(false);
   const loadStore = async () => {
     const [estimate, persisted, autosave, recents] = await Promise.all([
       estimateStorage(),
@@ -1105,19 +1163,7 @@ export default function PreferencesDialog({
             type="button"
             className={styles.btn}
             title="Reset every preference, tool option, panel layout and theme to its default"
-            onClick={() => {
-              if (
-                window.confirm(
-                  "Reset all preferences to their defaults?\n\n" +
-                    "Tool options, panel layout, theme, accent, colour management and every " +
-                    "Preferences setting return to factory state. Saved gradients, swatches, " +
-                    "presets and recent files are kept.\n\nThe app reloads to apply.",
-                )
-              ) {
-                resetSettings();
-                window.location.reload();
-              }
-            }}
+            onClick={() => setConfirmReset(true)}
           >
             Restore defaults…
           </button>
@@ -1156,6 +1202,23 @@ export default function PreferencesDialog({
           </button>
         </footer>
       </div>
+
+      {confirmReset && (
+        <ConfirmModal
+          title="Restore defaults?"
+          body={
+            "Tool options, panel layout, theme, accent, colour management and every " +
+            "Preferences setting return to factory state. Saved gradients, swatches, " +
+            "presets and recent files are kept.\n\nThe app reloads to apply."
+          }
+          confirmLabel="Restore defaults"
+          onCancel={() => setConfirmReset(false)}
+          onConfirm={() => {
+            resetSettings();
+            window.location.reload();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -515,6 +515,62 @@
   }
 }
 
+.danger {
+  color: #fff;
+  background: var(--danger);
+  border-color: transparent;
+  font-weight: 600;
+
+  &:hover {
+    background: color-mix(in srgb, var(--danger) 88%, #000);
+    border-color: transparent;
+  }
+}
+
+/* Custom confirmation modal (replaces window.confirm) — sits above the
+   Preferences dialog's own overlay. */
+.confirmOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 260;
+  display: grid;
+  place-items: center;
+  background: var(--blanket);
+  animation: fade var(--t-fast) var(--ease);
+}
+
+.confirmDialog {
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow);
+}
+
+.confirmTitle {
+  font-size: 15px;
+  font-weight: var(--weight-semibold);
+}
+
+.confirmBody {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+  white-space: pre-line; /* keeps the blank line between paragraphs */
+}
+
+.confirmFoot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
 /* ------------------ Appearance (Magiq-style theme selection) --------------- */
 .paneIntro {
   font-size: 13px;
