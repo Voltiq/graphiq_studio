@@ -482,6 +482,11 @@
 }
 
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap; /* keep an icon + label on one line inside a flex row */
   height: 32px;
   padding: 0 12px;
   font-size: 14px;
