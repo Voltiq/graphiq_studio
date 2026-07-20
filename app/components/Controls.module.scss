@@ -257,7 +257,12 @@
 /* Portalled popup — surface-overlay + shadow-overlay, radius-large (menus). */
 .selectMenu {
   zoom: var(--ui-zoom, 1); /* body-portalled — opts into the interface scale */
-  z-index: 200;
+  /* A dropdown must paint above whatever surface opened it, and a Select can be
+     hosted by any of them: docks (30), dialogs (200), the command palette (240),
+     menus/popovers (300-301) and the colour popover (9000). Sitting in the
+     dialog band left it occluded inside the colour popover and the options-bar
+     OpenType popover. Only the tooltip layer (10000) stays above. */
+  z-index: 9500;
   min-width: 150px;
   max-height: 300px;
   overflow-y: auto;
