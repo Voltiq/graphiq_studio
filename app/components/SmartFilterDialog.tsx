@@ -5,6 +5,7 @@ import {
   ArrowDown,
   ArrowUp,
   Brush,
+  Crosshair,
   Droplets,
   Focus,
   Grid3x3,
@@ -96,6 +97,8 @@ export default function SmartFilterDialog({
   onRemoveFilterMask,
   onToggleFilterMask,
   onPaintFilterMask,
+  anchorArmId,
+  onToggleAnchorArm,
   hasSelection = false,
   onClose,
 }: {
@@ -112,12 +115,25 @@ export default function SmartFilterDialog({
   onToggleFilterMask: (enabled: boolean) => void;
   /** Target the mask as the paint surface (closes the dialog to paint). */
   onPaintFilterMask: () => void;
+  /** Anchor targeting: id of the radial-blur filter placed by dragging the
+   *  canvas (null = off). While armed the dialog docks and the blanket lets
+   *  clicks through to the canvas — same treatment as the Curves Target mode. */
+  anchorArmId: string | null;
+  onToggleAnchorArm: (id: string | null) => void;
   hasSelection?: boolean;
   onClose: () => void;
 }) {
   const filters = node.filters ?? [];
   const [selId, setSelId] = useState<string | null>(filters.length ? filters[filters.length - 1].id : null);
   const sel = filters.find((f) => f.id === selId) ?? (filters.length ? filters[filters.length - 1] : null);
+
+  // Anchor targeting is armed for the SELECTED filter only; picking another row
+  // (or the armed filter vanishing) disarms so the blanket never blocks a still-
+  // armed canvas mode.
+  const arming = !!sel && anchorArmId === sel.id;
+  useEffect(() => {
+    if (anchorArmId && sel?.id !== anchorArmId) onToggleAnchorArm(null);
+  }, [anchorArmId, sel?.id, onToggleAnchorArm]);
 
   // Drag-reorder: the order previews in LOCAL state while dragging and commits
   // as ONE "Reorder Smart Filters" step on drop (the Up/Down buttons remain).
@@ -153,12 +169,14 @@ export default function SmartFilterDialog({
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopImmediatePropagation();
-        onClose();
+        // Esc steps out of anchor targeting first; a second Esc closes.
+        if (anchorArmId) onToggleAnchorArm(null);
+        else onClose();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose]);
+  }, [onClose, anchorArmId, onToggleAnchorArm]);
 
   const patchSel = (patch: Partial<SmartFilter["params"]>) => {
     if (!sel) return;
@@ -246,11 +264,33 @@ export default function SmartFilterDialog({
             </div>
             {radial && (
               <div className={styles.group}>
-                <span className={styles.groupTitle}>Centre</span>
+                <span className={styles.groupTitle}>
+                  Centre
+                  <button
+                    type="button"
+                    className={styles.resetBtn}
+                    data-active={arming}
+                    onClick={() => onToggleAnchorArm(arming ? null : sel.id)}
+                    title={
+                      arming
+                        ? "On-canvas placement is on — drag on the image (Esc exits)"
+                        : "Place it by dragging on the image itself"
+                    }
+                  >
+                    <Crosshair size={11} /> Set on canvas
+                  </button>
+                </span>
                 <div className={styles.grid2}>
                   <Slider label="X" min={0} max={100} unit="%" value={Math.round(p.anchor.x * 100)} onChange={(v) => patchSel({ anchor: { x: v / 100, y: p.anchor.y } })} />
                   <Slider label="Y" min={0} max={100} unit="%" value={Math.round(p.anchor.y * 100)} onChange={(v) => patchSel({ anchor: { x: p.anchor.x, y: v / 100 } })} />
                 </div>
+                {arming && (
+                  <p className={styles.targetHint}>
+                    Drag on the image to place the{" "}
+                    {p.kind === "tiltshift" ? "focus band" : p.kind === "spin" ? "rotation centre" : "blur centre"}
+                    {" "}— Esc to finish.
+                  </p>
+                )}
               </div>
             )}
           </>
@@ -392,11 +432,19 @@ export default function SmartFilterDialog({
   };
 
   return (
-    <div className={styles.overlay} onMouseDown={onClose}>
+    <div
+      className={styles.overlay}
+      data-targeting={arming}
+      // While targeting, the blanket stops intercepting the canvas (clicks fall
+      // through everywhere except the dialog itself, which re-enables events).
+      style={arming ? { pointerEvents: "none", background: "transparent", backdropFilter: "none" } : undefined}
+      onMouseDown={arming ? undefined : onClose}
+    >
       <div
         className={styles.dialog}
+        data-targeting={arming}
         role="dialog"
-        aria-modal="true"
+        aria-modal={!arming}
         aria-label="Smart filters"
         onMouseDown={(e) => e.stopPropagation()}
       >

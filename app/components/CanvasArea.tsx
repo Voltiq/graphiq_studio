@@ -599,6 +599,8 @@ export default function CanvasArea({
   onCurveTargetStart,
   onCurveTargetDrag,
   onCurveTargetEnd,
+  filterAnchor,
+  onFilterAnchorDrag,
   onPenPathCommit,
   recordStrokes,
   onStrokeRecord,
@@ -726,6 +728,17 @@ export default function CanvasArea({
   onCurveTargetStart: (rgb: { r: number; g: number; b: number }) => void;
   onCurveTargetDrag: (dy: number) => void;
   onCurveTargetEnd: () => void;
+  /** Smart-blur anchor targeting armed (non-null): dragging the image places the
+   *  zoom/spin centre or tilt-shift focus band; the guide draws on the overlay. */
+  filterAnchor: {
+    kind: "zoom" | "spin" | "tiltshift";
+    anchor: { x: number; y: number };
+    angle: number;
+    band: number;
+    feather: number;
+  } | null;
+  /** Reports the dragged anchor in doc-normalized coords (0–1, clamped). */
+  onFilterAnchorDrag: (nx: number, ny: number) => void;
   /** A pen path was committed (baked) — the Paths panel stores it as Work Path. */
   onPenPathCommit: (anchors: PenAnchor[], closed: boolean) => void;
   /** Actions recorder: capture brush/pencil/eraser strokes while armed. */
@@ -1200,6 +1213,10 @@ export default function CanvasArea({
   marqueeShapeRef.current = marqueeShape;
   const marqueeApexRef = useRef(triangleApex);
   marqueeApexRef.current = triangleApex;
+  // Smart-blur anchor targeting: guide params for the overlay + live-drag flag.
+  const filterAnchorRef = useRef(filterAnchor);
+  filterAnchorRef.current = filterAnchor;
+  const filterAnchorDragRef = useRef(false);
   // A just-committed triangle marquee, kept so the Apex slider can re-shape it while
   // it's still the active selection. `key` is the selection it produced; once the
   // selection changes by any other means the identity no longer matches and we drop it.
@@ -2091,7 +2108,12 @@ export default function CanvasArea({
       if (cp.crosshair) drawCross(hx, hy, 4);
     };
 
+    // While smart-blur anchor targeting is armed the pointer belongs to it —
+    // no tool hover rings (the crosshair cursor + anchor guide are the UI).
+    const anchorArmed = !!filterAnchorRef.current;
+
     if (
+      !anchorArmed &&
       (toolRef.current === "brush" || toolRef.current === "pencil" || toolRef.current === "eraser") &&
       paintHoverRef.current
     ) {
@@ -2101,7 +2123,7 @@ export default function CanvasArea({
       drawBrushCursor(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
     }
 
-    if (toolRef.current === "heal") {
+    if (!anchorArmed && toolRef.current === "heal") {
       // The painted blob: a translucent veil so you see what will be healed.
       const pts = healPtsRef.current;
       const hr = Math.max(1, (healRef.current.size / 2) * s);
@@ -2123,27 +2145,27 @@ export default function CanvasArea({
       }
     }
 
-    if (toolRef.current === "redeye" && redEyeHoverRef.current) {
+    if (!anchorArmed && toolRef.current === "redeye" && redEyeHoverRef.current) {
       const hx = p.x + redEyeHoverRef.current.x * s;
       const hy = p.y + redEyeHoverRef.current.y * s;
       drawBrushCursor(hx, hy, Math.max(1, (redEyeRef.current.size / 2) * s), 100);
     }
 
-    if (toolRef.current === "blur" && blurHoverRef.current) {
+    if (!anchorArmed && toolRef.current === "blur" && blurHoverRef.current) {
       const b = blurRef.current;
       const hx = p.x + blurHoverRef.current.x * s;
       const hy = p.y + blurHoverRef.current.y * s;
       drawBrushCursor(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
     }
 
-    if (toolRef.current === "dodge" && dodgeHoverRef.current) {
+    if (!anchorArmed && toolRef.current === "dodge" && dodgeHoverRef.current) {
       const d = dodgeRef.current;
       const hx = p.x + dodgeHoverRef.current.x * s;
       const hy = p.y + dodgeHoverRef.current.y * s;
       drawBrushCursor(hx, hy, Math.max(1, (d.size / 2) * s), d.hardness);
     }
 
-    if (toolRef.current === "clone" && cloneHoverRef.current) {
+    if (!anchorArmed && toolRef.current === "clone" && cloneHoverRef.current) {
       const c = cloneRef.current;
       const hov = cloneHoverRef.current;
       const hx = p.x + hov.x * s;
@@ -2211,6 +2233,76 @@ export default function CanvasArea({
       ctx.strokeRect(rx + 0.5, ry + 0.5, tdr.w * s, tdr.h * s);
       ctx.setLineDash([]);
     }
+
+    // --- smart-blur anchor targeting: the same guides the Blur Gallery draws on
+    //     its preview, here over the live document — a centre reticle for zoom/
+    //     spin, the focus-band lines for tilt-shift (band math mirrors filters.ts:
+    //     offsets are % of min(doc W, doc H) / 2, drawn at the current zoom). ---
+    const fa = filterAnchorRef.current;
+    if (fa) {
+      const dw = widthRef.current;
+      const dh = heightRef.current;
+      const ax = p.x + fa.anchor.x * dw * s;
+      const ay = p.y + fa.anchor.y * dh * s;
+      const dual = (draw: () => void) => {
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(0,0,0,0.5)";
+        draw();
+        ctx.lineWidth = 1.25;
+        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        draw();
+      };
+      if (fa.kind === "zoom" || fa.kind === "spin") {
+        dual(() => {
+          ctx.beginPath();
+          ctx.arc(ax, ay, 8, 0, Math.PI * 2);
+          ctx.moveTo(ax - 12, ay);
+          ctx.lineTo(ax + 12, ay);
+          ctx.moveTo(ax, ay - 12);
+          ctx.lineTo(ax, ay + 12);
+          ctx.stroke();
+        });
+      } else {
+        const rad = (fa.angle * Math.PI) / 180;
+        const dx = Math.cos(rad);
+        const dy = Math.sin(rad);
+        const nx = -dy;
+        const ny = dx;
+        const base = Math.min(dw, dh) * s;
+        const bandPx = (fa.band / 100) * base * 0.5;
+        const featherPx = Math.max(1, (fa.feather / 100) * base * 0.5);
+        const L = cw + ch; // long enough to cross the viewport at any angle
+        const line = (off: number) => {
+          const lx = ax + nx * off;
+          const ly = ay + ny * off;
+          ctx.beginPath();
+          ctx.moveTo(lx - dx * L, ly - dy * L);
+          ctx.lineTo(lx + dx * L, ly + dy * L);
+          ctx.stroke();
+        };
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(p.x, p.y, dw * s, dh * s); // clip the lines to the artwork
+        ctx.clip();
+        dual(() => line(0));
+        dual(() => {
+          line(bandPx);
+          line(-bandPx);
+        });
+        ctx.setLineDash([5, 5]);
+        dual(() => {
+          line(bandPx + featherPx);
+          line(-bandPx - featherPx);
+        });
+        ctx.setLineDash([]);
+        ctx.restore();
+        dual(() => {
+          ctx.beginPath();
+          ctx.arc(ax, ay, 5, 0, Math.PI * 2);
+          ctx.stroke();
+        });
+      }
+    }
   }, []);
 
   const tickAnts = useCallback(() => {
@@ -2235,7 +2327,8 @@ export default function CanvasArea({
       (toolRef.current === "dodge" && dodgeHoverRef.current) ||
       (toolRef.current === "clone" && cloneHoverRef.current) ||
       (toolRef.current === "text" && textDragRef.current) ||
-      (toolRef.current === "eyedropper" && hoverRef.current)
+      (toolRef.current === "eyedropper" && hoverRef.current) ||
+      filterAnchorRef.current
     ) {
       antsRaf.current = requestAnimationFrame(tickAnts);
     } else {
@@ -2260,6 +2353,12 @@ export default function CanvasArea({
   useEffect(() => {
     if (tool === "crop" && cropBox) ensureAnts();
   }, [tool, cropBox, cropGrid, cropShield, cropStraighten, cropAspect, ensureAnts]);
+
+  // Same for the smart-blur anchor guide: start the loop when armed, repaint when
+  // the dialog's sliders move the geometry (the loop's else-branch clears it off).
+  useEffect(() => {
+    if (filterAnchor) ensureAnts();
+  }, [filterAnchor, ensureAnts]);
 
   // ---- Undoable selection transforms (resize / rotate) ----
   // Snapshot the live selection (rects + rotation + wand ants cache) and restore
@@ -3002,6 +3101,14 @@ export default function CanvasArea({
       y: ((e.clientY - r.top) * height) / r.height,
     };
   };
+  /** Anchor targeting: report the pointer as a doc-normalized (clamped) anchor. */
+  const reportFilterAnchor = (e: React.PointerEvent) => {
+    const p = toDoc(e);
+    onFilterAnchorDrag(
+      Math.max(0, Math.min(1, p.x / width)),
+      Math.max(0, Math.min(1, p.y / height)),
+    );
+  };
   const pick = (e: React.PointerEvent) => {
     const p = toDoc(e);
     hoverRef.current = { x: p.x, y: p.y };
@@ -3634,6 +3741,16 @@ export default function CanvasArea({
       }
       return;
     }
+    // Smart-blur anchor targeting: click-drag anywhere on the image to place the
+    // zoom/spin centre or the tilt-shift focus band (Editor patches the filter).
+    // Non-left buttons fall through so middle-drag panning etc. keep working.
+    if (filterAnchor && e.button === 0) {
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      filterAnchorDragRef.current = true;
+      reportFilterAnchor(e);
+      return;
+    }
     if (tool === "zoom") {
       // Left click zooms in, right click (or Alt) zooms out — toward the cursor.
       e.preventDefault();
@@ -4086,6 +4203,11 @@ export default function CanvasArea({
       return;
     }
 
+    if (filterAnchorDragRef.current) {
+      reportFilterAnchor(e);
+      return;
+    }
+
     if (handRef.current) {
       // Pan: offset the canvas by the drag delta from the press point.
       const h = handRef.current;
@@ -4504,6 +4626,12 @@ export default function CanvasArea({
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       onCurveTargetEnd();
+      return;
+    }
+    if (filterAnchorDragRef.current) {
+      filterAnchorDragRef.current = false;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       return;
     }
     if (handRef.current) {
@@ -5060,7 +5188,7 @@ export default function CanvasArea({
               height={height}
               style={{
                 cursor:
-                  curveTarget
+                  curveTarget || filterAnchor
                     ? "crosshair"
                     : hoverCursor ??
                   (tool === "move"

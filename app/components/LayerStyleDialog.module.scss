@@ -276,6 +276,35 @@
     color: var(--text);
     border-color: var(--border-strong);
   }
+
+  /* Armed toggle (e.g. Smart Filters "Set on canvas") lights up solid accent. */
+  &[data-active="true"],
+  &[data-active="true"]:hover {
+    color: var(--accent-contrast);
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+}
+
+/* On-canvas targeting mode (Smart Filters anchor placement): the blanket goes
+   click-through (inline style) and the dialog docks aside so the image is
+   reachable — the same treatment as the Curves Target mode. */
+.overlay[data-targeting="true"] {
+  place-items: center end;
+  padding-right: 16px;
+}
+
+.dialog[data-targeting="true"] {
+  pointer-events: auto;
+  opacity: 0.96;
+  box-shadow: var(--shadow);
+}
+
+.targetHint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--accent);
 }
 
 /* Pane switch mirrors the rail check — a modern track/thumb toggle. */

@@ -1954,6 +1954,43 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setFilterTarget(id);
   };
 
+  // ---- Smart-blur anchor targeting (drag the canvas to place the zoom/spin
+  //      centre or tilt-shift focus band, instead of the X/Y sliders) ---------
+  const [filterAnchorId, setFilterAnchorId] = useState<string | null>(null);
+  // The armed filter's guide, re-derived every render so slider edits, undo and
+  // structural changes keep the on-canvas reticle honest; null = mode off.
+  const filterAnchorGuide = useMemo(() => {
+    if (!filterTarget || !filterAnchorId) return null;
+    const node = findNode(active.layers, filterTarget);
+    if (!node || node.type === "adjustment") return null;
+    const f = (node.filters ?? []).find((x) => x.id === filterAnchorId);
+    if (!f || f.type !== "blur") return null;
+    const p = f.params;
+    if (p.kind !== "zoom" && p.kind !== "spin" && p.kind !== "tiltshift") return null;
+    return { kind: p.kind, anchor: p.anchor, angle: p.angle, band: p.band, feather: p.feather };
+  }, [filterTarget, filterAnchorId, active.layers]);
+  // Disarm whenever the armed filter stops resolving (dialog closed, filter
+  // removed / kind changed / undone, doc switched).
+  useEffect(() => {
+    if (filterAnchorId && !filterAnchorGuide) setFilterAnchorId(null);
+  }, [filterAnchorId, filterAnchorGuide]);
+  // Canvas drags patch the armed filter's anchor through the same debounced
+  // live path as the dialog's sliders (one history step per gesture).
+  const onFilterAnchorDrag = (nx: number, ny: number) => {
+    const id = filterTarget;
+    if (!id || !filterAnchorId) return;
+    const node = findNode(activeDocRef.current.layers, id);
+    if (!node || node.type === "adjustment" || !node.filters) return;
+    setFiltersLive(
+      id,
+      node.filters.map((f) =>
+        f.id === filterAnchorId && f.type === "blur"
+          ? { ...f, params: { ...f.params, anchor: { x: nx, y: ny } } }
+          : f,
+      ),
+    );
+  };
+
   // Menu entry: append a default filter of `type` and open the stack dialog.
   const addFilterOp = (type: FilterType) => {
     const id = activeDocRef.current.activeLayerId;
@@ -4850,6 +4887,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onCurveTargetStart={onCurveTargetStart}
           onCurveTargetDrag={onCurveTargetDrag}
           onCurveTargetEnd={onCurveTargetEnd}
+          filterAnchor={filterAnchorGuide}
+          onFilterAnchorDrag={onFilterAnchorDrag}
           onPenPathCommit={storeWorkPath}
           recordStrokes={!!recordingId}
           onStrokeRecord={recordStrokeStep}
@@ -5120,6 +5159,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
                 commitFilterEdit();
                 setFilterTarget(null); // close so the brush can reach the canvas
               }}
+              anchorArmId={filterAnchorId}
+              onToggleAnchorArm={setFilterAnchorId}
               hasSelection={active.selection.length > 0}
               onClose={() => {
                 commitFilterEdit();
