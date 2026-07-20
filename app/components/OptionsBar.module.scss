@@ -38,6 +38,45 @@
   }
 }
 
+/* Mask-editing mode pill: paint/fill strokes land on the active layer's mask
+   (or filter mask), not its pixels. Mirrors the Layers-panel target ring, so
+   the mode is visible even with the panel collapsed. Click = back to pixels. */
+.maskPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 10px;
+  line-height: 1;
+  border-radius: var(--r-pill);
+  background: var(--selected-bg);
+  border: 1px solid var(--accent);
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+  color: var(--accent);
+  white-space: nowrap;
+  transition: background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--selected-bg-2);
+  }
+
+  &:active {
+    transform: scale(0.97);
+  }
+}
+
+/* The dismiss ✕ reads quieter than the label until the pill is hovered. */
+.maskPillX {
+  opacity: 0.55;
+  transition: opacity var(--t-fast) var(--ease);
+
+  .maskPill:hover & {
+    opacity: 1;
+  }
+}
+
 /* Controls scroll horizontally; the edges fade so a cut-off control reads as
    "there's more", not as a glitch. */
 .controls {

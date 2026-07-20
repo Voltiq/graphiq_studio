@@ -14,6 +14,7 @@ import {
   Bold,
   Check,
   Circle,
+  FlaskConical,
   Italic,
   Image as ImageIcon,
   Minus,
@@ -24,6 +25,7 @@ import {
   Strikethrough,
   Triangle,
   Underline,
+  X,
 } from "lucide-react";
 import styles from "./OptionsBar.module.scss";
 import {
@@ -54,6 +56,7 @@ import {
   type ToolId,
 } from "../lib/tools";
 import type { Rect } from "../lib/view";
+import type { ActiveSurface } from "../lib/layers";
 import GradientControl from "./GradientControl";
 import type { BrushSettings } from "../lib/paint";
 import {
@@ -123,6 +126,8 @@ interface CropProps {
 
 export default function OptionsBar({
   tool,
+  paintSurface,
+  onExitMaskEdit,
   foreground,
   onForeground,
   brush,
@@ -177,6 +182,8 @@ export default function OptionsBar({
   onStroke,
 }: {
   tool: ToolId;
+  paintSurface: ActiveSurface;
+  onExitMaskEdit: () => void;
   foreground: string;
   onForeground: (c: string) => void;
   brush: BrushSettings;
@@ -220,6 +227,29 @@ export default function OptionsBar({
         <Icon size={16} strokeWidth={2} />
         <span>{meta.name}</span>
       </div>
+      {paintSurface !== "pixels" && (
+        <button
+          type="button"
+          className={styles.maskPill}
+          title={
+            paintSurface === "filterMask"
+              ? "Paint tools and fills target the filter mask, not the layer pixels — click to edit pixels"
+              : "Paint tools and fills target the layer mask, not the layer pixels — click to edit pixels"
+          }
+          onClick={onExitMaskEdit}
+        >
+          {paintSurface === "filterMask" ? (
+            <FlaskConical size={12} />
+          ) : (
+            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+              <rect x="3" y="3" width="18" height="18" rx="3" />
+              <circle cx="12" cy="12" r="4.5" fill="currentColor" stroke="none" />
+            </svg>
+          )}
+          <span>{paintSurface === "filterMask" ? "Editing filter mask" : "Editing mask"}</span>
+          <X size={11} strokeWidth={2.5} className={styles.maskPillX} />
+        </button>
+      )}
       <Divider />
       <div className={styles.controls}>
         {renderOptions(

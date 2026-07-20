@@ -4687,6 +4687,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       />
       <OptionsBar
         tool={tool}
+        paintSurface={paintSurface}
+        onExitMaskEdit={() => {
+          const id = activeDocRef.current.activeLayerId;
+          if (id) chooseSurface(id, "pixels");
+        }}
         foreground={paintColor}
         onForeground={setPaintColor}
         brush={activeBrush}
