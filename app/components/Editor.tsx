@@ -100,6 +100,7 @@ import type {
   TextRenderSpec,
 } from "../lib/paint";
 import BlurGalleryDialog from "./BlurGalleryDialog";
+import LiquifyDialog from "./LiquifyDialog";
 import TrimDialog, { type TrimMode, type TrimSides } from "./TrimDialog";
 import SelectModifyDialog from "./SelectModifyDialog";
 import LayerStyleDialog from "./LayerStyleDialog";
@@ -3276,6 +3277,33 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setBlurFxOpen(false);
   };
 
+  // ---- Liquify (modal warp-mesh editor on the active pixel layer) ----------
+  const [liquify, setLiquify] = useState<{ layerId: string; name: string; canvas: HTMLCanvasElement } | null>(null);
+  const openLiquify = () => {
+    const d = activeDocRef.current;
+    const id = d.activeLayerId;
+    const node = id ? findNode(d.layers, id) : null;
+    if (!node || node.type !== "layer") {
+      showToast("Select a pixel layer to liquify.");
+      return;
+    }
+    if (node.vector) {
+      showToast("Liquify needs plain pixels — rasterize the vector layer first.");
+      return;
+    }
+    const canvas = paintRef.current?.getLayerCanvas(id!);
+    if (!canvas) return;
+    setLiquify({ layerId: id!, name: node.name, canvas });
+  };
+  const applyLiquify = (result: HTMLCanvasElement) => {
+    const lq = liquify;
+    setLiquify(null);
+    if (!lq) return;
+    // The layer may have been deleted while the dialog was open.
+    if (!findNode(activeDocRef.current.layers, lq.layerId)) return;
+    paintRef.current?.applyLayerImage(lq.layerId, result, "Liquify");
+  };
+
   // ---- Import (one or more image files) ----
   const stripExt = (n: string) => n.replace(/\.[^.]+$/, "") || "Image";
   const openImport = () => importInputRef.current?.click();
@@ -4252,6 +4280,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       else showToast("No HDR source — export true HDR from a document created via File ▸ Merge to HDR.");
     } else if (actionId === "print") printCanvas();
     else if (actionId === "effect-blur") openBlurFx();
+    else if (actionId === "effect-liquify") openLiquify();
     else if (actionId === "color-manage") openColorDialog();
     else if (actionId === "color-compare") openCompare();
     else if (actionId === "preferences") setPrefsOpen(true);
@@ -5094,6 +5123,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onClose={closeBlurFx}
           hasSelection={active.selection.length > 0}
           preview={blurPreview}
+        />
+      )}
+
+      {liquify && (
+        <LiquifyDialog
+          layerName={liquify.name}
+          source={liquify.canvas}
+          docWidth={active.width}
+          docHeight={active.height}
+          onApply={applyLiquify}
+          onClose={() => setLiquify(null)}
         />
       )}
 

@@ -256,6 +256,8 @@ export interface EngineHandle {
   rasterize: (targetId: string, nodes: LayerNode[], deleteIds: string[]) => void;
   removeLayer: (id: string) => void;
   getLayerImage: (id: string) => string | null;
+  /** Doc-sized copy of a layer's raster (blank canvas if none yet). */
+  getLayerCanvas: (id: string) => HTMLCanvasElement;
   getMaskImage: (id: string) => string | null;
   setMaskImage: (id: string, source: CanvasImageSource) => void;
   setLayerImage: (id: string, source: CanvasImageSource, x?: number, y?: number) => void;
@@ -2669,6 +2671,17 @@ export class PaintEngine {
   getLayerImage(id: string): string | null {
     const l = this.layers.get(id);
     return l ? l.c.toDataURL("image/png") : null;
+  }
+
+  /** A doc-sized COPY of a layer's raster as a canvas (blank if it has none
+   *  yet — a fresh empty layer simply liquifies/reads as transparency). */
+  getLayerCanvas(id: string): HTMLCanvasElement {
+    const c = document.createElement("canvas");
+    c.width = this.w;
+    c.height = this.h;
+    const l = this.layers.get(id);
+    if (l) c.getContext("2d")!.drawImage(l.c, 0, 0);
+    return c;
   }
 
   /** A layer's grayscale mask as a PNG data URL (null if it has no mask). */

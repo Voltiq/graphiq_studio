@@ -133,7 +133,7 @@ export const MENUS: Menu[] = [
       { label: "Distort…", action: "filter-add-distort" },
       { label: "Stylize…", action: "filter-add-stylize", separatorAfter: true },
       { label: "Smart filters…", action: "filter-open" },
-      { label: "Liquify…", shortcut: "Ctrl+Shift+X" },
+      { label: "Liquify…", shortcut: "Ctrl+Shift+X", action: "effect-liquify" },
     ],
   },
   {

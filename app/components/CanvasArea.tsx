@@ -2863,6 +2863,7 @@ export default function CanvasArea({
       rasterize: (id, nodes, del) => engine.rasterize(id, nodes, del),
       removeLayer: (id) => engine.removeLayer(id),
       getLayerImage: (id) => engine.getLayerImage(id),
+      getLayerCanvas: (id) => engine.getLayerCanvas(id),
       setLayerImage: (id, src, x, y) => engine.setLayerImage(id, src, x, y),
       applyLayerImage: (id, src, label) => engine.applyLayerImage(id, src, label),
       getMaskImage: (id) => engine.getMaskImage(id),
