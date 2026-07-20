@@ -5018,6 +5018,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           leftHost={leftHost}
           floatHost={floatHost}
           dockRef={dockRef}
+          onToast={showToast}
         />
       </div>
       <StatusBar

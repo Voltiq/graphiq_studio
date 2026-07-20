@@ -10,7 +10,6 @@ import {
   History,
   Info,
   Layers,
-  MoreHorizontal,
   Palette,
   Plus,
   Settings2,
@@ -22,6 +21,7 @@ import {
 import styles from "./RightDock.module.scss";
 import Panel from "./Panel";
 import ColorPanel from "./panels/ColorPanel";
+import ColorPanelMenu from "./panels/ColorPanelMenu";
 import SwatchesPanel from "./panels/SwatchesPanel";
 import AdjustmentsPanel from "./panels/AdjustmentsPanel";
 import LayersPanel from "./panels/LayersPanel";
@@ -233,6 +233,8 @@ interface Props {
   floatHost?: HTMLElement | null;
   /** Imperative layout capture/apply for workspaces + Reset Workspace. */
   dockRef?: RefObject<DockApi | null>;
+  /** Transient status message (clipboard results from the Color panel menu). */
+  onToast: (message: string) => void;
 }
 
 const IconBtn = ({
@@ -291,6 +293,7 @@ export default function RightDock({
   leftHost = null,
   floatHost = null,
   dockRef,
+  onToast,
 }: Props) {
   const [order, setOrder] = useState<PanelId[]>(DEFAULT_ORDER);
   const [openMap, setOpenMap] = useState<Record<PanelId, boolean>>(DEFAULT_OPEN);
@@ -483,7 +486,16 @@ export default function RightDock({
             key="color"
             title="Color"
             icon={Palette}
-            actions={<IconBtn title="More"><MoreHorizontal size={14} /></IconBtn>}
+            actions={
+              <ColorPanelMenu
+                foreground={foreground}
+                background={background}
+                onForeground={onForeground}
+                onBackground={onBackground}
+                active={activeSlot}
+                onToast={onToast}
+              />
+            }
             {...dp}
           >
             <ColorPanel
