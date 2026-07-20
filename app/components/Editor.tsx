@@ -2083,6 +2083,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       color: t.color,
       antialias: t.antialias,
       runs: p.runs,
+      features: t.features,
+      axes: t.axes,
     };
   };
   const textVectorOf = (spec: TextRenderSpec): VectorText => ({
@@ -2107,6 +2109,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     color: v.color,
     antialias: v.antialias,
     runs: v.runs,
+    features: v.features,
+    axes: v.axes,
   });
 
   // Commit a NEW text block: add a layer named after the text, rasterize it, and

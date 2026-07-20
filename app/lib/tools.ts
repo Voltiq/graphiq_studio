@@ -255,6 +255,41 @@ export interface TextRun extends TextRunStyle {
 }
 
 /** Text tool settings (a styled live editor that rasterizes onto a layer). */
+/** OpenType feature toggles (block-level). An absent field means the font's
+ *  own default, so an empty/absent object renders byte-identically to before
+ *  the feature existed. `liga`/`calt` are ON by default in browsers — setting
+ *  them false emits the "off" tags; every other flag opts IN when true. */
+export interface TextOpenType {
+  /** Standard + contextual ligatures (fi, ffl, …). False turns them OFF. */
+  liga?: boolean;
+  /** Discretionary ligatures (decorative — ct, st, …). */
+  dlig?: boolean;
+  /** Contextual alternates. False turns them OFF. */
+  calt?: boolean;
+  /** Small caps. */
+  smcp?: boolean;
+  /** Oldstyle (text) figures. */
+  onum?: boolean;
+  /** Tabular (fixed-width) figures. */
+  tnum?: boolean;
+  /** Diagonal fractions (1/2 → ½-style). */
+  frac?: boolean;
+  /** Slashed zero. */
+  zero?: boolean;
+  /** Stylistic alternates. */
+  salt?: boolean;
+  /** Stylistic set 1. */
+  ss01?: boolean;
+}
+
+/** Variable-font axes (block-level; no effect on static fonts).
+ *  `wght` 100–900 overrides the bold toggle; `wdth` is a percent that maps to
+ *  the nearest CSS font-stretch keyword (canvas accepts only the keywords). */
+export interface TextAxes {
+  wght?: number;
+  wdth?: number;
+}
+
 export interface TextSettings {
   fontFamily: string;
   /** Font size, px. */
@@ -272,9 +307,15 @@ export interface TextSettings {
   color: string;
   /** Smooth (anti-aliased) edges when rasterized; off gives hard 1-bit edges. */
   antialias: boolean;
+  /** OpenType features (absent = font defaults). */
+  features?: TextOpenType;
+  /** Variable-font axes (absent = weight from `bold`, normal width). */
+  axes?: TextAxes;
 }
 
-/** Font choices offered in the text options bar (web-safe families). */
+/** Font choices offered in the text options bar (web-safe families, plus a
+ *  few Windows-shipped OpenType/variable fonts so features and axes have
+ *  something real to bite on — elsewhere they fall back gracefully). */
 export const FONT_FAMILIES = [
   "Arial",
   "Helvetica",
@@ -287,6 +328,9 @@ export const FONT_FAMILIES = [
   "Courier New",
   "Impact",
   "Comic Sans MS",
+  "Calibri",
+  "Bahnschrift",
+  "Segoe UI Variable",
 ];
 
 export const DEFAULT_TEXT: TextSettings = {
@@ -329,6 +373,9 @@ export interface VectorText {
    *  fields above; when present, runs cover `text` exactly and the flat
    *  fontFamily/size/bold/… fields are the base (caret) style. */
   runs?: TextRun[];
+  /** OpenType features / variable axes (block-level; absent = defaults). */
+  features?: TextOpenType;
+  axes?: TextAxes;
   /** Rasterized bounds (doc px), for hit-testing the re-edit double-click. */
   bbox: { x: number; y: number; w: number; h: number };
 }

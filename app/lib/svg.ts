@@ -17,7 +17,14 @@
 
 import { clamp, parseColor, toHex8 } from "./color";
 import type { LayerNode } from "./layers";
-import { baseRunStyle, layoutRuns } from "./richtext";
+import {
+  baseRunStyle,
+  cssFontString,
+  effectiveWeight,
+  fontFeatureCSS,
+  layoutRuns,
+  stretchKeyword,
+} from "./richtext";
 import { insetPoly, polyInradius, trapPoints, triPoints } from "./shapes";
 import type {
   VectorData,
@@ -648,16 +655,44 @@ function emitShape(v: VectorShape, indent: string): string {
 
 // Text layout mirror (same math as PaintEngine.textLines/renderText).
 let measureCtx: CanvasRenderingContext2D | null = null;
+let measureHost: HTMLDivElement | null = null;
 
-function textLayout(v: VectorText): { lines: { text: string; x: number; y: number }[]; anchor: string } | null {
+function ensureMeasureCtx(): CanvasRenderingContext2D | null {
   if (!measureCtx) {
     const c = document.createElement("canvas");
     c.width = c.height = 8;
     measureCtx = c.getContext("2d");
   }
-  const ctx = measureCtx;
+  return measureCtx;
+}
+
+/** Measure with the block's OpenType features active: canvas honours
+ *  font-feature-settings only while the canvas is CONNECTED, so the measure
+ *  canvas mounts into a hidden host for the call (default features skip it),
+ *  keeping export layout identical to the raster's. */
+function withMeasureFeatures<T>(features: VectorText["features"], fn: () => T): T {
+  const css = fontFeatureCSS(features);
+  const canvas = ensureMeasureCtx()?.canvas;
+  if (!css || !canvas) return fn();
+  if (!measureHost) {
+    measureHost = document.createElement("div");
+    measureHost.style.display = "none";
+    document.body.appendChild(measureHost);
+  }
+  canvas.style.fontFeatureSettings = css;
+  measureHost.appendChild(canvas);
+  try {
+    return fn();
+  } finally {
+    measureHost.removeChild(canvas);
+    canvas.style.fontFeatureSettings = "";
+  }
+}
+
+function textLayout(v: VectorText): { lines: { text: string; x: number; y: number }[]; anchor: string } | null {
+  const ctx = ensureMeasureCtx();
   if (!ctx) return null;
-  ctx.font = `${v.italic ? "italic " : ""}${v.bold ? "700" : "400"} ${v.fontSize}px ${v.fontFamily}`;
+  ctx.font = cssFontString(v, v.axes);
   const ls = ctx as CanvasRenderingContext2D & { letterSpacing: string };
   if ("letterSpacing" in ctx) ls.letterSpacing = `${v.tracking}px`;
   const wrap = (para: string, maxW: number): string[] => {
@@ -697,6 +732,21 @@ function textLayout(v: VectorText): { lines: { text: string; x: number; y: numbe
 
 /** One text layer → <text> elements (same layout the raster used). */
 function emitText(v: VectorText, indent: string): string {
+  return withMeasureFeatures(v.features, () => emitTextInner(v, indent));
+}
+
+/** Extra style props shared by both text paths: width axis + feature tags
+ *  (weight folds into each style's own font-weight via effectiveWeight). */
+function otStyle(v: VectorText): string {
+  let s = "";
+  const stretch = stretchKeyword(v.axes?.wdth);
+  if (stretch) s += `;font-stretch:${stretch}`;
+  const feat = fontFeatureCSS(v.features);
+  if (feat) s += `;font-feature-settings:${feat}`;
+  return s;
+}
+
+function emitTextInner(v: VectorText, indent: string): string {
   const layout = textLayout(v);
   if (!layout) return "";
   // Rich runs / justification: lay out with the shared engine and emit one
@@ -714,7 +764,7 @@ function emitText(v: VectorText, indent: string): string {
       v.lineHeight,
       v.align,
       (text, st) => {
-        const font = `${st.italic ? "italic " : ""}${st.bold ? "700" : "400"} ${st.fontSize}px ${st.fontFamily}`;
+        const font = cssFontString(st, v.axes);
         ctx.font = font;
         if ("letterSpacing" in ctx) lsCtx.letterSpacing = `${v.tracking}px`;
         let met = fontMetrics.get(font);
@@ -736,8 +786,10 @@ function emitText(v: VectorText, indent: string): string {
         const st = seg.style;
         const fillP = splitPaint(st.color);
         let styleAttr = `font-family:${st.fontFamily.includes(" ") ? `'${st.fontFamily}'` : st.fontFamily};font-size:${f(st.fontSize)}px`;
-        if (st.bold) styleAttr += ";font-weight:700";
+        const segWeight = effectiveWeight(st.bold, v.axes);
+        if (segWeight !== 400) styleAttr += `;font-weight:${segWeight}`;
         if (st.italic) styleAttr += ";font-style:italic";
+        styleAttr += otStyle(v);
         if (v.tracking) styleAttr += `;letter-spacing:${f(v.tracking)}px`;
         const decoS = [st.underline ? "underline" : "", st.strike ? "line-through" : ""].filter(Boolean).join(" ");
         if (decoS) styleAttr += `;text-decoration:${decoS}`;
@@ -751,8 +803,10 @@ function emitText(v: VectorText, indent: string): string {
   }
   const fill = splitPaint(v.color);
   let style = `font-family:${v.fontFamily.includes(" ") ? `'${v.fontFamily}'` : v.fontFamily};font-size:${f(v.fontSize)}px`;
-  if (v.bold) style += ";font-weight:700";
+  const weight = effectiveWeight(v.bold, v.axes);
+  if (weight !== 400) style += `;font-weight:${weight}`;
   if (v.italic) style += ";font-style:italic";
+  style += otStyle(v);
   if (v.tracking) style += `;letter-spacing:${f(v.tracking)}px`;
   const deco = [v.underline ? "underline" : "", v.strike ? "line-through" : ""].filter(Boolean).join(" ");
   if (deco) style += `;text-decoration:${deco}`;

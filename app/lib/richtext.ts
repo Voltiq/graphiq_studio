@@ -11,7 +11,7 @@
 // lineHeight × its own max font size — which reproduces the legacy uniform
 // layout exactly when every run has the same size.
 
-import type { TextAlign, TextRun, TextRunStyle } from "./tools";
+import type { TextAlign, TextAxes, TextOpenType, TextRun, TextRunStyle } from "./tools";
 
 /** Injected measurement for one style: text width + font ascent/descent. */
 export interface RunMetrics {
@@ -20,6 +20,88 @@ export interface RunMetrics {
   descent: number;
 }
 export type MeasureFn = (text: string, style: TextRunStyle) => RunMetrics;
+
+// ---- OpenType features & variable axes (TODO §6) ---------------------------
+// Canvas 2D quirks these helpers encode (verified in Chromium):
+// - font-feature-settings applies to canvas text ONLY via CSS on the canvas
+//   ELEMENT, and only while the canvas is CONNECTED to the document (a
+//   display:none host suffices). fontFeatureCSS builds that CSS string.
+// - font-variation-settings never reaches canvas text; but the font SHORTHAND
+//   maps font-weight (any 1–1000) and font-stretch (keywords only) onto a
+//   variable font's wght/wdth axes — and that works detached. cssFontString
+//   builds the shorthand with the axes folded in.
+
+/** The default-on features: emitting them only happens when turned OFF. */
+const DEFAULT_ON: ReadonlySet<keyof TextOpenType> = new Set(["liga", "calt"]);
+
+/** All feature flags in UI order, with human labels. */
+export const OPENTYPE_FLAGS: { key: keyof TextOpenType; label: string }[] = [
+  { key: "liga", label: "Ligatures" },
+  { key: "dlig", label: "Discretionary ligatures" },
+  { key: "calt", label: "Contextual alternates" },
+  { key: "smcp", label: "Small caps" },
+  { key: "onum", label: "Oldstyle figures" },
+  { key: "tnum", label: "Tabular figures" },
+  { key: "frac", label: "Fractions" },
+  { key: "zero", label: "Slashed zero" },
+  { key: "salt", label: "Stylistic alternates" },
+  { key: "ss01", label: "Stylistic set 1" },
+];
+
+/** Effective on/off of one flag ("absent = the font's default"). */
+export const featureOn = (f: TextOpenType | undefined, key: keyof TextOpenType): boolean =>
+  f?.[key] ?? DEFAULT_ON.has(key);
+
+/** font-feature-settings CSS for the non-default flags — null when everything
+ *  is at its default (callers then skip the attached-canvas dance entirely). */
+export function fontFeatureCSS(f?: TextOpenType): string | null {
+  if (!f) return null;
+  const parts: string[] = [];
+  for (const { key } of OPENTYPE_FLAGS) {
+    const v = f[key];
+    if (v === undefined || v === DEFAULT_ON.has(key)) continue;
+    if (key === "liga" && !v) parts.push('"liga" 0', '"clig" 0');
+    else parts.push(`"${key}" ${v ? 1 : 0}`);
+  }
+  return parts.length ? parts.join(", ") : null;
+}
+
+/** The nine CSS font-stretch stops the font shorthand accepts. */
+const STRETCH_STOPS: { pct: number; kw: string }[] = [
+  { pct: 50, kw: "ultra-condensed" },
+  { pct: 62.5, kw: "extra-condensed" },
+  { pct: 75, kw: "condensed" },
+  { pct: 87.5, kw: "semi-condensed" },
+  { pct: 100, kw: "normal" },
+  { pct: 112.5, kw: "semi-expanded" },
+  { pct: 125, kw: "expanded" },
+  { pct: 150, kw: "extra-expanded" },
+  { pct: 200, kw: "ultra-expanded" },
+];
+
+/** Nearest font-stretch keyword for a width percent; null = normal (omit). */
+export function stretchKeyword(pct?: number): string | null {
+  if (pct === undefined) return null;
+  let best = STRETCH_STOPS[0];
+  for (const s of STRETCH_STOPS) if (Math.abs(s.pct - pct) < Math.abs(best.pct - pct)) best = s;
+  return best.kw === "normal" ? null : best.kw;
+}
+
+/** Effective numeric weight: the wght axis wins over the bold toggle. */
+export const effectiveWeight = (bold: boolean, axes?: TextAxes): number =>
+  axes?.wght !== undefined ? Math.round(Math.max(1, Math.min(1000, axes.wght))) : bold ? 700 : 400;
+
+/** The canvas/CSS font shorthand with variable axes folded in. Reproduces the
+ *  legacy `italic 700 32px Family` string exactly when no axes are set. */
+export function cssFontString(
+  style: { italic: boolean; bold: boolean; fontSize: number; fontFamily: string },
+  axes?: TextAxes,
+): string {
+  const stretch = stretchKeyword(axes?.wdth);
+  return `${style.italic ? "italic " : ""}${effectiveWeight(style.bold, axes)} ${
+    stretch ? `${stretch} ` : ""
+  }${style.fontSize}px ${style.fontFamily}`;
+}
 
 /** One positioned piece of a line (single style, no line breaks inside). */
 export interface RichSeg {

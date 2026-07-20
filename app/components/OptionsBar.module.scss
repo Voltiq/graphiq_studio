@@ -168,6 +168,81 @@
   flex-shrink: 0;
 }
 
+/* ---- OpenType popover (text tool): feature toggles + variable axes ------- */
+/* Body-portalled (the bar's masked scroll container would clip it) — the
+   same overlay tier + UI-scale opt-in as the layer context menu. */
+.otBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+}
+
+.otPopover {
+  position: fixed;
+  zoom: var(--ui-zoom, 1);
+  z-index: 301;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: var(--sp-3);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+}
+
+.otTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  color: var(--text-2);
+
+  &::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+}
+
+.otGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+}
+
+.otAxisRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.otReset {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+
+  &:hover {
+    color: var(--text);
+    background: var(--wash);
+    border-color: var(--border-strong);
+  }
+}
+
+.otHint {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
 /* Primary action variant of .preset (e.g. the crop Apply button). */
 .apply {
   color: var(--accent-contrast);

@@ -1,7 +1,10 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Hexagon,
+  Ligature,
   Lasso as LassoIcon,
   Magnet,
   AlignCenter,
@@ -57,6 +60,14 @@ import {
 } from "../lib/tools";
 import type { Rect } from "../lib/view";
 import type { ActiveSurface } from "../lib/layers";
+import type { TextAxes, TextOpenType } from "../lib/tools";
+import {
+  OPENTYPE_FLAGS,
+  effectiveWeight,
+  featureOn,
+  fontFeatureCSS,
+  stretchKeyword,
+} from "../lib/richtext";
 import GradientControl from "./GradientControl";
 import type { BrushSettings } from "../lib/paint";
 import {
@@ -72,6 +83,139 @@ import {
 /** In the options bar every slider is the compact inline (label-beside) variant. */
 function Slider(props: React.ComponentProps<typeof BaseSlider>) {
   return <BaseSlider inline {...props} />;
+}
+
+/** The nine width stops the canvas font shorthand can express (keywords). */
+const WIDTH_STOPS = [50, 62.5, 75, 87.5, 100, 112.5, 125, 150, 200];
+const widthLabel = (pct: number) => (pct === 100 ? "Normal (100%)" : `${pct}%`);
+
+/**
+ * OpenType popover (TODO §6): block-level feature toggles (ligatures,
+ * alternates, caps, figures) plus variable-font Weight/Width axes. Features
+ * apply where the font supports them; the axes need a variable font.
+ */
+function OpenTypeControl({ text, onText }: TextProps) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ left: 0, top: 0 });
+
+  const nonDefault =
+    !!fontFeatureCSS(text.features) ||
+    text.axes?.wght !== undefined ||
+    stretchKeyword(text.axes?.wdth) !== null;
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation();
+        setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
+  const toggleOpen = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({
+        left: Math.max(8, Math.min(r.left, window.innerWidth - 328)),
+        top: r.bottom + 6,
+      });
+    }
+    setOpen((o) => !o);
+  };
+
+  const setFeature = (key: keyof TextOpenType, v: boolean) => {
+    const next: TextOpenType = { ...text.features, [key]: v };
+    // Entries back at their default drop out, so "all defaults" is absent —
+    // and legacy blocks stay byte-stable.
+    for (const { key: k } of OPENTYPE_FLAGS) {
+      if (next[k] !== undefined && next[k] === featureOn(undefined, k)) delete next[k];
+    }
+    onText({ features: Object.keys(next).length ? next : undefined });
+  };
+  const setAxes = (patch: Partial<TextAxes>) => {
+    const next: TextAxes = { ...text.axes, ...patch };
+    if (next.wght === undefined) delete next.wght;
+    if (next.wdth === undefined || next.wdth === 100) delete next.wdth;
+    onText({ axes: Object.keys(next).length ? next : undefined });
+  };
+
+  const curWidth = WIDTH_STOPS.reduce((best, s) =>
+    Math.abs(s - (text.axes?.wdth ?? 100)) < Math.abs(best - (text.axes?.wdth ?? 100)) ? s : best,
+  );
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={styles.iconBtn}
+        data-active={nonDefault || open}
+        title="OpenType features & variable axes"
+        onClick={toggleOpen}
+      >
+        <Ligature size={15} />
+      </button>
+      {open &&
+        createPortal(
+          <>
+            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
+            <div className={styles.otPopover} style={{ left: pos.left, top: pos.top }} role="dialog" aria-label="OpenType features">
+            <span className={styles.otTitle}>OpenType features</span>
+            <div className={styles.otGrid}>
+              {OPENTYPE_FLAGS.map(({ key, label }) => (
+                <Toggle
+                  key={key}
+                  label={label}
+                  checked={featureOn(text.features, key)}
+                  onChange={(v) => setFeature(key, v)}
+                />
+              ))}
+            </div>
+            <span className={styles.otTitle}>Variable axes</span>
+            <div className={styles.otAxisRow}>
+              <BaseSlider
+                inline
+                label="Weight"
+                min={100}
+                max={900}
+                step={25}
+                value={effectiveWeight(text.bold, text.axes)}
+                onChange={(n) => setAxes({ wght: n })}
+              />
+              {text.axes?.wght !== undefined && (
+                <button
+                  type="button"
+                  className={styles.otReset}
+                  title="Back to the Bold toggle"
+                  onClick={() => setAxes({ wght: undefined })}
+                >
+                  <RotateCcw size={11} />
+                </button>
+              )}
+            </div>
+            <div className={styles.otAxisRow}>
+              <Select
+                label="Width"
+                options={WIDTH_STOPS.map(widthLabel)}
+                value={widthLabel(curWidth)}
+                onChange={(l) => setAxes({ wdth: WIDTH_STOPS.find((s) => widthLabel(s) === l) ?? 100 })}
+                width={150}
+              />
+            </div>
+            <span className={styles.otHint}>
+              Fonts decide which features exist; Weight and Width need a variable font (try
+              Bahnschrift or Segoe UI Variable).
+            </span>
+          </div>
+        </>,
+        document.body,
+      )}
+    </>
+  );
 }
 
 interface ShapeProps {
@@ -484,6 +628,8 @@ function renderOptions(
             checked={text.antialias}
             onChange={(v) => onText({ antialias: v })}
           />
+          <Divider />
+          <OpenTypeControl text={text} onText={onText} />
         </>
       );
     }

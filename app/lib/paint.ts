@@ -54,7 +54,7 @@ import {
   type ToneLUTs16,
 } from "./tone";
 import { renderPenStroke } from "./pen";
-import { baseRunStyle, layoutRuns, type MeasureFn } from "./richtext";
+import { baseRunStyle, cssFontString, fontFeatureCSS, layoutRuns, type MeasureFn } from "./richtext";
 import type {
   BlurSettings,
   DodgeSettings,
@@ -64,6 +64,8 @@ import type {
   PenSettings,
   ShapeKind,
   TextAlign,
+  TextAxes,
+  TextOpenType,
   TextRun,
 } from "./tools";
 
@@ -504,6 +506,10 @@ export interface TextRenderSpec {
   /** Rich runs (mixed fonts/sizes/colours) covering `text` exactly; absent =
    *  the uniform legacy path using the flat fields above. */
   runs?: TextRun[];
+  /** OpenType feature toggles (block-level; absent = the font's defaults). */
+  features?: TextOpenType;
+  /** Variable-font axes (block-level; wght overrides `bold`). */
+  axes?: TextAxes;
 }
 
 /** Pre-crop layer pixels + document size, captured so a crop can be undone. */
@@ -5167,8 +5173,42 @@ export class PaintEngine {
 
   // ---- Text ----------------------------------------------------------------
   /** Configure a context for `spec` and split the text into (wrapped) lines. */
+  /** Hidden display:none host: canvas font-feature-settings only applies while
+   *  the canvas element is CONNECTED (verified in Chromium) — so feature-bearing
+   *  text mounts its canvas here for the duration of the draw/measure. */
+  private static textFeatureHost: HTMLDivElement | null = null;
+
+  /** Run `fn` with `features` active on `canvas` — mounted into the hidden host
+   *  when detached, style restored after. Default features skip all DOM work,
+   *  keeping legacy text byte-stable and free of layout churn. */
+  private static withTextFeatures<T>(
+    canvas: HTMLCanvasElement,
+    features: TextOpenType | undefined,
+    fn: () => T,
+  ): T {
+    const css = fontFeatureCSS(features);
+    if (!css) return fn();
+    let host = PaintEngine.textFeatureHost;
+    if (!host) {
+      host = document.createElement("div");
+      host.style.display = "none";
+      host.setAttribute("data-graphiq", "text-feature-host");
+      document.body.appendChild(host);
+      PaintEngine.textFeatureHost = host;
+    }
+    const detached = !canvas.isConnected;
+    canvas.style.fontFeatureSettings = css;
+    if (detached) host.appendChild(canvas);
+    try {
+      return fn();
+    } finally {
+      if (detached) host.removeChild(canvas);
+      canvas.style.fontFeatureSettings = "";
+    }
+  }
+
   private textLines(ctx: CanvasRenderingContext2D, spec: TextRenderSpec): string[] {
-    ctx.font = `${spec.italic ? "italic " : ""}${spec.bold ? "700" : "400"} ${spec.fontSize}px ${spec.fontFamily}`;
+    ctx.font = cssFontString(spec, spec.axes);
     const lsCtx = ctx as CanvasRenderingContext2D & { letterSpacing: string };
     if ("letterSpacing" in ctx) lsCtx.letterSpacing = `${spec.tracking}px`;
     const wrap = (para: string, maxW: number): string[] => {
@@ -5197,11 +5237,11 @@ export class PaintEngine {
 
   /** Measurement hook for the rich layout: per-style canvas metrics with the
    *  block's tracking applied (letterSpacing), font metrics memoized. */
-  private richMeasurer(ctx: CanvasRenderingContext2D, tracking: number): MeasureFn {
+  private richMeasurer(ctx: CanvasRenderingContext2D, tracking: number, axes?: TextAxes): MeasureFn {
     const fontMetrics = new Map<string, { ascent: number; descent: number }>();
     const lsCtx = ctx as CanvasRenderingContext2D & { letterSpacing: string };
     return (text, style) => {
-      const font = `${style.italic ? "italic " : ""}${style.bold ? "700" : "400"} ${style.fontSize}px ${style.fontFamily}`;
+      const font = cssFontString(style, axes);
       ctx.font = font;
       if ("letterSpacing" in ctx) lsCtx.letterSpacing = `${tracking}px`;
       let met = fontMetrics.get(font);
@@ -5221,6 +5261,13 @@ export class PaintEngine {
   textBounds(spec: TextRenderSpec): { x: number; y: number; w: number; h: number } {
     if (!this.measureCtx) this.measureCtx = makeCanvas(8, 8).ctx;
     const ctx = this.measureCtx;
+    return PaintEngine.withTextFeatures(ctx.canvas, spec.features, () => this.textBoundsInner(ctx, spec));
+  }
+
+  private textBoundsInner(
+    ctx: CanvasRenderingContext2D,
+    spec: TextRenderSpec,
+  ): { x: number; y: number; w: number; h: number } {
     if (PaintEngine.isRichSpec(spec)) {
       const layout = layoutRuns(
         spec.text,
@@ -5229,7 +5276,7 @@ export class PaintEngine {
         spec.boxW,
         spec.lineHeight,
         spec.align,
-        this.richMeasurer(ctx, spec.tracking),
+        this.richMeasurer(ctx, spec.tracking, spec.axes),
       );
       const w = spec.boxW != null ? spec.boxW : Math.max(1, Math.ceil(layout.maxX - layout.minX));
       const x = spec.boxW != null ? spec.x : spec.x + layout.minX;
@@ -5265,11 +5312,16 @@ export class PaintEngine {
    * layer first so re-rendering an edited text layer replaces the old pixels.
    */
   renderText(layerId: string, spec: TextRenderSpec) {
-    const ctx = this.layer(layerId).ctx;
+    const layer = this.layer(layerId);
+    const ctx = layer.ctx;
     ctx.clearRect(0, 0, this.w, this.h);
     ctx.save();
-    if (PaintEngine.isRichSpec(spec)) this.drawRichText(ctx, spec);
-    else this.drawUniformText(ctx, spec);
+    // Non-default OpenType features need the layer canvas mounted (hidden) so
+    // its font-feature-settings CSS reaches the canvas text pipeline.
+    PaintEngine.withTextFeatures(layer.c, spec.features, () => {
+      if (PaintEngine.isRichSpec(spec)) this.drawRichText(ctx, spec);
+      else this.drawUniformText(ctx, spec);
+    });
     ctx.restore();
 
     // No anti-aliasing: threshold the rendered alpha to hard 1-bit edges. The
@@ -5336,7 +5388,7 @@ export class PaintEngine {
   /** The rich path: mixed-style runs and/or justification, laid out by
    *  richtext.ts and painted segment by segment. */
   private drawRichText(ctx: CanvasRenderingContext2D, spec: TextRenderSpec) {
-    const measure = this.richMeasurer(ctx, spec.tracking);
+    const measure = this.richMeasurer(ctx, spec.tracking, spec.axes);
     const layout = layoutRuns(
       spec.text,
       spec.runs,
@@ -5354,7 +5406,7 @@ export class PaintEngine {
       for (let i = 0; i < line.segs.length; i++) {
         const seg = line.segs[i];
         const st = seg.style;
-        ctx.font = `${st.italic ? "italic " : ""}${st.bold ? "700" : "400"} ${st.fontSize}px ${st.fontFamily}`;
+        ctx.font = cssFontString(st, spec.axes);
         if ("letterSpacing" in ctx) lsCtx.letterSpacing = `${spec.tracking}px`;
         ctx.fillStyle = st.color;
         if (!seg.space && seg.text) ctx.fillText(seg.text, spec.x + seg.x, by);

@@ -7,7 +7,7 @@ import type { WorkingSpace } from "../lib/colorspace";
 import { checkerCSS, type CheckerColors, type CheckerSize, type MeasureUnit } from "../lib/prefs";
 import { buildEdgeField, snapPoint, type EdgeField } from "../lib/magnetic";
 import type { StrokeStep } from "../lib/actions";
-import { baseRunStyle } from "../lib/richtext";
+import { baseRunStyle, effectiveWeight, fontFeatureCSS, stretchKeyword } from "../lib/richtext";
 import {
   applyPatchToSelection,
   seedTextEditor,
@@ -451,6 +451,8 @@ function textSpecOf(v: VectorText) {
     color: v.color,
     antialias: v.antialias,
     runs: v.runs,
+    features: v.features,
+    axes: v.axes,
   };
 }
 
@@ -1075,6 +1077,8 @@ export default function CanvasArea({
       lineHeight: v.lineHeight,
       tracking: v.tracking,
       color: v.color,
+      features: v.features,
+      axes: v.axes,
     });
     engine.clearLayerPixels(id);
     setTextSession({
@@ -5365,8 +5369,12 @@ export default function CanvasArea({
                 transformOrigin: "top left",
                 fontFamily: text.fontFamily,
                 fontSize: text.fontSize,
-                fontWeight: text.bold ? 700 : 400,
+                fontWeight: effectiveWeight(text.bold, text.axes),
                 fontStyle: text.italic ? "italic" : "normal",
+                // Same quantized keyword the raster uses (canvas accepts only
+                // stretch keywords), so the editor never lies about the width.
+                fontStretch: stretchKeyword(text.axes?.wdth) ?? undefined,
+                fontFeatureSettings: fontFeatureCSS(text.features) ?? undefined,
                 lineHeight: String(text.lineHeight),
                 letterSpacing: `${text.tracking}px`,
                 color: text.color,
