@@ -2,7 +2,7 @@
 
 Everything that would take the app from "feature-complete editor" (see [FEATURES.md](FEATURES.md)) to a great, professional-grade photo tool. Grouped by area; roughly ordered **P1 → P3** inside each group (P1 = finish/polish what exists, P2 = expected pro features, P3 = platform leaps).
 
-Legend: `[ ]` open · `[~]` partially exists (noted).
+Legend: `[ ]` open · `[~]` partially exists (noted) · `[x]` completed.
 
 ---
 
