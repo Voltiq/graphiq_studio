@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Redo2, Search, Undo2 } from "lucide-react";
+import { Check, Menu as MenuIcon, Redo2, Search, Undo2, X } from "lucide-react";
 import styles from "./TopBar.module.scss";
 import logo from "../icon.png";
 import ThemeToggle from "./ThemeToggle";
@@ -20,6 +20,7 @@ export default function TopBar({
   canRedo = false,
   checks,
   shortcutLabels,
+  mobile = false,
 }: {
   onMenuAction?: (action: string) => void;
   onSelectTool?: (id: ToolId) => void;
@@ -33,6 +34,9 @@ export default function TopBar({
   /** Effective shortcut labels from the registry ("menu:<action>"/"tool:<id>"
    *  → "Ctrl+Z"; "" = unbound). Menus/palette show THESE, so remaps are live. */
   shortcutLabels?: Record<string, string>;
+  /** On mobile the inline menubar collapses behind a hamburger, the brand text
+   *  and search hint hide, and the menus open as a full-height sheet. */
+  mobile?: boolean;
 }) {
   // The registry's effective label, falling back to the static default.
   const keyFor = (kind: "menu" | "tool", id: string, fallback?: string): string | undefined => {
@@ -41,7 +45,16 @@ export default function TopBar({
     return v || undefined; // "" = explicitly unbound → show nothing
   };
   const [open, setOpen] = useState<string | null>(null);
+  // Mobile menu sheet (the collapsed menubar behind the hamburger).
+  const [sheetOpen, setSheetOpen] = useState(false);
   const barRef = useRef<HTMLDivElement>(null);
+  // Back to desktop → drop any open sheet so its fixed overlay can't linger.
+  useEffect(() => {
+    if (!mobile) {
+      setSheetOpen(false);
+      setOpen(null);
+    }
+  }, [mobile]);
 
   // ---- Command palette (Ctrl+K): every tool + executable menu item ----------
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -105,19 +118,45 @@ export default function TopBar({
     };
   }, [open]);
 
+  // Fire a menu action and, on mobile, dismiss the whole sheet — unless it's a
+  // checkable toggle (View ▸ Grid etc.), where staying open lets you flip more.
+  const runMenuAction = (action: string, keepOpen: boolean) => {
+    onMenuAction?.(action);
+    if (mobile && !keepOpen) {
+      setOpen(null);
+      setSheetOpen(false);
+    }
+  };
+
   return (
     <header className={styles.topbar} data-tour="topbar">
+      {mobile && (
+        <button
+          type="button"
+          className={styles.hamburger}
+          aria-label="Menu"
+          aria-expanded={sheetOpen}
+          onClick={() => setSheetOpen((s) => !s)}
+        >
+          {sheetOpen ? <X size={18} /> : <MenuIcon size={18} />}
+        </button>
+      )}
       <div className={styles.brand}>
         <span className={styles.logo}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={logo.src} alt="Graphiq Studio" />
         </span>
-        <span className={styles.brandName}>Graphiq</span>
-        <span className={styles.brandTag}>Studio</span>
-        <span className={styles.brandDot} aria-hidden />
+        {!mobile && (
+          <>
+            <span className={styles.brandName}>Graphiq</span>
+            <span className={styles.brandTag}>Studio</span>
+            <span className={styles.brandDot} aria-hidden />
+          </>
+        )}
       </div>
 
-      <nav className={styles.menubar} ref={barRef}>
+      {mobile && sheetOpen && <div className={styles.sheetScrim} onClick={() => setSheetOpen(false)} />}
+      <nav className={styles.menubar} data-menubar data-sheet={mobile && sheetOpen ? "true" : undefined} ref={barRef}>
         {MENUS.map((menu) => (
           <div key={menu.label} className={styles.menuRoot}>
             <button
@@ -143,7 +182,7 @@ export default function TopBar({
                         aria-checked={checkable ? checked : undefined}
                         disabled={item.disabled}
                         onClick={() => {
-                          if (item.action) onMenuAction?.(item.action);
+                          if (item.action) runMenuAction(item.action, checkable);
                           // Keep the menu open when flipping a toggle; close otherwise.
                           if (!checkable) setOpen(null);
                         }}
@@ -201,8 +240,12 @@ export default function TopBar({
           title="Command palette (Ctrl+K)"
         >
           <Search size={14} />
-          <span className={styles.searchHint}>Search tools &amp; menus…</span>
-          <kbd className={styles.searchKbd}>Ctrl+K</kbd>
+          {!mobile && (
+            <>
+              <span className={styles.searchHint}>Search tools &amp; menus…</span>
+              <kbd className={styles.searchKbd}>Ctrl+K</kbd>
+            </>
+          )}
         </button>
 
         <ThemeToggle initialTheme={initialTheme} />

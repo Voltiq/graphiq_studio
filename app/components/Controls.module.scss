@@ -62,12 +62,17 @@
     min-width: 120px;
   }
 
-  /* Inline (options-bar) variant: label · value · short track in one row. */
+  /* Inline (options-bar) variant: label · value · short track in one row.
+     Only the TRACK flexes (down to a floor); the label+value never shrink, so
+     text can't clip. The options bar pins every other control at its natural
+     width (.controls > * { flex-shrink: 0 }), so a too-narrow bar first shortens
+     the tracks a little, then scrolls — it never crushes controls together.
+     `flex-shrink: 1` here outranks that rule by specificity. */
   &.inline {
     flex-direction: row;
     align-items: center;
     gap: 10px;
-    min-width: 0;
+    flex-shrink: 1;
 
     .sliderHead {
       gap: 8px;
@@ -85,7 +90,8 @@
 
     input[type="range"] {
       width: 104px;
-      flex-shrink: 0;
+      min-width: 56px;
+      flex-shrink: 1;
     }
   }
 }

@@ -89,6 +89,7 @@
   --statusbar-h: 28px;
   --toolbar-w: 48px;
   --dock-w: 320px;
+  --mobilebar-h: 56px; /* bottom tool/panel bar (mobile only) */
 
   /* ------------------------- Accent: Blue (default) -----------------------
      Each accent provides a light-theme and a dark-theme pair (hex + rgb);
@@ -372,4 +373,166 @@ input[type="range"]:focus-visible {
   animation-duration: 0.01ms !important;
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
+}
+
+/* ==========================================================================
+   MOBILE LAYOUT
+   Driven ENTIRELY by `html[data-mobile="true"]`, which Editor sets from the
+   `useIsMobile()` matchMedia hook — so JS behaviour and CSS layout share one
+   breakpoint evaluator and can never disagree. Desktop (attribute absent) is
+   completely untouched. Cross-component styling rides the stable `data-tour`
+   hooks the chrome already carries, since CSS-module class names are hashed.
+
+   The chrome that was flex columns/rows on desktop becomes: a full-bleed
+   canvas with the Toolbar and the panels dock lifted OUT of flow into
+   fixed slide-in drawers, opened by the bottom bar or an edge swipe, dimmed
+   behind a scrim. Open state is `html[data-drawer="tools" | "panels"]`.
+   ========================================================================== */
+html[data-mobile="true"] {
+  /* The desktop status bar is replaced by the bottom mobile bar. */
+  [data-tour="status"] {
+    display: none;
+  }
+
+  /* Options bar already scrolls horizontally — just guarantee it can't be
+     squeezed to nothing next to a narrow viewport. */
+  [data-tour="options"] {
+    min-height: var(--optionsbar-h);
+  }
+
+  /* ---- Toolbar → left drawer ---- */
+  [data-tour="toolbar"] {
+    position: fixed;
+    top: calc(var(--topbar-h) + var(--optionsbar-h));
+    left: 0;
+    bottom: calc(var(--mobilebar-h) + env(safe-area-inset-bottom, 0px));
+    width: 76px;
+    transform: translateX(-100%);
+    transition: transform var(--t-med) var(--ease-pop);
+    z-index: 120;
+    box-shadow: var(--shadow);
+    will-change: transform;
+  }
+
+  /* ---- Panels dock → right drawer ---- */
+  [data-tour="dock"] {
+    position: fixed;
+    top: calc(var(--topbar-h) + var(--optionsbar-h));
+    right: 0;
+    bottom: calc(var(--mobilebar-h) + env(safe-area-inset-bottom, 0px));
+    width: min(var(--dock-w), 86vw);
+    transform: translateX(100%);
+    transition: transform var(--t-med) var(--ease-pop);
+    z-index: 120;
+    box-shadow: var(--shadow);
+    will-change: transform;
+  }
+
+  /* Roomier, thumb-sized tool targets inside the drawer. */
+  [data-tour="toolbar"] button[aria-pressed] {
+    width: 46px;
+    height: 46px;
+  }
+
+  /* Floating panels aren't draggable on touch — the single right drawer is the
+     one home for panels on mobile. */
+  .gq-m-floathost-hidden {
+    display: none;
+  }
+
+  /* ---- TopBar menu sheet ----
+     The inline menubar collapses; the hamburger reveals it as a full-height
+     scrollable column of large touch rows. Structural selectors (the nav's
+     module class is hashed): nav > div.menuRoot > button.menuButton, and the
+     open dropdown is [role="menu"]. */
+  [data-menubar] {
+    display: none;
+  }
+  [data-menubar][data-sheet="true"] {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    position: fixed;
+    top: var(--topbar-h);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 80;
+    padding: var(--sp-2);
+    gap: 2px;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    background: var(--surface-3);
+    border-top: 1px solid var(--border);
+  }
+  [data-menubar][data-sheet="true"] > div {
+    position: static; /* menuRoot: let its dropdown flow inline */
+  }
+  [data-menubar][data-sheet="true"] > div > button {
+    width: 100%;
+    text-align: left;
+    font-size: 15px;
+    padding: 12px 14px;
+    border-radius: var(--r-md);
+  }
+  [data-menubar][data-sheet="true"] [role="menu"] {
+    position: static;
+    min-width: 0;
+    margin: 0 4px 8px;
+    padding: 4px;
+    border: none;
+    box-shadow: none;
+    background: var(--surface-2);
+    animation: none;
+  }
+  [data-menubar][data-sheet="true"] [role="menu"] button {
+    padding: 11px 12px;
+    font-size: 14px;
+  }
+}
+
+/* Open states slide the matching drawer in. */
+html[data-mobile="true"][data-drawer="tools"] [data-tour="toolbar"] {
+  transform: none;
+}
+html[data-mobile="true"][data-drawer="panels"] [data-tour="dock"] {
+  transform: none;
+}
+
+/* Scrim behind an open drawer — tap (or swipe) to dismiss. Rendered by Editor
+   only while a drawer is open. */
+.gq-m-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  background: var(--blanket);
+  animation: gqMScrimIn var(--t-med) var(--ease);
+  touch-action: none;
+}
+@keyframes gqMScrimIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Thin invisible edge strips that capture the open-swipe without stealing
+   touches from the canvas. Only mounted (by Editor) while their drawer is
+   closed. Sit above the canvas, below the drawers. */
+.gq-m-edge {
+  position: fixed;
+  top: calc(var(--topbar-h) + var(--optionsbar-h));
+  bottom: calc(var(--mobilebar-h) + env(safe-area-inset-bottom, 0px));
+  width: 20px;
+  z-index: 115;
+  touch-action: none;
+
+  &[data-side="left"] {
+    left: 0;
+  }
+  &[data-side="right"] {
+    right: 0;
+  }
 }

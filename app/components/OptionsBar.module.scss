@@ -95,6 +95,13 @@
   &::-webkit-scrollbar {
     height: 0;
   }
+
+  /* Every control keeps its natural width; when they don't all fit the row
+     SCROLLS instead of letting flex compress them into one another (which
+     clipped labels together — "SizeH…px" — on mobile and narrow desktop). */
+  > * {
+    flex-shrink: 0;
+  }
 }
 
 .preset {

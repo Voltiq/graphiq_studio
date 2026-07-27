@@ -63,6 +63,32 @@
   gap: 1px;
 }
 
+/* Mobile-only: the hamburger that summons the menu sheet, and its scrim. Both
+   are hidden on desktop (only rendered when `mobile`), styling lives here. */
+.hamburger {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: var(--r-md);
+  color: var(--text);
+
+  &:active {
+    background: var(--wash-2);
+  }
+}
+
+.sheetScrim {
+  position: fixed;
+  inset: var(--topbar-h) 0 0;
+  /* Same header stacking context (z 60) as the menubar sheet (globals: 80),
+     so it sits just under it and above the canvas. */
+  z-index: 79;
+  background: var(--blanket);
+  animation: dropIn var(--t-short) var(--ease);
+}
+
 .menuRoot {
   position: relative;
 }

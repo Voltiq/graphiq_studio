@@ -101,6 +101,8 @@ import type {
 } from "../lib/paint";
 import BlurGalleryDialog from "./BlurGalleryDialog";
 import LiquifyDialog from "./LiquifyDialog";
+import MobileBar, { type MobileDrawer } from "./MobileBar";
+import { useIsMobile } from "../lib/useMediaQuery";
 import TrimDialog, { type TrimMode, type TrimSides } from "./TrimDialog";
 import SelectModifyDialog from "./SelectModifyDialog";
 import LayerStyleDialog from "./LayerStyleDialog";
@@ -302,6 +304,61 @@ const makeDoc = (seq: number, size?: { w: number; h: number }, dpi = 300): Doc =
 
 export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [tool, setTool] = useState<ToolId>(DEFAULT_TOOL);
+  // --- Mobile shell: the Toolbar and panels dock become swipe-in drawers ----
+  const mobile = useIsMobile();
+  const [mobileDrawer, setMobileDrawer] = useState<MobileDrawer>(null);
+  // Mirror the mobile state onto <html> so the global mobile CSS (keyed off
+  // data-mobile / data-drawer, since module classes are hashed) can drive the
+  // layout from one source of truth.
+  useEffect(() => {
+    const el = document.documentElement;
+    if (mobile) el.dataset.mobile = "true";
+    else delete el.dataset.mobile;
+    return () => {
+      delete el.dataset.mobile;
+    };
+  }, [mobile]);
+  useEffect(() => {
+    const el = document.documentElement;
+    if (mobile && mobileDrawer) el.dataset.drawer = mobileDrawer;
+    else delete el.dataset.drawer;
+  }, [mobile, mobileDrawer]);
+  // Leaving mobile (rotate to landscape / resize up) closes any open drawer.
+  useEffect(() => {
+    if (!mobile) setMobileDrawer(null);
+  }, [mobile]);
+  const toggleMobileDrawer = (d: "tools" | "panels") =>
+    setMobileDrawer((cur) => (cur === d ? null : d));
+  // Edge-swipe: open a drawer by dragging inward from a screen edge; the strips
+  // that host these live above the canvas so touches never fight the tools.
+  const edgeSwipe = useRef<{ x: number; side: "left" | "right"; done: boolean } | null>(null);
+  const scrimSwipe = useRef<number | null>(null);
+  const SWIPE = 36; // px of travel before a swipe commits
+  const onEdgeDown = (e: React.PointerEvent, side: "left" | "right") => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    edgeSwipe.current = { x: e.clientX, side, done: false };
+  };
+  const onEdgeMove = (e: React.PointerEvent) => {
+    const s = edgeSwipe.current;
+    if (!s || s.done) return;
+    const dx = e.clientX - s.x;
+    if (s.side === "left" && dx > SWIPE) {
+      s.done = true;
+      setMobileDrawer("tools");
+    } else if (s.side === "right" && dx < -SWIPE) {
+      s.done = true;
+      setMobileDrawer("panels");
+    }
+  };
+  // Swiping the scrim back toward the drawer's own edge dismisses it.
+  const onScrimMove = (e: React.PointerEvent) => {
+    if (scrimSwipe.current == null) return;
+    const dx = e.clientX - scrimSwipe.current;
+    if ((mobileDrawer === "tools" && dx < -SWIPE) || (mobileDrawer === "panels" && dx > SWIPE)) {
+      scrimSwipe.current = null;
+      setMobileDrawer(null);
+    }
+  };
   const [zoom, setZoom] = useState(67);
   const [foreground, setForeground] = useState("#6366f1ff");
   const [background, setBackground] = useState("#ffffffff");
@@ -4726,6 +4783,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   return (
     <div className={styles.app}>
       <TopBar
+        mobile={mobile}
         onMenuAction={handleMenuAction}
         onSelectTool={setTool}
         shortcutLabels={shortcutLabels}
@@ -4826,7 +4884,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       <div className={styles.body}>
         <Toolbar
           tool={tool}
-          onToolChange={setTool}
+          onToolChange={(id) => {
+            setTool(id);
+            if (mobile) setMobileDrawer(null); // picking a tool closes the drawer
+          }}
           foreground={foreground}
           background={background}
           onForeground={setForeground}
@@ -4963,7 +5024,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         />
         {/* Floating-panel overlay — BEFORE RightDock so the dock stays the
             :last-child that the UI-scale zoom selector targets. */}
-        <div className={styles.floatHost} ref={setFloatHost} />
+        <div className={`${styles.floatHost} gq-m-floathost-hidden`} ref={setFloatHost} />
         <RightDock
           foreground={foreground}
           background={background}
@@ -5036,6 +5097,47 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         selection={active.selection}
         subscribeCursor={subscribeCursor}
       />
+
+      {/* -------- Mobile shell: bottom bar, drawer scrim, edge-swipe strips ---- */}
+      {mobile && (
+        <>
+          <MobileBar tool={tool} drawer={mobileDrawer} onToggle={toggleMobileDrawer} />
+          {mobileDrawer ? (
+            <div
+              className="gq-m-scrim"
+              onClick={() => setMobileDrawer(null)}
+              onPointerDown={(e) => {
+                scrimSwipe.current = e.clientX;
+              }}
+              onPointerMove={onScrimMove}
+              onPointerUp={() => {
+                scrimSwipe.current = null;
+              }}
+            />
+          ) : (
+            <>
+              <div
+                className="gq-m-edge"
+                data-side="left"
+                onPointerDown={(e) => onEdgeDown(e, "left")}
+                onPointerMove={onEdgeMove}
+                onPointerUp={() => {
+                  edgeSwipe.current = null;
+                }}
+              />
+              <div
+                className="gq-m-edge"
+                data-side="right"
+                onPointerDown={(e) => onEdgeDown(e, "right")}
+                onPointerMove={onEdgeMove}
+                onPointerUp={() => {
+                  edgeSwipe.current = null;
+                }}
+              />
+            </>
+          )}
+        </>
+      )}
 
       {sizeDialogOpen && (
         <CanvasSizeDialog

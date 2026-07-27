@@ -1,0 +1,69 @@
+/* Fixed bottom bar (mobile only). Sits above the drawers so its toggles stay
+   reachable while a drawer is open; honours the iOS home-indicator inset. */
+.bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 130;
+  height: calc(var(--mobilebar-h) + env(safe-area-inset-bottom, 0px));
+  padding: 0 var(--sp-2) env(safe-area-inset-bottom, 0px);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.btn {
+  flex: 0 0 auto;
+  min-width: 68px;
+  height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: var(--weight-medium);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+
+  &:active {
+    background: var(--wash-2);
+  }
+
+  &[data-active="true"] {
+    color: var(--accent);
+    background: var(--selected-bg);
+  }
+}
+
+/* Centre chip: the active tool's icon + name; tapping it also opens Tools. */
+.tool {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-md);
+  background: var(--wash);
+  border: 1px solid var(--border);
+  color: var(--text);
+
+  &:active {
+    background: var(--wash-2);
+  }
+}
+
+.toolName {
+  font-size: 12.5px;
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
