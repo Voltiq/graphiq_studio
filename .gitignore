@@ -46,3 +46,6 @@ next-env.d.ts
 # design reference (local, not part of the repo)
 DESIGN.md
 DESIGN.dark.md
+
+# roadmap / TODO (local, not part of the repo)
+TODO.md
