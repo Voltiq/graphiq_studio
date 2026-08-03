@@ -5070,6 +5070,28 @@ export class PaintEngine {
     this.emitChange();
   }
 
+  /** Abandon the in-progress stroke WITHOUT committing it to the layer or the
+   *  history — used when a gesture takes over (e.g. a second finger begins a
+   *  pinch-zoom). Resets the same state endStroke() does, minus the bake. */
+  cancelStroke() {
+    if (!this.painting) return;
+    this.stroke?.ctx.clearRect(0, 0, this.w, this.h);
+    this.painting = false;
+    this.strokeLayer = null;
+    this.strokeOnMask = false;
+    this.brush = null;
+    this.clip = null;
+    this.tip = null;
+    this.dirty = null;
+    if (this.cloneActive) {
+      this.cloneActive = false;
+      this.cloneSample = null;
+      this.cloneDab = null;
+      this.cloneOff = null;
+    }
+    this.emitChange();
+  }
+
   // ---- Clone stamp ---------------------------------------------------------
   /**
    * Begin a clone-stamp stroke. `offset` is the source→destination vector (source

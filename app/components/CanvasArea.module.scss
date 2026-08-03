@@ -232,6 +232,11 @@ $ruler: 22px;
   grid-area: 2 / 2;
   position: relative;
   overflow: hidden;
+  /* The canvas owns every touch here — our own pinch/pan handlers drive
+     zoom & pan, so the browser must never treat a touch as page pan/zoom
+     (the .view canvas is already touch-action:none; this covers the padding
+     around it too). */
+  touch-action: none;
   /* faint dot lattice so "empty" reads as a workspace, not a void */
   background-image: radial-gradient(
     circle at center,

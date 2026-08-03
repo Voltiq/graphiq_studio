@@ -901,6 +901,17 @@ export default function CanvasArea({
   };
   // Hand-tool pan drag: starting pointer position + pan at the start of the drag.
   const handRef = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null);
+  // Multi-touch pinch: all active touch/pen pointers (id → client x/y), the live
+  // pinch gesture, and a flag that makes the tool handlers stand down for the
+  // rest of a gesture (so the finger that started a stroke can't also draw).
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchRef = useRef<{
+    startDist: number;
+    startZoom: number;
+    docMx: number; // doc point under the gesture's starting midpoint
+    docMy: number;
+  } | null>(null);
+  const gestureSuppressRef = useRef(false);
   // Shape-tool drag: start point + the current (preview) doc-space box.
   const shapeRef = useRef<{ x: number; y: number } | null>(null);
   const shapeRectRef = useRef<Rect | null>(null);
@@ -3368,6 +3379,108 @@ export default function CanvasArea({
   };
 
   // Zoom tool: step in (dir 1) / out (dir -1), pivoting on the clicked point.
+  // ---- Two-finger pinch (touch/pen): zoom + pan the canvas together ---------
+  // Gated to ≥2 non-mouse pointers, so mouse drawing on desktop is untouched.
+  const beginPinch = () => {
+    const vp = viewportRef.current;
+    const pts = [...pointersRef.current.values()];
+    if (!vp || pts.length < 2) return;
+    // A second finger overrides whatever the first one started — discard any
+    // live paint stroke (no commit) and drop the other tools' in-progress state
+    // so no stray marquee/shape/gradient gets committed on lift.
+    if (paintingRef.current) {
+      engine.cancelStroke();
+      paintingRef.current = false;
+    }
+    handRef.current = null;
+    marqueeRef.current = null;
+    dragRectRef.current = null;
+    lassoRef.current = null;
+    shapeRef.current = null;
+    shapeRectRef.current = null;
+    gradientRef.current = null;
+    gestureSuppressRef.current = true;
+    scheduleComposite();
+    ensureAnts();
+
+    const [p1, p2] = pts;
+    const r = vp.getBoundingClientRect();
+    const midX = (p1.x + p2.x) / 2 - r.left;
+    const midY = (p1.y + p2.y) / 2 - r.top;
+    const s0 = zoomRef.current / 100;
+    pinchRef.current = {
+      startDist: Math.hypot(p1.x - p2.x, p1.y - p2.y) || 1,
+      startZoom: zoomRef.current,
+      docMx: (midX - panR.current.x) / s0,
+      docMy: (midY - panR.current.y) / s0,
+    };
+    // Capture both pointers on the viewport so their moves keep reporting even
+    // if a finger strays off the (possibly tiny, at fit-view) artwork.
+    for (const id of pointersRef.current.keys()) {
+      try {
+        viewportRef.current?.setPointerCapture(id);
+      } catch {
+        /* a pointer already released — ignore */
+      }
+    }
+  };
+
+  // Viewport-level (capture-phase) gesture tracking. Capture runs BEFORE the
+  // canvas tool handlers, and the viewport wraps both the artwork and the
+  // padding around it — so a second finger anywhere in the canvas area starts a
+  // pinch and pre-empts the tool, wherever the fingers land.
+  const gestureDown = (e: React.PointerEvent) => {
+    if (e.pointerType === "mouse") return;
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointersRef.current.size >= 2 && !pinchRef.current) beginPinch();
+  };
+  const gestureMove = (e: React.PointerEvent) => {
+    if (e.pointerType === "mouse" || !pointersRef.current.has(e.pointerId)) return;
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinchRef.current) updatePinch();
+  };
+  const gestureUp = (e: React.PointerEvent) => {
+    if (e.pointerType === "mouse" || !pointersRef.current.has(e.pointerId)) return;
+    pointersRef.current.delete(e.pointerId);
+    const vp = viewportRef.current;
+    if (vp && vp.hasPointerCapture(e.pointerId)) vp.releasePointerCapture(e.pointerId);
+    if (pointersRef.current.size < 2) pinchRef.current = null;
+    // Clear the tool-suppress flag only AFTER this event's tool handlers have
+    // run (they check it and bail), so the aborted stroke never commits.
+    if (pointersRef.current.size === 0 && gestureSuppressRef.current) {
+      queueMicrotask(() => {
+        if (pointersRef.current.size === 0) gestureSuppressRef.current = false;
+      });
+    }
+  };
+
+  const updatePinch = () => {
+    const pin = pinchRef.current;
+    const vp = viewportRef.current;
+    const pts = [...pointersRef.current.values()];
+    if (!pin || !vp || pts.length < 2) return;
+    const [p1, p2] = pts;
+    const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
+    const nextZoom = clamp(Math.round(pin.startZoom * (dist / pin.startDist)), MIN_ZOOM, MAX_ZOOM);
+    const s1 = nextZoom / 100;
+    const r = vp.getBoundingClientRect();
+    // Keep the doc point that was under the starting midpoint under the CURRENT
+    // midpoint — moving both fingers pans, spreading them zooms about that point.
+    const m1x = (p1.x + p2.x) / 2 - r.left;
+    const m1y = (p1.y + p2.y) / 2 - r.top;
+    const panX = m1x - pin.docMx * s1;
+    const panY = m1y - pin.docMy * s1;
+    const clamped = clampHere(panX, panY, s1, vp);
+    if (nextZoom !== zoomRef.current) {
+      // Route the pan through the zoom effect's queue so it isn't overwritten
+      // by the focal-point recentre.
+      pendingPanRef.current = { pan: clamped, zoom: nextZoom };
+      onZoomChangeRef.current(nextZoom);
+    } else {
+      setPanRef.current(clamped);
+    }
+  };
+
   const zoomToPoint = (dir: 1 | -1, clientX: number, clientY: number) => {
     const z = zoomRef.current;
     const opts = ZOOM_STEPS.filter((v) => (dir === 1 ? v > z : v < z));
@@ -3719,6 +3832,9 @@ export default function CanvasArea({
   }, [engine, commitNudge]);
 
   const onCanvasPointerDown = (e: React.PointerEvent) => {
+    // A pinch (tracked on the viewport, capture-phase) owns the gesture — the
+    // tool stands down for touch while one is active or being wound down.
+    if (e.pointerType !== "mouse" && (pinchRef.current || gestureSuppressRef.current)) return;
     commitNudge(); // a pointer gesture finalizes any pending arrow-key nudge
     // Levels eyedropper: sample the composite under the cursor, then hand back the
     // RGB (the active tool's normal action is suppressed for this one click).
@@ -4195,6 +4311,8 @@ export default function CanvasArea({
     }
   };
   const onCanvasPointerMove = (e: React.PointerEvent) => {
+    // While a pinch owns the gesture, tools ignore touch moves.
+    if (e.pointerType !== "mouse" && (pinchRef.current || gestureSuppressRef.current)) return;
     // Report the doc-space cursor position to the status bar (null off-canvas).
     const cur = toDoc(e);
     onCursor(
@@ -4626,6 +4744,8 @@ export default function CanvasArea({
     }
   };
   const onCanvasPointerUp = (e: React.PointerEvent) => {
+    // The aborted tool must not commit on lift while a gesture is winding down.
+    if (e.pointerType !== "mouse" && (pinchRef.current || gestureSuppressRef.current)) return;
     if (curveDragYRef.current !== null) {
       curveDragYRef.current = null;
       const v = viewRef.current;
@@ -5158,6 +5278,12 @@ export default function CanvasArea({
           className={styles.viewport}
           ref={viewportRef}
           style={tool === "hand" ? { cursor: hoverCursor ?? "grab" } : undefined}
+          // Capture-phase multi-touch: a two-finger pinch anywhere in the canvas
+          // area zooms/pans, pre-empting the tool (see gestureDown/Move/Up).
+          onPointerDownCapture={gestureDown}
+          onPointerMoveCapture={gestureMove}
+          onPointerUpCapture={gestureUp}
+          onPointerCancelCapture={gestureUp}
           onPointerDown={(e) => {
             // Hand tool: also start a pan when the press lands in the padding
             // around the canvas (target is the viewport itself, not the artwork

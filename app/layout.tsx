@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
 import { getServerAccent, getServerTheme, getServerUiScale } from "./lib/theme.server";
 import "./globals.scss";
@@ -38,6 +38,18 @@ const atlassianMono = localFont({
     },
   ],
 });
+
+// A photo editor owns the pinch gesture: the canvas zooms on pinch, so the
+// PAGE must never zoom. Disable browser page-zoom (the app has its own canvas
+// zoom + a UI-scale preference). `viewport-fit: cover` lets the mobile chrome
+// use the safe-area insets it references.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+};
 
 export const metadata: Metadata = {
   title: "Graphiq Studio — Photo Editor",
