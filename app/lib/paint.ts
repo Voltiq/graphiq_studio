@@ -63,6 +63,8 @@ import type {
   PenAnchor,
   PenSettings,
   ShapeKind,
+  SmudgeSettings,
+  SpongeSettings,
   TextAlign,
   TextAxes,
   TextOpenType,
@@ -313,6 +315,31 @@ export interface EngineHandle {
   ) => void;
   moveBlur: (x: number, y: number) => void;
   endBlur: () => void;
+  /** Smudge brush: begin / extend / finish a colour-dragging stroke. */
+  beginSmudge: (
+    layerId: string,
+    opts: SmudgeSettings,
+    x: number,
+    y: number,
+    fingerColor?: { r: number; g: number; b: number; a: number } | null,
+    clip?: Rect[] | null,
+    clipAngle?: number,
+    clipPivot?: { x: number; y: number } | null,
+  ) => void;
+  moveSmudge: (x: number, y: number) => void;
+  endSmudge: () => void;
+  /** Sponge brush: begin / extend / finish a saturate/desaturate stroke. */
+  beginSponge: (
+    layerId: string,
+    opts: SpongeSettings,
+    x: number,
+    y: number,
+    clip?: Rect[] | null,
+    clipAngle?: number,
+    clipPivot?: { x: number; y: number } | null,
+  ) => void;
+  moveSponge: (x: number, y: number) => void;
+  endSponge: () => void;
   /** Blur Gallery: begin / preview / commit / cancel a live blur-effect session. */
   beginBlurFx: (
     ids: string[],
@@ -932,6 +959,46 @@ export class PaintEngine {
   private dodgeLastRaw = { x: 0, y: 0 };
   private dodgeSmoothPt = { x: 0, y: 0 };
   private dodgeSelMask: Uint8ClampedArray | null = null;
+
+  // Sponge session — the exact dodge/burn coverage-mask model (orig snapshot +
+  // 0–1 coverage, re-baked as saturate/desaturate(orig, coverage × flow)).
+  private sponging = false;
+  private spongeLayer: string | null = null;
+  private spongeOnMask = false;
+  private spongeOrig: ImageData | null = null;
+  private spongeCov: Float32Array | null = null;
+  private spongeTip: { data: Float32Array; size: number; r: number } | null = null;
+  private spongeOpts: SpongeSettings | null = null;
+  private spongeDirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  private spongeStep = 1;
+  private spongeResidual = 0;
+  private spongeLast = { x: 0, y: 0 };
+  private spongeLastRaw = { x: 0, y: 0 };
+  private spongeSmoothPt = { x: 0, y: 0 };
+  private spongeSelMask: Uint8ClampedArray | null = null;
+
+  // Smudge session — NOT the coverage model: a stateful smear. `smudgeData` is a
+  // live working copy of the layer bytes (mutated in place, blitted per segment);
+  // `smudgeCarried` is a tip-sized RGBA buffer of the colour the finger drags,
+  // updated each dab (pickup) and laid back down (deposit). `smudgeImage` wraps
+  // smudgeData so a dirty-rect putImageData repaints only the touched region.
+  private smudging = false;
+  private smudgeLayer: string | null = null;
+  private smudgeOnMask = false;
+  private smudgeOrig: ImageData | null = null; // for the history before-image
+  private smudgeData: Uint8ClampedArray | null = null; // live working bytes
+  private smudgeImage: ImageData | null = null; // wraps smudgeData for blitting
+  private smudgePickup: Uint8ClampedArray | null = null; // sampleAll composite, or null → smudgeData
+  private smudgeCarried: Float32Array | null = null; // tip-sized RGBA the finger carries
+  private smudgeTip: { data: Float32Array; size: number; r: number } | null = null;
+  private smudgeOpts: SmudgeSettings | null = null;
+  private smudgeDirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  private smudgeStep = 1;
+  private smudgeResidual = 0;
+  private smudgeLast = { x: 0, y: 0 };
+  private smudgeLastRaw = { x: 0, y: 0 };
+  private smudgeSmoothPt = { x: 0, y: 0 };
+  private smudgeSelMask: Uint8ClampedArray | null = null;
 
   // Blur Gallery (Effects ▸ Blur Gallery) live preview session: the affected
   // layers' original pixels + a selection mask + the zoom/spin centre.
@@ -5930,6 +5997,477 @@ export class PaintEngine {
     this.dodgeOpts = null;
     this.dodgeDirty = null;
     this.dodgeSelMask = null;
+    this.wandSrc = null;
+    this.emitChange();
+  }
+
+  // ---- Sponge brush (saturate / desaturate) --------------------------------
+  // Structurally identical to dodge/burn: an original snapshot plus a 0–1
+  // coverage buffer, each affected region re-baked from the original so a
+  // stroke stays even and repeated strokes compound. `bakeSponge` is the only
+  // difference — it pushes chroma toward or away from luma.
+  beginSponge(
+    layerId: string,
+    opts: SpongeSettings,
+    x: number,
+    y: number,
+    clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
+  ) {
+    if (this.w < 1 || this.h < 1) return;
+    this.endAdjust();
+    this.spongeOnMask = this.activeSurface(layerId) === "mask";
+    const l = this.spongeOnMask ? this.masks.get(this.maskKeyOf(layerId))! : this.layer(layerId);
+    this.sponging = true;
+    this.spongeLayer = layerId;
+    this.spongeOpts = { ...opts };
+    this.spongeOrig = l.ctx.getImageData(0, 0, this.w, this.h);
+    this.spongeCov = new Float32Array(this.w * this.h);
+    this.spongeSelMask = null;
+    if (clip && clip.length) {
+      const mask = this.selectionMask(clip, clipAngle, clipPivot);
+      const md = mask.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
+      const sa = new Uint8ClampedArray(this.w * this.h);
+      for (let i = 0; i < sa.length; i++) sa[i] = md[i * 4 + 3];
+      this.spongeSelMask = sa;
+    }
+    this.spongeTip = this.buildCoverageTip(Math.max(0.5, opts.size / 2), opts.hardness);
+    this.spongeStep = Math.max(1, opts.size * (opts.spacing / 100));
+    this.spongeResidual = 0;
+    this.spongeDirty = null;
+    this.spongeLast = { x, y };
+    this.spongeLastRaw = { x, y };
+    this.spongeSmoothPt = { x, y };
+    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    this.stampSponge(x, y, seg);
+    this.spongeResidual = this.spongeStep;
+    if (seg.x1 >= seg.x0) this.bakeSponge(seg.x0, seg.y0, seg.x1, seg.y1);
+    this.emitChange();
+  }
+
+  moveSponge(rawX: number, rawY: number) {
+    if (!this.sponging || !this.spongeOpts) return;
+    this.spongeLastRaw = { x: rawX, y: rawY };
+    const alpha = 1 - (this.spongeOpts.smoothing / 100) * 0.85;
+    this.spongeSmoothPt.x += (rawX - this.spongeSmoothPt.x) * alpha;
+    this.spongeSmoothPt.y += (rawY - this.spongeSmoothPt.y) * alpha;
+    this.spongeLineTo(this.spongeSmoothPt.x, this.spongeSmoothPt.y);
+    this.emitChange();
+  }
+
+  private spongeLineTo(x: number, y: number) {
+    const dx = x - this.spongeLast.x;
+    const dy = y - this.spongeLast.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist === 0) return;
+    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    let d = this.spongeResidual;
+    while (d <= dist) {
+      const t = d / dist;
+      this.stampSponge(this.spongeLast.x + dx * t, this.spongeLast.y + dy * t, seg);
+      d += this.spongeStep;
+    }
+    this.spongeResidual = d - dist;
+    this.spongeLast = { x, y };
+    if (seg.x1 >= seg.x0) this.bakeSponge(seg.x0, seg.y0, seg.x1, seg.y1);
+  }
+
+  private stampSponge(
+    cx: number,
+    cy: number,
+    seg: { x0: number; y0: number; x1: number; y1: number },
+  ) {
+    const tip = this.spongeTip;
+    const cov = this.spongeCov;
+    if (!tip || !cov) return;
+    const size = tip.size;
+    const half = size / 2;
+    const left = Math.floor(cx - half);
+    const top = Math.floor(cy - half);
+    for (let py = 0; py < size; py++) {
+      const gy = top + py;
+      if (gy < 0 || gy >= this.h) continue;
+      for (let px = 0; px < size; px++) {
+        const gx = left + px;
+        if (gx < 0 || gx >= this.w) continue;
+        const f = tip.data[py * size + px];
+        if (f <= 0) continue;
+        const idx = gy * this.w + gx;
+        if (f > cov[idx]) cov[idx] = f;
+        if (gx < seg.x0) seg.x0 = gx;
+        if (gy < seg.y0) seg.y0 = gy;
+        if (gx > seg.x1) seg.x1 = gx;
+        if (gy > seg.y1) seg.y1 = gy;
+        const D = this.spongeDirty;
+        if (!D) this.spongeDirty = { x0: gx, y0: gy, x1: gx, y1: gy };
+        else {
+          if (gx < D.x0) D.x0 = gx;
+          if (gy < D.y0) D.y0 = gy;
+          if (gx > D.x1) D.x1 = gx;
+          if (gy > D.y1) D.y1 = gy;
+        }
+      }
+    }
+  }
+
+  /** Re-bake one region as saturate/desaturate(orig) by coverage × flow. */
+  private bakeSponge(x0: number, y0: number, x1: number, y1: number) {
+    const orig = this.spongeOrig;
+    const cov = this.spongeCov;
+    const opts = this.spongeOpts;
+    if (!orig || !cov || !opts || this.spongeLayer == null) return;
+    const ix = Math.max(0, x0);
+    const iy = Math.max(0, y0);
+    const ax = Math.min(this.w - 1, x1);
+    const ay = Math.min(this.h - 1, y1);
+    const iw = ax - ix + 1;
+    const ih = ay - iy + 1;
+    if (iw <= 0 || ih <= 0) return;
+    const od = orig.data;
+    const sel = this.spongeSelMask;
+    const flow = opts.flow / 100;
+    const desat = opts.mode === "desaturate";
+    const vibrance = opts.vibrance;
+    const MASTER = 0.6; // flow 100% in-range ≈ a 60% push per full-coverage pass
+    const out = new Uint8ClampedArray(iw * ih * 4);
+    for (let yy = 0; yy < ih; yy++) {
+      for (let xx = 0; xx < iw; xx++) {
+        const gx = ix + xx;
+        const gy = iy + yy;
+        const ci = gy * this.w + gx;
+        const oi = ci * 4;
+        const r = od[oi];
+        const g = od[oi + 1];
+        const b = od[oi + 2];
+        const doI = (yy * iw + xx) * 4;
+        let m = cov[ci];
+        if (sel) m *= sel[ci] / 255;
+        if (m <= 0) {
+          out[doI] = r;
+          out[doI + 1] = g;
+          out[doI + 2] = b;
+          out[doI + 3] = od[oi + 3];
+          continue;
+        }
+        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+        let k = m * flow * MASTER;
+        if (k > 0.95) k = 0.95;
+        let nr: number;
+        let ng: number;
+        let nb: number;
+        if (desat) {
+          nr = r + (gray - r) * k;
+          ng = g + (gray - g) * k;
+          nb = b + (gray - b) * k;
+        } else {
+          // Saturate: push chroma away from luma. Vibrance eases the push on
+          // already-saturated pixels so they don't clip to a flat primary.
+          if (vibrance) {
+            const maxc = r > g ? (r > b ? r : b) : g > b ? g : b;
+            const minc = r < g ? (r < b ? r : b) : g < b ? g : b;
+            const s = maxc > 0 ? (maxc - minc) / maxc : 0; // 0..1
+            k *= 1 - s;
+          }
+          nr = r + (r - gray) * k;
+          ng = g + (g - gray) * k;
+          nb = b + (b - gray) * k;
+        }
+        out[doI] = nr;
+        out[doI + 1] = ng;
+        out[doI + 2] = nb;
+        out[doI + 3] = od[oi + 3];
+      }
+    }
+    if (this.spongeOnMask) {
+      this.masks.get(this.maskKeyOf(this.spongeLayer))!.ctx.putImageData(new ImageData(out, iw, ih), ix, iy);
+      this.deriveMaskAlpha(this.maskKeyOf(this.spongeLayer), { x: ix, y: iy, w: iw, h: ih });
+    } else {
+      this.layer(this.spongeLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
+    }
+  }
+
+  endSponge() {
+    if (!this.sponging) return;
+    this.spongeLineTo(this.spongeLastRaw.x, this.spongeLastRaw.y);
+    const D = this.spongeDirty;
+    const layerId = this.spongeLayer;
+    if (D && layerId != null && this.spongeOrig) {
+      const x = Math.max(0, D.x0);
+      const y = Math.max(0, D.y0);
+      const w = Math.min(this.w - 1, D.x1) - x + 1;
+      const h = Math.min(this.h - 1, D.y1) - y + 1;
+      if (w > 0 && h > 0) {
+        const mid = this.spongeOnMask ? this.maskKeyOf(layerId) : layerId;
+        const target = this.spongeOnMask ? this.masks.get(mid)! : this.layer(layerId);
+        const before = this.subImage(this.spongeOrig, x, y, w, h);
+        const after = target.ctx.getImageData(x, y, w, h);
+        this.pushEntry(mid, { x, y, w, h }, before, after, "Sponge", undefined, this.spongeOnMask ? "mask" : "layer");
+      }
+    }
+    this.sponging = false;
+    this.spongeOnMask = false;
+    this.spongeLayer = null;
+    this.spongeOrig = null;
+    this.spongeCov = null;
+    this.spongeTip = null;
+    this.spongeOpts = null;
+    this.spongeDirty = null;
+    this.spongeSelMask = null;
+    this.wandSrc = null;
+    this.emitChange();
+  }
+
+  // ---- Smudge brush (drag colour along the stroke) -------------------------
+  // A stateful smear, so NOT the coverage model: the layer bytes are mutated in
+  // place (a working copy blitted per segment), and a tip-sized "carried" RGBA
+  // buffer holds the colour the finger drags — deposited each dab, then refreshed
+  // from the pixels beneath (pickup). `strength` sets how long the colour is
+  // carried (pickup = 1 − strength); premultiplied blending keeps soft edges clean.
+  beginSmudge(
+    layerId: string,
+    opts: SmudgeSettings,
+    x: number,
+    y: number,
+    fingerColor: { r: number; g: number; b: number; a: number } | null = null,
+    clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
+  ) {
+    if (this.w < 1 || this.h < 1) return;
+    this.endAdjust();
+    this.smudgeOnMask = this.activeSurface(layerId) === "mask";
+    const l = this.smudgeOnMask ? this.masks.get(this.maskKeyOf(layerId))! : this.layer(layerId);
+    this.smudging = true;
+    this.smudgeLayer = layerId;
+    this.smudgeOpts = { ...opts };
+    this.smudgeOrig = l.ctx.getImageData(0, 0, this.w, this.h);
+    const data = new Uint8ClampedArray(this.smudgeOrig.data);
+    this.smudgeData = data;
+    // Wrap the SAME buffer so a dirty-rect putImageData repaints only the dab.
+    this.smudgeImage = this.smudgeOnMask
+      ? new ImageData(data, this.w, this.h)
+      : new ImageData(data, this.w, this.h, { colorSpace: this.cs });
+    // Sample-all pickup source (static composite snapshot); layer smudging only.
+    this.smudgePickup = null;
+    if (opts.sampleAll && !this.smudgeOnMask && this.vctx) {
+      try {
+        this.smudgePickup = this.vctx.getImageData(0, 0, this.w, this.h).data;
+      } catch {
+        this.smudgePickup = null;
+      }
+    }
+    this.smudgeSelMask = null;
+    if (clip && clip.length) {
+      const mask = this.selectionMask(clip, clipAngle, clipPivot);
+      const md = mask.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
+      const sa = new Uint8ClampedArray(this.w * this.h);
+      for (let i = 0; i < sa.length; i++) sa[i] = md[i * 4 + 3];
+      this.smudgeSelMask = sa;
+    }
+    const tip = this.buildCoverageTip(Math.max(0.5, opts.size / 2), opts.hardness);
+    this.smudgeTip = tip;
+    this.smudgeStep = Math.max(1, opts.size * (opts.spacing / 100));
+    this.smudgeResidual = 0;
+    this.smudgeDirty = null;
+    this.smudgeLast = { x, y };
+    this.smudgeLastRaw = { x, y };
+    this.smudgeSmoothPt = { x, y };
+    // Seed the carried colour: the foreground (finger painting) or the pixels
+    // under the brush at the start point.
+    const size = tip.size;
+    const carried = new Float32Array(size * size * 4);
+    this.smudgeCarried = carried;
+    const src = this.smudgePickup ?? data;
+    const half = size / 2;
+    const left = Math.floor(x - half);
+    const top = Math.floor(y - half);
+    for (let py = 0; py < size; py++) {
+      const gy = top + py;
+      for (let px = 0; px < size; px++) {
+        const gx = left + px;
+        const coff = (py * size + px) * 4;
+        if (fingerColor) {
+          carried[coff] = fingerColor.r;
+          carried[coff + 1] = fingerColor.g;
+          carried[coff + 2] = fingerColor.b;
+          carried[coff + 3] = fingerColor.a;
+        } else if (gx >= 0 && gx < this.w && gy >= 0 && gy < this.h) {
+          const gi = (gy * this.w + gx) * 4;
+          carried[coff] = src[gi];
+          carried[coff + 1] = src[gi + 1];
+          carried[coff + 2] = src[gi + 2];
+          carried[coff + 3] = src[gi + 3];
+        } // else off-canvas → stays transparent (0)
+      }
+    }
+    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    this.stampSmudge(x, y, seg);
+    this.smudgeResidual = this.smudgeStep;
+    if (seg.x1 >= seg.x0) this.blitSmudge(seg.x0, seg.y0, seg.x1, seg.y1);
+    this.emitChange();
+  }
+
+  moveSmudge(rawX: number, rawY: number) {
+    if (!this.smudging || !this.smudgeOpts) return;
+    this.smudgeLastRaw = { x: rawX, y: rawY };
+    const alpha = 1 - (this.smudgeOpts.smoothing / 100) * 0.85;
+    this.smudgeSmoothPt.x += (rawX - this.smudgeSmoothPt.x) * alpha;
+    this.smudgeSmoothPt.y += (rawY - this.smudgeSmoothPt.y) * alpha;
+    this.smudgeLineTo(this.smudgeSmoothPt.x, this.smudgeSmoothPt.y);
+    this.emitChange();
+  }
+
+  private smudgeLineTo(x: number, y: number) {
+    const dx = x - this.smudgeLast.x;
+    const dy = y - this.smudgeLast.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist === 0) return;
+    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    let d = this.smudgeResidual;
+    while (d <= dist) {
+      const t = d / dist;
+      this.stampSmudge(this.smudgeLast.x + dx * t, this.smudgeLast.y + dy * t, seg);
+      d += this.smudgeStep;
+    }
+    this.smudgeResidual = d - dist;
+    this.smudgeLast = { x, y };
+    if (seg.x1 >= seg.x0) this.blitSmudge(seg.x0, seg.y0, seg.x1, seg.y1);
+  }
+
+  /** One dab: deposit the carried colour (premultiplied), then refresh it from
+   *  the underlying pixels. Mutates smudgeData; grows the segment + total dirty. */
+  private stampSmudge(
+    cx: number,
+    cy: number,
+    seg: { x0: number; y0: number; x1: number; y1: number },
+  ) {
+    const tip = this.smudgeTip;
+    const carried = this.smudgeCarried;
+    const data = this.smudgeData;
+    const opts = this.smudgeOpts;
+    if (!tip || !carried || !data || !opts) return;
+    const size = tip.size;
+    const half = size / 2;
+    const left = Math.floor(cx - half);
+    const top = Math.floor(cy - half);
+    const w = this.w;
+    const h = this.h;
+    const strength = opts.strength / 100;
+    const pickup = 1 - strength; // high strength → carried persists → long smear
+    const pick = this.smudgePickup; // sampleAll composite, else the live layer
+    const sel = this.smudgeSelMask;
+    for (let py = 0; py < size; py++) {
+      const gy = top + py;
+      if (gy < 0 || gy >= h) continue;
+      for (let px = 0; px < size; px++) {
+        const gx = left + px;
+        if (gx < 0 || gx >= w) continue;
+        const f = tip.data[py * size + px];
+        if (f <= 0) continue;
+        const coff = (py * size + px) * 4;
+        const gi = (gy * w + gx) * 4;
+        // Underlying colour (pre-deposit) — the pickup source.
+        const ur = pick ? pick[gi] : data[gi];
+        const ug = pick ? pick[gi + 1] : data[gi + 1];
+        const ub = pick ? pick[gi + 2] : data[gi + 2];
+        const ua = pick ? pick[gi + 3] : data[gi + 3];
+        let lay = f;
+        if (sel) lay *= sel[gy * w + gx] / 255;
+        if (lay > 0) {
+          const cr = carried[coff];
+          const cg = carried[coff + 1];
+          const cb = carried[coff + 2];
+          const ca = carried[coff + 3];
+          const dr = data[gi];
+          const dg = data[gi + 1];
+          const db = data[gi + 2];
+          const da = data[gi + 3];
+          // Premultiplied lerp: data → carried by `lay`.
+          const oa = da + (ca - da) * lay;
+          const opr = dr * da + (cr * ca - dr * da) * lay;
+          const opg = dg * da + (cg * ca - dg * da) * lay;
+          const opb = db * da + (cb * ca - db * da) * lay;
+          const inv = oa > 0 ? 1 / oa : 0;
+          data[gi] = opr * inv;
+          data[gi + 1] = opg * inv;
+          data[gi + 2] = opb * inv;
+          data[gi + 3] = oa;
+        }
+        // Pickup: the finger absorbs some of the underlying colour.
+        const pk = pickup * f;
+        if (pk > 0) {
+          carried[coff] += (ur - carried[coff]) * pk;
+          carried[coff + 1] += (ug - carried[coff + 1]) * pk;
+          carried[coff + 2] += (ub - carried[coff + 2]) * pk;
+          carried[coff + 3] += (ua - carried[coff + 3]) * pk;
+        }
+        if (gx < seg.x0) seg.x0 = gx;
+        if (gy < seg.y0) seg.y0 = gy;
+        if (gx > seg.x1) seg.x1 = gx;
+        if (gy > seg.y1) seg.y1 = gy;
+        const D = this.smudgeDirty;
+        if (!D) this.smudgeDirty = { x0: gx, y0: gy, x1: gx, y1: gy };
+        else {
+          if (gx < D.x0) D.x0 = gx;
+          if (gy < D.y0) D.y0 = gy;
+          if (gx > D.x1) D.x1 = gx;
+          if (gy > D.y1) D.y1 = gy;
+        }
+      }
+    }
+  }
+
+  /** Blit only the touched sub-rect of the working buffer to the layer/mask. */
+  private blitSmudge(x0: number, y0: number, x1: number, y1: number) {
+    const img = this.smudgeImage;
+    if (!img || this.smudgeLayer == null) return;
+    const ix = Math.max(0, x0);
+    const iy = Math.max(0, y0);
+    const ax = Math.min(this.w - 1, x1);
+    const ay = Math.min(this.h - 1, y1);
+    const iw = ax - ix + 1;
+    const ih = ay - iy + 1;
+    if (iw <= 0 || ih <= 0) return;
+    if (this.smudgeOnMask) {
+      const mid = this.maskKeyOf(this.smudgeLayer);
+      this.masks.get(mid)!.ctx.putImageData(img, 0, 0, ix, iy, iw, ih);
+      this.deriveMaskAlpha(mid, { x: ix, y: iy, w: iw, h: ih });
+    } else {
+      this.layer(this.smudgeLayer).ctx.putImageData(img, 0, 0, ix, iy, iw, ih);
+    }
+  }
+
+  endSmudge() {
+    if (!this.smudging) return;
+    this.smudgeLineTo(this.smudgeLastRaw.x, this.smudgeLastRaw.y);
+    const D = this.smudgeDirty;
+    const layerId = this.smudgeLayer;
+    if (D && layerId != null && this.smudgeOrig) {
+      const x = Math.max(0, D.x0);
+      const y = Math.max(0, D.y0);
+      const w = Math.min(this.w - 1, D.x1) - x + 1;
+      const h = Math.min(this.h - 1, D.y1) - y + 1;
+      if (w > 0 && h > 0) {
+        const mid = this.smudgeOnMask ? this.maskKeyOf(layerId) : layerId;
+        const target = this.smudgeOnMask ? this.masks.get(mid)! : this.layer(layerId);
+        const before = this.subImage(this.smudgeOrig, x, y, w, h);
+        const after = target.ctx.getImageData(x, y, w, h);
+        this.pushEntry(mid, { x, y, w, h }, before, after, "Smudge", undefined, this.smudgeOnMask ? "mask" : "layer");
+      }
+    }
+    this.smudging = false;
+    this.smudgeOnMask = false;
+    this.smudgeLayer = null;
+    this.smudgeOrig = null;
+    this.smudgeData = null;
+    this.smudgeImage = null;
+    this.smudgePickup = null;
+    this.smudgeCarried = null;
+    this.smudgeTip = null;
+    this.smudgeOpts = null;
+    this.smudgeDirty = null;
+    this.smudgeSelMask = null;
     this.wandSrc = null;
     this.emitChange();
   }

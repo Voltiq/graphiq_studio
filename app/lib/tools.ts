@@ -16,6 +16,8 @@ import {
   PaintBucket,
   Blend,
   Droplet,
+  Droplets,
+  Fingerprint,
   SunMedium,
   Type,
   PenTool,
@@ -40,7 +42,9 @@ export type ToolId =
   | "bucket"
   | "gradient"
   | "blur"
+  | "smudge"
   | "dodge"
+  | "sponge"
   | "text"
   | "pen"
   | "shape"
@@ -76,7 +80,9 @@ export const TOOL_GROUPS: Tool[][] = [
   ],
   [
     { id: "blur", name: "Blur", icon: Droplet, shortcut: "R" },
+    { id: "smudge", name: "Smudge", icon: Fingerprint, shortcut: "F" },
     { id: "dodge", name: "Dodge", icon: SunMedium, shortcut: "O" },
+    { id: "sponge", name: "Sponge", icon: Droplets, shortcut: "A" },
   ],
   [
     { id: "text", name: "Text", icon: Type, shortcut: "T" },
@@ -230,6 +236,37 @@ export const DEFAULT_BLUR: BlurSettings = {
   smoothing: 20,
   spacing: 15,
   sampleAll: false,
+};
+
+/** Smudge tool: drags colour along the stroke like a finger through wet paint.
+ *  Unlike Blur/Dodge/Sponge (which recompute from the original by a coverage
+ *  mask) this is a stateful smear — a "carried" colour that the stroke pushes
+ *  forward — so the engine paints it incrementally in place. */
+export interface SmudgeSettings {
+  /** Brush diameter, px. */
+  size: number;
+  /** Brush edge softness, 0–100. */
+  hardness: number;
+  /** How far the colour is carried (higher = longer smear), 0–100%. */
+  strength: number;
+  /** Spacing between dabs as a fraction of the brush size, 1–100%. */
+  spacing: number;
+  /** Stroke stabilisation, 0–100. */
+  smoothing: number;
+  /** Pick up colour from the merged composite of all layers (paints the active). */
+  sampleAll: boolean;
+  /** Start the smear with the foreground colour instead of the pixels beneath. */
+  fingerPaint: boolean;
+}
+
+export const DEFAULT_SMUDGE: SmudgeSettings = {
+  size: 40,
+  hardness: 50,
+  strength: 50,
+  spacing: 12,
+  smoothing: 20,
+  sampleAll: false,
+  fingerPaint: false,
 };
 
 /** Text tool: paragraph alignment. */
@@ -522,6 +559,38 @@ export const DEFAULT_DODGE: DodgeSettings = {
   mode: "dodge",
   range: "midtones",
   protect: true,
+  spacing: 12,
+  smoothing: 15,
+};
+
+/** Sponge tool: saturate or desaturate as you paint. Same coverage-mask session
+ *  model as Dodge/Burn (recompute from the original by coverage × flow), so a
+ *  stroke stays even and successive strokes compound. */
+export type SpongeMode = "saturate" | "desaturate";
+
+export interface SpongeSettings {
+  /** Brush diameter, px. */
+  size: number;
+  /** Brush edge softness, 0–100. */
+  hardness: number;
+  /** Strength of each pass, 0–100%. */
+  flow: number;
+  /** Add or remove saturation. */
+  mode: SpongeMode;
+  /** Protect already-saturated colours from clipping (minimises banding). */
+  vibrance: boolean;
+  /** Spacing between dabs as a fraction of the brush size, 1–100%. */
+  spacing: number;
+  /** Stroke stabilisation, 0–100. */
+  smoothing: number;
+}
+
+export const DEFAULT_SPONGE: SpongeSettings = {
+  size: 60,
+  hardness: 50,
+  flow: 50,
+  mode: "saturate",
+  vibrance: true,
   spacing: 12,
   smoothing: 15,
 };

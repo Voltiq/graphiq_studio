@@ -22,6 +22,8 @@ import type {
   CloneSettings,
   CropGrid,
   DodgeSettings,
+  SmudgeSettings,
+  SpongeSettings,
   HealSettings,
   RedEyeSettings,
   MarqueeShape,
@@ -561,6 +563,8 @@ export default function CanvasArea({
   pen,
   shape,
   blur,
+  smudge,
+  sponge,
   heal,
   redEye,
   clone,
@@ -672,6 +676,10 @@ export default function CanvasArea({
   shape: { kind: ShapeKind; strokeWidth: number; radius: number; fill: string; stroke: string };
   /** Blur (focus) brush settings. */
   blur: BlurSettings;
+  /** Smudge brush settings. */
+  smudge: SmudgeSettings;
+  /** Sponge (saturate/desaturate) brush settings. */
+  sponge: SpongeSettings;
   heal: HealSettings;
   /** Red-eye tool settings (search size + darken amount). */
   redEye: RedEyeSettings;
@@ -996,6 +1004,11 @@ export default function CanvasArea({
   const blurRef = useRef(blur);
   blurRef.current = blur;
   const blurHoverRef = useRef<{ x: number; y: number } | null>(null);
+  // Smudge brush: latest settings + hover ring + active flag (colour-drag stroke).
+  const smudgeRef = useRef(smudge);
+  smudgeRef.current = smudge;
+  const smudgeHoverRef = useRef<{ x: number; y: number } | null>(null);
+  const smudgingRef = useRef(false);
   // Spot-heal brush: settings + hover ring + the blob's stroke points (doc
   // space). The blob is shown as a veil while painting and heals on release.
   const healRef = useRef(heal);
@@ -1011,6 +1024,11 @@ export default function CanvasArea({
   dodgeRef.current = dodge;
   const dodgeHoverRef = useRef<{ x: number; y: number } | null>(null);
   const dodgingRef = useRef(false);
+  // Sponge brush: latest settings + hover point + active flag.
+  const spongeRef = useRef(sponge);
+  spongeRef.current = sponge;
+  const spongeHoverRef = useRef<{ x: number; y: number } | null>(null);
+  const spongingRef = useRef(false);
   // Clone stamp: latest settings, the sampled source point (Alt-click), the live
   // source→dest offset, the hover point for the brush ring, and the Alt-held state
   // (which swaps the ring for a "set source" reticle).
@@ -2177,11 +2195,25 @@ export default function CanvasArea({
       drawBrushCursor(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
     }
 
+    if (!anchorArmed && toolRef.current === "smudge" && smudgeHoverRef.current) {
+      const sm = smudgeRef.current;
+      const hx = p.x + smudgeHoverRef.current.x * s;
+      const hy = p.y + smudgeHoverRef.current.y * s;
+      drawBrushCursor(hx, hy, Math.max(1, (sm.size / 2) * s), sm.hardness);
+    }
+
     if (!anchorArmed && toolRef.current === "dodge" && dodgeHoverRef.current) {
       const d = dodgeRef.current;
       const hx = p.x + dodgeHoverRef.current.x * s;
       const hy = p.y + dodgeHoverRef.current.y * s;
       drawBrushCursor(hx, hy, Math.max(1, (d.size / 2) * s), d.hardness);
+    }
+
+    if (!anchorArmed && toolRef.current === "sponge" && spongeHoverRef.current) {
+      const sp = spongeRef.current;
+      const hx = p.x + spongeHoverRef.current.x * s;
+      const hy = p.y + spongeHoverRef.current.y * s;
+      drawBrushCursor(hx, hy, Math.max(1, (sp.size / 2) * s), sp.hardness);
     }
 
     if (!anchorArmed && toolRef.current === "clone" && cloneHoverRef.current) {
@@ -2343,7 +2375,9 @@ export default function CanvasArea({
       (toolRef.current === "heal" && (healHoverRef.current || healPtsRef.current)) ||
       (toolRef.current === "redeye" && redEyeHoverRef.current) ||
       (toolRef.current === "blur" && blurHoverRef.current) ||
+      (toolRef.current === "smudge" && smudgeHoverRef.current) ||
       (toolRef.current === "dodge" && dodgeHoverRef.current) ||
+      (toolRef.current === "sponge" && spongeHoverRef.current) ||
       (toolRef.current === "clone" && cloneHoverRef.current) ||
       (toolRef.current === "text" && textDragRef.current) ||
       (toolRef.current === "eyedropper" && hoverRef.current) ||
@@ -2922,6 +2956,14 @@ export default function CanvasArea({
         engine.beginBlur(layerId, blur, x, y, clip, clipAngle, clipPivot),
       moveBlur: (x, y) => engine.moveBlur(x, y),
       endBlur: () => engine.endBlur(),
+      beginSmudge: (layerId, opts, x, y, finger, clip, clipAngle, clipPivot) =>
+        engine.beginSmudge(layerId, opts, x, y, finger, clip, clipAngle, clipPivot),
+      moveSmudge: (x, y) => engine.moveSmudge(x, y),
+      endSmudge: () => engine.endSmudge(),
+      beginSponge: (layerId, opts, x, y, clip, clipAngle, clipPivot) =>
+        engine.beginSponge(layerId, opts, x, y, clip, clipAngle, clipPivot),
+      moveSponge: (x, y) => engine.moveSponge(x, y),
+      endSponge: () => engine.endSponge(),
       cropSnapshot: (ids) => engine.cropSnapshot(ids),
       applyCrop: (rect, ids, angle) => engine.applyCrop(rect, ids, angle),
       cropRestore: (snap) => engine.cropRestore(snap),
@@ -4245,6 +4287,27 @@ export default function CanvasArea({
         selectionPivot,
       );
     }
+    if (tool === "smudge") {
+      if (!activeLayerId) return; // nothing to smudge on an empty doc
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      smudgingRef.current = true;
+      const p = toDoc(e);
+      smudgeHoverRef.current = { x: p.x, y: p.y };
+      // Finger painting seeds the smear with the foreground colour.
+      const fc = smudge.fingerPaint ? parseColor(fgRef.current) : null;
+      engine.beginSmudge(
+        activeLayerId,
+        smudge,
+        p.x,
+        p.y,
+        fc ? { r: fc.r, g: fc.g, b: fc.b, a: Math.round(fc.a * 255) } : null,
+        selection.length ? selection : null,
+        selectionAngle,
+        selectionPivot,
+      );
+    }
     if (tool === "dodge") {
       if (!activeLayerId) return; // nothing to dodge/burn on an empty doc
       if (engine.isFloating) engine.commitFloat();
@@ -4256,6 +4319,24 @@ export default function CanvasArea({
       engine.beginDodge(
         activeLayerId,
         dodge,
+        p.x,
+        p.y,
+        selection.length ? selection : null,
+        selectionAngle,
+        selectionPivot,
+      );
+    }
+    if (tool === "sponge") {
+      if (!activeLayerId) return; // nothing to sponge on an empty doc
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      spongingRef.current = true;
+      const p = toDoc(e);
+      spongeHoverRef.current = { x: p.x, y: p.y };
+      engine.beginSponge(
+        activeLayerId,
+        sponge,
         p.x,
         p.y,
         selection.length ? selection : null,
@@ -4386,9 +4467,19 @@ export default function CanvasArea({
       blurHoverRef.current = { x: cur.x, y: cur.y };
       ensureAnts();
     }
+    // Smudge: same brush-ring tracking.
+    if (toolRef.current === "smudge") {
+      smudgeHoverRef.current = { x: cur.x, y: cur.y };
+      ensureAnts();
+    }
     // Dodge/Burn: same brush-ring tracking.
     if (toolRef.current === "dodge") {
       dodgeHoverRef.current = { x: cur.x, y: cur.y };
+      ensureAnts();
+    }
+    // Sponge: same brush-ring tracking.
+    if (toolRef.current === "sponge") {
+      spongeHoverRef.current = { x: cur.x, y: cur.y };
       ensureAnts();
     }
     // Clone: track the pointer + Alt state for the brush ring / source marker.
@@ -4745,9 +4836,19 @@ export default function CanvasArea({
       engine.moveBlur(p.x, p.y);
       return;
     }
+    if (smudgingRef.current) {
+      const p = toDoc(e);
+      engine.moveSmudge(p.x, p.y);
+      return;
+    }
     if (dodgingRef.current) {
       const p = toDoc(e);
       engine.moveDodge(p.x, p.y);
+      return;
+    }
+    if (spongingRef.current) {
+      const p = toDoc(e);
+      engine.moveSponge(p.x, p.y);
       return;
     }
     if (!paintingRef.current) return;
@@ -5122,9 +5223,17 @@ export default function CanvasArea({
       engine.endBlur();
       blurringRef.current = false;
     }
+    if (smudgingRef.current) {
+      engine.endSmudge();
+      smudgingRef.current = false;
+    }
     if (dodgingRef.current) {
       engine.endDodge();
       dodgingRef.current = false;
+    }
+    if (spongingRef.current) {
+      engine.endSponge();
+      spongingRef.current = false;
     }
     if (paintingRef.current) {
       engine.endStroke();
@@ -5346,8 +5455,10 @@ export default function CanvasArea({
                       : tool === "zoom"
                         ? "zoom-in"
                         : tool === "blur" ||
+                            tool === "smudge" ||
                             tool === "clone" ||
                             tool === "dodge" ||
+                            tool === "sponge" ||
                             tool === "heal" ||
                             tool === "redeye" ||
                             tool === "brush" ||
@@ -5406,12 +5517,20 @@ export default function CanvasArea({
                   blurHoverRef.current = null;
                   ensureAnts();
                 }
+                if (!smudgingRef.current) {
+                  smudgeHoverRef.current = null;
+                  ensureAnts();
+                }
                 if (!healPtsRef.current) {
                   healHoverRef.current = null;
                   ensureAnts();
                 }
                 if (!dodgingRef.current) {
                   dodgeHoverRef.current = null;
+                  ensureAnts();
+                }
+                if (!spongingRef.current) {
+                  spongeHoverRef.current = null;
                   ensureAnts();
                 }
                 if (!paintingRef.current) {

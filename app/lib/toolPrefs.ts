@@ -15,6 +15,8 @@ import type {
   RedEyeSettings,
   SelectResizeMode,
   ShapeSettings,
+  SmudgeSettings,
+  SpongeSettings,
   TextSettings,
 } from "./tools";
 
@@ -45,6 +47,8 @@ export interface ToolPrefs {
   gradient: GradientSettings;
   pen: PenSettings;
   blur: BlurSettings;
+  smudge: SmudgeSettings;
+  sponge: SpongeSettings;
   heal: HealSettings;
   redEye: RedEyeSettings;
   clone: CloneSettings;

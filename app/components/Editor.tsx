@@ -33,6 +33,8 @@ import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
 import {
   BLUR_FX_LABELS,
   DEFAULT_BLUR,
+  DEFAULT_SMUDGE,
+  DEFAULT_SPONGE,
   DEFAULT_HEAL,
   DEFAULT_REDEYE,
   DEFAULT_BLUR_FX,
@@ -46,6 +48,8 @@ import {
   type BlurFxScope,
   type BlurFxSettings,
   type BlurSettings,
+  type SmudgeSettings,
+  type SpongeSettings,
   type HealSettings,
   type RedEyeSettings,
   type TextRun,
@@ -409,6 +413,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   });
   const [pen, setPen] = useState<PenSettings>({ width: 8, taper: 0, bend: 0 });
   const [blur, setBlur] = useState<BlurSettings>(DEFAULT_BLUR);
+  const [smudge, setSmudge] = useState<SmudgeSettings>(DEFAULT_SMUDGE);
+  const [sponge, setSponge] = useState<SpongeSettings>(DEFAULT_SPONGE);
   const [heal, setHeal] = useState<HealSettings>(DEFAULT_HEAL);
   const [redEye, setRedEye] = useState<RedEyeSettings>(DEFAULT_REDEYE);
   const [clone, setClone] = useState<CloneSettings>(DEFAULT_CLONE);
@@ -525,6 +531,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (p.gradient) setGradient((s) => ({ ...s, ...p.gradient }));
     if (p.pen) setPen((s) => ({ ...s, ...p.pen }));
     if (p.blur) setBlur((s) => ({ ...s, ...p.blur }));
+    if (p.smudge) setSmudge((s) => ({ ...s, ...p.smudge }));
+    if (p.sponge) setSponge((s) => ({ ...s, ...p.sponge }));
     if (p.heal) setHeal((s) => ({ ...s, ...p.heal }));
     if (p.redEye) setRedEye((s) => ({ ...s, ...p.redEye }));
     if (p.clone) setClone((s) => ({ ...s, ...p.clone }));
@@ -560,6 +568,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           gradient,
           pen,
           blur,
+          smudge,
+          sponge,
           heal,
           redEye,
           clone,
@@ -590,6 +600,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     gradient,
     pen,
     blur,
+    smudge,
+    sponge,
     heal,
     redEye,
     clone,
@@ -4572,6 +4584,31 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         }
       }
 
+      // Smudge shortcuts: [ / ] size, { / } hardness, digits = strength.
+      if (toolRef.current === "smudge" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === "[" || e.key === "]") {
+          e.preventDefault();
+          const dir = e.key === "]" ? 1 : -1;
+          setSmudge((s) => {
+            const stepPx = Math.max(1, Math.round(s.size * 0.1));
+            return { ...s, size: Math.max(1, Math.min(500, s.size + dir * stepPx)) };
+          });
+          return;
+        }
+        if (e.key === "{" || e.key === "}") {
+          e.preventDefault();
+          const dir = e.key === "}" ? 1 : -1;
+          setSmudge((s) => ({ ...s, hardness: Math.max(0, Math.min(100, s.hardness + dir * 10)) }));
+          return;
+        }
+        if (/^[0-9]$/.test(e.key)) {
+          e.preventDefault();
+          const n = parseInt(e.key, 10);
+          setSmudge((s) => ({ ...s, strength: n === 0 ? 100 : n * 10 }));
+          return;
+        }
+      }
+
       // Clone-stamp shortcuts: [ / ] size, { / } hardness, digits = opacity.
       if (toolRef.current === "clone" && !e.ctrlKey && !e.metaKey && !e.altKey) {
         if (e.key === "[" || e.key === "]") {
@@ -4625,6 +4662,39 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             e.preventDefault();
             const n = parseInt(e.key, 10);
             setDodge((s) => ({ ...s, exposure: n === 0 ? 100 : n * 10 }));
+            return;
+          }
+        }
+      }
+
+      // Sponge shortcuts: Shift+A toggles saturate↔desaturate, [ / ] size,
+      // { / } hardness, digits = flow.
+      if (toolRef.current === "sponge" && !e.ctrlKey && !e.metaKey) {
+        if (e.shiftKey && key === "a") {
+          e.preventDefault();
+          setSponge((s) => ({ ...s, mode: s.mode === "saturate" ? "desaturate" : "saturate" }));
+          return;
+        }
+        if (!e.altKey) {
+          if (e.key === "[" || e.key === "]") {
+            e.preventDefault();
+            const dir = e.key === "]" ? 1 : -1;
+            setSponge((s) => {
+              const stepPx = Math.max(1, Math.round(s.size * 0.1));
+              return { ...s, size: Math.max(1, Math.min(500, s.size + dir * stepPx)) };
+            });
+            return;
+          }
+          if (e.key === "{" || e.key === "}") {
+            e.preventDefault();
+            const dir = e.key === "}" ? 1 : -1;
+            setSponge((s) => ({ ...s, hardness: Math.max(0, Math.min(100, s.hardness + dir * 10)) }));
+            return;
+          }
+          if (/^[0-9]$/.test(e.key)) {
+            e.preventDefault();
+            const n = parseInt(e.key, 10);
+            setSponge((s) => ({ ...s, flow: n === 0 ? 100 : n * 10 }));
             return;
           }
         }
@@ -4853,6 +4923,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onShape={(patch) => setShape((s) => ({ ...s, ...patch }))}
         blur={blur}
         onBlur={(patch) => setBlur((b) => ({ ...b, ...patch }))}
+        smudge={smudge}
+        onSmudge={(patch) => setSmudge((s) => ({ ...s, ...patch }))}
+        sponge={sponge}
+        onSponge={(patch) => setSponge((s) => ({ ...s, ...patch }))}
         heal={heal}
         onHeal={(patch) => setHeal((h) => ({ ...h, ...patch }))}
         redEye={redEye}
@@ -4940,6 +5014,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             stroke: background,
           }}
           blur={blur}
+          smudge={smudge}
+          sponge={sponge}
           heal={heal}
           redEye={redEye}
           clone={clone}

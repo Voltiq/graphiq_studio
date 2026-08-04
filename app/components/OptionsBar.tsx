@@ -45,6 +45,9 @@ import {
   type DodgeMode,
   type DodgeRange,
   type DodgeSettings,
+  type SmudgeSettings,
+  type SpongeMode,
+  type SpongeSettings,
   type TextAlign,
   type TextSettings,
   type GradientSettings,
@@ -232,6 +235,16 @@ interface BlurProps {
   onBlur: (patch: Partial<BlurSettings>) => void;
 }
 
+interface SmudgeProps {
+  smudge: SmudgeSettings;
+  onSmudge: (patch: Partial<SmudgeSettings>) => void;
+}
+
+interface SpongeProps {
+  sponge: SpongeSettings;
+  onSponge: (patch: Partial<SpongeSettings>) => void;
+}
+
 interface HealProps {
   heal: HealSettings;
   onHeal: (patch: Partial<HealSettings>) => void;
@@ -302,6 +315,10 @@ export default function OptionsBar({
   onShape,
   blur,
   onBlur,
+  smudge,
+  onSmudge,
+  sponge,
+  onSponge,
   heal,
   onHeal,
   redEye,
@@ -356,6 +373,8 @@ export default function OptionsBar({
   onEyedropper: (patch: { size?: string; scope?: string }) => void;
 } & ShapeProps &
   BlurProps &
+  SmudgeProps &
+  SpongeProps &
   HealProps &
   RedEyeProps &
   CloneProps &
@@ -427,6 +446,8 @@ export default function OptionsBar({
           { shape, onShape, fill, onFill, stroke, onStroke },
           { crop, onCrop, cropBox, onCropBox, onCropApply, onCropReset, docWidth, docHeight },
           { blur, onBlur },
+          { smudge, onSmudge },
+          { sponge, onSponge },
           { heal, onHeal },
           { redEye, onRedEye },
           { clone, onClone },
@@ -469,6 +490,8 @@ function renderOptions(
   shapeProps: ShapeProps,
   cropProps: CropProps,
   blurProps: BlurProps,
+  smudgeProps: SmudgeProps,
+  spongeProps: SpongeProps,
   healProps: HealProps,
   redEyeProps: RedEyeProps,
   cloneProps: CloneProps,
@@ -1289,6 +1312,61 @@ function renderOptions(
       );
     }
 
+    case "smudge": {
+      const { smudge, onSmudge } = smudgeProps;
+      return (
+        <>
+          <Slider
+            label="Size"
+            min={1}
+            max={500}
+            unit="px"
+            value={smudge.size}
+            onChange={(n) => onSmudge({ size: n })}
+          />
+          <Slider
+            label="Hardness"
+            unit="%"
+            value={smudge.hardness}
+            onChange={(n) => onSmudge({ hardness: n })}
+          />
+          <Divider />
+          <Slider
+            label="Strength"
+            unit="%"
+            value={smudge.strength}
+            onChange={(n) => onSmudge({ strength: n })}
+          />
+          <Divider />
+          <Slider
+            label="Spacing"
+            min={1}
+            max={100}
+            unit="%"
+            value={smudge.spacing}
+            onChange={(n) => onSmudge({ spacing: n })}
+          />
+          <Slider
+            label="Smoothing"
+            unit="%"
+            value={smudge.smoothing}
+            onChange={(n) => onSmudge({ smoothing: n })}
+          />
+          <Divider />
+          <Toggle
+            label="Sample all layers"
+            checked={smudge.sampleAll}
+            onChange={(v) => onSmudge({ sampleAll: v })}
+          />
+          <Toggle
+            label="Finger painting"
+            checked={smudge.fingerPaint}
+            onChange={(v) => onSmudge({ fingerPaint: v })}
+          />
+        </>
+      );
+    }
+
     case "dodge": {
       const { dodge, onDodge } = dodgeProps;
       const RANGE_OPTS = [
@@ -1358,6 +1436,65 @@ function renderOptions(
             label="Protect tones"
             checked={dodge.protect}
             onChange={(v) => onDodge({ protect: v })}
+          />
+        </>
+      );
+    }
+
+    case "sponge": {
+      const { sponge, onSponge } = spongeProps;
+      return (
+        <>
+          <Segmented
+            label="Mode"
+            value={sponge.mode}
+            onChange={(v) => onSponge({ mode: v as SpongeMode })}
+            options={[
+              { value: "saturate", text: "Saturate" },
+              { value: "desaturate", text: "Desaturate" },
+            ]}
+          />
+          <Slider
+            label="Flow"
+            unit="%"
+            value={sponge.flow}
+            onChange={(n) => onSponge({ flow: n })}
+          />
+          <Divider />
+          <Slider
+            label="Size"
+            min={1}
+            max={500}
+            unit="px"
+            value={sponge.size}
+            onChange={(n) => onSponge({ size: n })}
+          />
+          <Slider
+            label="Hardness"
+            unit="%"
+            value={sponge.hardness}
+            onChange={(n) => onSponge({ hardness: n })}
+          />
+          <Divider />
+          <Slider
+            label="Spacing"
+            min={1}
+            max={100}
+            unit="%"
+            value={sponge.spacing}
+            onChange={(n) => onSponge({ spacing: n })}
+          />
+          <Slider
+            label="Smoothing"
+            unit="%"
+            value={sponge.smoothing}
+            onChange={(n) => onSponge({ smoothing: n })}
+          />
+          <Divider />
+          <Toggle
+            label="Vibrance"
+            checked={sponge.vibrance}
+            onChange={(v) => onSponge({ vibrance: v })}
           />
         </>
       );
