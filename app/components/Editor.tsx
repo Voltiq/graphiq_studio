@@ -4915,6 +4915,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           pan={pan}
           setPan={setPan}
           onViewport={setViewport}
+          mobile={mobile}
           tool={tool}
           brush={activeBrush}
           color={paintColor}

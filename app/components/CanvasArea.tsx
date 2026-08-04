@@ -550,6 +550,7 @@ export default function CanvasArea({
   pan,
   setPan,
   onViewport,
+  mobile = false,
   tool,
   brush,
   color,
@@ -644,6 +645,9 @@ export default function CanvasArea({
   pan: Pan;
   setPan: (p: Pan | ((prev: Pan) => Pan)) => void;
   onViewport: (size: { w: number; h: number }) => void;
+  /** Mobile shell: while an untouched view is still auto-fit, re-fit on viewport
+   *  resize (the desktop→mobile reflow widens the canvas after the first fit). */
+  mobile?: boolean;
   tool: ToolId;
   brush: BrushSettings;
   color: string;
@@ -2642,6 +2646,7 @@ export default function CanvasArea({
   const onViewportRef = useRef(onViewport);
   const widthRef = useRef(width);
   const heightRef = useRef(height);
+  const mobileRef = useRef(mobile);
   zoomRef.current = zoom;
   scaleRef.current = zoom / 100;
   onZoomChangeRef.current = onZoomChange;
@@ -2649,6 +2654,11 @@ export default function CanvasArea({
   onViewportRef.current = onViewport;
   widthRef.current = width;
   heightRef.current = height;
+  mobileRef.current = mobile;
+  // True once the user has zoomed/panned/drawn — a still-false ("pristine") view
+  // re-fits on viewport resize so the mobile-shell reflow (which widens the
+  // canvas after the initial fit) leaves the document centred.
+  const viewTouchedRef = useRef(false);
 
   const prevZoomRef = useRef(zoom);
   const focalRef = useRef<{ ax: number; ay: number } | null>(null);
@@ -2800,7 +2810,12 @@ export default function CanvasArea({
     const ro = new ResizeObserver(() => {
       onViewportRef.current({ w: vp.clientWidth, h: vp.clientHeight });
       setVpSize({ w: vp.clientWidth, h: vp.clientHeight });
-      setPanRef.current((p) => clampHere(p.x, p.y, scaleRef.current, vp));
+      // On mobile the first fit() runs against the transient desktop-flow width
+      // (toolbar + dock still in flow); once the mobile CSS lifts them out and
+      // the canvas widens, re-fit a still-untouched view so it lands centred.
+      // A touched view (or desktop) just clamps the existing pan, as before.
+      if (mobileRef.current && !viewTouchedRef.current) fit();
+      else setPanRef.current((p) => clampHere(p.x, p.y, scaleRef.current, vp));
     });
     ro.observe(vp);
     setVpSize({ w: vp.clientWidth, h: vp.clientHeight });
@@ -3431,6 +3446,7 @@ export default function CanvasArea({
   // pinch and pre-empts the tool, wherever the fingers land.
   const gestureDown = (e: React.PointerEvent) => {
     if (e.pointerType === "mouse") return;
+    viewTouchedRef.current = true; // any canvas touch ends the auto-fit-on-resize
     pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointersRef.current.size >= 2 && !pinchRef.current) beginPinch();
   };
@@ -5124,6 +5140,7 @@ export default function CanvasArea({
 
   // Ref-based so the exposed handle stays valid without re-binding.
   const step = (dir: 1 | -1) => {
+    viewTouchedRef.current = true; // an explicit zoom ends the auto-fit-on-resize
     const z = zoomRef.current;
     const next = ZOOM_STEPS.filter((s) => (dir === 1 ? s > z : s < z));
     if (next.length) onZoomChangeRef.current(dir === 1 ? next[0] : next[next.length - 1]);
