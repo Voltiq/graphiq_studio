@@ -193,6 +193,8 @@ function maskToSegments(mask: Uint8Array, w: number, h: number, b: Bounds): Seg[
 export interface HistorySummary {
   items: { label: string }[];
   index: number;
+  /** Which history state the History brush paints from (0 = the original). */
+  sourceIndex: number;
 }
 
 /** Per-channel tonal distribution of the composite (256 bins per channel). */
@@ -208,6 +210,8 @@ export interface EngineHandle {
   undo: () => void;
   redo: () => void;
   jumpTo: (index: number) => void;
+  /** Point the History brush at a history state (0 = the original). */
+  setHistorySourceIndex: (index: number) => void;
   fillSelection: (
     layerId: string,
     rects: Rect[],
@@ -877,6 +881,8 @@ export class PaintEngine {
     }
     if (dropped) {
       this.pos = Math.max(0, this.pos - dropped);
+      // The History-brush source index rides the same shifting window.
+      this.historySourceIndex = Math.max(0, this.historySourceIndex - dropped);
       this.emitHistory();
     }
   }
@@ -1114,6 +1120,10 @@ export class PaintEngine {
 
   private entries: Entry[] = [];
   private pos = 0;
+  // History brush source: the state index the brush repaints from (0 = the
+  // original). The active layer's pixels AT that index are reconstructed from
+  // its patch entries on demand (beginHistory), so no full snapshots are stored.
+  private historySourceIndex = 0;
 
   onChange: () => void = () => {};
   onHistory: (s: HistorySummary) => void = () => {};
@@ -5253,6 +5263,223 @@ export class PaintEngine {
     }
   }
 
+  // ---- History brush -------------------------------------------------------
+  // Repaints the active layer from its OWN pixels at the source history state.
+  // Reverting must be able to REDUCE alpha (e.g. back to the blank original), so
+  // it can't use source-over compositing — it uses the same coverage-mask model
+  // as blur/dodge: an original snapshot + a 0–1 coverage buffer that builds with
+  // flow, re-baked as a premultiplied LERP from `orig` toward the source pixels
+  // by coverage × opacity. Always targets the LAYER (not a mask surface).
+  private historying = false;
+  private historyLayer: string | null = null;
+  private historyOrig: ImageData | null = null;
+  private historySource: ImageData | null = null; // pixels at the source state
+  private historyCov: Float32Array | null = null;
+  private historyTip: { data: Float32Array; size: number; r: number } | null = null;
+  private historyOpacity = 1;
+  private historyFlow = 1;
+  private historySmoothing = 0;
+  private historyDirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  private historyStep = 1;
+  private historyResidual = 0;
+  private historyLast = { x: 0, y: 0 };
+  private historyLastRaw = { x: 0, y: 0 };
+  private historySmoothPt = { x: 0, y: 0 };
+  private historySelMask: Uint8ClampedArray | null = null;
+
+  beginHistory(
+    layerId: string,
+    brush: BrushSettings,
+    x: number,
+    y: number,
+    clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
+  ) {
+    if (this.w < 1 || this.h < 1) return;
+    this.endAdjust();
+    const l = this.layer(layerId);
+    this.historying = true;
+    this.historyLayer = layerId;
+    this.historyOrig = l.ctx.getImageData(0, 0, this.w, this.h);
+    // The source: this layer's pixels reconstructed at the source history state.
+    const src = this.reconstructLayerAt(layerId, this.historySourceIndex);
+    this.historySource = src.ctx.getImageData(0, 0, this.w, this.h);
+    this.historyCov = new Float32Array(this.w * this.h);
+    this.historyOpacity = Math.max(0, Math.min(1, brush.opacity / 100));
+    this.historyFlow = Math.max(0, Math.min(1, brush.flow / 100));
+    this.historySmoothing = brush.smoothing;
+    this.historySelMask = null;
+    if (clip && clip.length) {
+      const mask = this.selectionMask(clip, clipAngle, clipPivot);
+      const md = mask.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
+      const sa = new Uint8ClampedArray(this.w * this.h);
+      for (let i = 0; i < sa.length; i++) sa[i] = md[i * 4 + 3];
+      this.historySelMask = sa;
+    }
+    this.historyTip = this.buildCoverageTip(Math.max(0.5, brush.size / 2), brush.hardness);
+    this.historyStep = Math.max(1, brush.size * 0.1);
+    this.historyResidual = 0;
+    this.historyDirty = null;
+    this.historyLast = { x, y };
+    this.historyLastRaw = { x, y };
+    this.historySmoothPt = { x, y };
+    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    this.stampHistory(x, y, seg);
+    this.historyResidual = this.historyStep;
+    if (seg.x1 >= seg.x0) this.bakeHistory(seg.x0, seg.y0, seg.x1, seg.y1);
+    this.emitChange();
+  }
+
+  moveHistory(rawX: number, rawY: number) {
+    if (!this.historying) return;
+    this.historyLastRaw = { x: rawX, y: rawY };
+    const alpha = 1 - (this.historySmoothing / 100) * 0.85;
+    this.historySmoothPt.x += (rawX - this.historySmoothPt.x) * alpha;
+    this.historySmoothPt.y += (rawY - this.historySmoothPt.y) * alpha;
+    this.historyLineTo(this.historySmoothPt.x, this.historySmoothPt.y);
+    this.emitChange();
+  }
+
+  private historyLineTo(x: number, y: number) {
+    const dx = x - this.historyLast.x;
+    const dy = y - this.historyLast.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist === 0) return;
+    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    let d = this.historyResidual;
+    while (d <= dist) {
+      const t = d / dist;
+      this.stampHistory(this.historyLast.x + dx * t, this.historyLast.y + dy * t, seg);
+      d += this.historyStep;
+    }
+    this.historyResidual = d - dist;
+    this.historyLast = { x, y };
+    if (seg.x1 >= seg.x0) this.bakeHistory(seg.x0, seg.y0, seg.x1, seg.y1);
+  }
+
+  /** Build coverage with flow: each dab adds `tip × flow` toward 1 (opacity caps
+   *  the effect at bake time), so overlapping dabs build up like a real brush. */
+  private stampHistory(
+    cx: number,
+    cy: number,
+    seg: { x0: number; y0: number; x1: number; y1: number },
+  ) {
+    const tip = this.historyTip;
+    const cov = this.historyCov;
+    if (!tip || !cov) return;
+    const size = tip.size;
+    const half = size / 2;
+    const left = Math.floor(cx - half);
+    const top = Math.floor(cy - half);
+    const flow = this.historyFlow;
+    for (let py = 0; py < size; py++) {
+      const gy = top + py;
+      if (gy < 0 || gy >= this.h) continue;
+      for (let px = 0; px < size; px++) {
+        const gx = left + px;
+        if (gx < 0 || gx >= this.w) continue;
+        const f = tip.data[py * size + px];
+        if (f <= 0) continue;
+        const idx = gy * this.w + gx;
+        const c = cov[idx];
+        const nc = c + (1 - c) * f * flow;
+        if (nc > cov[idx]) cov[idx] = nc;
+        if (gx < seg.x0) seg.x0 = gx;
+        if (gy < seg.y0) seg.y0 = gy;
+        if (gx > seg.x1) seg.x1 = gx;
+        if (gy > seg.y1) seg.y1 = gy;
+        const D = this.historyDirty;
+        if (!D) this.historyDirty = { x0: gx, y0: gy, x1: gx, y1: gy };
+        else {
+          if (gx < D.x0) D.x0 = gx;
+          if (gy < D.y0) D.y0 = gy;
+          if (gx > D.x1) D.x1 = gx;
+          if (gy > D.y1) D.y1 = gy;
+        }
+      }
+    }
+  }
+
+  /** Re-bake a region as a premultiplied lerp orig → source by coverage×opacity. */
+  private bakeHistory(x0: number, y0: number, x1: number, y1: number) {
+    const orig = this.historyOrig;
+    const src = this.historySource;
+    const cov = this.historyCov;
+    if (!orig || !src || !cov || this.historyLayer == null) return;
+    const ix = Math.max(0, x0);
+    const iy = Math.max(0, y0);
+    const ax = Math.min(this.w - 1, x1);
+    const ay = Math.min(this.h - 1, y1);
+    const iw = ax - ix + 1;
+    const ih = ay - iy + 1;
+    if (iw <= 0 || ih <= 0) return;
+    const od = orig.data;
+    const sd = src.data;
+    const sel = this.historySelMask;
+    const opacity = this.historyOpacity;
+    const out = new Uint8ClampedArray(iw * ih * 4);
+    for (let yy = 0; yy < ih; yy++) {
+      for (let xx = 0; xx < iw; xx++) {
+        const gx = ix + xx;
+        const gy = iy + yy;
+        const ci = gy * this.w + gx;
+        const oi = ci * 4;
+        let m = cov[ci] * opacity;
+        if (sel) m *= sel[ci] / 255;
+        const doI = (yy * iw + xx) * 4;
+        if (m <= 0) {
+          out[doI] = od[oi];
+          out[doI + 1] = od[oi + 1];
+          out[doI + 2] = od[oi + 2];
+          out[doI + 3] = od[oi + 3];
+          continue;
+        }
+        // Premultiplied lerp orig → source (so reducing alpha reads clean).
+        const oa = od[oi + 3];
+        const sa = sd[oi + 3];
+        const na = oa + (sa - oa) * m;
+        const opr = od[oi] * oa + (sd[oi] * sa - od[oi] * oa) * m;
+        const opg = od[oi + 1] * oa + (sd[oi + 1] * sa - od[oi + 1] * oa) * m;
+        const opb = od[oi + 2] * oa + (sd[oi + 2] * sa - od[oi + 2] * oa) * m;
+        const inv = na > 0 ? 1 / na : 0;
+        out[doI] = opr * inv;
+        out[doI + 1] = opg * inv;
+        out[doI + 2] = opb * inv;
+        out[doI + 3] = na;
+      }
+    }
+    this.layer(this.historyLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
+  }
+
+  endHistory() {
+    if (!this.historying) return;
+    this.historyLineTo(this.historyLastRaw.x, this.historyLastRaw.y);
+    const D = this.historyDirty;
+    const layerId = this.historyLayer;
+    if (D && layerId != null && this.historyOrig) {
+      const x = Math.max(0, D.x0);
+      const y = Math.max(0, D.y0);
+      const w = Math.min(this.w - 1, D.x1) - x + 1;
+      const h = Math.min(this.h - 1, D.y1) - y + 1;
+      if (w > 0 && h > 0) {
+        const before = this.subImage(this.historyOrig, x, y, w, h);
+        const after = this.layer(layerId).ctx.getImageData(x, y, w, h);
+        this.pushEntry(layerId, { x, y, w, h }, before, after, "History Brush");
+      }
+    }
+    this.historying = false;
+    this.historyLayer = null;
+    this.historyOrig = null;
+    this.historySource = null;
+    this.historyCov = null;
+    this.historyTip = null;
+    this.historyDirty = null;
+    this.historySelMask = null;
+    this.wandSrc = null;
+    this.emitChange();
+  }
+
   /** Erase a layer's pixels (used to hide a vector layer while it's re-edited). */
   clearLayerPixels(layerId: string) {
     this.layer(layerId).ctx.clearRect(0, 0, this.w, this.h);
@@ -7183,9 +7410,44 @@ export class PaintEngine {
   private emitHistory() {
     // Any history change means layer pixels changed → wand source is stale.
     this.wandSrc = null;
+    this.historySourceIndex = Math.max(0, Math.min(this.entries.length, this.historySourceIndex));
     this.onHistory({
       items: [{ label: "New" }, ...this.entries.map((e) => ({ label: e.label }))],
       index: this.pos,
+      sourceIndex: this.historySourceIndex,
     });
+  }
+
+  /** Point the History brush at a history state (0 = the original document). */
+  setHistorySourceIndex(index: number) {
+    this.historySourceIndex = Math.max(0, Math.min(this.entries.length, Math.round(index)));
+    this.emitHistory();
+  }
+
+  /** Reconstruct one layer's pixels AT a history state, by replaying only that
+   *  layer's pixel patches between the current position and `index` onto a copy
+   *  of its live canvas — non-destructive and O(patches for this layer). Mask-
+   *  surface and purely-structural entries are skipped (documented: sourcing
+   *  across a canvas-size change or a layer's own creation is approximate). */
+  private reconstructLayerAt(layerId: string, index: number): Layer {
+    const snap = this.mk(this.w, this.h, true);
+    snap.ctx.drawImage(this.layer(layerId).c, 0, 0);
+    const target = Math.max(0, Math.min(this.entries.length, index));
+    if (target < this.pos) {
+      for (let k = this.pos - 1; k >= target; k--) {
+        const e = this.entries[k];
+        if (e.layerId === layerId && e.surface !== "mask" && e.before && e.rect) {
+          snap.ctx.putImageData(e.before, e.rect.x, e.rect.y);
+        }
+      }
+    } else if (target > this.pos) {
+      for (let k = this.pos; k < target; k++) {
+        const e = this.entries[k];
+        if (e.layerId === layerId && e.surface !== "mask" && e.after && e.rect) {
+          snap.ctx.putImageData(e.after, e.rect.x, e.rect.y);
+        }
+      }
+    }
+    return snap;
   }
 }

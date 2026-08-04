@@ -245,6 +245,11 @@ interface SpongeProps {
   onSponge: (patch: Partial<SpongeSettings>) => void;
 }
 
+interface HistoryBrushProps {
+  historyBrush: BrushSettings;
+  onHistoryBrush: (b: BrushSettings) => void;
+}
+
 interface HealProps {
   heal: HealSettings;
   onHeal: (patch: Partial<HealSettings>) => void;
@@ -319,6 +324,8 @@ export default function OptionsBar({
   onSmudge,
   sponge,
   onSponge,
+  historyBrush,
+  onHistoryBrush,
   heal,
   onHeal,
   redEye,
@@ -375,6 +382,7 @@ export default function OptionsBar({
   BlurProps &
   SmudgeProps &
   SpongeProps &
+  HistoryBrushProps &
   HealProps &
   RedEyeProps &
   CloneProps &
@@ -448,6 +456,7 @@ export default function OptionsBar({
           { blur, onBlur },
           { smudge, onSmudge },
           { sponge, onSponge },
+          { historyBrush, onHistoryBrush },
           { heal, onHeal },
           { redEye, onRedEye },
           { clone, onClone },
@@ -492,6 +501,7 @@ function renderOptions(
   blurProps: BlurProps,
   smudgeProps: SmudgeProps,
   spongeProps: SpongeProps,
+  historyBrushProps: HistoryBrushProps,
   healProps: HealProps,
   redEyeProps: RedEyeProps,
   cloneProps: CloneProps,
@@ -557,6 +567,29 @@ function renderOptions(
           )}
         </>
       );
+
+    case "history": {
+      const { historyBrush, onHistoryBrush } = historyBrushProps;
+      const hset = (patch: Partial<BrushSettings>) => onHistoryBrush({ ...historyBrush, ...patch });
+      return (
+        <>
+          <Slider label="Size" min={1} max={500} unit="px" value={historyBrush.size} onChange={(n) => hset({ size: n })} />
+          <Slider label="Hardness" unit="%" value={historyBrush.hardness} onChange={(n) => hset({ hardness: n })} />
+          <Slider label="Opacity" unit="%" value={historyBrush.opacity} onChange={(n) => hset({ opacity: n })} />
+          <Slider label="Flow" unit="%" value={historyBrush.flow} onChange={(n) => hset({ flow: n })} />
+          <Divider />
+          <Slider
+            label="Smoothing"
+            unit="%"
+            compact
+            value={historyBrush.smoothing}
+            onChange={(n) => hset({ smoothing: n })}
+          />
+          <Divider />
+          <span className={styles.muted}>Paints from the history source — set it in the History panel.</span>
+        </>
+      );
+    }
 
     case "text": {
       const { text, onText } = textProps;

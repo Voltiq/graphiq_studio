@@ -190,6 +190,8 @@ interface Props {
   history: HistorySummary;
   maxHistoryRows: number;
   onHistoryJump: (index: number) => void;
+  /** Point the History brush at a history state (0 = the original). */
+  onSetHistorySource: (index: number) => void;
   view: NavigatorView;
   panels: PanelVisibility;
   adjust: Adjustments;
@@ -262,6 +264,7 @@ export default function RightDock({
   history,
   maxHistoryRows,
   onHistoryJump,
+  onSetHistorySource,
   view,
   adjust,
   onAdjust,
@@ -575,7 +578,9 @@ export default function RightDock({
             <HistoryPanel
               items={history.items}
               index={history.index}
+              sourceIndex={history.sourceIndex}
               onJump={onHistoryJump}
+              onSetSource={onSetHistorySource}
               maxRows={maxHistoryRows}
             />
           </Panel>

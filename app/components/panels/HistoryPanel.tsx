@@ -14,6 +14,7 @@ import {
   FlipVertical2,
   FolderPlus,
   Frame,
+  History,
   Image as ImageIcon,
   ImagePlus,
   Layers,
@@ -78,12 +79,17 @@ const GAP = 2;
 export default function HistoryPanel({
   items,
   index,
+  sourceIndex,
   onJump,
+  onSetSource,
   maxRows = 25,
 }: {
   items: { label: string }[];
   index: number;
+  /** The state the History brush repaints from (0 = the original). */
+  sourceIndex: number;
   onJump: (index: number) => void;
+  onSetSource: (index: number) => void;
   /** Rows shown before the list becomes scrollable. */
   maxRows?: number;
 }) {
@@ -111,7 +117,18 @@ export default function HistoryPanel({
       {items.map((h, i) => {
         const Icon = iconForStep(h.label, i === 0);
         return (
-          <li key={i}>
+          <li key={i} className={styles.historyRow}>
+            <button
+              type="button"
+              className={styles.historySource}
+              data-source={i === sourceIndex}
+              title={i === sourceIndex ? "History-brush source" : "Set as History-brush source"}
+              aria-label="Set as History-brush source"
+              aria-pressed={i === sourceIndex}
+              onClick={() => onSetSource(i)}
+            >
+              <History size={12} />
+            </button>
             <button
               type="button"
               className={styles.historyItem}

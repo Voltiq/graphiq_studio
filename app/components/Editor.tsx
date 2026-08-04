@@ -415,6 +415,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [blur, setBlur] = useState<BlurSettings>(DEFAULT_BLUR);
   const [smudge, setSmudge] = useState<SmudgeSettings>(DEFAULT_SMUDGE);
   const [sponge, setSponge] = useState<SpongeSettings>(DEFAULT_SPONGE);
+  const [historyBrush, setHistoryBrush] = useState<BrushSettings>({
+    size: 24,
+    hardness: 80,
+    opacity: 100,
+    flow: 100,
+    blend: "Normal",
+    smoothing: 20,
+  });
   const [heal, setHeal] = useState<HealSettings>(DEFAULT_HEAL);
   const [redEye, setRedEye] = useState<RedEyeSettings>(DEFAULT_REDEYE);
   const [clone, setClone] = useState<CloneSettings>(DEFAULT_CLONE);
@@ -468,7 +476,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       savePrefs(next);
       return next;
     });
-  const [history, setHistory] = useState<HistorySummary>({ items: [{ label: "New" }], index: 0 });
+  const [history, setHistory] = useState<HistorySummary>({ items: [{ label: "New" }], index: 0, sourceIndex: 0 });
   // Any history movement means unsaved work (autosave + status-bar indicator).
   const historyInitRef = useRef(true);
   useEffect(() => {
@@ -533,6 +541,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (p.blur) setBlur((s) => ({ ...s, ...p.blur }));
     if (p.smudge) setSmudge((s) => ({ ...s, ...p.smudge }));
     if (p.sponge) setSponge((s) => ({ ...s, ...p.sponge }));
+    if (p.historyBrush) setHistoryBrush((s) => ({ ...s, ...p.historyBrush }));
     if (p.heal) setHeal((s) => ({ ...s, ...p.heal }));
     if (p.redEye) setRedEye((s) => ({ ...s, ...p.redEye }));
     if (p.clone) setClone((s) => ({ ...s, ...p.clone }));
@@ -570,6 +579,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           blur,
           smudge,
           sponge,
+          historyBrush,
           heal,
           redEye,
           clone,
@@ -602,6 +612,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     blur,
     smudge,
     sponge,
+    historyBrush,
     heal,
     redEye,
     clone,
@@ -4609,6 +4620,31 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         }
       }
 
+      // History-brush shortcuts: [ / ] size, { / } hardness, digits = opacity.
+      if (toolRef.current === "history" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === "[" || e.key === "]") {
+          e.preventDefault();
+          const dir = e.key === "]" ? 1 : -1;
+          setHistoryBrush((s) => {
+            const stepPx = Math.max(1, Math.round(s.size * 0.1));
+            return { ...s, size: Math.max(1, Math.min(500, s.size + dir * stepPx)) };
+          });
+          return;
+        }
+        if (e.key === "{" || e.key === "}") {
+          e.preventDefault();
+          const dir = e.key === "}" ? 1 : -1;
+          setHistoryBrush((s) => ({ ...s, hardness: Math.max(0, Math.min(100, s.hardness + dir * 10)) }));
+          return;
+        }
+        if (/^[0-9]$/.test(e.key)) {
+          e.preventDefault();
+          const n = parseInt(e.key, 10);
+          setHistoryBrush((s) => ({ ...s, opacity: n === 0 ? 100 : n * 10 }));
+          return;
+        }
+      }
+
       // Clone-stamp shortcuts: [ / ] size, { / } hardness, digits = opacity.
       if (toolRef.current === "clone" && !e.ctrlKey && !e.metaKey && !e.altKey) {
         if (e.key === "[" || e.key === "]") {
@@ -4927,6 +4963,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onSmudge={(patch) => setSmudge((s) => ({ ...s, ...patch }))}
         sponge={sponge}
         onSponge={(patch) => setSponge((s) => ({ ...s, ...patch }))}
+        historyBrush={historyBrush}
+        onHistoryBrush={setHistoryBrush}
         heal={heal}
         onHeal={(patch) => setHeal((h) => ({ ...h, ...patch }))}
         redEye={redEye}
@@ -5016,6 +5054,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           blur={blur}
           smudge={smudge}
           sponge={sponge}
+          historyBrush={historyBrush}
           heal={heal}
           redEye={redEye}
           clone={clone}
@@ -5113,6 +5152,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           history={history}
           maxHistoryRows={prefs.maxHistory}
           onHistoryJump={(i) => paintRef.current?.jumpTo(i)}
+          onSetHistorySource={(i) => paintRef.current?.setHistorySourceIndex(i)}
           view={{
             zoom,
             pan,

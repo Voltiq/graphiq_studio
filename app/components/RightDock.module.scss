@@ -1099,8 +1099,43 @@
   margin: 0 calc(-1 * var(--sp-1));
 }
 
+/* A history row: the History-brush source toggle + the (jump) step button. */
+.historyRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Photoshop-style source marker: click to point the History brush at this
+   state; the active source lights up accent. */
+.historySource {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  opacity: 0.5;
+  transition: opacity var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+
+  &:hover {
+    opacity: 1;
+    color: var(--text-2);
+    background: var(--wash);
+  }
+
+  &[data-source="true"] {
+    opacity: 1;
+    color: var(--accent);
+    background: var(--selected-bg);
+  }
+}
+
 .historyItem {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 10px;

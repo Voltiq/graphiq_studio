@@ -18,6 +18,7 @@ import {
   Droplet,
   Droplets,
   Fingerprint,
+  History,
   SunMedium,
   Type,
   PenTool,
@@ -36,6 +37,7 @@ export type ToolId =
   | "brush"
   | "pencil"
   | "eraser"
+  | "history"
   | "clone"
   | "heal"
   | "redeye"
@@ -72,6 +74,7 @@ export const TOOL_GROUPS: Tool[][] = [
     { id: "brush", name: "Brush", icon: Brush, shortcut: "B" },
     { id: "pencil", name: "Pencil", icon: Pencil, shortcut: "N" },
     { id: "eraser", name: "Eraser", icon: Eraser, shortcut: "E" },
+    { id: "history", name: "History brush", icon: History, shortcut: "K" },
     { id: "clone", name: "Clone stamp", icon: Stamp, shortcut: "S" },
     { id: "heal", name: "Spot heal", icon: Bandage, shortcut: "J" },
     { id: "redeye", name: "Red eye", icon: Eye, shortcut: "Y" },

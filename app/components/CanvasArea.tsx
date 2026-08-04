@@ -565,6 +565,7 @@ export default function CanvasArea({
   blur,
   smudge,
   sponge,
+  historyBrush,
   heal,
   redEye,
   clone,
@@ -680,6 +681,8 @@ export default function CanvasArea({
   smudge: SmudgeSettings;
   /** Sponge (saturate/desaturate) brush settings. */
   sponge: SpongeSettings;
+  /** History brush settings (brush controls; paints from the source state). */
+  historyBrush: BrushSettings;
   heal: HealSettings;
   /** Red-eye tool settings (search size + darken amount). */
   redEye: RedEyeSettings;
@@ -1009,6 +1012,12 @@ export default function CanvasArea({
   smudgeRef.current = smudge;
   const smudgeHoverRef = useRef<{ x: number; y: number } | null>(null);
   const smudgingRef = useRef(false);
+  // History brush: latest settings + hover ring + active flag (coverage-lerp
+  // stroke — its own begin/move/end, like blur/dodge).
+  const historyBrushRef = useRef(historyBrush);
+  historyBrushRef.current = historyBrush;
+  const historyHoverRef = useRef<{ x: number; y: number } | null>(null);
+  const historyingRef = useRef(false);
   // Spot-heal brush: settings + hover ring + the blob's stroke points (doc
   // space). The blob is shown as a veil while painting and heals on release.
   const healRef = useRef(heal);
@@ -2195,6 +2204,13 @@ export default function CanvasArea({
       drawBrushCursor(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
     }
 
+    if (!anchorArmed && toolRef.current === "history" && historyHoverRef.current) {
+      const hb = historyBrushRef.current;
+      const hx = p.x + historyHoverRef.current.x * s;
+      const hy = p.y + historyHoverRef.current.y * s;
+      drawBrushCursor(hx, hy, Math.max(1, (hb.size / 2) * s), hb.hardness);
+    }
+
     if (!anchorArmed && toolRef.current === "smudge" && smudgeHoverRef.current) {
       const sm = smudgeRef.current;
       const hx = p.x + smudgeHoverRef.current.x * s;
@@ -2375,6 +2391,7 @@ export default function CanvasArea({
       (toolRef.current === "heal" && (healHoverRef.current || healPtsRef.current)) ||
       (toolRef.current === "redeye" && redEyeHoverRef.current) ||
       (toolRef.current === "blur" && blurHoverRef.current) ||
+      (toolRef.current === "history" && historyHoverRef.current) ||
       (toolRef.current === "smudge" && smudgeHoverRef.current) ||
       (toolRef.current === "dodge" && dodgeHoverRef.current) ||
       (toolRef.current === "sponge" && spongeHoverRef.current) ||
@@ -2892,6 +2909,7 @@ export default function CanvasArea({
       undo: () => engine.undo(),
       redo: () => engine.redo(),
       jumpTo: (i) => engine.jumpTo(i),
+      setHistorySourceIndex: (i) => engine.setHistorySourceIndex(i),
       fillSelection: (layerId, rects, col, angle, pivot, feather) =>
         engine.fillSelection(layerId, rects, col, angle, pivot, feather),
       eraseSelection: (layerId, rects, angle, pivot, label, feather) =>
@@ -4344,6 +4362,24 @@ export default function CanvasArea({
         selectionPivot,
       );
     }
+    if (tool === "history") {
+      if (!activeLayerId) return; // needs a layer with history to paint from
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      historyingRef.current = true;
+      const p = toDoc(e);
+      historyHoverRef.current = { x: p.x, y: p.y };
+      engine.beginHistory(
+        activeLayerId,
+        historyBrush,
+        p.x,
+        p.y,
+        selection.length ? selection : null,
+        selectionAngle,
+        selectionPivot,
+      );
+    }
     if (tool === "clone") {
       const p = toDoc(e);
       cloneHoverRef.current = { x: p.x, y: p.y };
@@ -4443,6 +4479,11 @@ export default function CanvasArea({
     // Brush / pencil / eraser: track the pointer for the brush-ring cursor.
     if (toolRef.current === "brush" || toolRef.current === "pencil" || toolRef.current === "eraser") {
       paintHoverRef.current = { x: cur.x, y: cur.y };
+      ensureAnts();
+    }
+    // History brush: same brush-ring tracking (painting rides the shared path).
+    if (toolRef.current === "history") {
+      historyHoverRef.current = { x: cur.x, y: cur.y };
       ensureAnts();
     }
     // Red-eye: ring cursor tracking.
@@ -4841,6 +4882,11 @@ export default function CanvasArea({
       engine.moveSmudge(p.x, p.y);
       return;
     }
+    if (historyingRef.current) {
+      const p = toDoc(e);
+      engine.moveHistory(p.x, p.y);
+      return;
+    }
     if (dodgingRef.current) {
       const p = toDoc(e);
       engine.moveDodge(p.x, p.y);
@@ -5227,6 +5273,10 @@ export default function CanvasArea({
       engine.endSmudge();
       smudgingRef.current = false;
     }
+    if (historyingRef.current) {
+      engine.endHistory();
+      historyingRef.current = false;
+    }
     if (dodgingRef.current) {
       engine.endDodge();
       dodgingRef.current = false;
@@ -5456,6 +5506,7 @@ export default function CanvasArea({
                         ? "zoom-in"
                         : tool === "blur" ||
                             tool === "smudge" ||
+                            tool === "history" ||
                             tool === "clone" ||
                             tool === "dodge" ||
                             tool === "sponge" ||
@@ -5519,6 +5570,10 @@ export default function CanvasArea({
                 }
                 if (!smudgingRef.current) {
                   smudgeHoverRef.current = null;
+                  ensureAnts();
+                }
+                if (!historyingRef.current) {
+                  historyHoverRef.current = null;
                   ensureAnts();
                 }
                 if (!healPtsRef.current) {

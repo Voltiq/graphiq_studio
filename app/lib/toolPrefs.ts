@@ -49,6 +49,8 @@ export interface ToolPrefs {
   blur: BlurSettings;
   smudge: SmudgeSettings;
   sponge: SpongeSettings;
+  /** History brush (reuses the brush settings shape). */
+  historyBrush: BrushSettings;
   heal: HealSettings;
   redEye: RedEyeSettings;
   clone: CloneSettings;

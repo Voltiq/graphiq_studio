@@ -49,3 +49,6 @@ DESIGN.dark.md
 
 # roadmap / TODO (local, not part of the repo)
 TODO.md
+
+# GitHub release description (local, regenerated per release)
+RELEASE.md
