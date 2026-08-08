@@ -77,6 +77,8 @@ import {
   findNode,
   flattenedIds,
   clearLinkKey,
+  fillLabel,
+  isFillLayer,
   insertInGroup,
   insertRelative,
   isLinked,
@@ -93,6 +95,7 @@ import {
   ungroupNode,
   updateNode,
   type ActiveSurface,
+  type FillSpec,
   type Layer,
   type LayerAdjustment,
   type LayerGroup,
@@ -204,6 +207,7 @@ import {
   type ExtraAdjustmentType,
 } from "../lib/adjust-extra";
 import AdjustmentExtraDialog from "./AdjustmentExtraDialog";
+import FillDialog from "./FillDialog";
 import ExportLutDialog from "./ExportLutDialog";
 import ExportTiffDialog from "./ExportTiffDialog";
 import ExportPdfDialog from "./ExportPdfDialog";
@@ -1567,6 +1571,86 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     return id;
   };
 
+  // ---- Fill layers ---------------------------------------------------------
+  const [fillEdit, setFillEdit] = useState<{ layerId: string } | null>(null);
+  // The Fill editor closes the moment its layer goes away (delete / undo).
+  useEffect(() => {
+    if (!fillEdit) return;
+    const n = findNode(active.layers, fillEdit.layerId);
+    if (!n || n.type !== "layer" || !n.fill) setFillEdit(null);
+  }, [active.layers, fillEdit]);
+  // A default fill spec for a new fill layer of the given kind (uses the current
+  // colours so it's immediately meaningful, then opens the editor to tweak).
+  const defaultFill = (kind: "solid" | "gradient"): FillSpec =>
+    kind === "solid"
+      ? { kind: "solid", color: foreground }
+      : {
+          kind: "gradient",
+          gradient: {
+            stops: [
+              { color: foreground, pos: 0 },
+              { color: background, pos: 1 },
+            ],
+            type: "linear",
+            angle: 90,
+            scale: 1,
+            reverse: false,
+            smooth: false,
+          },
+        };
+
+  // Insert a new Fill layer above the active node (folding a live selection into
+  // a confining mask), as one undoable structural step. Mirrors addAdjustmentOp.
+  const addFillLayer = (fill: FillSpec): string | null => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    if (!eng) return null;
+    commitAdjustEdit();
+    const docId = d.id;
+    const selBefore = selNow();
+    const before = d.layers;
+    const id = nextLeafId();
+    const node: Layer = {
+      id,
+      type: "layer",
+      name: fillLabel(fill),
+      visible: true,
+      opacity: 100,
+      blend: "Normal",
+      fill,
+    };
+    const anchor = d.activeLayerId ? findNode(before, d.activeLayerId) : null;
+    let after: LayerNode[];
+    if (anchor && anchor.type === "group") after = insertInGroup(before, node, anchor.id);
+    else if (anchor) after = insertRelative(before, node, anchor.id, true);
+    else after = [node, ...before];
+    const hasSel = d.selection.length > 0;
+    if (hasSel) {
+      after = updateNode(after, id, { mask: { enabled: true, linked: true } });
+      eng.allocMask(id, "selection", d.selection, d.selectionAngle, d.selectionPivot);
+    }
+    const maskSnap = hasSel ? eng.captureMask(id) : null;
+    setDocSel(docId, after, single(id));
+    eng.pushStructural(
+      "New Fill Layer",
+      () => {
+        if (hasSel) eng.freeMask(id);
+        setDocSel(docId, before, selBefore);
+      },
+      () => {
+        if (maskSnap) eng.restoreMask(id, maskSnap);
+        setDocSel(docId, after, single(id));
+      },
+    );
+    return id;
+  };
+
+  // Create a fill layer of the given kind and open its editor immediately.
+  const addFillOp = (kind: "solid" | "gradient") => {
+    const id = addFillLayer(defaultFill(kind));
+    if (id) setFillEdit({ layerId: id });
+  };
+
   // Live param edit from the panel (no per-tick history; one step per gesture).
   const editAdjustmentParams = (patch: Partial<Adjustments>) => {
     const d = activeDocRef.current;
@@ -2480,6 +2564,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     },
     unlinkLayer: (id) =>
       patchActiveDoc((d) => ({ ...d, layers: pruneLinks(clearLinkKey(d.layers, new Set([id]))) })),
+    addFill: (kind) => addFillOp(kind),
+    editFill: (id) => {
+      if (isFillLayer(findNode(active.layers, id))) setFillEdit({ layerId: id });
+    },
     maskSurface: paintSurface,
     chooseSurface,
     addMask: addMaskOp,
@@ -3054,6 +3142,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           opacity: n.opacity,
           blend: n.blend,
           ...(n.vector ? { vector: n.vector } : {}),
+          ...(n.fill ? { fill: n.fill } : {}), // v14 fill layer (no pixel data)
           ...mask,
           ...fx,
           ...clip,
@@ -4440,6 +4529,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "undo") doUndo();
     else if (actionId === "redo") doRedo();
     else if (actionId === "layer-new") addLayerOp();
+    else if (actionId === "fill-solid") addFillOp("solid");
+    else if (actionId === "fill-gradient") addFillOp("gradient");
     else if (actionId === "layer-duplicate") duplicateSelected();
     else if (actionId === "layer-delete") removeSelected();
     else if (actionId === "layer-group") groupSelected();
@@ -5143,7 +5234,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             showToast(
               kind === "pixels"
                 ? "This layer's pixels are locked — unlock it in the Layers panel to edit."
-                : "This layer's position is locked — unlock it in the Layers panel to move it.",
+                : kind === "position"
+                  ? "This layer's position is locked — unlock it in the Layers panel to move it."
+                  : "This is a fill layer — double-click it to edit, or paint on its mask to confine it.",
             )
           }
           selection={active.selection}
@@ -5582,6 +5675,23 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           }}
         />
       )}
+      {fillEdit &&
+        (() => {
+          const n = findNode(active.layers, fillEdit.layerId);
+          if (!n || n.type !== "layer" || !n.fill) return null;
+          return (
+            <FillDialog
+              fill={n.fill}
+              onChange={(fill) =>
+                patchActiveDoc((d) => ({
+                  ...d,
+                  layers: updateNode(d.layers, fillEdit.layerId, { fill }),
+                }))
+              }
+              onClose={() => setFillEdit(null)}
+            />
+          );
+        })()}
       {toneEdit && toneSpec && toneEdit.tool === "curves" && toneSpec.type === "curves" && (
         <CurvesDialog
           spec={toneSpec}

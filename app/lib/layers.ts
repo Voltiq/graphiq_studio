@@ -1,7 +1,7 @@
 import type { AdjustmentSpec } from "./adjust";
 import type { FxKey, LayerEffects } from "./effects";
 import type { SmartFilter } from "./filters";
-import type { VectorData } from "./tools";
+import type { GradientStop, GradientType, VectorData } from "./tools";
 
 /** Per-layer mask metadata. The mask *pixels* live in the paint engine (keyed by
  *  layer id, mirroring layer pixels); only this metadata lives on the tree. */
@@ -100,12 +100,44 @@ export interface LayerBase {
   filterMask?: MaskMeta;
 }
 
+/** A re-editable gradient fill (full-canvas). Reuses the gradient tool's stop
+ *  model + type; `angle`/`scale` place it (it isn't drawn by dragging). */
+export interface GradientFill {
+  stops: GradientStop[];
+  type: GradientType;
+  /** Direction in degrees (0 = →, 90 = ↓). */
+  angle: number;
+  /** Span as a fraction of the canvas diagonal (1 = corner-to-corner). */
+  scale: number;
+  reverse: boolean;
+  /** Angle gradients only: soften the wrap seam. */
+  smooth: boolean;
+}
+
+/** A Fill layer's parametric content — rendered fresh at composite time, never
+ *  baked, so it stays re-editable (like Photoshop's Solid/Gradient fill layers). */
+export type FillSpec =
+  | { kind: "solid"; color: string }
+  | { kind: "gradient"; gradient: GradientFill };
+
 /** A pixel layer (has its own canvas in the paint engine, keyed by id). */
 export interface LayerLeaf extends LayerBase {
   type: "layer";
   /** If set, the layer is a rasterized shape/text that can be re-edited as a vector. */
   vector?: VectorData;
+  /** If set, the layer is a parametric Fill layer: it stores no pixels, the
+   *  engine renders `fill` full-canvas each frame (confined by mask/clip). */
+  fill?: FillSpec;
 }
+
+/** A layer whose content comes from a fill spec (no stored pixels). */
+export const isFillLayer = (
+  n: LayerNode | null | undefined,
+): n is LayerLeaf & { fill: FillSpec } => !!n && n.type === "layer" && !!n.fill;
+
+/** A short human label for a fill spec (panel sublabel / default name). */
+export const fillLabel = (fill: FillSpec): string =>
+  fill.kind === "solid" ? "Color Fill" : "Gradient Fill";
 
 /** A folder of layers/groups. Has no pixels of its own; composites its children. */
 export interface LayerGroup extends LayerBase {
@@ -138,6 +170,7 @@ export type LayerPatch = Partial<
   linkKey?: string | undefined;
   expanded?: boolean;
   vector?: VectorData;
+  fill?: FillSpec | undefined;
   mask?: MaskMeta | undefined;
   adjustment?: AdjustmentSpec;
   clipped?: boolean;
@@ -632,6 +665,10 @@ export interface LayersApi {
   toggleLinkSelected: () => void;
   /** Unlink one layer from its link set (row chain / context menu). */
   unlinkLayer: (id: string) => void;
+  /** Add a Solid/Gradient fill layer (creates it and opens its editor). */
+  addFill: (kind: "solid" | "gradient") => void;
+  /** Open the Fill editor for an existing fill layer. */
+  editFill: (id: string) => void;
   // ---- Layer masks ----
   /** The active layer's current paint surface (drives the active-surface ring). */
   maskSurface: ActiveSurface;

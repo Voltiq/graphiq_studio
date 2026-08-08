@@ -91,7 +91,9 @@ function serializeNode(
       children: node.children.map((c) => serializeNode(c, getImage, getMask)),
     };
   }
-  return { ...node, data: getImage(node.id), maskImage, filterMaskImage };
+  // A Fill layer stores no pixels (its `fill` spec rides through the spread).
+  const data = node.fill ? null : getImage(node.id);
+  return { ...node, data, maskImage, filterMaskImage };
 }
 
 /** Build the full, self-describing project document (layers + pixels + state). */
@@ -104,7 +106,7 @@ export function serializeProject(
 ): ProjectFile {
   return {
     format: "graphiq-project",
-    version: 13, // v13 adds linked layers (v12 edit locks, v11 pen paths, v10 labels, v9 metadata)
+    version: 14, // v14 adds fill layers (v13 linked layers, v12 edit locks, v11 pen paths, v10 labels)
     name: doc.name,
     width: doc.width,
     height: doc.height,

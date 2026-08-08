@@ -54,6 +54,7 @@ import {
 import {
   collectLeafIds,
   findNode,
+  isFillLayer,
   isPixelsLocked,
   isPositionLocked,
   linkedLeafIds,
@@ -724,8 +725,8 @@ export default function CanvasArea({
   layers: LayerNode[];
   activeLayerId: string | null;
   ensureLayer: () => string;
-  /** A locked layer blocked an edit — the editor shows the matching toast. */
-  onLockedAction?: (kind: "pixels" | "position") => void;
+  /** A locked (or parametric fill) layer blocked an edit — editor shows a toast. */
+  onLockedAction?: (kind: "pixels" | "position" | "fill") => void;
   selection: Rect[];
   onSelectionChange: (rects: Rect[]) => void;
   /** Update the selection rects WITHOUT resetting the rotation transform. */
@@ -1381,19 +1382,36 @@ export default function CanvasArea({
     if (blocked) onLockedActionRef.current?.(kind);
     return blocked;
   };
-  // Paint tools: block when the target layer's pixels are locked — but never when
+  // Paint tools: block when the target layer's pixels aren't editable — a fill
+  // layer is parametric (no pixels), or its pixels are locked — but never when
   // the active surface is a mask (masks are separate rasters, always paintable).
-  const paintBlocked = (id: string | null): boolean =>
-    !!id && engine.getActiveSurface(id) === "pixels" && lockBlocks(id, "pixels");
+  const paintBlocked = (id: string | null): boolean => {
+    if (!id || engine.getActiveSurface(id) !== "pixels") return false;
+    if (isFillLayer(findNode(layersRef.current, id))) {
+      onLockedActionRef.current?.("fill");
+      return true;
+    }
+    return lockBlocks(id, "pixels");
+  };
+  // Move tools: block a fill layer (nothing to move — it fills the canvas) or a
+  // position-locked layer.
+  const moveBlocked = (id: string | null): boolean => {
+    if (!id) return false;
+    if (isFillLayer(findNode(layersRef.current, id))) {
+      onLockedActionRef.current?.("fill");
+      return true;
+    }
+    return lockBlocks(id, "position");
+  };
   // Linked layers that should ride along a whole-layer move of `primaryId`: the
   // other leaf pixel layers sharing its link key, minus any that are position-
-  // locked (a locked layer stays put). Each carries its own mask-link flag.
+  // locked or parametric fills (which don't move). Each carries its mask-link flag.
   const linkedMoveExtras = (primaryId: string): { id: string; maskLinked: boolean }[] => {
     const out: { id: string; maskLinked: boolean }[] = [];
     for (const id of linkedLeafIds(layersRef.current, primaryId)) {
       if (id === primaryId) continue;
       const node = findNode(layersRef.current, id);
-      if (!node || node.type !== "layer" || isPositionLocked(node)) continue;
+      if (!node || node.type !== "layer" || isPositionLocked(node) || isFillLayer(node)) continue;
       out.push({ id, maskLinked: !!node.mask && node.mask.linked !== false });
     }
     return out;
@@ -3427,7 +3445,7 @@ export default function CanvasArea({
     // layer's position is locked, in which case only the marquee reshapes.
     const liftContent = (): boolean => {
       if (!((tool === "shape" || resizeMode === "content") && activeLayerId)) return false;
-      if (lockBlocks(activeLayerId, "position")) return false;
+      if (moveBlocked(activeLayerId)) return false; // position-locked or fill layer
       return engine.beginFloatFromSelection(
         activeLayerId,
         selection,
@@ -3927,7 +3945,7 @@ export default function CanvasArea({
           n.baseOff = engine.getFloatOffset();
         } else {
           if (!layerId) return;
-          if (lockBlocks(layerId, "position")) return; // position-locked layer
+          if (moveBlocked(layerId)) return; // position-locked or fill layer
           const node = findNode(layersRef.current, layerId);
           if (!node || node.type !== "layer") return; // pixel leaves only
           n.float = false;
@@ -4052,7 +4070,7 @@ export default function CanvasArea({
       } else {
         // Pixels mode: float an active selection (or keep moving the current float),
         // leaving the layer's own content untouched until deselect.
-        if (lockBlocks(activeLayerId, "position")) return; // position-locked layer
+        if (moveBlocked(activeLayerId)) return; // position-locked or fill layer
         let floating = engine.isFloating && engine.floatLayerId === activeLayerId;
         if (!floating && activeLayerId && selection.length) {
           floating = engine.beginFloatFromSelection(

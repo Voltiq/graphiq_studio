@@ -1,7 +1,7 @@
 ﻿import { parseColor, toHex8 } from "./color";
 import type { Rect } from "./view";
 import { blendOp, clipGroupsOf, filterMaskKey, type ClipGroup } from "./layers";
-import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerNode } from "./layers";
+import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers";
 import { applyAdjustments, applyAdjustments16, isDefaultAdjust, type Adjustments } from "./adjust";
 import { applyExtraAdjustment, extraIsDefault, isExtraSpec, type ExtraAdjustment } from "./adjust-extra";
 import { removeRedEyeInPlace } from "./redeye";
@@ -3252,7 +3252,9 @@ export class PaintEngine {
       return `G${fnv(sig)}|${flt}|${fmv}|${fx}|${mv}|${this.cs}|${this.docEpoch}`;
     }
     const pv = this.pixelVersion.get(node.id) ?? 0;
-    return `L${pv}|${flt}|${fmv}|${fx}|${mv}|${this.cs}|${this.docEpoch}`;
+    // A Fill layer's render depends on its spec, not stored pixels.
+    const fillH = node.type === "layer" && node.fill ? fnv(this.specHash(node.fill)) : "0";
+    return `L${pv}|${fillH}|${flt}|${fmv}|${fx}|${mv}|${this.cs}|${this.docEpoch}`;
   }
 
   /** What a parent's merge depends on for one child: the child's intrinsic key
@@ -3379,12 +3381,43 @@ export class PaintEngine {
    * render cache. Live-session layers (and their ancestors) bypass the cache
    * entirely so in-progress edits render fresh every frame, exactly as before.
    */
+  /** Render a Fill layer's parametric content full-canvas into an owned buffer
+   *  (cached like any intrinsic render, keyed on the fill spec via nodeKey). */
+  private renderFill(node: LayerLeaf): HTMLCanvasElement {
+    const out = this.mk(this.w, this.h);
+    const ctx = out.ctx;
+    const fill = node.fill!;
+    if (fill.kind === "solid") {
+      ctx.fillStyle = fill.color;
+      ctx.fillRect(0, 0, this.w, this.h);
+      return out.c;
+    }
+    const g = fill.gradient;
+    // Reverse just flips the stop positions (buildCanvasGradient re-sorts).
+    const stops = g.reverse ? g.stops.map((s) => ({ color: s.color, pos: 1 - s.pos })) : g.stops;
+    const cx = this.w / 2;
+    const cy = this.h / 2;
+    const half = Math.max(1, ((g.scale || 1) * Math.hypot(this.w, this.h)) / 2);
+    const rad = (g.angle * Math.PI) / 180;
+    const dir = { x: Math.cos(rad), y: Math.sin(rad) };
+    // Radial/angle grow from the centre; linear/reflected run through it.
+    const start =
+      g.type === "radial" || g.type === "angle"
+        ? { x: cx, y: cy }
+        : { x: cx - dir.x * half, y: cy - dir.y * half };
+    const end = { x: cx + dir.x * half, y: cy + dir.y * half };
+    ctx.fillStyle = buildCanvasGradient(ctx, g.type, start, end, 0.5, stops, g.smooth);
+    ctx.fillRect(0, 0, this.w, this.h);
+    return out.c;
+  }
+
   private renderNode(node: LayerNode): HTMLCanvasElement | null {
     if (node.type === "adjustment") return null; // handled by drawStack
-    // Plain leaf (no mask, no effects, no smart filters): its layer canvas IS
-    // the intrinsic render — alias it, no copy, no cache entry needed.
+    // Plain leaf (no fill, no mask, no effects, no smart filters): its layer
+    // canvas IS the intrinsic render — alias it, no copy, no cache entry needed.
     if (
       node.type === "layer" &&
+      !node.fill &&
       !node.mask?.enabled &&
       !hasEnabledFx(node.effects) &&
       !hasEnabledFilters(node.filters)
@@ -3450,7 +3483,8 @@ export class PaintEngine {
    *  its mask / opacity / blend). Null when a leaf has no canvas. */
   private styledSource(node: LayerNode): HTMLCanvasElement | null {
     if (node.type === "group") return node.children.length ? this.groupMerged(node) : null;
-    const disp = this.leafDisplay(node.id);
+    // A Fill layer's base pixels come from its spec, not a stored canvas.
+    const disp = node.type === "layer" && node.fill ? this.renderFill(node) : this.leafDisplay(node.id);
     if (!disp) return null;
     // Order within a layer: raw pixels → smart filters → layer effects.
     // (Effects derive their silhouette from the FILTERED display — Spec 07 §5.3.)

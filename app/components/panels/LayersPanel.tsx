@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDownToLine,
@@ -22,6 +22,7 @@ import {
   Lock,
   Move,
   Paintbrush,
+  PaintBucket,
   Pencil,
   Plus,
   FlaskConical,
@@ -33,19 +34,24 @@ import {
 } from "lucide-react";
 import styles from "../RightDock.module.scss";
 import { EditableValue, Select } from "../Controls";
+import { cssGradient } from "../GradientControl";
+import { swatchBg } from "../../lib/color";
 import { uiZoom } from "../../lib/ui-scale";
 import {
   BLEND_MODES,
   clipGroupsOf,
   EMPTY_LAYER_FILTER,
   filterLayerTree,
+  fillLabel,
   findNode,
   hasAnyLock,
+  isFillLayer,
   isLinked,
   isPixelsLocked,
   isPositionLocked,
   isTransparencyLocked,
   labelColor,
+  type FillSpec,
   layerFilterActive,
   LAYER_LABELS,
   type LayerFilter,
@@ -74,6 +80,13 @@ const LOCK_DEFS: { flag: LockFlag; label: string; Icon: typeof Lock; pixelOnly?:
   { flag: "position", label: "position", Icon: Move },
   { flag: "all", label: "all", Icon: Lock },
 ];
+
+/** Background style previewing a fill spec in the layer thumbnail. */
+function fillPreview(fill: FillSpec): CSSProperties {
+  return fill.kind === "solid"
+    ? swatchBg(fill.color)
+    : { backgroundImage: cssGradient(fill.gradient.stops) };
+}
 
 /** Human-readable summary of a layer's active locks (row indicator tooltip). */
 function lockSummary(n: LayerNode): string {
@@ -415,6 +428,16 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                   <span
                     className={styles.layerThumb}
                     data-active={l.mask || l.filterMask ? l.id === activeLayerId && api.maskSurface === "pixels" : undefined}
+                    style={isFillLayer(l) ? fillPreview(l.fill) : undefined}
+                    title={isFillLayer(l) ? "Fill layer — double-click to edit" : undefined}
+                    onDoubleClick={
+                      isFillLayer(l)
+                        ? (e) => {
+                            e.stopPropagation();
+                            api.editFill(l.id);
+                          }
+                        : undefined
+                    }
                     onClick={
                       l.mask || l.filterMask
                         ? (e) => {
@@ -554,7 +577,14 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                     </span>
                   )}
                   <span className={styles.layerSub}>
-                    {isAdjustment ? "Adjustment" : isGroup ? "Group" : "Layer"} · {l.opacity}%
+                    {isAdjustment
+                      ? "Adjustment"
+                      : isGroup
+                        ? "Group"
+                        : isFillLayer(l)
+                          ? fillLabel(l.fill)
+                          : "Layer"}{" "}
+                    · {l.opacity}%
                   </span>
                 </div>
                 {hasAnyLock(l) && (
@@ -762,6 +792,11 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
             {menu.node.type === "adjustment" && (
               <button type="button" onClick={() => run(() => api.editAdjustment(menu.node.id))}>
                 <Contrast size={13} /> Edit Adjustment…
+              </button>
+            )}
+            {isFillLayer(menu.node) && (
+              <button type="button" onClick={() => run(() => api.editFill(menu.node.id))}>
+                <PaintBucket size={13} /> Edit Fill…
               </button>
             )}
             <button type="button" onClick={() => run(() => api.toggleClip(menu.node.id))}>
