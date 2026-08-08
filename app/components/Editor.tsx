@@ -41,6 +41,7 @@ import {
   DEFAULT_CLONE,
   DEFAULT_CROP,
   DEFAULT_DODGE,
+  DEFAULT_QUICKSELECT,
   DEFAULT_TEXT,
   DEFAULT_TOOL,
   SAMPLE_SIZE_PX,
@@ -68,6 +69,7 @@ import {
   type LassoMode,
   type MarqueeShape,
   type MeasureLine,
+  type QuickSelectSettings,
   type ShapeSettings,
   type ToolId,
 } from "../lib/tools";
@@ -437,6 +439,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   });
   const [pen, setPen] = useState<PenSettings>({ width: 8, taper: 0, bend: 0 });
   const [blur, setBlur] = useState<BlurSettings>(DEFAULT_BLUR);
+  const [quickSelect, setQuickSelect] = useState<QuickSelectSettings>(DEFAULT_QUICKSELECT);
   const [smudge, setSmudge] = useState<SmudgeSettings>(DEFAULT_SMUDGE);
   const [sponge, setSponge] = useState<SpongeSettings>(DEFAULT_SPONGE);
   const [historyBrush, setHistoryBrush] = useState<BrushSettings>({
@@ -581,6 +584,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (p.gradient) setGradient((s) => ({ ...s, ...p.gradient }));
     if (p.pen) setPen((s) => ({ ...s, ...p.pen }));
     if (p.blur) setBlur((s) => ({ ...s, ...p.blur }));
+    if (p.quickSelect) setQuickSelect((s) => ({ ...s, ...p.quickSelect }));
     if (p.smudge) setSmudge((s) => ({ ...s, ...p.smudge }));
     if (p.sponge) setSponge((s) => ({ ...s, ...p.sponge }));
     if (p.historyBrush) setHistoryBrush((s) => ({ ...s, ...p.historyBrush }));
@@ -614,6 +618,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           eraser,
           pencil,
           wand,
+          quickSelect,
           bucket,
           shape,
           gradient,
@@ -647,6 +652,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     eraser,
     pencil,
     wand,
+    quickSelect,
     bucket,
     shape,
     gradient,
@@ -4813,6 +4819,25 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         }
       }
 
+      // Quick-select shortcuts: [ / ] brush size, digits = tolerance.
+      if (toolRef.current === "quickselect" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === "[" || e.key === "]") {
+          e.preventDefault();
+          const dir = e.key === "]" ? 1 : -1;
+          setQuickSelect((s) => {
+            const stepPx = Math.max(1, Math.round(s.size * 0.1));
+            return { ...s, size: Math.max(1, Math.min(500, s.size + dir * stepPx)) };
+          });
+          return;
+        }
+        if (/^[0-9]$/.test(e.key)) {
+          e.preventDefault();
+          const n = parseInt(e.key, 10);
+          setQuickSelect((s) => ({ ...s, tolerance: n === 0 ? 100 : n * 10 }));
+          return;
+        }
+      }
+
       // Blur (focus) brush shortcuts: [ / ] size, { / } hardness, digits = strength.
       if (toolRef.current === "blur" && !e.ctrlKey && !e.metaKey && !e.altKey) {
         if (e.key === "[" || e.key === "]") {
@@ -5188,6 +5213,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onTriangleApex={setTriangleApex}
         wand={wand}
         onWand={(patch) => setWand((wd) => ({ ...wd, ...patch }))}
+        quickSelect={quickSelect}
+        onQuickSelect={(patch) => setQuickSelect((q) => ({ ...q, ...patch }))}
         bucket={bucket}
         onBucket={(patch) => setBucket((b) => ({ ...b, ...patch }))}
         gradient={gradient}
@@ -5350,6 +5377,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           lassoMode={lassoMode}
           triangleApex={triangleApex}
           wand={wand}
+          quickSelect={quickSelect}
+          onQuickSelect={(patch) => setQuickSelect((q) => ({ ...q, ...patch }))}
           sampleSize={SAMPLE_SIZE_PX[sampleSizeLabel] ?? 1}
           sampleAllLayers={sampleScopeLabel === "All layers"}
           onPick={setPaintColor}

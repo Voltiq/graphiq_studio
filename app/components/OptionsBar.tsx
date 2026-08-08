@@ -58,6 +58,7 @@ import {
   type MarqueeShape,
   type MeasureLine,
   type MoveMode,
+  type QuickSelectSettings,
   type PenSettings,
   type SelectResizeMode,
   type ShapeKind,
@@ -311,6 +312,8 @@ export default function OptionsBar({
   onTriangleApex,
   wand,
   onWand,
+  quickSelect,
+  onQuickSelect,
   bucket,
   onBucket,
   gradient,
@@ -376,6 +379,8 @@ export default function OptionsBar({
   onTriangleApex: (v: number) => void;
   wand: { tolerance: number; contiguous: boolean; sampleAll: boolean };
   onWand: (patch: Partial<{ tolerance: number; contiguous: boolean; sampleAll: boolean }>) => void;
+  quickSelect: QuickSelectSettings;
+  onQuickSelect: (patch: Partial<QuickSelectSettings>) => void;
   bucket: { tolerance: number; opacity: number; contiguous: boolean; antialias: boolean };
   onBucket: (patch: Partial<{ tolerance: number; opacity: number; contiguous: boolean; antialias: boolean }>) => void;
   gradient: GradientSettings;
@@ -452,6 +457,8 @@ export default function OptionsBar({
           onTriangleApex,
           wand,
           onWand,
+          quickSelect,
+          onQuickSelect,
           bucket,
           onBucket,
           gradient,
@@ -500,6 +507,8 @@ function renderOptions(
   onTriangleApex: (v: number) => void,
   wand: { tolerance: number; contiguous: boolean; sampleAll: boolean },
   onWand: (patch: Partial<{ tolerance: number; contiguous: boolean; sampleAll: boolean }>) => void,
+  quickSelect: QuickSelectSettings,
+  onQuickSelect: (patch: Partial<QuickSelectSettings>) => void,
   bucket: { tolerance: number; opacity: number; contiguous: boolean; antialias: boolean },
   onBucket: (patch: Partial<{ tolerance: number; opacity: number; contiguous: boolean; antialias: boolean }>) => void,
   gradient: GradientSettings,
@@ -1638,6 +1647,38 @@ function renderOptions(
         <span className={styles.muted}>Drag a line on the canvas to measure distance &amp; angle.</span>
       );
     }
+
+    case "quickselect":
+      return (
+        <>
+          <Slider
+            label="Size"
+            min={1}
+            max={500}
+            value={quickSelect.size}
+            onChange={(n) => onQuickSelect({ size: n })}
+            unit="px"
+          />
+          <Divider />
+          <Slider
+            label="Tolerance"
+            min={1}
+            max={100}
+            value={quickSelect.tolerance}
+            onChange={(n) => onQuickSelect({ tolerance: n })}
+          />
+          <Divider />
+          <Toggle
+            label="Sample all layers"
+            checked={quickSelect.sampleAll}
+            onChange={(v) => onQuickSelect({ sampleAll: v })}
+          />
+          <Divider />
+          <span className={styles.muted}>
+            Brush over a region — it grows to the edges. Alt-drag to subtract.
+          </span>
+        </>
+      );
 
     case "move":
       return (

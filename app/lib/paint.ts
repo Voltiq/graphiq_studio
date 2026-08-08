@@ -43,6 +43,7 @@ import { GpuToneRenderer } from "./gpu";
 import { healPadding, healRegion } from "./heal";
 import { buildCanvasGradient } from "./gradient";
 import { solveHomography } from "./homography";
+import { buildEdgeField, type EdgeField } from "./magnetic";
 import {
   applyToneLUTs,
   applyToneLUTs16,
@@ -1213,6 +1214,27 @@ export class PaintEngine {
   } | null = null;
   // Reused magic-wand scratch buffers (mask / flood-fill stack / visited).
   private wandBuf: { mask: Uint8Array; stack: Int32Array; seen: Uint8Array; n: number } | null = null;
+  // Quick-select session: source pixels + edge field snapshotted at stroke start,
+  // an accumulating selection mask, per-dab visit stamps, the running brushed-colour
+  // mean, and the selection's growing bounds. Grows incrementally per brush dab.
+  private qs: {
+    data: Uint8ClampedArray;
+    edge: EdgeField;
+    mask: Uint8Array; // 1 = selected
+    stamp: Int32Array; // last dab index that visited a pixel (avoids re-clearing)
+    stack: Int32Array;
+    dab: number;
+    subtract: boolean;
+    tol: number;
+    mr: number; // running brushed-colour mean
+    mg: number;
+    mb: number;
+    count: number;
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+  } | null = null;
   // When set, adjustments only affect this (possibly rotated) selection region.
   private adjSel: Rect[] | null = null;
   private adjSelAngle = 0;
@@ -5203,6 +5225,175 @@ export class PaintEngine {
     const rects = maskToRects(mask, w, b);
     if (!rects.length) return null;
     return { rects, segments: maskToSegments(mask, w, h, b) };
+  }
+
+  // ---- Quick selection (edge-aware region grow) ----------------------------
+  /** Begin a quick-selection stroke: snapshot the sampled surface + its edge
+   *  field, and seed the accumulating mask with the current selection. */
+  beginQuickSelect(
+    layerId: string,
+    opts: { tolerance: number; sampleAll: boolean },
+    base: Rect[] | null,
+    subtract: boolean,
+  ): void {
+    const w = this.w;
+    const h = this.h;
+    const ctx = opts.sampleAll ? this.vctx : this.layers.get(layerId)?.ctx;
+    if (!ctx) {
+      this.qs = null;
+      return;
+    }
+    const data = ctx.getImageData(0, 0, w, h, { colorSpace: "srgb" }).data;
+    const n = w * h;
+    const mask = new Uint8Array(n);
+    let x0 = w;
+    let y0 = h;
+    let x1 = -1;
+    let y1 = -1;
+    if (base) {
+      for (const r of base) {
+        const rx0 = Math.max(0, r.x);
+        const ry0 = Math.max(0, r.y);
+        const rx1 = Math.min(w, r.x + r.w);
+        const ry1 = Math.min(h, r.y + r.h);
+        for (let yy = ry0; yy < ry1; yy++) {
+          const row = yy * w;
+          for (let xx = rx0; xx < rx1; xx++) mask[row + xx] = 1;
+        }
+        if (rx0 < rx1 && ry0 < ry1) {
+          x0 = Math.min(x0, rx0);
+          y0 = Math.min(y0, ry0);
+          x1 = Math.max(x1, rx1 - 1);
+          y1 = Math.max(y1, ry1 - 1);
+        }
+      }
+    }
+    this.qs = {
+      data,
+      edge: buildEdgeField(data, w, h),
+      mask,
+      stamp: new Int32Array(n),
+      stack: new Int32Array(n),
+      dab: 0,
+      subtract,
+      tol: Math.max(1, opts.tolerance),
+      mr: 0,
+      mg: 0,
+      mb: 0,
+      count: 0,
+      x0,
+      y0,
+      x1,
+      y1,
+    };
+  }
+
+  /** One brush dab (centre `x,y`, pixel radius `r`): grows (add) or shrinks
+   *  (subtract) the selection through the edge-aware colour region. */
+  quickSelectDab(x: number, y: number, r: number): WandSelection | null {
+    const qs = this.qs;
+    if (!qs) return null;
+    const w = this.w;
+    const h = this.h;
+    const { data, edge, mask, stamp, stack } = qs;
+    const sub = qs.subtract;
+    const dab = ++qs.dab;
+    const cx = Math.round(x);
+    const cy = Math.round(y);
+    const rad = Math.max(1, Math.round(r));
+    const rr = rad * rad;
+    // Seed from the brush footprint: select those pixels outright (user intent),
+    // fold their colour into the running region mean, and queue them to grow from.
+    let sp = 0;
+    const bx0 = Math.max(0, cx - rad);
+    const bx1 = Math.min(w - 1, cx + rad);
+    const by0 = Math.max(0, cy - rad);
+    const by1 = Math.min(h - 1, cy + rad);
+    for (let yy = by0; yy <= by1; yy++) {
+      const dy = yy - cy;
+      for (let xx = bx0; xx <= bx1; xx++) {
+        const dx = xx - cx;
+        if (dx * dx + dy * dy > rr) continue;
+        const p = yy * w + xx;
+        const i = p * 4;
+        qs.mr += data[i];
+        qs.mg += data[i + 1];
+        qs.mb += data[i + 2];
+        qs.count++;
+        if (sub) {
+          mask[p] = 0;
+        } else {
+          mask[p] = 1;
+          if (xx < qs.x0) qs.x0 = xx;
+          if (xx > qs.x1) qs.x1 = xx;
+          if (yy < qs.y0) qs.y0 = yy;
+          if (yy > qs.y1) qs.y1 = yy;
+        }
+        if (stamp[p] !== dab) {
+          stamp[p] = dab;
+          stack[sp++] = p;
+        }
+      }
+    }
+    if (qs.count === 0) return this.qsResult();
+    const mr = qs.mr / qs.count;
+    const mg = qs.mg / qs.count;
+    const mb = qs.mb / qs.count;
+    const tol = qs.tol * 1.6; // UI 0–100 → colour distance
+    const edgeW = 0.35; // strong edges raise the colour bar
+    const EDGE_STOP = 46; // an edge this strong is a wall (don't expand across it)
+    // BFS grow: only step into pixels not yet handled by this dab, and — to keep
+    // the whole stroke ~O(final selection) — only into pixels not already in the
+    // right state (unselected for add, selected for subtract).
+    while (sp > 0) {
+      const p = stack[--sp];
+      if (edge.mag[p] > EDGE_STOP) continue; // edge pixel: a boundary, no expansion
+      const px = p % w;
+      const py = (p - px) / w;
+      const step = (q: number) => {
+        if (stamp[q] === dab) return;
+        stamp[q] = dab;
+        if (sub ? mask[q] === 0 : mask[q] === 1) return; // already in target state
+        const iq = q * 4;
+        const cd = Math.max(
+          Math.abs(data[iq] - mr),
+          Math.abs(data[iq + 1] - mg),
+          Math.abs(data[iq + 2] - mb),
+        );
+        if (cd + edgeW * edge.mag[q] > tol) return; // too far / across an edge
+        if (sub) {
+          mask[q] = 0;
+        } else {
+          mask[q] = 1;
+          const qx = q % w;
+          const qy = (q - qx) / w;
+          if (qx < qs.x0) qs.x0 = qx;
+          if (qx > qs.x1) qs.x1 = qx;
+          if (qy < qs.y0) qs.y0 = qy;
+          if (qy > qs.y1) qs.y1 = qy;
+        }
+        stack[sp++] = q;
+      };
+      if (px > 0) step(p - 1);
+      if (px < w - 1) step(p + 1);
+      if (py > 0) step(p - w);
+      if (py < h - 1) step(p + w);
+    }
+    return this.qsResult();
+  }
+
+  private qsResult(): WandSelection | null {
+    const qs = this.qs;
+    if (!qs || qs.x1 < 0) return null;
+    const b: Bounds = { x0: qs.x0, y0: qs.y0, x1: qs.x1 + 1, y1: qs.y1 + 1 };
+    const rects = maskToRects(qs.mask, this.w, b);
+    if (!rects.length) return null;
+    return { rects, segments: maskToSegments(qs.mask, this.w, this.h, b) };
+  }
+
+  /** End the quick-selection stroke (free the session buffers). */
+  endQuickSelect(): void {
+    this.qs = null;
   }
 
   /**

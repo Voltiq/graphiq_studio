@@ -7,6 +7,7 @@ import {
   BoxSelect,
   Lasso,
   Wand2,
+  SquareDashedMousePointer,
   Crop,
   Pipette,
   Brush,
@@ -33,6 +34,7 @@ export type ToolId =
   | "select"
   | "lasso"
   | "wand"
+  | "quickselect"
   | "crop"
   | "eyedropper"
   | "measure"
@@ -69,6 +71,7 @@ export const TOOL_GROUPS: Tool[][] = [
     { id: "select", name: "Rectangular marquee", icon: BoxSelect, shortcut: "M" },
     { id: "lasso", name: "Lasso", icon: Lasso, shortcut: "L" },
     { id: "wand", name: "Magic wand", icon: Wand2, shortcut: "W" },
+    { id: "quickselect", name: "Quick selection", icon: SquareDashedMousePointer, shortcut: "Q" },
     { id: "crop", name: "Crop", icon: Crop, shortcut: "C" },
     { id: "eyedropper", name: "Eyedropper", icon: Pipette, shortcut: "I" },
     { id: "measure", name: "Measure", icon: Ruler, shortcut: "I" },
@@ -163,6 +166,16 @@ export function measureInfo(m: MeasureLine): {
   return { dx, dy, length, angle, straighten: dev };
 }
 
+/** Quick-selection tool: brush over a region and it grows a selection along edges. */
+export interface QuickSelectSettings {
+  /** Brush diameter, px. */
+  size: number;
+  /** Colour tolerance 0–100 — how far the region grows from the brushed colour. */
+  tolerance: number;
+  /** Sample the active layer only, or the merged composite of all layers. */
+  sampleAll: boolean;
+}
+
 /** Shape tool: the geometry being drawn. */
 export type ShapeKind = "rect" | "ellipse" | "tri" | "trapezoid";
 
@@ -233,6 +246,12 @@ export const CROP_RATIOS: { id: string; label: string; w: number; h: number }[] 
   { id: "4:5", label: "4 : 5", w: 4, h: 5 },
   { id: "7:5", label: "7 : 5", w: 7, h: 5 },
 ];
+
+export const DEFAULT_QUICKSELECT: QuickSelectSettings = {
+  size: 30,
+  tolerance: 25,
+  sampleAll: false,
+};
 
 export const DEFAULT_CROP: CropSettings = {
   ratio: "free",

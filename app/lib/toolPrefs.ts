@@ -12,6 +12,7 @@ import type {
   MarqueeShape,
   MoveMode,
   PenSettings,
+  QuickSelectSettings,
   RedEyeSettings,
   SelectResizeMode,
   ShapeSettings,
@@ -42,6 +43,7 @@ export interface ToolPrefs {
   eraser: BrushSettings;
   pencil: BrushSettings;
   wand: WandSettings;
+  quickSelect: QuickSelectSettings;
   bucket: BucketSettings;
   shape: ShapeSettings;
   gradient: GradientSettings;

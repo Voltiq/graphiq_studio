@@ -29,6 +29,7 @@ import type {
   RedEyeSettings,
   MarqueeShape,
   MeasureLine,
+  QuickSelectSettings,
   TextSettings,
   GradientStop,
   GradientType,
@@ -617,6 +618,8 @@ export default function CanvasArea({
   marqueeShape,
   triangleApex,
   wand,
+  quickSelect,
+  onQuickSelect,
   sampleSize,
   sampleAllLayers,
   onPick,
@@ -766,6 +769,8 @@ export default function CanvasArea({
   /** Triangle-marquee apex position as a fraction of width (0.5 = isosceles). */
   triangleApex: number;
   wand: { tolerance: number; contiguous: boolean; sampleAll: boolean };
+  quickSelect: QuickSelectSettings;
+  onQuickSelect: (patch: Partial<QuickSelectSettings>) => void;
   sampleSize: number;
   sampleAllLayers: boolean;
   onPick: (hex: string) => void;
@@ -1039,6 +1044,14 @@ export default function CanvasArea({
   const blurRef = useRef(blur);
   blurRef.current = blur;
   const blurHoverRef = useRef<{ x: number; y: number } | null>(null);
+  // Quick-selection brush: latest settings + hover ring + in-stroke state.
+  const quickSelectRef = useRef(quickSelect);
+  quickSelectRef.current = quickSelect;
+  const onQuickSelectRef = useRef(onQuickSelect);
+  onQuickSelectRef.current = onQuickSelect;
+  const quickSelectHoverRef = useRef<{ x: number; y: number } | null>(null);
+  const qsDraggingRef = useRef(false);
+  const qsLastRef = useRef<{ x: number; y: number } | null>(null);
   // Smudge brush: latest settings + hover ring + active flag (colour-drag stroke).
   const smudgeRef = useRef(smudge);
   smudgeRef.current = smudge;
@@ -2407,6 +2420,13 @@ export default function CanvasArea({
       drawBrushCursor(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
     }
 
+    if (!anchorArmed && toolRef.current === "quickselect" && quickSelectHoverRef.current) {
+      const q = quickSelectRef.current;
+      const hx = p.x + quickSelectHoverRef.current.x * s;
+      const hy = p.y + quickSelectHoverRef.current.y * s;
+      drawBrushCursor(hx, hy, Math.max(1, (q.size / 2) * s), 100);
+    }
+
     if (!anchorArmed && toolRef.current === "history" && historyHoverRef.current) {
       const hb = historyBrushRef.current;
       const hx = p.x + historyHoverRef.current.x * s;
@@ -2594,6 +2614,7 @@ export default function CanvasArea({
       (toolRef.current === "heal" && (healHoverRef.current || healPtsRef.current)) ||
       (toolRef.current === "redeye" && redEyeHoverRef.current) ||
       (toolRef.current === "blur" && blurHoverRef.current) ||
+      (toolRef.current === "quickselect" && quickSelectHoverRef.current) ||
       (toolRef.current === "history" && historyHoverRef.current) ||
       (toolRef.current === "smudge" && smudgeHoverRef.current) ||
       (toolRef.current === "dodge" && dodgeHoverRef.current) ||
@@ -4326,6 +4347,28 @@ export default function CanvasArea({
       ensureAnts();
       return;
     }
+    if (tool === "quickselect") {
+      if (!quickSelect.sampleAll && !activeLayerId) return; // need a layer to sample
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      const p = toDoc(e);
+      const subtract = e.altKey; // Alt = subtract; a plain brush grows the selection
+      engine.beginQuickSelect(
+        activeLayerId ?? "",
+        { tolerance: quickSelect.tolerance, sampleAll: quickSelect.sampleAll },
+        selection.length ? selection : null,
+        subtract,
+      );
+      qsDraggingRef.current = true;
+      qsLastRef.current = { x: p.x, y: p.y };
+      quickSelectHoverRef.current = { x: p.x, y: p.y };
+      const r = engine.quickSelectDab(p.x, p.y, quickSelect.size / 2);
+      if (r) applyCombined(r);
+      else onSelectionChange([]);
+      ensureAnts();
+      return;
+    }
     if (tool === "select") {
       if (engine.isFloating) engine.commitFloat(); // merge before reselecting
       const p = toDoc(e);
@@ -4802,6 +4845,11 @@ export default function CanvasArea({
       blurHoverRef.current = { x: cur.x, y: cur.y };
       ensureAnts();
     }
+    // Quick-select: same brush-ring tracking.
+    if (toolRef.current === "quickselect") {
+      quickSelectHoverRef.current = { x: cur.x, y: cur.y };
+      ensureAnts();
+    }
     // Smudge: same brush-ring tracking.
     if (toolRef.current === "smudge") {
       smudgeHoverRef.current = { x: cur.x, y: cur.y };
@@ -5209,6 +5257,20 @@ export default function CanvasArea({
       dragRectRef.current = snap
         ? { x: Math.round(dr.x), y: Math.round(dr.y), w: Math.round(dr.w), h: Math.round(dr.h) }
         : dr;
+      return;
+    }
+    if (qsDraggingRef.current) {
+      const p = toDoc(e);
+      quickSelectHoverRef.current = { x: p.x, y: p.y };
+      const last = qsLastRef.current;
+      const step = Math.max(2, quickSelectRef.current.size * 0.25);
+      if (!last || Math.hypot(p.x - last.x, p.y - last.y) >= step) {
+        qsLastRef.current = { x: p.x, y: p.y };
+        const r = engine.quickSelectDab(p.x, p.y, quickSelectRef.current.size / 2);
+        if (r) applyCombined(r);
+        else onSelectionChange([]);
+      }
+      ensureAnts();
       return;
     }
     if (blurringRef.current) {
@@ -5622,6 +5684,14 @@ export default function CanvasArea({
       }
       ensureAnts();
     }
+    if (qsDraggingRef.current) {
+      engine.endQuickSelect();
+      qsDraggingRef.current = false;
+      qsLastRef.current = null;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      ensureAnts();
+    }
     if (blurringRef.current) {
       engine.endBlur();
       blurringRef.current = false;
@@ -5869,6 +5939,7 @@ export default function CanvasArea({
                             tool === "sponge" ||
                             tool === "heal" ||
                             tool === "redeye" ||
+                            tool === "quickselect" ||
                             tool === "brush" ||
                             tool === "pencil" ||
                             tool === "eraser"
@@ -5923,6 +5994,10 @@ export default function CanvasArea({
                 }
                 if (!blurringRef.current) {
                   blurHoverRef.current = null;
+                  ensureAnts();
+                }
+                if (!qsDraggingRef.current) {
+                  quickSelectHoverRef.current = null;
                   ensureAnts();
                 }
                 if (!smudgingRef.current) {
