@@ -24,6 +24,7 @@ import {
   MousePointer2,
   Plus,
   RotateCcw,
+  Ruler,
   Square,
   Strikethrough,
   Triangle,
@@ -35,6 +36,7 @@ import {
   CROP_RATIOS,
   FONT_FAMILIES,
   getTool,
+  measureInfo,
   SAMPLE_SCOPE_OPTIONS,
   SAMPLE_SIZE_OPTIONS,
   type BlurSettings,
@@ -54,6 +56,7 @@ import {
   type GradientType,
   type LassoMode,
   type MarqueeShape,
+  type MeasureLine,
   type MoveMode,
   type PenSettings,
   type SelectResizeMode,
@@ -348,6 +351,9 @@ export default function OptionsBar({
   onFill,
   stroke,
   onStroke,
+  measure,
+  onMeasureClear,
+  onStraighten,
 }: {
   tool: ToolId;
   paintSurface: ActiveSurface;
@@ -378,6 +384,9 @@ export default function OptionsBar({
   onPen: (patch: Partial<PenSettings>) => void;
   eyedropper: { size: string; scope: string };
   onEyedropper: (patch: { size?: string; scope?: string }) => void;
+  measure: MeasureLine | null;
+  onMeasureClear: () => void;
+  onStraighten: () => void;
 } & ShapeProps &
   BlurProps &
   SmudgeProps &
@@ -462,6 +471,9 @@ export default function OptionsBar({
           { clone, onClone },
           { text, onText },
           { dodge, onDodge },
+          measure,
+          onMeasureClear,
+          onStraighten,
         )}
       </div>
     </div>
@@ -507,6 +519,9 @@ function renderOptions(
   cloneProps: CloneProps,
   textProps: TextProps,
   dodgeProps: DodgeProps,
+  measure: MeasureLine | null,
+  onMeasureClear: () => void,
+  onStraighten: () => void,
 ) {
   const set = (patch: Partial<BrushSettings>) => onBrush({ ...brush, ...patch });
   switch (tool) {
@@ -1572,6 +1587,43 @@ function renderOptions(
           />
         </>
       );
+
+    case "measure": {
+      const info = measure ? measureInfo(measure) : null;
+      return info ? (
+        <>
+          <div className={styles.measureReadout}>
+            <span>A</span>
+            <b>{info.angle.toFixed(1)}°</b>
+            <span>L</span>
+            <b>{Math.round(info.length)} px</b>
+            <span>W</span>
+            <b>{Math.round(info.dx)}</b>
+            <span>H</span>
+            <b>{Math.round(info.dy)}</b>
+          </div>
+          <Divider />
+          <button
+            type="button"
+            className={styles.preset}
+            onClick={onStraighten}
+            title="Rotate the image so the measured line is level (opens the Crop tool)"
+          >
+            <Ruler size={14} /> Straighten
+          </button>
+          <button
+            type="button"
+            className={styles.preset}
+            onClick={onMeasureClear}
+            title="Clear the measurement"
+          >
+            <X size={14} /> Clear
+          </button>
+        </>
+      ) : (
+        <span className={styles.muted}>Drag a line on the canvas to measure distance &amp; angle.</span>
+      );
+    }
 
     case "move":
       return (

@@ -12,6 +12,7 @@ import {
   Brush,
   Pencil,
   Eraser,
+  Ruler,
   Stamp,
   PaintBucket,
   Blend,
@@ -34,6 +35,7 @@ export type ToolId =
   | "wand"
   | "crop"
   | "eyedropper"
+  | "measure"
   | "brush"
   | "pencil"
   | "eraser"
@@ -69,6 +71,7 @@ export const TOOL_GROUPS: Tool[][] = [
     { id: "wand", name: "Magic wand", icon: Wand2, shortcut: "W" },
     { id: "crop", name: "Crop", icon: Crop, shortcut: "C" },
     { id: "eyedropper", name: "Eyedropper", icon: Pipette, shortcut: "I" },
+    { id: "measure", name: "Measure", icon: Ruler, shortcut: "I" },
   ],
   [
     { id: "brush", name: "Brush", icon: Brush, shortcut: "B" },
@@ -128,6 +131,36 @@ export interface GradientSettings {
   /** Angle gradients only: blend across the wrap seam to soften its hard edge. */
   smooth: boolean;
   stops: GradientStop[] | null;
+}
+
+/** A measure/ruler line (two endpoints in document space). */
+export interface MeasureLine {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/** Derived readout for a measure line: pixel deltas, length, and angle. The
+ *  angle is degrees from the +x axis, POSITIVE COUNTER-CLOCKWISE (screen y is
+ *  down, so we negate) — matching Photoshop's ruler (drag up-right ⇒ positive).
+ *  `straighten` is the deviation from the nearest 90° axis, in (−45, 45], i.e.
+ *  the rotation needed to level the line to horizontal/vertical. */
+export function measureInfo(m: MeasureLine): {
+  dx: number;
+  dy: number;
+  length: number;
+  angle: number;
+  straighten: number;
+} {
+  const dx = m.x2 - m.x1;
+  const dy = m.y2 - m.y1;
+  const length = Math.hypot(dx, dy);
+  const angle = -(Math.atan2(dy, dx) * 180) / Math.PI;
+  // Fold onto (−45, 45]: how far the line tilts off the nearest axis.
+  let dev = ((angle % 90) + 90) % 90; // [0, 90)
+  if (dev > 45) dev -= 90; // (−45, 45]
+  return { dx, dy, length, angle, straighten: dev };
 }
 
 /** Shape tool: the geometry being drawn. */

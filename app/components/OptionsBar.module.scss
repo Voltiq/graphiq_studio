@@ -137,6 +137,26 @@
   white-space: nowrap;
 }
 
+/* Measure tool: compact A / L / W / H readout. */
+.measureReadout {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+
+  span {
+    color: var(--text-3);
+  }
+
+  b {
+    font-weight: 600;
+    color: var(--text);
+    margin-right: 6px;
+  }
+}
+
 .iconBtn {
   display: inline-grid;
   place-items: center;

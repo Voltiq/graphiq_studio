@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BoxSelect, Check, CircleDashed, MousePointer2 } from "lucide-react";
+import { BoxSelect, Check, CircleDashed, MousePointer2, Ruler } from "lucide-react";
 import styles from "./StatusBar.module.scss";
 import { EditableValue } from "./Controls";
 import { WORKING_SPACE_LABELS, type WorkingSpace } from "../lib/colorspace";
 import type { MeasureUnit } from "../lib/prefs";
-import { getTool, type ToolId } from "../lib/tools";
+import { getTool, measureInfo, type MeasureLine, type ToolId } from "../lib/tools";
 import { parseColor, swatchBg, toHex6 } from "../lib/color";
 import type { Rect } from "../lib/view";
 
@@ -62,6 +62,7 @@ export default function StatusBar({
   layerCount,
   saveState,
   selection,
+  measure = null,
   subscribeCursor,
 }: {
   tool: ToolId;
@@ -76,6 +77,7 @@ export default function StatusBar({
   layerCount: number;
   saveState: { label: string; ok: boolean };
   selection: Rect[];
+  measure?: MeasureLine | null;
   subscribeCursor: (fn: (p: CursorPt) => void) => () => void;
 }) {
   const meta = getTool(tool);
@@ -118,7 +120,25 @@ export default function StatusBar({
         <span className={styles.mono}>X {cursor ? cursor.x : "—"}</span>
         <span className={styles.mono}>Y {cursor ? cursor.y : "—"}</span>
         <span className={styles.sep}>|</span>
-        {sel ? (
+        {tool === "measure" && measure ? (
+          (() => {
+            const m = measureInfo(measure);
+            const len =
+              unit === "px"
+                ? `${Math.round(m.length)} px`
+                : `${fmtUnit(m.length, unit, dpi)} ${unit}`;
+            return (
+              <span className={styles.selInfo}>
+                <Ruler size={12} />
+                <span className={styles.mono}>L {len}</span>
+                <span className={styles.mono}>A {m.angle.toFixed(1)}°</span>
+                <span className={styles.muted}>
+                  dX {Math.round(m.dx)} · dY {Math.round(m.dy)}
+                </span>
+              </span>
+            );
+          })()
+        ) : sel ? (
           <span className={styles.selInfo}>
             <BoxSelect size={12} />
             <span className={styles.mono}>

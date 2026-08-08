@@ -45,6 +45,7 @@ import {
   DEFAULT_TOOL,
   SAMPLE_SIZE_PX,
   cropAspect,
+  measureInfo,
   type BlurFxScope,
   type BlurFxSettings,
   type BlurSettings,
@@ -65,6 +66,7 @@ import {
   type SelectResizeMode,
   type LassoMode,
   type MarqueeShape,
+  type MeasureLine,
   type ShapeSettings,
   type ToolId,
 } from "../lib/tools";
@@ -516,6 +518,19 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [gamutWarn, setGamutWarn] = useState(false);
   // Dev Perf HUD overlay (View ▸ Performance HUD / window.__gqPerf).
   const [perfHud, setPerfHud] = useState(false);
+  // Measure/ruler line (doc space) — a session line shown while the tool is active.
+  const [measure, setMeasure] = useState<MeasureLine | null>(null);
+  // Straighten angle to seat when the crop tool next mounts (the crop-enter effect
+  // otherwise zeroes straighten); consumed once, so a plain Crop still starts at 0.
+  const pendingStraightenRef = useRef<number | null>(null);
+  // "Straighten" feeds the measured tilt into the Crop tool's straighten angle
+  // (rotate the image so the measured line becomes level), then activates Crop.
+  const straightenFromMeasure = () => {
+    if (!measure) return;
+    const dev = measureInfo(measure).straighten; // deviation from the nearest axis
+    pendingStraightenRef.current = Math.max(-45, Math.min(45, -dev));
+    setTool("crop");
+  };
   const [proofTarget, setProofTargetState] = useState<ProofTarget>("srgb");
   const [colorDialogOpen, setColorDialogOpen] = useState(false);
   const [compareComposite, setCompareComposite] = useState<HTMLCanvasElement | null | undefined>(undefined);
@@ -1001,7 +1016,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     }
     const d = activeDocRef.current;
     setCropBox({ x: 0, y: 0, w: d.width, h: d.height });
-    setCropSettings((s) => ({ ...s, straighten: 0 }));
+    // Seat a straighten angle handed over by the Measure tool's Straighten button,
+    // else start level. Consumed once so a normal crop entry stays at 0.
+    const seed = pendingStraightenRef.current ?? 0;
+    pendingStraightenRef.current = null;
+    setCropSettings((s) => ({ ...s, straighten: seed }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, activeId]);
 
@@ -1250,6 +1269,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // and it ends the moment the viewed layer or its mask goes away.
   useEffect(() => {
     setMaskViewId(null);
+  }, [activeId]);
+  // The measure line is per-document; drop it when switching tabs.
+  useEffect(() => {
+    setMeasure(null);
   }, [activeId]);
   useEffect(() => {
     if (!maskViewId) return;
@@ -5153,6 +5176,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onFill={setForeground}
         stroke={background}
         onStroke={setBackground}
+        measure={measure}
+        onMeasureClear={() => setMeasure(null)}
+        onStraighten={straightenFromMeasure}
       />
       <div className={styles.body}>
         <Toolbar
@@ -5245,6 +5271,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           }
           perfHud={perfHud}
           onPerfHud={setPerfHud}
+          measure={measure}
+          onMeasure={setMeasure}
           selection={active.selection}
           onSelectionChange={setSelection}
           onSelectionRects={setSelectionRects}
@@ -5384,6 +5412,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         layerCount={collectLeafIds(active.layers).length}
         saveState={saveState}
         selection={active.selection}
+        measure={tool === "measure" ? measure : null}
         subscribeCursor={subscribeCursor}
       />
 

@@ -27,6 +27,7 @@ import type {
   HealSettings,
   RedEyeSettings,
   MarqueeShape,
+  MeasureLine,
   TextSettings,
   GradientStop,
   GradientType,
@@ -41,6 +42,7 @@ import type {
   VectorShape,
   VectorText,
 } from "../lib/tools";
+import { measureInfo } from "../lib/tools";
 import { renderShape, type ShapeGeom, type TrapInsets } from "../lib/shapes";
 import { resolveStops } from "../lib/gradient";
 import {
@@ -596,6 +598,8 @@ export default function CanvasArea({
   onLockedAction,
   perfHud,
   onPerfHud,
+  measure,
+  onMeasure,
   selection,
   onSelectionChange,
   onSelectionRects,
@@ -734,6 +738,10 @@ export default function CanvasArea({
   perfHud?: boolean;
   /** Toggle the Perf HUD (wired to the window.__gqPerf console API). */
   onPerfHud?: (on: boolean) => void;
+  /** The current measure/ruler line (null = none), shown while the tool is active. */
+  measure: MeasureLine | null;
+  /** Update the measure line (live during a drag; null clears it). */
+  onMeasure: (line: MeasureLine | null) => void;
   selection: Rect[];
   onSelectionChange: (rects: Rect[]) => void;
   /** Update the selection rects WITHOUT resetting the rotation transform. */
@@ -1393,6 +1401,13 @@ export default function CanvasArea({
   const onPerfHudRef = useRef(onPerfHud);
   onPerfHudRef.current = onPerfHud;
   const perfStatsCb = useCallback(() => engine.perfStats(), [engine]);
+  // Measure/ruler line: the committed line comes from the editor as a prop (drawn
+  // on the overlay); which endpoint is being dragged lives here.
+  const measureRef = useRef(measure);
+  measureRef.current = measure;
+  const onMeasureRef = useRef(onMeasure);
+  onMeasureRef.current = onMeasure;
+  const measureDragRef = useRef<"start" | "end" | null>(null);
   // Latest ensureAnts (defined later) — lets the composite scheduler restart the
   // overlay loop for the Perf HUD dirty flash without a forward reference.
   const ensureAntsRef = useRef<() => void>(() => {});
@@ -2008,6 +2023,54 @@ export default function CanvasArea({
       ctx.lineCap = "butt";
     }
 
+    // --- measure/ruler: the line + endpoint dots + a compact angle/length label ---
+    const meas = measureRef.current;
+    if (toolRef.current === "measure" && meas) {
+      const ax = p.x + meas.x1 * s;
+      const ay = p.y + meas.y1 * s;
+      const bx = p.x + meas.x2 * s;
+      const by = p.y + meas.y2 * s;
+      ctx.setLineDash([]);
+      ctx.lineCap = "round";
+      for (const [w, col] of [
+        [3, "rgba(0,0,0,0.55)"],
+        [1, "#ffd24a"],
+      ] as const) {
+        ctx.lineWidth = w;
+        ctx.strokeStyle = col;
+        ctx.beginPath();
+        ctx.moveTo(ax, ay);
+        ctx.lineTo(bx, by);
+        ctx.stroke();
+      }
+      const dot = (x: number, y: number) => {
+        ctx.beginPath();
+        ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = "#ffd24a";
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "rgba(0,0,0,0.75)";
+        ctx.stroke();
+      };
+      dot(ax, ay);
+      dot(bx, by);
+      ctx.lineCap = "butt";
+      // Floating label near the far endpoint: angle + pixel length.
+      const info = measureInfo(meas);
+      if (info.length > 0.5) {
+        const label = `${info.angle.toFixed(1)}° · ${Math.round(info.length)} px`;
+        ctx.font = "11px var(--font-mono, monospace)";
+        const tw = ctx.measureText(label).width;
+        const lx = bx + 10;
+        const ly = by - 10;
+        ctx.fillStyle = "rgba(12,14,20,0.82)";
+        ctx.fillRect(lx - 4, ly - 11, tw + 8, 16);
+        ctx.fillStyle = "#ffe9a6";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, lx, ly - 2);
+      }
+    }
+
     // --- pen: the editable path skeleton + anchor / handle nodes ---
     const path = penPathRef.current;
     if (path && path.anchors.length) {
@@ -2505,6 +2568,7 @@ export default function CanvasArea({
       (toolRef.current === "clone" && cloneHoverRef.current) ||
       (toolRef.current === "text" && textDragRef.current) ||
       (toolRef.current === "eyedropper" && hoverRef.current) ||
+      (toolRef.current === "measure" && measureRef.current) ||
       filterAnchorRef.current ||
       // Keep the loop alive while a dirty-region flash is still fading.
       (perfHudRef.current && performance.now() - engine.perfStats().dirtyAt < 520)
@@ -3901,6 +3965,16 @@ export default function CanvasArea({
     return null;
   };
 
+  // Which measure-line endpoint (if any) a doc-space point is over.
+  const measureHandleAt = (p: { x: number; y: number }): "start" | "end" | null => {
+    const m = measureRef.current;
+    if (!m) return null;
+    const hit = 10 / (zoomRef.current / 100);
+    if (Math.hypot(p.x - m.x2, p.y - m.y2) <= hit) return "end";
+    if (Math.hypot(p.x - m.x1, p.y - m.y1) <= hit) return "start";
+    return null;
+  };
+
   // ---- Arrow-key nudge -------------------------------------------------------
   // Arrows move the selection OUTLINE (selection tools) or the selected pixels /
   // whole layer / float (Move tool) by 1px — 10px with Ctrl. Pixel nudges keep
@@ -4262,6 +4336,20 @@ export default function CanvasArea({
       triApexRef.current = 0.5; // a fresh triangle starts centred
       shapeRef.current = { x: p.x, y: p.y };
       shapeRectRef.current = { x: p.x, y: p.y, w: 0, h: 0 };
+      ensureAnts();
+      return;
+    }
+    if (tool === "measure") {
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      const p = toDoc(e);
+      const hit = measureHandleAt(p);
+      if (hit && measureRef.current) {
+        measureDragRef.current = hit; // grab an existing endpoint to adjust
+      } else {
+        onMeasureRef.current({ x1: p.x, y1: p.y, x2: p.x, y2: p.y }); // start fresh
+        measureDragRef.current = "end";
+      }
       ensureAnts();
       return;
     }
@@ -4728,6 +4816,10 @@ export default function CanvasArea({
       const next = gradDragRef.current ? "grabbing" : gradientHandleAt(toDoc(e)) ? "grab" : null;
       setHoverCursor((c) => (c === next ? c : next));
     }
+    if (toolRef.current === "measure") {
+      const next = measureDragRef.current ? "grabbing" : measureHandleAt(toDoc(e)) ? "grab" : "crosshair";
+      setHoverCursor((c) => (c === next ? c : next));
+    }
     if (anchorRef.current) {
       const p = toDoc(e);
       onSelectionPivot({ x: Math.round(p.x), y: Math.round(p.y) });
@@ -4881,6 +4973,29 @@ export default function CanvasArea({
         g.mid = t;
       }
       renderGradient();
+      ensureAnts();
+      return;
+    }
+    if (measureDragRef.current && measureRef.current) {
+      const p = toDoc(e);
+      const m = measureRef.current;
+      let nx = p.x;
+      let ny = p.y;
+      // Shift constrains the line to 45° increments from the anchored endpoint.
+      if (e.shiftKey) {
+        const ax = measureDragRef.current === "end" ? m.x1 : m.x2;
+        const ay = measureDragRef.current === "end" ? m.y1 : m.y2;
+        const step = Math.PI / 4;
+        const ang = Math.round(Math.atan2(p.y - ay, p.x - ax) / step) * step;
+        const len = Math.hypot(p.x - ax, p.y - ay);
+        nx = ax + Math.cos(ang) * len;
+        ny = ay + Math.sin(ang) * len;
+      }
+      onMeasureRef.current(
+        measureDragRef.current === "end"
+          ? { ...m, x2: nx, y2: ny }
+          : { ...m, x1: nx, y1: ny },
+      );
       ensureAnts();
       return;
     }
@@ -5292,6 +5407,17 @@ export default function CanvasArea({
         };
         renderLiveBucket();
       }
+      ensureAnts();
+      return;
+    }
+    if (measureDragRef.current) {
+      measureDragRef.current = null;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      // A bare click (no drag) clears the measurement rather than leaving a dot.
+      const m = measureRef.current;
+      if (m && Math.hypot(m.x2 - m.x1, m.y2 - m.y1) < 1) onMeasureRef.current(null);
+      setHoverCursor(measureHandleAt(toDoc(e)) ? "grab" : null);
       ensureAnts();
       return;
     }
