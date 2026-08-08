@@ -51,7 +51,13 @@ import {
   type PendingPaste,
   type WandSelection,
 } from "../lib/paint";
-import { collectLeafIds, findNode, type LayerNode } from "../lib/layers";
+import {
+  collectLeafIds,
+  findNode,
+  isPixelsLocked,
+  isPositionLocked,
+  type LayerNode,
+} from "../lib/layers";
 import type { PendingLoad } from "../lib/project";
 
 const ZOOM_STEPS = [
@@ -584,6 +590,7 @@ export default function CanvasArea({
   layers,
   activeLayerId,
   ensureLayer,
+  onLockedAction,
   selection,
   onSelectionChange,
   onSelectionRects,
@@ -716,6 +723,8 @@ export default function CanvasArea({
   layers: LayerNode[];
   activeLayerId: string | null;
   ensureLayer: () => string;
+  /** A locked layer blocked an edit — the editor shows the matching toast. */
+  onLockedAction?: (kind: "pixels" | "position") => void;
   selection: Rect[];
   onSelectionChange: (rects: Rect[]) => void;
   /** Update the selection rects WITHOUT resetting the rotation transform. */
@@ -1357,6 +1366,24 @@ export default function CanvasArea({
 
   const layersRef = useRef(layers);
   layersRef.current = layers;
+  const onLockedActionRef = useRef(onLockedAction);
+  onLockedActionRef.current = onLockedAction;
+  // Guard an edit against a layer's locks: returns true (and fires the toast)
+  // when `id` is locked against `kind` ("pixels" for paint/fill, "position" for
+  // move/transform). The engine also reverts pixel edits as a backstop, but
+  // bailing here avoids the flash and gives the user an explanation.
+  const lockBlocks = (id: string | null, kind: "pixels" | "position"): boolean => {
+    if (!id) return false;
+    const node = findNode(layersRef.current, id);
+    if (!node) return false;
+    const blocked = kind === "pixels" ? isPixelsLocked(node) : isPositionLocked(node);
+    if (blocked) onLockedActionRef.current?.(kind);
+    return blocked;
+  };
+  // Paint tools: block when the target layer's pixels are locked — but never when
+  // the active surface is a mask (masks are separate rasters, always paintable).
+  const paintBlocked = (id: string | null): boolean =>
+    !!id && engine.getActiveSurface(id) === "pixels" && lockBlocks(id, "pixels");
   const onHistoryRef = useRef(onHistory);
   onHistoryRef.current = onHistory;
   const onAdjustEndRef = useRef(onAdjustEnd);
@@ -2958,6 +2985,8 @@ export default function CanvasArea({
       resizeImage: (w, h, ids, smooth) => engine.resizeImage(w, h, ids, smooth),
       transformImage: (kind, ids) => engine.transformImage(kind, ids),
       clearLayerPixels: (id) => engine.clearLayerPixels(id),
+      syncLayerLocks: (list) => engine.syncLayerLocks(list),
+      isPixelsLocked: (id) => engine.isPixelsLocked(id),
       renderText: (id, spec) => engine.renderText(id, spec),
       textBounds: (spec) => engine.textBounds(spec),
       rasterizeShape: (id, box, angle, kind, fill, stroke, sw, radius, geom) =>
@@ -3380,6 +3409,19 @@ export default function CanvasArea({
     sc: number,
   ): boolean => {
     if (selection.length < 1) return false;
+    // Lift the selected pixels into a float for a content transform — unless the
+    // layer's position is locked, in which case only the marquee reshapes.
+    const liftContent = (): boolean => {
+      if (!((tool === "shape" || resizeMode === "content") && activeLayerId)) return false;
+      if (lockBlocks(activeLayerId, "position")) return false;
+      return engine.beginFloatFromSelection(
+        activeLayerId,
+        selection,
+        selectionAngle,
+        selectionPivot,
+        selectionFeather,
+      );
+    };
     const bbox = bboxOf(selection);
     const pivot = selectionPivot ?? { x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h / 2 };
     const zone = selectZone(p.x, p.y, selection, selectionAngle, pivot, sc);
@@ -3394,10 +3436,7 @@ export default function CanvasArea({
     if (zone.kind === "resize") {
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
-      let content = false;
-      if ((tool === "shape" || resizeMode === "content") && activeLayerId) {
-        content = engine.beginFloatFromSelection(activeLayerId, selection, selectionAngle, selectionPivot, selectionFeather);
-      }
+      const content = liftContent();
       resizeRef.current = {
         rects: selection,
         bbox,
@@ -3414,10 +3453,7 @@ export default function CanvasArea({
       return true;
     }
     if (zone.kind === "ring") {
-      let content = false;
-      if ((tool === "shape" || resizeMode === "content") && activeLayerId) {
-        content = engine.beginFloatFromSelection(activeLayerId, selection, selectionAngle, selectionPivot, selectionFeather);
-      }
+      const content = liftContent();
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
       rotateRef.current = {
@@ -3877,6 +3913,7 @@ export default function CanvasArea({
           n.baseOff = engine.getFloatOffset();
         } else {
           if (!layerId) return;
+          if (lockBlocks(layerId, "position")) return; // position-locked layer
           const node = findNode(layersRef.current, layerId);
           if (!node || node.type !== "layer") return; // pixel leaves only
           n.float = false;
@@ -4000,6 +4037,7 @@ export default function CanvasArea({
       } else {
         // Pixels mode: float an active selection (or keep moving the current float),
         // leaving the layer's own content untouched until deselect.
+        if (lockBlocks(activeLayerId, "position")) return; // position-locked layer
         let floating = engine.isFloating && engine.floatLayerId === activeLayerId;
         if (!floating && activeLayerId && selection.length) {
           floating = engine.beginFloatFromSelection(
@@ -4132,6 +4170,7 @@ export default function CanvasArea({
       return;
     }
     if (tool === "bucket") {
+      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
       if (engine.isFloating) engine.commitFloat();
       finishLiveBucket(); // bake any previous editable fill before a new one
       e.preventDefault();
@@ -4152,6 +4191,7 @@ export default function CanvasArea({
       return;
     }
     if (tool === "gradient") {
+      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
       if (engine.isFloating) engine.commitFloat();
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
@@ -4231,6 +4271,7 @@ export default function CanvasArea({
       } else {
         layerId = ensureLayer(); // brush / pencil auto-creates a layer if none is selected
       }
+      if (paintBlocked(layerId)) return; // pixels-locked layer
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
       paintingRef.current = true;
@@ -4259,6 +4300,7 @@ export default function CanvasArea({
       if (!activeLayerId) return; // nothing to heal on an empty doc
       const healNode = findNode(layers, activeLayerId);
       if (!healNode || healNode.type !== "layer") return; // pixel leaves only
+      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
       if (engine.isFloating) engine.commitFloat();
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
@@ -4272,6 +4314,7 @@ export default function CanvasArea({
       if (!activeLayerId) return;
       const node = findNode(layers, activeLayerId);
       if (!node || node.type !== "layer") return; // pixel leaves only
+      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
       if (engine.isFloating) engine.commitFloat();
       e.preventDefault();
       const p = toDoc(e);
@@ -4289,6 +4332,7 @@ export default function CanvasArea({
     }
     if (tool === "blur") {
       if (!activeLayerId) return; // nothing to soften on an empty doc
+      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
       if (engine.isFloating) engine.commitFloat();
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
@@ -4307,6 +4351,7 @@ export default function CanvasArea({
     }
     if (tool === "smudge") {
       if (!activeLayerId) return; // nothing to smudge on an empty doc
+      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
       if (engine.isFloating) engine.commitFloat();
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
@@ -4328,6 +4373,7 @@ export default function CanvasArea({
     }
     if (tool === "dodge") {
       if (!activeLayerId) return; // nothing to dodge/burn on an empty doc
+      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
       if (engine.isFloating) engine.commitFloat();
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
@@ -4346,6 +4392,7 @@ export default function CanvasArea({
     }
     if (tool === "sponge") {
       if (!activeLayerId) return; // nothing to sponge on an empty doc
+      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
       if (engine.isFloating) engine.commitFloat();
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
@@ -4364,6 +4411,7 @@ export default function CanvasArea({
     }
     if (tool === "history") {
       if (!activeLayerId) return; // needs a layer with history to paint from
+      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
       if (engine.isFloating) engine.commitFloat();
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
@@ -4395,6 +4443,7 @@ export default function CanvasArea({
       if (!cloneSrcRef.current) return; // no source defined yet → nothing to paint
       if (engine.isFloating) engine.commitFloat();
       const layerId = ensureLayer();
+      if (paintBlocked(layerId)) return; // pixels-locked layer
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
       paintingRef.current = true;

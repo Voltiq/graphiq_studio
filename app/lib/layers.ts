@@ -41,6 +41,32 @@ export const LAYER_LABELS: { id: LayerLabel; color: string; name: string }[] = [
 export const labelColor = (l: LayerLabel | undefined): string =>
   LAYER_LABELS.find((x) => x.id === l)?.color ?? "";
 
+/** Per-layer edit locks — Photoshop's lock row. `all` implies the other three. */
+export interface LayerLocks {
+  /** Freeze the alpha channel: paint only where the layer is already opaque. */
+  transparency?: boolean;
+  /** Block every pixel edit (paint, fill, filter/adjustment bake). */
+  pixels?: boolean;
+  /** Block moving / transforming the layer. */
+  position?: boolean;
+  /** Lock everything (transparency + pixels + position). */
+  all?: boolean;
+}
+
+export type LockFlag = "transparency" | "pixels" | "position" | "all";
+
+type MaybeLocked = { locks?: LayerLocks } | null | undefined;
+/** Effective checks — a flag is on when it's set OR `all` is set. */
+export const isTransparencyLocked = (n: MaybeLocked): boolean =>
+  !!n?.locks && (!!n.locks.all || !!n.locks.transparency);
+export const isPixelsLocked = (n: MaybeLocked): boolean =>
+  !!n?.locks && (!!n.locks.all || !!n.locks.pixels);
+export const isPositionLocked = (n: MaybeLocked): boolean =>
+  !!n?.locks && (!!n.locks.all || !!n.locks.position);
+export const hasAnyLock = (n: MaybeLocked): boolean =>
+  !!n?.locks &&
+  (!!n.locks.all || !!n.locks.transparency || !!n.locks.pixels || !!n.locks.position);
+
 export interface LayerBase {
   id: string;
   name: string;
@@ -50,6 +76,8 @@ export interface LayerBase {
   blend: string;
   /** Colour label (organization only — never affects rendering). */
   label?: LayerLabel;
+  /** Edit locks (transparency / pixels / position / all). Absent ⇒ unlocked. */
+  locks?: LayerLocks;
   /** Present ⇒ the layer carries a raster mask (pixels held by the engine). */
   mask?: MaskMeta;
   /** Non-destructive layer effects (drop shadow, glow, stroke, …); rendered at
@@ -103,6 +131,7 @@ export type LayerPatch = Partial<
   Pick<LayerBase, "name" | "visible" | "opacity" | "blend">
 > & {
   label?: LayerLabel | undefined;
+  locks?: LayerLocks | undefined;
   expanded?: boolean;
   vector?: VectorData;
   mask?: MaskMeta | undefined;
@@ -505,6 +534,8 @@ export interface LayersApi {
   ungroup: (id: string) => void;
   merge: () => void;
   flatten: () => void;
+  /** Toggle one edit-lock flag (transparency/pixels/position/all) on a layer. */
+  setLock: (id: string, flag: LockFlag, on: boolean) => void;
   // ---- Layer masks ----
   /** The active layer's current paint surface (drives the active-surface ring). */
   maskSurface: ActiveSurface;

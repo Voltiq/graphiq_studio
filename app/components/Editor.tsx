@@ -78,6 +78,8 @@ import {
   flattenedIds,
   insertInGroup,
   insertRelative,
+  isPixelsLocked,
+  isTransparencyLocked,
   mergeDownInTree,
   removeMany,
   removeNode,
@@ -89,6 +91,7 @@ import {
   type Layer,
   type LayerAdjustment,
   type LayerGroup,
+  type LayerLocks,
   type LayerNode,
   type LayersApi,
   type MaskMeta,
@@ -1245,6 +1248,20 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       paintRef.current?.setMaskView(null);
     }
   }, [active.layers, maskViewId]);
+
+  // Keep the engine's view of transparency/pixels locks in step with the tree so
+  // it can enforce them at the pixel-commit chokepoint (pushEntry).
+  useEffect(() => {
+    const list: { id: string; transparency: boolean; pixels: boolean }[] = [];
+    const walk = (nodes: LayerNode[]) => {
+      for (const n of nodes) {
+        list.push({ id: n.id, transparency: isTransparencyLocked(n), pixels: isPixelsLocked(n) });
+        if (n.type === "group") walk(n.children);
+      }
+    };
+    walk(active.layers);
+    paintRef.current?.syncLayerLocks(list);
+  }, [active.layers]);
 
   const chooseSurface = (layerId: string, surface: ActiveSurface) => {
     paintRef.current?.setActiveSurface(layerId, surface);
@@ -2422,6 +2439,23 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     ungroup: ungroupLayerOp,
     merge: mergeSelected,
     flatten: flattenImage,
+    setLock: (id, flag, on) => {
+      const n = findNode(active.layers, id);
+      if (!n) return;
+      const next: LayerLocks = { ...n.locks, [flag]: on };
+      // Normalize: keep only the flags that are on, so a fully-unlocked layer
+      // stores no `locks` object at all (clean tree + smaller .gproj).
+      const clean: LayerLocks = {};
+      if (next.transparency) clean.transparency = true;
+      if (next.pixels) clean.pixels = true;
+      if (next.position) clean.position = true;
+      if (next.all) clean.all = true;
+      const any = clean.transparency || clean.pixels || clean.position || clean.all;
+      patchActiveDoc((d) => ({
+        ...d,
+        layers: updateNode(d.layers, id, { locks: any ? clean : undefined }),
+      }));
+    },
     maskSurface: paintSurface,
     chooseSurface,
     addMask: addMaskOp,
@@ -2928,6 +2962,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         const clip = n.clipped ? { clipped: true } : {};
         const flt = n.filters?.length ? { filters: n.filters } : {};
         const lbl = n.label ? { label: n.label } : {}; // v10 colour label
+        const lck = n.locks ? { locks: n.locks } : {}; // v12 edit locks
         // v8: filter mask meta + grayscale (restored under filterMaskKey(new id)).
         const fmMeta =
           n.type !== "adjustment" && n.filterMask
@@ -2956,6 +2991,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             ...flt,
             ...fmMeta,
             ...lbl,
+            ...lck,
             children: remap(n.children),
           };
         }
@@ -2975,6 +3011,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             ...mask,
             ...fx,
             ...lbl,
+            ...lck,
           };
         }
         const id = nextLeafId();
@@ -2996,6 +3033,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           ...flt,
           ...fmMeta,
           ...lbl,
+          ...lck,
         };
       });
 
@@ -5073,6 +5111,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           layers={active.layers}
           activeLayerId={active.activeLayerId}
           ensureLayer={ensureLayer}
+          onLockedAction={(kind) =>
+            showToast(
+              kind === "pixels"
+                ? "This layer's pixels are locked — unlock it in the Layers panel to edit."
+                : "This layer's position is locked — unlock it in the Layers panel to move it.",
+            )
+          }
           selection={active.selection}
           onSelectionChange={setSelection}
           onSelectionRects={setSelectionRects}

@@ -16,8 +16,12 @@ import {
   FolderMinus,
   FolderOpen,
   FolderPlus,
+  Grid2x2,
   Layers as LayersIcon,
   Link2,
+  Lock,
+  Move,
+  Paintbrush,
   Pencil,
   Plus,
   FlaskConical,
@@ -36,6 +40,10 @@ import {
   EMPTY_LAYER_FILTER,
   filterLayerTree,
   findNode,
+  hasAnyLock,
+  isPixelsLocked,
+  isPositionLocked,
+  isTransparencyLocked,
   labelColor,
   layerFilterActive,
   LAYER_LABELS,
@@ -43,6 +51,7 @@ import {
   type LayerLabel,
   type LayerNode,
   type LayersApi,
+  type LockFlag,
 } from "../../lib/layers";
 import { hasEnabledFx } from "../../lib/effects";
 import { hasEnabledFilters } from "../../lib/filters";
@@ -54,6 +63,25 @@ interface Row {
   clip: ClipRole;
   /** Visible-but-not-matching under an active filter (rendered dimmed). */
   dim: boolean;
+}
+
+// Photoshop-style lock row: transparency & pixels apply to pixel layers only;
+// position & all apply to every kind. `all` overrides the individual three.
+const LOCK_DEFS: { flag: LockFlag; label: string; Icon: typeof Lock; pixelOnly?: boolean }[] = [
+  { flag: "transparency", label: "transparency", Icon: Grid2x2, pixelOnly: true },
+  { flag: "pixels", label: "image pixels", Icon: Paintbrush, pixelOnly: true },
+  { flag: "position", label: "position", Icon: Move },
+  { flag: "all", label: "all", Icon: Lock },
+];
+
+/** Human-readable summary of a layer's active locks (row indicator tooltip). */
+function lockSummary(n: LayerNode): string {
+  if (n.locks?.all) return "All locked";
+  const on: string[] = [];
+  if (isTransparencyLocked(n)) on.push("transparency");
+  if (isPixelsLocked(n)) on.push("pixels");
+  if (isPositionLocked(n)) on.push("position");
+  return `Locked: ${on.join(", ")}`;
 }
 
 const KIND_OPTIONS = ["All kinds", "Layers", "Groups", "Adjustments"] as const;
@@ -209,6 +237,41 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
               onCommit={(n) => api.update(active.id, { opacity: n })}
               ariaLabel="Layer opacity percentage"
             />
+          </div>
+          <div className={styles.lockRow} role="group" aria-label="Layer locks">
+            <span className={styles.lockLabel}>Lock</span>
+            <div className={styles.lockBtns}>
+              {LOCK_DEFS.map(({ flag, label, Icon, pixelOnly }) => {
+                const allOn = !!active.locks?.all;
+                const rawOn = !!active.locks?.[flag];
+                const na = pixelOnly && active.type !== "layer"; // no pixels to lock
+                const on = flag === "all" ? allOn : allOn || rawOn;
+                // Individual flags are frozen (but shown locked) while Lock-all is on.
+                const disabled = na || (flag !== "all" && allOn);
+                return (
+                  <button
+                    key={flag}
+                    type="button"
+                    className={styles.lockBtn}
+                    data-on={on}
+                    aria-pressed={on}
+                    disabled={disabled}
+                    title={
+                      na
+                        ? `Lock ${label} applies to pixel layers only`
+                        : flag === "all"
+                          ? on
+                            ? "Unlock all"
+                            : "Lock all"
+                          : `${on ? "Unlock" : "Lock"} ${label}`
+                    }
+                    onClick={() => api.setLock(active.id, flag, flag === "all" ? !allOn : !rawOn)}
+                  >
+                    <Icon size={13} />
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}
@@ -485,6 +548,11 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                     {isAdjustment ? "Adjustment" : isGroup ? "Group" : "Layer"} · {l.opacity}%
                   </span>
                 </div>
+                {hasAnyLock(l) && (
+                  <span className={styles.rowLock} title={lockSummary(l)} aria-label={lockSummary(l)}>
+                    <Lock size={11} />
+                  </span>
+                )}
                 {!isAdjustment && hasEnabledFilters(l.filters) && (
                   <button
                     type="button"
@@ -618,6 +686,39 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                   onClick={() => run(() => applyLabel(l.id))}
                 />
               ))}
+            </div>
+            <div className={styles.menuLockRow} aria-label="Lock">
+              <span className={styles.menuLockLabel}>Lock</span>
+              {LOCK_DEFS.map(({ flag, label, Icon, pixelOnly }) => {
+                // Read the live node so toggles stay in sync without closing the menu.
+                const node = findNode(layers, menu.node.id) ?? menu.node;
+                const allOn = !!node.locks?.all;
+                const rawOn = !!node.locks?.[flag];
+                const na = pixelOnly && node.type !== "layer";
+                const on = flag === "all" ? allOn : allOn || rawOn;
+                const disabled = na || (flag !== "all" && allOn);
+                return (
+                  <button
+                    key={flag}
+                    type="button"
+                    className={styles.lockBtn}
+                    data-on={on}
+                    disabled={disabled}
+                    title={
+                      na
+                        ? `Lock ${label} applies to pixel layers only`
+                        : flag === "all"
+                          ? on
+                            ? "Unlock all"
+                            : "Lock all"
+                          : `${on ? "Unlock" : "Lock"} ${label}`
+                    }
+                    onClick={() => api.setLock(node.id, flag, flag === "all" ? !allOn : !rawOn)}
+                  >
+                    <Icon size={12} />
+                  </button>
+                );
+              })}
             </div>
             <button type="button" onClick={() => run(api.duplicate)}>
               <Copy size={13} /> {multi ? "Duplicate layers" : "Duplicate"}

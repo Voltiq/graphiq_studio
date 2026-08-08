@@ -104,7 +104,7 @@ export function serializeProject(
 ): ProjectFile {
   return {
     format: "graphiq-project",
-    version: 11, // v11 adds stored pen paths (v10 labels, v9 metadata, v8 filter masks)
+    version: 12, // v12 adds edit locks (v11 pen paths, v10 labels, v9 metadata, v8 filter masks)
     name: doc.name,
     width: doc.width,
     height: doc.height,

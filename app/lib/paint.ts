@@ -291,6 +291,11 @@ export interface EngineHandle {
   transformImage: (kind: ImageTransform, ids?: string[]) => void;
   /** Erase a layer's pixels (e.g. to hide a vector layer while re-editing it). */
   clearLayerPixels: (layerId: string) => void;
+  /** Push the current transparency/pixels lock flags for every layer so the
+   *  engine can enforce them at the pixel-commit chokepoint. */
+  syncLayerLocks: (list: { id: string; transparency: boolean; pixels: boolean }[]) => void;
+  /** True when a layer's pixels are locked (lets menu ops short-circuit early). */
+  isPixelsLocked: (id: string) => boolean;
   /** Rasterise styled text onto a layer (no history; caller folds into a step). */
   renderText: (layerId: string, spec: TextRenderSpec) => void;
   /** The bounds styled text would rasterize into (for re-edit hit-testing). */
@@ -916,6 +921,10 @@ export class PaintEngine {
   private strokeLayer: string | null = null;
   private brush: BrushSettings | null = null;
   private mode: StrokeMode = "paint";
+  // Per-layer edit locks the engine enforces at the pixel-commit chokepoint
+  // (pushEntry). Kept in sync from the layer tree via syncLayerLocks(). Only the
+  // two flags the engine acts on live here; position lock is a UI-level guard.
+  private layerLocks = new Map<string, { transparency: boolean; pixels: boolean }>();
   private strokeLabel = "Brush"; // history label for the current stroke
   private clip: Rect[] | null = null;
   private clipAngle = 0;
@@ -1910,7 +1919,15 @@ export class PaintEngine {
     ctx.save();
     this.clipTo(ctx, this.clip, this.clipAngle, this.clipPivot);
     ctx.globalAlpha = this.strokeAlpha();
-    ctx.globalCompositeOperation = this.strokeComposite();
+    // On a transparency-locked layer, paint clips to the existing opacity live via
+    // source-atop so the preview matches the alpha-frozen commit (freezeAlpha).
+    // Erasing keeps its normal composite here; the commit still freezes its alpha.
+    const transpLock =
+      !this.strokeOnMask &&
+      this.strokeLayer != null &&
+      !!this.layerLocks.get(this.strokeLayer)?.transparency;
+    ctx.globalCompositeOperation =
+      transpLock && this.mode !== "erase" ? "source-atop" : this.strokeComposite();
     ctx.drawImage(this.stroke!.c, 0, 0);
     ctx.restore();
   }
@@ -1961,6 +1978,48 @@ export class PaintEngine {
     return { x: x0, y: y0, w, h };
   }
 
+  /** Replace the engine's view of which layers are transparency/pixels locked.
+   *  Called from the editor whenever the layer tree changes; position lock is a
+   *  UI-level guard and isn't tracked here. */
+  syncLayerLocks(list: { id: string; transparency: boolean; pixels: boolean }[]) {
+    this.layerLocks.clear();
+    for (const l of list) {
+      if (l.transparency || l.pixels)
+        this.layerLocks.set(l.id, { transparency: l.transparency, pixels: l.pixels });
+    }
+  }
+
+  /** True when `id`'s pixels are locked — lets callers short-circuit an op before
+   *  it runs (the pushEntry backstop also reverts anything that slips through). */
+  isPixelsLocked(id: string) {
+    return !!this.layerLocks.get(id)?.pixels;
+  }
+
+  /** Rewrite `after` so the alpha channel matches `before` (transparency lock):
+   *  keep the painted colour where the pixel was already opaque, restore the
+   *  original colour where it was transparent or the edit erased it. Works for
+   *  every tool — paint, erase, fill, filters — from one uniform rule. */
+  private freezeAlpha(before: ImageData, after: ImageData): ImageData {
+    const out = new ImageData(after.width, after.height);
+    const b = before.data;
+    const a = after.data;
+    const o = out.data;
+    for (let i = 0; i < o.length; i += 4) {
+      const ba = b[i + 3];
+      o[i + 3] = ba; // alpha is frozen to its pre-edit value
+      if (ba !== 0 && a[i + 3] > 0) {
+        o[i] = a[i]; // opaque + still painted → take the new colour
+        o[i + 1] = a[i + 1];
+        o[i + 2] = a[i + 2];
+      } else {
+        o[i] = b[i]; // transparent, or erased away → keep the original colour
+        o[i + 1] = b[i + 1];
+        o[i + 2] = b[i + 2];
+      }
+    }
+    return out;
+  }
+
   private pushEntry(
     layerId: string,
     rect: { x: number; y: number; w: number; h: number },
@@ -1975,6 +2034,23 @@ export class PaintEngine {
     this.endGradient();
     this.endPath();
     this.endFill();
+    // ── Edit-lock enforcement (the universal pixel-commit chokepoint) ──────────
+    // Transform ops (Move/Rotate/Scale) reposition existing pixels — they answer
+    // to POSITION lock, guarded at the UI entry, so they're exempt here. Every
+    // other layer-surface op is a pixel edit: a pixels-lock reverts it outright,
+    // a transparency-lock rewrites it to leave the alpha channel untouched.
+    if (surface === "layer" && label !== "Move" && label !== "Rotate" && label !== "Scale") {
+      const lock = this.layerLocks.get(layerId);
+      if (lock?.pixels) {
+        this.layer(layerId).ctx.putImageData(before, rect.x, rect.y); // undo the edit
+        this.emitChange();
+        return;
+      }
+      if (lock?.transparency) {
+        after = this.freezeAlpha(before, after);
+        this.layer(layerId).ctx.putImageData(after, rect.x, rect.y);
+      }
+    }
     if (this.pos < this.entries.length) this.entries.length = this.pos;
     this.entries.push({ layerId, rect, before, after, label, side, surface });
     this.pos = this.entries.length;
