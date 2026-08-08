@@ -28,6 +28,7 @@ import {
   Hand,
   ZoomIn,
 } from "lucide-react";
+import type { TextWarp } from "./textwarp";
 
 export type ToolId =
   | "move"
@@ -415,6 +416,8 @@ export interface TextSettings {
   features?: TextOpenType;
   /** Variable-font axes (absent = weight from `bold`, normal width). */
   axes?: TextAxes;
+  /** Warp preset (arc / bulge / flag / …); absent = flat text. */
+  warp?: TextWarp;
 }
 
 /** Font choices offered in the text options bar (web-safe families, plus a
@@ -480,6 +483,8 @@ export interface VectorText {
   /** OpenType features / variable axes (block-level; absent = defaults). */
   features?: TextOpenType;
   axes?: TextAxes;
+  /** Warp preset (absent = flat text). */
+  warp?: TextWarp;
   /** Rasterized bounds (doc px), for hit-testing the re-edit double-click. */
   bbox: { x: number; y: number; w: number; h: number };
 }

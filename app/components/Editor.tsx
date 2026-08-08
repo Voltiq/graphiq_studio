@@ -74,6 +74,7 @@ import {
   type ToolId,
 } from "../lib/tools";
 import { estimateQuadSize } from "../lib/homography";
+import { warpActive, warpedBounds } from "../lib/textwarp";
 import type { Theme } from "../lib/theme";
 import { invertRects, type Pan, type Rect } from "../lib/view";
 import {
@@ -2362,13 +2363,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       runs: p.runs,
       features: t.features,
       axes: t.axes,
+      warp: t.warp,
     };
   };
-  const textVectorOf = (spec: TextRenderSpec): VectorText => ({
-    type: "text",
-    ...spec,
-    bbox: paintRef.current?.textBounds(spec) ?? { x: spec.x, y: spec.y, w: 0, h: 0 },
-  });
+  const textVectorOf = (spec: TextRenderSpec): VectorText => {
+    const flat = paintRef.current?.textBounds(spec) ?? { x: spec.x, y: spec.y, w: 0, h: 0 };
+    return {
+      type: "text",
+      ...spec,
+      bbox: warpActive(spec.warp) ? warpedBounds(flat, spec.warp) : flat,
+    };
+  };
   const specFromTextVector = (v: VectorText): TextRenderSpec => ({
     text: v.text,
     x: v.x,
@@ -2388,6 +2393,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     runs: v.runs,
     features: v.features,
     axes: v.axes,
+    warp: v.warp,
   });
 
   // Commit a NEW text block: add a layer named after the text, rasterize it, and

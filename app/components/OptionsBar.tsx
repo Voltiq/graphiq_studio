@@ -7,6 +7,7 @@ import {
   Ligature,
   Lasso as LassoIcon,
   Magnet,
+  Waves,
   AlignCenter,
   AlignHorizontalJustifyCenter,
   AlignJustify,
@@ -68,6 +69,7 @@ import {
 import type { Rect } from "../lib/view";
 import type { ActiveSurface } from "../lib/layers";
 import type { TextAxes, TextOpenType } from "../lib/tools";
+import { WARP_STYLES, warpActive, type TextWarp, type TextWarpStyle } from "../lib/textwarp";
 import {
   OPENTYPE_FLAGS,
   effectiveWeight,
@@ -221,6 +223,86 @@ function OpenTypeControl({ text, onText }: TextProps) {
         </>,
         document.body,
       )}
+    </>
+  );
+}
+
+const DEFAULT_WARP: TextWarp = { style: "arc", bend: 40, distH: 0, distV: 0 };
+
+/** Warp-text popover: a style dropdown + bend / horizontal / vertical sliders.
+ *  Deforms the whole text block (arc, bulge, flag, …); baked on commit. */
+function WarpControl({ text, onText }: TextProps) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ left: 0, top: 0 });
+  const active = warpActive(text.warp);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation();
+        setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
+  const toggleOpen = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 300)), top: r.bottom + 6 });
+    }
+    setOpen((o) => !o);
+  };
+
+  const warp: TextWarp = text.warp ?? { style: "none", bend: 0, distH: 0, distV: 0 };
+  const setWarp = (patch: Partial<TextWarp>) => {
+    const next = { ...warp, ...patch };
+    onText({ warp: next.style === "none" ? undefined : next });
+  };
+  const setStyle = (style: TextWarpStyle) => {
+    if (style === "none") return onText({ warp: undefined });
+    // Picking a style from flat seeds a sensible default bend so it's visible.
+    onText({ warp: warp.style === "none" ? { ...DEFAULT_WARP, style } : { ...warp, style } });
+  };
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={styles.iconBtn}
+        data-active={active || open}
+        title="Warp text (arc, bulge, flag, …)"
+        onClick={toggleOpen}
+      >
+        <Waves size={15} />
+      </button>
+      {open &&
+        createPortal(
+          <>
+            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
+            <div className={styles.otPopover} style={{ left: pos.left, top: pos.top }} role="dialog" aria-label="Warp text">
+              <span className={styles.otTitle}>Warp text</span>
+              <div className={styles.otAxisRow}>
+                <Select
+                  label="Style"
+                  options={WARP_STYLES.map((s) => s.label)}
+                  value={WARP_STYLES.find((s) => s.id === warp.style)?.label ?? "None"}
+                  onChange={(l) => setStyle(WARP_STYLES.find((s) => s.label === l)?.id ?? "none")}
+                  width={150}
+                />
+              </div>
+              <BaseSlider inline label="Bend" min={-100} max={100} bipolar value={warp.bend} onChange={(n) => setWarp({ bend: n })} />
+              <BaseSlider inline label="Horizontal" min={-100} max={100} bipolar value={warp.distH} onChange={(n) => setWarp({ distH: n })} />
+              <BaseSlider inline label="Vertical" min={-100} max={100} bipolar value={warp.distV} onChange={(n) => setWarp({ distV: n })} />
+              <span className={styles.otHint}>Deforms the whole block; bakes when you commit the text (Enter / click away).</span>
+            </div>
+          </>,
+          document.body,
+        )}
     </>
   );
 }
@@ -710,6 +792,7 @@ function renderOptions(
           />
           <Divider />
           <OpenTypeControl text={text} onText={onText} />
+          <WarpControl text={text} onText={onText} />
         </>
       );
     }

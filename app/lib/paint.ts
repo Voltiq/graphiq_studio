@@ -44,6 +44,7 @@ import { healPadding, healRegion } from "./heal";
 import { buildCanvasGradient } from "./gradient";
 import { solveHomography } from "./homography";
 import { buildEdgeField, type EdgeField } from "./magnetic";
+import { warpActive, warpPoint, type TextWarp } from "./textwarp";
 import {
   applyToneLUTs,
   applyToneLUTs16,
@@ -559,6 +560,8 @@ export interface TextRenderSpec {
   features?: TextOpenType;
   /** Variable-font axes (block-level; wght overrides `bold`). */
   axes?: TextAxes;
+  /** Warp preset (absent = flat text). */
+  warp?: TextWarp;
 }
 
 /** Pre-crop layer pixels + document size, captured so a crop can be undone. */
@@ -6211,14 +6214,26 @@ export class PaintEngine {
     const layer = this.layer(layerId);
     const ctx = layer.ctx;
     ctx.clearRect(0, 0, this.w, this.h);
-    ctx.save();
-    // Non-default OpenType features need the layer canvas mounted (hidden) so
-    // its font-feature-settings CSS reaches the canvas text pipeline.
-    PaintEngine.withTextFeatures(layer.c, spec.features, () => {
-      if (PaintEngine.isRichSpec(spec)) this.drawRichText(ctx, spec);
-      else this.drawUniformText(ctx, spec);
+    // A warp renders the flat text into a temp buffer, then texture-maps it onto
+    // a deformed mesh — so the warp target is the temp, not the layer directly.
+    const warp = warpActive(spec.warp) ? spec.warp : null;
+    const tmp = warp ? this.mk(this.w, this.h) : null;
+    const target = tmp ? tmp.ctx : ctx;
+    target.save();
+    // Non-default OpenType features need the canvas mounted (hidden) so its
+    // font-feature-settings CSS reaches the canvas text pipeline.
+    PaintEngine.withTextFeatures(tmp ? tmp.c : layer.c, spec.features, () => {
+      if (PaintEngine.isRichSpec(spec)) this.drawRichText(target, spec);
+      else this.drawUniformText(target, spec);
     });
-    ctx.restore();
+    target.restore();
+    if (warp && tmp) {
+      // The warp resamples with bilinear smoothing, so hard 1-bit edges are moot;
+      // the flat source is left anti-aliased regardless of spec.antialias.
+      this.drawWarpedText(ctx, tmp.c, this.textBounds(spec), warp);
+      this.emitChange();
+      return;
+    }
 
     // No anti-aliasing: threshold the rendered alpha to hard 1-bit edges. The
     // solid value is the colour's own alpha (so text opacity is preserved); edge
@@ -6242,6 +6257,102 @@ export class PaintEngine {
       }
     }
     this.emitChange();
+  }
+
+  /** Texture-map the flat text (`src`, doc-sized) from its bounds `b` onto the
+   *  warp-deformed mesh, drawing into `ctx`. A grid of quads is split into
+   *  triangles, each drawn through the affine that maps its flat corners to its
+   *  warped corners (a piecewise-affine approximation of the smooth warp). */
+  private drawWarpedText(
+    ctx: CanvasRenderingContext2D,
+    src: HTMLCanvasElement,
+    b: { x: number; y: number; w: number; h: number },
+    warp: TextWarp,
+  ) {
+    if (b.w < 1 || b.h < 1) return;
+    const cols = 40;
+    const rows = Math.max(6, Math.min(24, Math.round((b.h / b.w) * cols) || 8));
+    // Flat corner (doc coords) at grid (i,j).
+    const flat = (i: number, j: number) => ({ x: b.x + (i / cols) * b.w, y: b.y + (j / rows) * b.h });
+    // Warped corner (doc coords) at grid (i,j).
+    const warped = (i: number, j: number) => {
+      const p = warpPoint(warp, i / cols, j / rows);
+      return { x: b.x + p.u * b.w, y: b.y + p.v * b.h };
+    };
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const s00 = flat(i, j);
+        const s10 = flat(i + 1, j);
+        const s01 = flat(i, j + 1);
+        const s11 = flat(i + 1, j + 1);
+        const d00 = warped(i, j);
+        const d10 = warped(i + 1, j);
+        const d01 = warped(i, j + 1);
+        const d11 = warped(i + 1, j + 1);
+        this.drawTexTri(ctx, src, s00, s10, s11, d00, d10, d11);
+        this.drawTexTri(ctx, src, s00, s11, s01, d00, d11, d01);
+      }
+    }
+    ctx.restore();
+  }
+
+  /** Draw the `src` triangle (s0,s1,s2) into the dest triangle (d0,d1,d2): clip
+   *  to a slightly-inflated dest triangle (hides hairline seams), then blit `src`
+   *  through the affine mapping the source corners onto the dest corners. */
+  private drawTexTri(
+    ctx: CanvasRenderingContext2D,
+    src: HTMLCanvasElement,
+    s0: { x: number; y: number },
+    s1: { x: number; y: number },
+    s2: { x: number; y: number },
+    d0: { x: number; y: number },
+    d1: { x: number; y: number },
+    d2: { x: number; y: number },
+  ) {
+    // Affine M (setTransform semantics: X = a·x + c·y + e, Y = b·x + d·y + f)
+    // solved from the three source→dest correspondences (Cramer's rule).
+    const det =
+      s0.x * (s1.y - s2.y) + s1.x * (s2.y - s0.y) + s2.x * (s0.y - s1.y);
+    if (Math.abs(det) < 1e-6) return;
+    const id = 1 / det;
+    const a = (d0.x * (s1.y - s2.y) + d1.x * (s2.y - s0.y) + d2.x * (s0.y - s1.y)) * id;
+    const c = (s0.x * (d1.x - d2.x) + s1.x * (d2.x - d0.x) + s2.x * (d0.x - d1.x)) * id;
+    const e =
+      (s0.x * (s1.y * d2.x - s2.y * d1.x) +
+        s1.x * (s2.y * d0.x - s0.y * d2.x) +
+        s2.x * (s0.y * d1.x - s1.y * d0.x)) * id;
+    const bb = (d0.y * (s1.y - s2.y) + d1.y * (s2.y - s0.y) + d2.y * (s0.y - s1.y)) * id;
+    const d = (s0.x * (d1.y - d2.y) + s1.x * (d2.y - d0.y) + s2.x * (d0.y - d1.y)) * id;
+    const f =
+      (s0.x * (s1.y * d2.y - s2.y * d1.y) +
+        s1.x * (s2.y * d0.y - s0.y * d2.y) +
+        s2.x * (s0.y * d1.y - s1.y * d0.y)) * id;
+    // Inflate the dest triangle ~0.4px about its centroid so neighbours overlap.
+    const cx = (d0.x + d1.x + d2.x) / 3;
+    const cy = (d0.y + d1.y + d2.y) / 3;
+    const grow = (p: { x: number; y: number }) => {
+      const dx = p.x - cx;
+      const dy = p.y - cy;
+      const len = Math.hypot(dx, dy) || 1;
+      return { x: p.x + (dx / len) * 0.4, y: p.y + (dy / len) * 0.4 };
+    };
+    const g0 = grow(d0);
+    const g1 = grow(d1);
+    const g2 = grow(d2);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(g0.x, g0.y);
+    ctx.lineTo(g1.x, g1.y);
+    ctx.lineTo(g2.x, g2.y);
+    ctx.closePath();
+    ctx.clip();
+    ctx.setTransform(a, bb, c, d, e, f);
+    ctx.drawImage(src, 0, 0);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.restore();
   }
 
   /** The legacy uniform-style text body (single font/colour, canvas textAlign

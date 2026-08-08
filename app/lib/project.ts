@@ -106,7 +106,7 @@ export function serializeProject(
 ): ProjectFile {
   return {
     format: "graphiq-project",
-    version: 14, // v14 adds fill layers (v13 linked layers, v12 edit locks, v11 pen paths, v10 labels)
+    version: 15, // v15 adds text warp (v14 fill layers, v13 linked layers, v12 edit locks, v11 pen paths)
     name: doc.name,
     width: doc.width,
     height: doc.height,
