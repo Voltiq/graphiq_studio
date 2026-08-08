@@ -102,6 +102,10 @@ interface Bounds {
   y1: number;
 }
 
+/** High-resolution clock (falls back to Date.now where performance is absent). */
+const nowMs = (): number =>
+  typeof performance !== "undefined" ? performance.now() : Date.now();
+
 /**
  * Decompose a boolean mask into rectangles: per-row runs greedily extended
  * downward while the run directly below is identical (cuts the rect count for
@@ -600,6 +604,32 @@ interface Entry {
  * is what stops a single stroke from darkening where it overlaps itself, while
  * still letting a new stroke stack on top of the previous result.
  */
+/** Live performance snapshot surfaced by the dev Perf HUD. */
+export interface PerfStats {
+  /** Last / rolling-average / peak composite duration, in milliseconds. */
+  lastMs: number;
+  avgMs: number;
+  maxMs: number;
+  /** Composites in the last second (0 when idle). */
+  rate: number;
+  /** Render-cache hit rate 0–1 (cumulative for the session). */
+  hitRate: number;
+  hits: number;
+  misses: number;
+  /** Cached products (incl. tiled adjustments) + resident tile count. */
+  entries: number;
+  tiles: number;
+  /** Cache memory used vs. budget (bytes). */
+  bytes: number;
+  budget: number;
+  enabled: boolean;
+  /** The last frame's blit region (doc space), or null for a full-doc blit. */
+  dirty: Rect | null;
+  full: boolean;
+  /** Timestamp (performance.now) the last blit was recorded — drives the fade. */
+  dirtyAt: number;
+}
+
 export class PaintEngine {
   private w = 0;
   private h = 0;
@@ -659,6 +689,14 @@ export class PaintEngine {
   private renderBudget = 256 * 1024 * 1024; // LRU eviction beyond this (Preferences ▸ Performance)
   private cacheHits = 0;
   private cacheMisses = 0;
+  // Perf HUD (dev): rolling composite durations (ms) + timestamps of recent
+  // composites (for a "recomposites/sec" reading), and the last frame's blit
+  // region so the overlay can visualize what was recomputed.
+  private compositeTimes: number[] = [];
+  private compositeStamps: number[] = [];
+  private lastDirtyRect: Rect | null = null;
+  private lastDirtyAt = 0;
+  private lastFrameFull = false;
   private historyLimit = 60; // max undoable steps kept (Preferences ▸ Performance)
   private workersOn = true; // background compute (blur/filters/heal) toggle
   private frameProtect = new Set<string>(); // entries used by the current frame
@@ -868,6 +906,51 @@ export class PaintEngine {
       hits: this.cacheHits,
       misses: this.cacheMisses,
       tiles,
+    };
+  }
+
+  /** Record one composite frame's cost + blit region (Perf HUD). */
+  private recordFrame(ms: number, dirty: Rect | null, full: boolean) {
+    this.compositeTimes.push(ms);
+    if (this.compositeTimes.length > 120) this.compositeTimes.shift();
+    const t = nowMs();
+    this.compositeStamps.push(t);
+    while (this.compositeStamps.length && this.compositeStamps[0] < t - 1000)
+      this.compositeStamps.shift();
+    this.lastDirtyRect = dirty;
+    this.lastFrameFull = full;
+    this.lastDirtyAt = t;
+  }
+
+  /** Live performance snapshot for the dev HUD: composite timing, recomposite
+   *  rate, render-cache occupancy/hit-rate, and the last frame's blit region. */
+  perfStats(): PerfStats {
+    const c = this.renderCacheStats();
+    const times = this.compositeTimes;
+    const last = times.length ? times[times.length - 1] : 0;
+    const avg = times.length ? times.reduce((a, b) => a + b, 0) / times.length : 0;
+    const max = times.length ? Math.max(...times) : 0;
+    const total = c.hits + c.misses;
+    // Trim stale recomposite stamps so an idle HUD reads 0/s.
+    const t = nowMs();
+    while (this.compositeStamps.length && this.compositeStamps[0] < t - 1000)
+      this.compositeStamps.shift();
+    return {
+      lastMs: last,
+      avgMs: avg,
+      maxMs: max,
+      rate: this.compositeStamps.length,
+      hitRate: total ? c.hits / total : 0,
+      hits: c.hits,
+      misses: c.misses,
+      entries: c.entries,
+      tiles: c.tiles,
+      bytes: c.bytes,
+      budget: c.budget,
+      enabled: c.enabled,
+      dirty: this.lastDirtyRect,
+      full: this.lastFrameFull,
+      dirtyAt: this.lastDirtyAt,
     };
   }
 
@@ -4224,6 +4307,7 @@ export class PaintEngine {
   composite(tree: LayerNode[]) {
     const ctx = this.vctx;
     if (!ctx) return;
+    const t0 = nowMs();
     if (this.maskView) {
       // Mask view (Alt-click on a mask chip / Channels panel): the mask's
       // EFFECTIVE grayscale (R×A/255 — the same math the alpha derivation
@@ -4261,6 +4345,7 @@ export class PaintEngine {
         ctx.putImageData(img, 0, 0);
         this.pendingDirty = null;
         this.lastTree = tree;
+        this.recordFrame(nowMs() - t0, null, true);
         return;
       }
     }
@@ -4308,6 +4393,7 @@ export class PaintEngine {
     this.pendingDirty = null;
     this.lastTree = tree;
     this.evictOverBudget();
+    this.recordFrame(nowMs() - t0, d, !d); // d === null ⇒ a full-document blit
   }
 
   /** Begin moving pixels: lift the selection (or whole layer) into a float buffer.

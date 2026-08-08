@@ -514,6 +514,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // Soft proofing (view-only): Ctrl+Alt+Y simulate, Ctrl+Alt+Shift+Y gamut warn.
   const [proofColors, setProofColors] = useState(false);
   const [gamutWarn, setGamutWarn] = useState(false);
+  // Dev Perf HUD overlay (View ▸ Performance HUD / window.__gqPerf).
+  const [perfHud, setPerfHud] = useState(false);
   const [proofTarget, setProofTargetState] = useState<ProofTarget>("srgb");
   const [colorDialogOpen, setColorDialogOpen] = useState(false);
   const [compareComposite, setCompareComposite] = useState<HTMLCanvasElement | null | undefined>(undefined);
@@ -4279,6 +4281,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "view-snap") persistView({ snap: !v.snap });
     else if (actionId === "view-proof") setProofColors((p) => !p);
     else if (actionId === "view-gamut") setGamutWarn((g) => !g);
+    else if (actionId === "view-perf-hud") setPerfHud((h) => !h);
   };
 
   // ---- Actions (macro recorder — Actions panel + F-key playback) ------------
@@ -5073,6 +5076,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           "view-proof": proofColors,
           "view-gamut": gamutWarn,
           "view-snap": snap,
+          "view-perf-hud": perfHud,
           "layer-clip": !!activeLeafNode?.clipped,
         }}
       />
@@ -5239,6 +5243,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
                   : "This is a fill layer — double-click it to edit, or paint on its mask to confine it.",
             )
           }
+          perfHud={perfHud}
+          onPerfHud={setPerfHud}
           selection={active.selection}
           onSelectionChange={setSelection}
           onSelectionRects={setSelectionRects}

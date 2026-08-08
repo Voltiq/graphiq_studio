@@ -151,7 +151,8 @@ export const MENUS: Menu[] = [
       { label: "Snap", separatorAfter: true, action: "view-snap" },
       { label: "Proof colors", shortcut: "Ctrl+Alt+Y", action: "view-proof" },
       { label: "Gamut warning", shortcut: "Ctrl+Alt+Shift+Y", action: "view-gamut", separatorAfter: true },
-      { label: "Compare color profiles…", action: "color-compare" },
+      { label: "Compare color profiles…", separatorAfter: true, action: "color-compare" },
+      { label: "Performance HUD", action: "view-perf-hud" },
     ],
   },
   {

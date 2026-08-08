@@ -61,6 +61,7 @@ import {
   type LayerNode,
 } from "../lib/layers";
 import type { PendingLoad } from "../lib/project";
+import PerfHud from "./PerfHud";
 
 const ZOOM_STEPS = [
   12, 25, 33, 50, 67, 100, 150, 200, 300, 400, 600, 800, 1200, 1600, 2400, 3200,
@@ -593,6 +594,8 @@ export default function CanvasArea({
   activeLayerId,
   ensureLayer,
   onLockedAction,
+  perfHud,
+  onPerfHud,
   selection,
   onSelectionChange,
   onSelectionRects,
@@ -727,6 +730,10 @@ export default function CanvasArea({
   ensureLayer: () => string;
   /** A locked (or parametric fill) layer blocked an edit — editor shows a toast. */
   onLockedAction?: (kind: "pixels" | "position" | "fill") => void;
+  /** Dev Perf HUD visible (composite ms / cache hit rate / dirty-rect overlay). */
+  perfHud?: boolean;
+  /** Toggle the Perf HUD (wired to the window.__gqPerf console API). */
+  onPerfHud?: (on: boolean) => void;
   selection: Rect[];
   onSelectionChange: (rects: Rect[]) => void;
   /** Update the selection rects WITHOUT resetting the rotation transform. */
@@ -1349,7 +1356,11 @@ export default function CanvasArea({
   // the always-correct Canvas2D path).
   useEffect(() => {
     if (process.env.NODE_ENV === "production") return;
-    const w = window as unknown as { __gqRenderCache?: object; __gqGPU?: object };
+    const w = window as unknown as {
+      __gqRenderCache?: object;
+      __gqGPU?: object;
+      __gqPerf?: object;
+    };
     w.__gqRenderCache = {
       enable: () => engine.setRenderCacheEnabled(true),
       disable: () => engine.setRenderCacheEnabled(false),
@@ -1360,9 +1371,16 @@ export default function CanvasArea({
       disable: () => engine.setGpuEnabled(false),
       status: () => engine.gpuStatus(),
     };
+    w.__gqPerf = {
+      show: () => onPerfHudRef.current?.(true),
+      hide: () => onPerfHudRef.current?.(false),
+      toggle: () => onPerfHudRef.current?.(!perfHudRef.current),
+      stats: () => engine.perfStats(),
+    };
     return () => {
       delete w.__gqRenderCache;
       delete w.__gqGPU;
+      delete w.__gqPerf;
     };
   }, [engine]);
 
@@ -1370,6 +1388,14 @@ export default function CanvasArea({
   layersRef.current = layers;
   const onLockedActionRef = useRef(onLockedAction);
   onLockedActionRef.current = onLockedAction;
+  const perfHudRef = useRef(perfHud);
+  perfHudRef.current = perfHud;
+  const onPerfHudRef = useRef(onPerfHud);
+  onPerfHudRef.current = onPerfHud;
+  const perfStatsCb = useCallback(() => engine.perfStats(), [engine]);
+  // Latest ensureAnts (defined later) — lets the composite scheduler restart the
+  // overlay loop for the Perf HUD dirty flash without a forward reference.
+  const ensureAntsRef = useRef<() => void>(() => {});
   // Guard an edit against a layer's locks: returns true (and fires the toast)
   // when `id` is locked against `kind` ("pixels" for paint/fill, "position" for
   // move/transform). The engine also reverts pixel edits as a backstop, but
@@ -1427,6 +1453,7 @@ export default function CanvasArea({
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = 0;
       engine.composite(layersRef.current);
+      if (perfHudRef.current) ensureAntsRef.current(); // flash the new dirty region
     });
   }, [engine]);
 
@@ -1449,6 +1476,27 @@ export default function CanvasArea({
     ctx.clearRect(0, 0, cw, ch);
     const s = zoomRef.current / 100;
     const p = panR.current;
+
+    // --- Perf HUD dirty-region flash (dev): outline what the last composite
+    // re-blitted — green = a cheap region blit, red = a full-document recompute
+    // — fading out over ~500ms so repeated edits pulse the touched area. ---
+    if (perfHudRef.current) {
+      const st = engine.perfStats();
+      const age = performance.now() - st.dirtyAt;
+      if (age < 500 && st.dirtyAt > 0) {
+        const a = 1 - age / 500;
+        const r = st.dirty ?? { x: 0, y: 0, w: widthRef.current, h: heightRef.current };
+        const x = p.x + r.x * s;
+        const y = p.y + r.y * s;
+        ctx.save();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = st.full ? `rgba(248,113,113,${0.9 * a})` : `rgba(74,222,128,${0.9 * a})`;
+        ctx.fillStyle = st.full ? `rgba(248,113,113,${0.1 * a})` : `rgba(74,222,128,${0.1 * a})`;
+        ctx.fillRect(x, y, r.w * s, r.h * s);
+        ctx.strokeRect(x, y, r.w * s, r.h * s);
+        ctx.restore();
+      }
+    }
 
     // --- crop overlay (its own complete UI: shield + box + grid + handles) ---
     const cb = cropBoxRef.current;
@@ -2457,7 +2505,9 @@ export default function CanvasArea({
       (toolRef.current === "clone" && cloneHoverRef.current) ||
       (toolRef.current === "text" && textDragRef.current) ||
       (toolRef.current === "eyedropper" && hoverRef.current) ||
-      filterAnchorRef.current
+      filterAnchorRef.current ||
+      // Keep the loop alive while a dirty-region flash is still fading.
+      (perfHudRef.current && performance.now() - engine.perfStats().dirtyAt < 520)
     ) {
       antsRaf.current = requestAnimationFrame(tickAnts);
     } else {
@@ -2470,6 +2520,13 @@ export default function CanvasArea({
   const ensureAnts = useCallback(() => {
     if (!antsRaf.current) antsRaf.current = requestAnimationFrame(tickAnts);
   }, [tickAnts]);
+  ensureAntsRef.current = ensureAnts;
+
+  // Start the overlay loop when the Perf HUD turns on so any recent dirty region
+  // flashes right away (and it stops itself once the flash fades).
+  useEffect(() => {
+    if (perfHud) ensureAnts();
+  }, [perfHud, ensureAnts]);
 
   // Repaint the hover cursor immediately when its prefs change (otherwise the
   // new ring style waits for the next pointer move).
@@ -5689,6 +5746,7 @@ export default function CanvasArea({
           </div>
           <canvas ref={gridRef} className={styles.overlay} />
           <canvas ref={overlayRef} className={styles.overlay} />
+          {perfHud && <PerfHud stats={perfStatsCb} />}
           {textSession && (
             <div
               ref={textEditRef}
