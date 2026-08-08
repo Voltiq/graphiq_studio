@@ -21,6 +21,7 @@ import type {
   BlurSettings,
   CloneSettings,
   CropGrid,
+  CropQuad,
   DodgeSettings,
   SmudgeSettings,
   SpongeSettings,
@@ -587,6 +588,8 @@ export default function CanvasArea({
   onUpdateText,
   cropBox,
   onCropBox,
+  cropQuad,
+  onCropQuad,
   cropGrid,
   cropShield,
   cropStraighten,
@@ -720,6 +723,9 @@ export default function CanvasArea({
   /** Crop tool: the pending crop rectangle (doc coords), null when not cropping. */
   cropBox: Rect | null;
   onCropBox: (b: Rect | null) => void;
+  /** Perspective-crop quad (tl,tr,br,bl) — non-null only in Perspective mode. */
+  cropQuad: CropQuad | null;
+  onCropQuad: (q: CropQuad | null) => void;
   cropGrid: CropGrid;
   /** Dimming (0–90%) of the area outside the crop box. */
   cropShield: number;
@@ -1201,6 +1207,12 @@ export default function CanvasArea({
   cropBoxRef.current = cropBox;
   const onCropBoxRef = useRef(onCropBox);
   onCropBoxRef.current = onCropBox;
+  const cropQuadRef = useRef(cropQuad);
+  cropQuadRef.current = cropQuad;
+  const onCropQuadRef = useRef(onCropQuad);
+  onCropQuadRef.current = onCropQuad;
+  // Which perspective-quad corner (0=tl..3=bl) is being dragged, or null.
+  const perspDragRef = useRef<number | null>(null);
   const cropGridRef = useRef(cropGrid);
   cropGridRef.current = cropGrid;
   const cropShieldRef = useRef(cropShield);
@@ -1513,27 +1525,41 @@ export default function CanvasArea({
       }
     }
 
-    // --- crop overlay (its own complete UI: shield + box + grid + handles) ---
+    // --- crop overlay (its own complete UI: shield + box/quad + grid + handles) ---
     const cb = cropBoxRef.current;
-    if (toolRef.current === "crop" && cb) {
-      const ang = (cropStraightenRef.current * Math.PI) / 180;
-      const cx = cb.x + cb.w / 2;
-      const cy = cb.y + cb.h / 2;
-      const scx = p.x + cx * s;
-      const scy = p.y + cy * s;
-      const cos = Math.cos(ang);
-      const sin = Math.sin(ang);
-      // A box corner offset (doc px from centre) → rotated screen point.
-      const corner = (dx: number, dy: number): [number, number] => [
-        scx + (dx * cos - dy * sin) * s,
-        scy + (dx * sin + dy * cos) * s,
-      ];
-      const hw = cb.w / 2;
-      const hh = cb.h / 2;
-      const tl = corner(-hw, -hh);
-      const tr = corner(hw, -hh);
-      const br = corner(hw, hh);
-      const bl = corner(-hw, hh);
+    const pq = cropQuadRef.current; // non-null ⇒ perspective mode (free quad)
+    if (toolRef.current === "crop" && (cb || pq)) {
+      let tl: [number, number];
+      let tr: [number, number];
+      let br: [number, number];
+      let bl: [number, number];
+      if (pq) {
+        const sc = (pt: { x: number; y: number }): [number, number] => [p.x + pt.x * s, p.y + pt.y * s];
+        tl = sc(pq[0]);
+        tr = sc(pq[1]);
+        br = sc(pq[2]);
+        bl = sc(pq[3]);
+      } else {
+        const box = cb!;
+        const ang = (cropStraightenRef.current * Math.PI) / 180;
+        const cx = box.x + box.w / 2;
+        const cy = box.y + box.h / 2;
+        const scx = p.x + cx * s;
+        const scy = p.y + cy * s;
+        const cos = Math.cos(ang);
+        const sin = Math.sin(ang);
+        // A box corner offset (doc px from centre) → rotated screen point.
+        const corner = (dx: number, dy: number): [number, number] => [
+          scx + (dx * cos - dy * sin) * s,
+          scy + (dx * sin + dy * cos) * s,
+        ];
+        const hw = box.w / 2;
+        const hh = box.h / 2;
+        tl = corner(-hw, -hh);
+        tr = corner(hw, -hh);
+        br = corner(hw, hh);
+        bl = corner(-hw, hh);
+      }
       const lerp = (a: [number, number], b: [number, number], t: number): [number, number] => [
         a[0] + (b[0] - a[0]) * t,
         a[1] + (b[1] - a[1]) * t,
@@ -1608,13 +1634,8 @@ export default function CanvasArea({
       poly([tl, tr, br, bl]);
       ctx.stroke();
 
-      // Handles: 4 corners + 4 edge midpoints.
-      const mids: [number, number][] = [
-        lerp(tl, tr, 0.5),
-        lerp(tr, br, 0.5),
-        lerp(br, bl, 0.5),
-        lerp(bl, tl, 0.5),
-      ];
+      // Handles: 4 corners always; edge midpoints only for a rectangular box
+      // (a free quad has no meaningful edge-midpoint drag).
       ctx.lineWidth = 1;
       const drawHandle = (hx: number, hy: number, big: boolean) => {
         const r = big ? 4.5 : 3.5;
@@ -1626,12 +1647,24 @@ export default function CanvasArea({
         ctx.stroke();
       };
       [tl, tr, br, bl].forEach(([hx, hy]) => drawHandle(hx, hy, true));
-      mids.forEach(([hx, hy]) => drawHandle(hx, hy, false));
+      if (!pq) {
+        [lerp(tl, tr, 0.5), lerp(tr, br, 0.5), lerp(br, bl, 0.5), lerp(bl, tl, 0.5)].forEach(
+          ([hx, hy]) => drawHandle(hx, hy, false),
+        );
+      }
 
-      // Size readout.
-      const label = `${Math.round(cb.w)} × ${Math.round(cb.h)}${
-        cropStraightenRef.current ? `   ${cropStraightenRef.current}°` : ""
-      }`;
+      // Size readout: for perspective, the estimated output rectangle.
+      const label = pq
+        ? (() => {
+            const d = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+              Math.hypot(a.x - b.x, a.y - b.y);
+            const ow = Math.round((d(pq[0], pq[1]) + d(pq[3], pq[2])) / 2);
+            const oh = Math.round((d(pq[0], pq[3]) + d(pq[1], pq[2])) / 2);
+            return `${ow} × ${oh}  ⟂`;
+          })()
+        : `${Math.round(cb!.w)} × ${Math.round(cb!.h)}${
+            cropStraightenRef.current ? `   ${cropStraightenRef.current}°` : ""
+          }`;
       ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
       const tw = ctx.measureText(label).width;
       const lx = Math.min(tl[0], tr[0], br[0], bl[0]);
@@ -3166,6 +3199,8 @@ export default function CanvasArea({
       endSponge: () => engine.endSponge(),
       cropSnapshot: (ids) => engine.cropSnapshot(ids),
       applyCrop: (rect, ids, angle) => engine.applyCrop(rect, ids, angle),
+      applyPerspectiveCrop: (quad, outW, outH, ids) =>
+        engine.applyPerspectiveCrop(quad, outW, outH, ids),
       cropRestore: (snap) => engine.cropRestore(snap),
       applyAdjust: (layerId, adj, sel, angle, pivot) =>
         engine.applyAdjust(layerId, adj, sel, angle, pivot),
@@ -4172,6 +4207,32 @@ export default function CanvasArea({
       return;
     }
     if (tool === "crop") {
+      const pq = cropQuadRef.current;
+      if (pq) {
+        // Perspective mode: grab the nearest corner; double-click commits.
+        e.preventDefault();
+        const p = toDoc(e);
+        if (e.detail >= 2) {
+          onCropApplyRef.current();
+          return;
+        }
+        const hit = 12 / (zoomRef.current / 100);
+        let idx = -1;
+        let best = hit;
+        for (let i = 0; i < 4; i++) {
+          const d = Math.hypot(p.x - pq[i].x, p.y - pq[i].y);
+          if (d <= best) {
+            best = d;
+            idx = i;
+          }
+        }
+        if (idx >= 0) {
+          viewRef.current?.setPointerCapture(e.pointerId);
+          perspDragRef.current = idx;
+          ensureAnts();
+        }
+        return;
+      }
       if (!cropBoxRef.current) return;
       e.preventDefault();
       const p = toDoc(e);
@@ -4772,6 +4833,24 @@ export default function CanvasArea({
 
     // Crop: drag a handle / move / rubber-band, else show the right hover cursor.
     if (toolRef.current === "crop") {
+      // Perspective mode: drag a quad corner (clamped to the canvas).
+      const pq = cropQuadRef.current;
+      if (pq) {
+        if (perspDragRef.current !== null) {
+          const idx = perspDragRef.current;
+          const nx = Math.max(0, Math.min(widthRef.current, cur.x));
+          const ny = Math.max(0, Math.min(heightRef.current, cur.y));
+          const next = pq.map((c, i) => (i === idx ? { x: nx, y: ny } : c)) as CropQuad;
+          onCropQuadRef.current(next);
+          ensureAnts();
+        } else {
+          const hit = 12 / (zoomRef.current / 100);
+          const onCorner = pq.some((c) => Math.hypot(cur.x - c.x, cur.y - c.y) <= hit);
+          const next = onCorner ? "grab" : "crosshair";
+          setHoverCursor((c) => (c === next ? c : next));
+        }
+        return;
+      }
       if (cropDragRef.current) {
         onCropBoxRef.current(computeCropDrag(cropDragRef.current, cur));
         ensureAnts();
@@ -5187,6 +5266,13 @@ export default function CanvasArea({
       setHoverCursor(null);
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      return;
+    }
+    if (perspDragRef.current !== null) {
+      perspDragRef.current = null;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      ensureAnts();
       return;
     }
     if (cropDragRef.current) {

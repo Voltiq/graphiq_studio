@@ -55,6 +55,7 @@ import {
   type RedEyeSettings,
   type TextRun,
   type CloneSettings,
+  type CropQuad,
   type CropSettings,
   type PenAnchor,
   type DodgeSettings,
@@ -70,6 +71,7 @@ import {
   type ShapeSettings,
   type ToolId,
 } from "../lib/tools";
+import { estimateQuadSize } from "../lib/homography";
 import type { Theme } from "../lib/theme";
 import { invertRects, type Pan, type Rect } from "../lib/view";
 import {
@@ -320,6 +322,14 @@ const makeDoc = (seq: number, size?: { w: number; h: number }, dpi = 300): Doc =
   selectionPivot: null,
 });
 
+/** The four canvas corners as a perspective-crop quad (tl, tr, br, bl). */
+const fullCanvasQuad = (w: number, h: number): CropQuad => [
+  { x: 0, y: 0 },
+  { x: w, y: 0 },
+  { x: w, y: h },
+  { x: 0, y: h },
+];
+
 export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [tool, setTool] = useState<ToolId>(DEFAULT_TOOL);
   // --- Mobile shell: the Toolbar and panels dock become swipe-in drawers ----
@@ -447,6 +457,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // means no crop is in progress. Edited interactively on the canvas overlay and
   // via the options bar; committed with Enter / ✓, dropped with Esc.
   const [cropBox, setCropBox] = useState<Rect | null>(null);
+  // Perspective-crop quad (tl, tr, br, bl in doc coords); non-null only while the
+  // crop tool's Perspective mode is on. Seeded from the box, then dragged freely.
+  const [cropQuad, setCropQuad] = useState<CropQuad | null>(null);
   const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFS);
   const [prefsOpen, setPrefsOpen] = useState(false);
   // Preferences section to open on — Settings ▸ Performance / Scratch disks
@@ -715,6 +728,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const activeDocRef = useRef(active);
   const toolRef = useRef(tool);
   const cropBoxRef = useRef(cropBox);
+  const cropQuadRef = useRef(cropQuad);
   const cropSettingsRef = useRef(cropSettings);
   const blurRef = useRef(blur);
   const textSettingsRef = useRef(textSettings);
@@ -728,6 +742,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   activeDocRef.current = active;
   toolRef.current = tool;
   cropBoxRef.current = cropBox;
+  cropQuadRef.current = cropQuad;
   cropSettingsRef.current = cropSettings;
   blurRef.current = blur;
   textSettingsRef.current = textSettings;
@@ -956,15 +971,49 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const d = activeDocRef.current;
     setCropBox({ x: 0, y: 0, w: d.width, h: d.height });
     setCropSettings((s) => ({ ...s, straighten: 0 }));
+    if (cropSettingsRef.current.perspective) setCropQuad(fullCanvasQuad(d.width, d.height));
   }, []);
 
   // Commit the pending crop: snapshot, crop every leaf to the box (rotating by the
   // straighten angle), resize the document, and fold it into one undoable step.
   const applyCropNow = useCallback(() => {
-    const box = cropBoxRef.current;
     const eng = paintRef.current;
     const d = activeDocRef.current;
-    if (!box || !eng || !d.layers.length) return;
+    if (!eng || !d.layers.length) return;
+    const docId = activeIdRef.current;
+    const leafIds = collectLeafIds(d.layers);
+    const setDims = (w: number, h: number) =>
+      setDocs((ds) =>
+        ds.map((x) =>
+          x.id === docId
+            ? { ...x, width: w, height: h, selection: [], selectionAngle: 0, selectionPivot: null }
+            : x,
+        ),
+      );
+
+    // Perspective crop: resample the picked quad into a rectangle (auto-sized to
+    // the quad's average edge lengths), as one undoable step.
+    const quad = cropQuadRef.current;
+    if (cropSettingsRef.current.perspective && quad) {
+      const { w: outW, h: outH } = estimateQuadSize(quad);
+      const snap = eng.cropSnapshot(leafIds);
+      const redo = () => {
+        eng.applyPerspectiveCrop(quad, outW, outH, leafIds);
+        setDims(outW, outH);
+      };
+      const undo = () => {
+        eng.cropRestore(snap);
+        setDims(snap.w, snap.h);
+      };
+      redo();
+      eng.pushStructural("Perspective Crop", undo, redo);
+      setCropBox({ x: 0, y: 0, w: outW, h: outH });
+      setCropQuad(fullCanvasQuad(outW, outH));
+      return;
+    }
+
+    const box = cropBoxRef.current;
+    if (!box) return;
     const angle = cropSettingsRef.current.straighten;
     const rect: Rect = {
       x: Math.round(box.x),
@@ -981,17 +1030,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       rect.h === d.height
     )
       return;
-    const docId = activeIdRef.current;
-    const leafIds = collectLeafIds(d.layers);
     const snap = eng.cropSnapshot(leafIds);
-    const setDims = (w: number, h: number) =>
-      setDocs((ds) =>
-        ds.map((x) =>
-          x.id === docId
-            ? { ...x, width: w, height: h, selection: [], selectionAngle: 0, selectionPivot: null }
-            : x,
-        ),
-      );
     const redo = () => {
       eng.applyCrop(rect, leafIds, angle);
       setDims(rect.w, rect.h);
@@ -1012,6 +1051,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   useEffect(() => {
     if (tool !== "crop") {
       setCropBox(null);
+      setCropQuad(null);
       return;
     }
     const d = activeDocRef.current;
@@ -1021,8 +1061,28 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const seed = pendingStraightenRef.current ?? 0;
     pendingStraightenRef.current = null;
     setCropSettings((s) => ({ ...s, straighten: seed }));
+    setCropQuad(
+      cropSettingsRef.current.perspective ? fullCanvasQuad(d.width, d.height) : null,
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, activeId]);
+  // Toggling Perspective while in the crop tool seeds the quad from the current
+  // box (or the full canvas), and leaving the mode drops it.
+  useEffect(() => {
+    if (tool !== "crop") return;
+    if (!cropSettings.perspective) {
+      setCropQuad(null);
+      return;
+    }
+    const b = cropBoxRef.current ?? { x: 0, y: 0, w: active.width, h: active.height };
+    setCropQuad([
+      { x: b.x, y: b.y },
+      { x: b.x + b.w, y: b.y },
+      { x: b.x + b.w, y: b.y + b.h },
+      { x: b.x, y: b.y + b.h },
+    ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cropSettings.perspective]);
 
   // Setting a (new) selection resets its rotation transform.
   const setSelection = (rects: Rect[]) => {
@@ -5252,6 +5312,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onUpdateText={updateText}
           cropBox={cropBox}
           onCropBox={setCropBox}
+          cropQuad={cropQuad}
+          onCropQuad={setCropQuad}
           cropGrid={cropSettings.grid}
           cropShield={cropSettings.shield}
           cropStraighten={cropSettings.straighten}

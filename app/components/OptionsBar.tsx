@@ -883,60 +883,74 @@ function renderOptions(
 
       return (
         <>
-          <Select
-            label="Ratio"
-            options={RATIO_OPTS.map((r) => r.label)}
-            value={curRatioLabel}
-            onChange={pickRatio}
-            width={140}
+          <Toggle
+            label="Perspective"
+            checked={crop.perspective}
+            onChange={(v) => onCrop({ perspective: v })}
           />
-          {crop.ratio === "custom" && (
+          <Divider />
+          {crop.perspective ? (
+            <span className={styles.muted}>
+              Drag the corners over a skewed subject — Apply resamples it to a rectangle.
+            </span>
+          ) : (
             <>
-              <NumberField
-                value={crop.customW}
-                min={1}
-                max={9999}
-                onChange={(n) => {
-                  onCrop({ customW: n });
-                  if (cropBox) onCropBox(reshape(cropBox, n / Math.max(1, crop.customH)));
-                }}
-                width={52}
+              <Select
+                label="Ratio"
+                options={RATIO_OPTS.map((r) => r.label)}
+                value={curRatioLabel}
+                onChange={pickRatio}
+                width={140}
               />
-              <span className={styles.muted}>:</span>
-              <NumberField
-                value={crop.customH}
-                min={1}
-                max={9999}
-                onChange={(n) => {
-                  onCrop({ customH: n });
-                  if (cropBox) onCropBox(reshape(cropBox, Math.max(1, crop.customW) / n));
-                }}
-                width={52}
+              {crop.ratio === "custom" && (
+                <>
+                  <NumberField
+                    value={crop.customW}
+                    min={1}
+                    max={9999}
+                    onChange={(n) => {
+                      onCrop({ customW: n });
+                      if (cropBox) onCropBox(reshape(cropBox, n / Math.max(1, crop.customH)));
+                    }}
+                    width={52}
+                  />
+                  <span className={styles.muted}>:</span>
+                  <NumberField
+                    value={crop.customH}
+                    min={1}
+                    max={9999}
+                    onChange={(n) => {
+                      onCrop({ customH: n });
+                      if (cropBox) onCropBox(reshape(cropBox, Math.max(1, crop.customW) / n));
+                    }}
+                    width={52}
+                  />
+                </>
+              )}
+              <button
+                type="button"
+                className={styles.iconBtn}
+                title="Swap orientation"
+                onClick={swapOrientation}
+              >
+                <ArrowLeftRight size={15} />
+              </button>
+              <Divider />
+              <NumberField label="W" value={Math.round(box.w)} min={1} onChange={setW} unit="px" width={74} />
+              <NumberField label="H" value={Math.round(box.h)} min={1} onChange={setH} unit="px" width={74} />
+              <NumberField label="X" value={Math.round(box.x)} min={0} onChange={setX} unit="px" width={70} />
+              <NumberField label="Y" value={Math.round(box.y)} min={0} onChange={setY} unit="px" width={70} />
+              <Divider />
+              <Slider
+                label="Straighten"
+                min={-45}
+                max={45}
+                value={crop.straighten}
+                onChange={(n) => onCrop({ straighten: n })}
+                unit="°"
               />
             </>
           )}
-          <button
-            type="button"
-            className={styles.iconBtn}
-            title="Swap orientation"
-            onClick={swapOrientation}
-          >
-            <ArrowLeftRight size={15} />
-          </button>
-          <Divider />
-          <NumberField label="W" value={Math.round(box.w)} min={1} onChange={setW} unit="px" width={74} />
-          <NumberField label="H" value={Math.round(box.h)} min={1} onChange={setH} unit="px" width={74} />
-          <NumberField label="X" value={Math.round(box.x)} min={0} onChange={setX} unit="px" width={70} />
-          <NumberField label="Y" value={Math.round(box.y)} min={0} onChange={setY} unit="px" width={70} />
-          <Divider />
-          <Slider
-            label="Straighten"
-            min={-45}
-            max={45}
-            value={crop.straighten}
-            onChange={(n) => onCrop({ straighten: n })}
-            unit="°"
-          />
           <Select
             label="Overlay"
             options={GRID_OPTS.map((g) => g.label)}

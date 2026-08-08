@@ -42,6 +42,7 @@ import {
 import { GpuToneRenderer } from "./gpu";
 import { healPadding, healRegion } from "./heal";
 import { buildCanvasGradient } from "./gradient";
+import { solveHomography } from "./homography";
 import {
   applyToneLUTs,
   applyToneLUTs16,
@@ -383,6 +384,13 @@ export interface EngineHandle {
   cropSnapshot: (ids: string[]) => CropSnapshot;
   /** Crop (and optionally straighten) owned layers to `rect`, resizing the doc. */
   applyCrop: (rect: Rect, ids: string[], angle?: number) => void;
+  /** Perspective crop: resample the quad (tl,tr,br,bl) into an outW×outH rect. */
+  applyPerspectiveCrop: (
+    quad: { x: number; y: number }[],
+    outW: number,
+    outH: number,
+    ids: string[],
+  ) => void;
   /** Restore a pre-crop snapshot (crop undo/redo). */
   cropRestore: (snap: CropSnapshot) => void;
   applyAdjust: (
@@ -1603,6 +1611,122 @@ export class PaintEngine {
       }
     });
     this.emitChange();
+  }
+
+  /**
+   * Perspective crop: resample the picked quadrilateral `quad` (four doc-space
+   * corners in tl, tr, br, bl order) into an `outW × outH` rectangle, correcting
+   * perspective. Every owned layer + mask is warped through the same homography
+   * and the document is resized. Destructive — paired with cropSnapshot/restore
+   * for undo, exactly like applyCrop.
+   */
+  applyPerspectiveCrop(
+    quad: { x: number; y: number }[],
+    outW: number,
+    outH: number,
+    ownLayerIds: string[],
+  ) {
+    const nw = Math.max(1, Math.round(outW));
+    const nh = Math.max(1, Math.round(outH));
+    this.endAdjust();
+    if (this.floatActive) this.discardFloat();
+    this.wandSrc = null;
+    this.invalidateStyled();
+    // Map each OUTPUT pixel → its SOURCE location: solve output-rect corners → quad.
+    const dst = [
+      { x: 0, y: 0 },
+      { x: nw, y: 0 },
+      { x: nw, y: nh },
+      { x: 0, y: nh },
+    ];
+    const H = solveHomography(dst, quad);
+    const sw = this.w;
+    const sh = this.h;
+    for (const [id, l] of this.layers) {
+      if (!ownLayerIds.includes(id)) continue;
+      const srcData = l.ctx.getImageData(0, 0, sw, sh);
+      const out = this.warpPerspective(srcData, H, nw, nh);
+      const next = this.mk(nw, nh, true);
+      next.ctx.putImageData(out, 0, 0);
+      this.layers.set(id, next);
+    }
+    this.w = nw;
+    this.h = nh;
+    this.stroke = makeCanvas(nw, nh);
+    this.scratch = this.mk(nw, nh);
+    this.transformMasks(ownLayerIds, (ctx, src) => {
+      const sctx = src.getContext("2d");
+      if (!sctx) return;
+      const srcData = sctx.getImageData(0, 0, src.width, src.height);
+      ctx.putImageData(this.warpPerspective(srcData, H, nw, nh), 0, 0);
+    });
+    this.emitChange();
+  }
+
+  /** Inverse-map + premultiplied bilinear resample of `srcData` into an `outW×outH`
+   *  buffer. `H` maps output-pixel coords → source coords. Pixels whose source
+   *  falls outside the image come out transparent. */
+  private warpPerspective(srcData: ImageData, H: number[], outW: number, outH: number): ImageData {
+    const sw = srcData.width;
+    const sh = srcData.height;
+    const sd = srcData.data;
+    const out = new ImageData(outW, outH);
+    const od = out.data;
+    const [h0, h1, h2, h3, h4, h5, h6, h7, h8] = H;
+    let di = 0;
+    for (let y = 0; y < outH; y++) {
+      const yc = y + 0.5;
+      for (let x = 0; x < outW; x++, di += 4) {
+        const xc = x + 0.5;
+        const w = h6 * xc + h7 * yc + h8;
+        if (w === 0) continue;
+        const iw = 1 / w;
+        const sx = (h0 * xc + h1 * yc + h2) * iw - 0.5;
+        const sy = (h3 * xc + h4 * yc + h5) * iw - 0.5;
+        if (sx <= -1 || sx >= sw || sy <= -1 || sy >= sh) continue; // outside → clear
+        const x0f = Math.floor(sx);
+        const y0f = Math.floor(sy);
+        const fx = sx - x0f;
+        const fy = sy - y0f;
+        const x0 = x0f < 0 ? 0 : x0f >= sw ? sw - 1 : x0f;
+        const y0 = y0f < 0 ? 0 : y0f >= sh ? sh - 1 : y0f;
+        const x1 = x0f + 1 < 0 ? 0 : x0f + 1 >= sw ? sw - 1 : x0f + 1;
+        const y1 = y0f + 1 < 0 ? 0 : y0f + 1 >= sh ? sh - 1 : y0f + 1;
+        const w00 = (1 - fx) * (1 - fy);
+        const w10 = fx * (1 - fy);
+        const w01 = (1 - fx) * fy;
+        const w11 = fx * fy;
+        // Premultiplied blend so transparent edges don't darken the result.
+        const o00 = (y0 * sw + x0) * 4;
+        const o10 = (y0 * sw + x1) * 4;
+        const o01 = (y1 * sw + x0) * 4;
+        const o11 = (y1 * sw + x1) * 4;
+        const a00 = sd[o00 + 3];
+        const a10 = sd[o10 + 3];
+        const a01 = sd[o01 + 3];
+        const a11 = sd[o11 + 3];
+        const a = a00 * w00 + a10 * w10 + a01 * w01 + a11 * w11;
+        od[di + 3] = Math.round(a);
+        if (a > 0) {
+          const r =
+            sd[o00] * a00 * w00 + sd[o10] * a10 * w10 + sd[o01] * a01 * w01 + sd[o11] * a11 * w11;
+          const g =
+            sd[o00 + 1] * a00 * w00 +
+            sd[o10 + 1] * a10 * w10 +
+            sd[o01 + 1] * a01 * w01 +
+            sd[o11 + 1] * a11 * w11;
+          const b =
+            sd[o00 + 2] * a00 * w00 +
+            sd[o10 + 2] * a10 * w10 +
+            sd[o01 + 2] * a01 * w01 +
+            sd[o11 + 2] * a11 * w11;
+          od[di] = Math.round(r / a);
+          od[di + 1] = Math.round(g / a);
+          od[di + 2] = Math.round(b / a);
+        }
+      }
+    }
+    return out;
   }
 
   /** Restore a pre-crop snapshot (layers + masks + document size) for crop undo/redo. */

@@ -207,7 +207,18 @@ export interface CropSettings {
   shield: number;
   /** Straighten / rotate the crop, −45…45°. */
   straighten: number;
+  /** Perspective mode: the crop box becomes a free quadrilateral that resamples
+   *  to a rectangle on apply (correcting perspective). */
+  perspective: boolean;
 }
+
+/** The four corners of a perspective-crop quad, in tl, tr, br, bl order (doc space). */
+export type CropQuad = [
+  { x: number; y: number },
+  { x: number; y: number },
+  { x: number; y: number },
+  { x: number; y: number },
+];
 
 /** Built-in aspect-ratio presets for the crop tool (w : h). */
 export const CROP_RATIOS: { id: string; label: string; w: number; h: number }[] = [
@@ -230,6 +241,7 @@ export const DEFAULT_CROP: CropSettings = {
   grid: "thirds",
   shield: 65,
   straighten: 0,
+  perspective: false,
 };
 
 /**
