@@ -56,6 +56,7 @@ import {
   findNode,
   isPixelsLocked,
   isPositionLocked,
+  linkedLeafIds,
   type LayerNode,
 } from "../lib/layers";
 import type { PendingLoad } from "../lib/project";
@@ -1384,6 +1385,19 @@ export default function CanvasArea({
   // the active surface is a mask (masks are separate rasters, always paintable).
   const paintBlocked = (id: string | null): boolean =>
     !!id && engine.getActiveSurface(id) === "pixels" && lockBlocks(id, "pixels");
+  // Linked layers that should ride along a whole-layer move of `primaryId`: the
+  // other leaf pixel layers sharing its link key, minus any that are position-
+  // locked (a locked layer stays put). Each carries its own mask-link flag.
+  const linkedMoveExtras = (primaryId: string): { id: string; maskLinked: boolean }[] => {
+    const out: { id: string; maskLinked: boolean }[] = [];
+    for (const id of linkedLeafIds(layersRef.current, primaryId)) {
+      if (id === primaryId) continue;
+      const node = findNode(layersRef.current, id);
+      if (!node || node.type !== "layer" || isPositionLocked(node)) continue;
+      out.push({ id, maskLinked: !!node.mask && node.mask.linked !== false });
+    }
+    return out;
+  };
   const onHistoryRef = useRef(onHistory);
   onHistoryRef.current = onHistory;
   const onAdjustEndRef = useRef(onAdjustEnd);
@@ -3922,6 +3936,7 @@ export default function CanvasArea({
             layerId,
             sel.length ? sel : null,
             !!node.mask && node.mask.linked !== false && !sel.length,
+            sel.length ? [] : linkedMoveExtras(layerId), // linked layers ride whole-layer moves
           );
         }
         n.active = true;
@@ -4057,9 +4072,15 @@ export default function CanvasArea({
           e.preventDefault();
           viewRef.current?.setPointerCapture(e.pointerId);
           moveRef.current = { sx: p.x, sy: p.y, mode: "pixels" };
-          // No selection → move the whole layer; a linked mask travels with it.
+          // No selection → move the whole layer; a linked mask travels with it,
+          // and any linked layers ride along by the same delta.
           const moveNode = findNode(layers, activeLayerId);
-          engine.beginMove(activeLayerId, null, !!moveNode?.mask && moveNode.mask.linked !== false);
+          engine.beginMove(
+            activeLayerId,
+            null,
+            !!moveNode?.mask && moveNode.mask.linked !== false,
+            linkedMoveExtras(activeLayerId),
+          );
         }
       }
       moveDeltaRef.current = { x: 0, y: 0 };

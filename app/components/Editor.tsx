@@ -76,11 +76,16 @@ import {
   filterMaskKey,
   findNode,
   flattenedIds,
+  clearLinkKey,
   insertInGroup,
   insertRelative,
+  isLinked,
   isPixelsLocked,
   isTransparencyLocked,
   mergeDownInTree,
+  newLinkKey,
+  pruneLinks,
+  setLinkKey,
   removeMany,
   removeNode,
   replaceNodeWith,
@@ -2456,6 +2461,25 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         layers: updateNode(d.layers, id, { locks: any ? clean : undefined }),
       }));
     },
+    toggleLinkSelected: () => {
+      const ids = active.selectedLayerIds;
+      if (!ids.length) return;
+      const nodes = ids
+        .map((id) => findNode(active.layers, id))
+        .filter((n): n is LayerNode => !!n);
+      const allLinked = nodes.length > 0 && nodes.every((n) => isLinked(n));
+      const set = new Set(ids);
+      if (allLinked) {
+        // Every selected layer is linked → unlink them all (then prune orphans).
+        patchActiveDoc((d) => ({ ...d, layers: pruneLinks(clearLinkKey(d.layers, set)) }));
+      } else if (ids.length >= 2) {
+        // Bind the whole selection under one fresh key (prune any freed sets).
+        const key = newLinkKey();
+        patchActiveDoc((d) => ({ ...d, layers: pruneLinks(setLinkKey(d.layers, set, key)) }));
+      }
+    },
+    unlinkLayer: (id) =>
+      patchActiveDoc((d) => ({ ...d, layers: pruneLinks(clearLinkKey(d.layers, new Set([id]))) })),
     maskSurface: paintSurface,
     chooseSurface,
     addMask: addMaskOp,
@@ -2963,6 +2987,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         const flt = n.filters?.length ? { filters: n.filters } : {};
         const lbl = n.label ? { label: n.label } : {}; // v10 colour label
         const lck = n.locks ? { locks: n.locks } : {}; // v12 edit locks
+        const lnk = n.linkKey ? { linkKey: n.linkKey } : {}; // v13 linked layers
         // v8: filter mask meta + grayscale (restored under filterMaskKey(new id)).
         const fmMeta =
           n.type !== "adjustment" && n.filterMask
@@ -2992,6 +3017,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             ...fmMeta,
             ...lbl,
             ...lck,
+            ...lnk,
             children: remap(n.children),
           };
         }
@@ -3012,6 +3038,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             ...fx,
             ...lbl,
             ...lck,
+            ...lnk,
           };
         }
         const id = nextLeafId();
@@ -3034,6 +3061,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           ...fmMeta,
           ...lbl,
           ...lck,
+          ...lnk,
         };
       });
 

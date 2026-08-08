@@ -41,6 +41,7 @@ import {
   filterLayerTree,
   findNode,
   hasAnyLock,
+  isLinked,
   isPixelsLocked,
   isPositionLocked,
   isTransparencyLocked,
@@ -206,6 +207,14 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
 
   const rows = flattenRows(layers, vis);
   const multi = selectedLayerIds.length > 1;
+
+  // Link button: bind 2+ selected layers, or unlink when everything selected is
+  // already linked (so a single linked layer can be unlinked here too).
+  const selectedNodes = selectedLayerIds
+    .map((id) => findNode(layers, id))
+    .filter((n): n is LayerNode => !!n);
+  const allSelLinked = selectedNodes.length > 0 && selectedNodes.every((n) => isLinked(n));
+  const canToggleLink = selectedLayerIds.length >= 2 || allSelLinked;
 
   return (
     <div className={styles.layers}>
@@ -553,6 +562,20 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                     <Lock size={11} />
                   </span>
                 )}
+                {isLinked(l) && (
+                  <button
+                    type="button"
+                    className={styles.rowLink}
+                    title="Linked — moves with its link-mates; click to unlink"
+                    aria-label="Linked layer — click to unlink"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      api.unlinkLayer(l.id);
+                    }}
+                  >
+                    <Link2 size={12} />
+                  </button>
+                )}
                 {!isAdjustment && hasEnabledFilters(l.filters) && (
                   <button
                     type="button"
@@ -621,6 +644,19 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
           }}
         >
           <FolderPlus size={15} />
+        </button>
+        <button
+          type="button"
+          title={
+            allSelLinked
+              ? "Unlink layers"
+              : "Link layers — move them together without grouping"
+          }
+          data-on={allSelLinked || undefined}
+          disabled={!canToggleLink}
+          onClick={() => api.toggleLinkSelected()}
+        >
+          {allSelLinked ? <Unlink2 size={15} /> : <Link2 size={15} />}
         </button>
         <button
           type="button"
@@ -732,6 +768,17 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
               <CornerDownRight size={13} /> {menu.node.clipped ? "Release clipping mask" : "Create clipping mask"}
             </button>
             <div className={styles.menuSep} />
+            {isLinked(menu.node) ? (
+              <button type="button" onClick={() => run(() => api.unlinkLayer(menu.node.id))}>
+                <Unlink2 size={13} /> Unlink layer
+              </button>
+            ) : (
+              multi && (
+                <button type="button" onClick={() => run(api.toggleLinkSelected)}>
+                  <Link2 size={13} /> Link layers
+                </button>
+              )
+            )}
             <button type="button" onClick={() => run(api.group)}>
               <FolderPlus size={13} /> {multi ? "Group selection" : "Group"}
             </button>

@@ -78,6 +78,9 @@ export interface LayerBase {
   label?: LayerLabel;
   /** Edit locks (transparency / pixels / position / all). Absent ⇒ unlocked. */
   locks?: LayerLocks;
+  /** Link key: nodes sharing the same non-empty key move together (like PS's
+   *  linked layers) without being grouped. Absent ⇒ not linked. */
+  linkKey?: string;
   /** Present ⇒ the layer carries a raster mask (pixels held by the engine). */
   mask?: MaskMeta;
   /** Non-destructive layer effects (drop shadow, glow, stroke, …); rendered at
@@ -132,6 +135,7 @@ export type LayerPatch = Partial<
 > & {
   label?: LayerLabel | undefined;
   locks?: LayerLocks | undefined;
+  linkKey?: string | undefined;
   expanded?: boolean;
   vector?: VectorData;
   mask?: MaskMeta | undefined;
@@ -219,6 +223,94 @@ export function containsId(node: LayerNode, id: string): boolean {
   if (node.id === id) return true;
   if (node.type === "group") return node.children.some((c) => containsId(c, id));
   return false;
+}
+
+// ---- Linked layers ----------------------------------------------------------
+/** A node is linked when it carries a link key (shared with its link-mates). */
+export const isLinked = (n: { linkKey?: string } | null | undefined): boolean => !!n?.linkKey;
+
+/** A fresh, collision-resistant link key. */
+export function newLinkKey(): string {
+  return `lk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** All nodes in the tree sharing `id`'s link key (⊇ {id}); empty if unlinked. */
+export function linkedNodes(tree: LayerNode[], id: string): LayerNode[] {
+  const self = findNode(tree, id);
+  if (!self?.linkKey) return [];
+  const key = self.linkKey;
+  const out: LayerNode[] = [];
+  const walk = (ns: LayerNode[]) => {
+    for (const n of ns) {
+      if (n.linkKey === key) out.push(n);
+      if (n.type === "group") walk(n.children);
+    }
+  };
+  walk(tree);
+  return out;
+}
+
+/** Leaf pixel-layer ids of every node linked to `id` (groups expand to leaves).
+ *  Includes `id`'s own leaf when it is a pixel layer. Empty when unlinked. */
+export function linkedLeafIds(tree: LayerNode[], id: string): string[] {
+  const nodes = linkedNodes(tree, id);
+  if (!nodes.length) return [];
+  const ids = new Set<string>();
+  for (const n of nodes) for (const lid of collectLeafIds([n])) ids.add(lid);
+  return [...ids];
+}
+
+/** Count of distinct nodes carrying a given link key across the tree. */
+export function linkKeyCount(tree: LayerNode[], key: string): number {
+  let n = 0;
+  const walk = (ns: LayerNode[]) => {
+    for (const m of ns) {
+      if (m.linkKey === key) n++;
+      if (m.type === "group") walk(m.children);
+    }
+  };
+  walk(tree);
+  return n;
+}
+
+/** Apply `fn` to every node in the tree (recursing into groups), returning a new tree. */
+function mapTree(tree: LayerNode[], fn: (n: LayerNode) => LayerNode): LayerNode[] {
+  return tree.map((n) => {
+    const m = fn(n);
+    return m.type === "group" ? { ...m, children: mapTree(m.children, fn) } : m;
+  });
+}
+
+const stripLinkKey = (n: LayerNode): LayerNode => {
+  if (!n.linkKey) return n;
+  const rest = { ...n };
+  delete (rest as { linkKey?: string }).linkKey;
+  return rest;
+};
+
+/** Give every node in `ids` the shared link `key` (returns a new tree). */
+export function setLinkKey(tree: LayerNode[], ids: Set<string>, key: string): LayerNode[] {
+  return mapTree(tree, (n) => (ids.has(n.id) ? { ...n, linkKey: key } : n));
+}
+
+/** Remove the link key from every node in `ids`. */
+export function clearLinkKey(tree: LayerNode[], ids: Set<string>): LayerNode[] {
+  return mapTree(tree, (n) => (ids.has(n.id) ? stripLinkKey(n) : n));
+}
+
+/** Drop link keys that now bind fewer than two nodes (a link of one is inert). */
+export function pruneLinks(tree: LayerNode[]): LayerNode[] {
+  const counts = new Map<string, number>();
+  const walk = (ns: LayerNode[]) => {
+    for (const n of ns) {
+      if (n.linkKey) counts.set(n.linkKey, (counts.get(n.linkKey) ?? 0) + 1);
+      if (n.type === "group") walk(n.children);
+    }
+  };
+  walk(tree);
+  const orphans = new Set([...counts].filter(([, c]) => c < 2).map(([k]) => k));
+  if (!orphans.size) return tree;
+  return mapTree(tree, (n) => (n.linkKey && orphans.has(n.linkKey) ? stripLinkKey(n) : n));
 }
 
 /** Apply a shallow patch to the matching node (returns a new tree). */
@@ -536,6 +628,10 @@ export interface LayersApi {
   flatten: () => void;
   /** Toggle one edit-lock flag (transparency/pixels/position/all) on a layer. */
   setLock: (id: string, flag: LockFlag, on: boolean) => void;
+  /** Link the current multi-selection, or unlink it if it's already all linked. */
+  toggleLinkSelected: () => void;
+  /** Unlink one layer from its link set (row chain / context menu). */
+  unlinkLayer: (id: string) => void;
   // ---- Layer masks ----
   /** The active layer's current paint surface (drives the active-surface ring). */
   maskSurface: ActiveSurface;

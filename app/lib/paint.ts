@@ -1041,6 +1041,14 @@ export class PaintEngine {
   private moveOff = { x: 0, y: 0 };
   /** Whole-layer move with a linked mask: shift the mask with the pixels. */
   private moveMaskLinked = false;
+  /** Extra linked layers riding along on a whole-layer move (same delta). Each
+   *  carries its own before/float surfaces; all commit in ONE undo step. */
+  private moveExtra: {
+    id: string;
+    orig: Layer;
+    float: Layer;
+    maskLinked: boolean;
+  }[] = [];
 
   // Floating content sitting above a layer, not yet merged (paste, or a moved selection).
   private floatActive = false;
@@ -3131,6 +3139,17 @@ export class PaintEngine {
       s.drawImage(this.moveFloat.c, this.moveOff.x, this.moveOff.y);
       return this.scratch!.c;
     }
+    if (this.moving && s && this.moveExtra.length) {
+      const ex = this.moveExtra.find((e) => e.id === id); // a linked layer riding along
+      if (ex) {
+        s.globalAlpha = 1;
+        s.globalCompositeOperation = "source-over";
+        s.clearRect(0, 0, this.w, this.h);
+        if (l) s.drawImage(l.c, 0, 0); // layer was cleared at beginMove
+        s.drawImage(ex.float.c, this.moveOff.x, this.moveOff.y);
+        return this.scratch!.c;
+      }
+    }
     if (this.floatActive && this.floatSource && s && id === this.floatLayer) {
       s.globalAlpha = 1;
       s.globalCompositeOperation = "source-over";
@@ -3272,6 +3291,7 @@ export class PaintEngine {
     const live = new Set<string>();
     if (this.painting && this.strokeLayer) live.add(this.strokeLayer);
     if (this.moving && this.moveLayer) live.add(this.moveLayer);
+    if (this.moving) for (const ex of this.moveExtra) live.add(ex.id);
     if (this.floatActive && this.floatLayer) live.add(this.floatLayer);
     if (this.blurring && this.blurLayer) live.add(this.blurLayer);
     if (this.dodging && this.dodgeLayer) live.add(this.dodgeLayer);
@@ -4259,12 +4279,18 @@ export class PaintEngine {
   /** Begin moving pixels: lift the selection (or whole layer) into a float buffer.
    *  `linkedMask` (whole-layer moves only): shift the layer's mask along with the
    *  pixels on commit — the Layers-panel chain toggle. */
-  beginMove(layerId: string, rects: Rect[] | null, linkedMask = false) {
+  beginMove(
+    layerId: string,
+    rects: Rect[] | null,
+    linkedMask = false,
+    linked: { id: string; maskLinked: boolean }[] = [],
+  ) {
     if (!this.stroke) return;
     this.moving = true;
     this.moveMaskLinked = linkedMask && !rects;
     this.moveLayer = layerId;
     this.moveOff = { x: 0, y: 0 };
+    this.moveExtra = [];
     const l = this.layer(layerId);
     this.moveOrig = this.mk(this.w, this.h, true);
     this.moveOrig.ctx.drawImage(l.c, 0, 0);
@@ -4288,6 +4314,18 @@ export class PaintEngine {
       this.moveSrc = null;
       this.moveFloat.ctx.drawImage(l.c, 0, 0);
       l.ctx.clearRect(0, 0, this.w, this.h);
+      // Linked layers ride along a whole-layer move only: float each and clear it
+      // so its preview follows the same delta; committed together in endMove.
+      for (const { id, maskLinked } of linked) {
+        if (id === layerId) continue;
+        const el = this.layer(id);
+        const orig = this.mk(this.w, this.h, true);
+        orig.ctx.drawImage(el.c, 0, 0);
+        const float = this.mk(this.w, this.h);
+        float.ctx.drawImage(el.c, 0, 0);
+        el.ctx.clearRect(0, 0, this.w, this.h);
+        this.moveExtra.push({ id, orig, float, maskLinked });
+      }
     }
     this.emitChange();
   }
@@ -5040,12 +5078,20 @@ export class PaintEngine {
   endMove() {
     if (!this.moving || !this.moveLayer || !this.moveFloat || !this.moveOrig) {
       this.moving = false;
+      this.moveExtra = [];
       return;
     }
     const l = this.layer(this.moveLayer);
     l.ctx.globalAlpha = 1;
     l.ctx.globalCompositeOperation = "source-over";
     l.ctx.drawImage(this.moveFloat.c, this.moveOff.x, this.moveOff.y);
+    // Bake each linked layer's float at the same delta (a zero move restores it).
+    for (const ex of this.moveExtra) {
+      const el = this.layer(ex.id);
+      el.ctx.globalAlpha = 1;
+      el.ctx.globalCompositeOperation = "source-over";
+      el.ctx.drawImage(ex.float.c, this.moveOff.x, this.moveOff.y);
+    }
 
     const moved = this.moveOff.x !== 0 || this.moveOff.y !== 0;
     if (moved) {
@@ -5060,38 +5106,60 @@ export class PaintEngine {
       } else {
         region = { x: 0, y: 0, w: this.w, h: this.h };
       }
-      // Linked mask (whole-layer move): shift the mask by the same delta and
-      // fold its patch into the SAME history step via side callbacks, so one
-      // undo restores pixels and mask together.
-      let side: HistorySide | undefined;
-      const mask = this.moveMaskLinked ? this.masks.get(this.moveLayer) : undefined;
-      if (mask) {
-        const id = this.moveLayer;
-        const maskBefore = mask.ctx.getImageData(0, 0, this.w, this.h);
-        mask.ctx.globalAlpha = 1;
-        mask.ctx.globalCompositeOperation = "source-over";
-        mask.ctx.fillStyle = "#000"; // vacated area = hidden (matches offsetMask)
-        mask.ctx.fillRect(0, 0, this.w, this.h);
-        mask.ctx.putImageData(maskBefore, Math.round(this.moveOff.x), Math.round(this.moveOff.y));
+      const off = { x: Math.round(this.moveOff.x), y: Math.round(this.moveOff.y) };
+      // Fold-in ops so ONE undo restores the whole linked move together with the
+      // primary layer (whose own before/after the pushEntry journals directly):
+      // every linked mask shifts by the same delta, and each extra linked layer's
+      // full-canvas pixels ride along in the same history step's side callbacks.
+      const undoOps: (() => void)[] = [];
+      const redoOps: (() => void)[] = [];
+      const foldMask = (id: string) => {
+        const m = this.masks.get(id);
+        if (!m) return;
+        const before = m.ctx.getImageData(0, 0, this.w, this.h);
+        m.ctx.globalAlpha = 1;
+        m.ctx.globalCompositeOperation = "source-over";
+        m.ctx.fillStyle = "#000"; // vacated area = hidden (matches offsetMask)
+        m.ctx.fillRect(0, 0, this.w, this.h);
+        m.ctx.putImageData(before, off.x, off.y);
         this.deriveMaskAlpha(id);
-        const maskAfter = mask.ctx.getImageData(0, 0, this.w, this.h);
-        side = {
-          undo: () => {
-            const m = this.masks.get(id);
-            if (m) {
-              m.ctx.putImageData(maskBefore, 0, 0);
-              this.deriveMaskAlpha(id);
-            }
-          },
-          redo: () => {
-            const m = this.masks.get(id);
-            if (m) {
-              m.ctx.putImageData(maskAfter, 0, 0);
-              this.deriveMaskAlpha(id);
-            }
-          },
-        };
+        const after = m.ctx.getImageData(0, 0, this.w, this.h);
+        undoOps.push(() => {
+          const mm = this.masks.get(id);
+          if (mm) {
+            mm.ctx.putImageData(before, 0, 0);
+            this.deriveMaskAlpha(id);
+          }
+        });
+        redoOps.push(() => {
+          const mm = this.masks.get(id);
+          if (mm) {
+            mm.ctx.putImageData(after, 0, 0);
+            this.deriveMaskAlpha(id);
+          }
+        });
+      };
+      if (this.moveMaskLinked) foldMask(this.moveLayer);
+      const full: Rect = { x: 0, y: 0, w: this.w, h: this.h };
+      for (const ex of this.moveExtra) {
+        const id = ex.id;
+        const el = this.layer(id);
+        const before = ex.orig.ctx.getImageData(0, 0, this.w, this.h);
+        const after = el.ctx.getImageData(0, 0, this.w, this.h);
+        undoOps.push(() => {
+          this.layer(id).ctx.putImageData(before, 0, 0);
+          this.bumpPixel(id, full);
+        });
+        redoOps.push(() => {
+          this.layer(id).ctx.putImageData(after, 0, 0);
+          this.bumpPixel(id, full);
+        });
+        if (ex.maskLinked) foldMask(id);
       }
+      const side: HistorySide | undefined =
+        undoOps.length || redoOps.length
+          ? { undo: () => undoOps.forEach((f) => f()), redo: () => redoOps.forEach((f) => f()) }
+          : undefined;
       if (region.w > 0 && region.h > 0) {
         const before = this.moveOrig.ctx.getImageData(region.x, region.y, region.w, region.h);
         const after = l.ctx.getImageData(region.x, region.y, region.w, region.h);
@@ -5105,6 +5173,7 @@ export class PaintEngine {
     this.moveOrig = null;
     this.moveSrc = null;
     this.moveOff = { x: 0, y: 0 };
+    this.moveExtra = [];
     this.emitChange();
   }
 

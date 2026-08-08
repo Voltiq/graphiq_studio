@@ -790,6 +790,20 @@
   color: var(--text-3);
 }
 
+/* Chain icon on a linked row — click to unlink. */
+.rowLink {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--accent);
+  opacity: 0.85;
+  transition: opacity var(--t-fast) var(--ease);
+
+  &:hover {
+    opacity: 1;
+  }
+}
+
 /* Context-menu lock toggles (mirrors the label swatch row). */
 .menuLockRow {
   display: flex;
@@ -1159,6 +1173,11 @@
     &:disabled {
       opacity: 0.4;
       cursor: default;
+    }
+
+    /* Active toggle (e.g. layers currently linked). */
+    &[data-on] {
+      color: var(--accent);
     }
   }
 }
