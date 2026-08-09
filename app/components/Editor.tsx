@@ -286,6 +286,7 @@ type Sel = { active: string | null; selected: string[] };
 const ALL_PANELS: PanelVisibility = {
   color: true,
   swatches: true,
+  brushes: true,
   adjustments: true,
   properties: true,
   layers: true,
@@ -300,6 +301,7 @@ const ALL_PANELS: PanelVisibility = {
 const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
   "window-color": "color",
   "window-swatches": "swatches",
+  "window-brushes": "brushes",
   "window-adjustments": "adjustments",
   "window-properties": "properties",
   "window-layers": "layers",
@@ -5177,6 +5179,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         checks={{
           "window-color": panels.color,
           "window-swatches": panels.swatches,
+          "window-brushes": panels.brushes,
           "window-adjustments": panels.adjustments,
           "window-properties": panels.properties,
           "window-layers": panels.layers,
@@ -5447,6 +5450,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onBackground={setBackground}
           activeSlot={activeSlot}
           onActiveSlot={setActiveSlot}
+          brush={activeBrush}
+          onBrush={setActiveBrush}
+          tool={tool}
           layers={layersApi}
           history={history}
           maxHistoryRows={prefs.maxHistory}

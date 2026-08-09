@@ -72,6 +72,12 @@ import type { ActiveSurface } from "../lib/layers";
 import type { TextAxes, TextGradient, TextOpenType } from "../lib/tools";
 import { WARP_STYLES, warpActive, type TextWarp, type TextWarpStyle } from "../lib/textwarp";
 import {
+  BUILTIN_BRUSHES,
+  getBrushPresets,
+  subscribeBrushPresets,
+  type BrushPreset,
+} from "../lib/brushes";
+import {
   OPENTYPE_FLAGS,
   effectiveWeight,
   featureOn,
@@ -305,6 +311,56 @@ function WarpControl({ text, onText }: TextProps) {
           document.body,
         )}
     </>
+  );
+}
+
+/** Options-bar brush-preset picker: the shipped + saved presets from the
+ *  Brushes panel. Applying one loads its whole settings bundle; the label falls
+ *  back to "Custom" once the live settings no longer match any preset. */
+function BrushPresetSelect({
+  brush,
+  onBrush,
+}: {
+  brush: BrushSettings;
+  onBrush: (b: BrushSettings) => void;
+}) {
+  // Shared store, so presets saved in the Brushes panel appear here at once.
+  const [user, setUser] = useState<BrushPreset[]>(() => getBrushPresets());
+  useEffect(() => subscribeBrushPresets(setUser), []);
+  const all = [...BUILTIN_BRUSHES, ...user];
+  const same = (a: BrushSettings, b: BrushSettings) =>
+    a.size === b.size &&
+    a.hardness === b.hardness &&
+    a.opacity === b.opacity &&
+    a.flow === b.flow &&
+    a.smoothing === b.smoothing &&
+    a.blend === b.blend;
+  const match = all.find((p) => same(p.settings, brush));
+  const CUSTOM = "Custom";
+  // Duplicate names would collapse in the Select — de-duplicate for display.
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  const byLabel = new Map<string, BrushPreset>();
+  for (const p of all) {
+    let l = p.name;
+    let i = 2;
+    while (seen.has(l)) l = `${p.name} (${i++})`;
+    seen.add(l);
+    labels.push(l);
+    byLabel.set(l, p);
+  }
+  const current = match ? labels[all.indexOf(match)] : CUSTOM;
+  return (
+    <Select
+      label="Preset"
+      width={140}
+      options={match ? labels : [CUSTOM, ...labels]}
+      value={current}
+      onChange={(l) => {
+        const p = byLabel.get(l);
+        if (p) onBrush({ ...p.settings });
+      }}
+    />
   );
 }
 
@@ -763,7 +819,7 @@ function renderOptions(
     case "eraser":
       return (
         <>
-          <Select label="Preset" options={["Soft Round", "Hard Round", "Chalk", "Spatter"]} width={130} />
+          <BrushPresetSelect brush={brush} onBrush={onBrush} />
           <Divider />
           <Slider label="Size" min={1} max={500} unit="px" value={brush.size} onChange={(n) => set({ size: n })} />
           <Slider label="Hardness" unit="%" value={brush.hardness} onChange={(n) => set({ hardness: n })} />

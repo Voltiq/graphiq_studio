@@ -16,6 +16,7 @@ import { SETTINGS_KEYS } from "./settings";
  *  twins are pre-rebrand keys that older sessions may still hold. */
 export const PRESET_KEYS: readonly string[] = [
   "graphiq:swatches",
+  "graphiq:brushes", // Brushes panel presets
   "graphiq:gradient-presets",
   "graphiq:gradient-presets-fx",
   "graphiq:adjust-presets", // AdjustmentsPanel's saved filters

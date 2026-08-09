@@ -160,6 +160,7 @@ export const MENUS: Menu[] = [
     items: [
       { label: "Color", action: "window-color" },
       { label: "Swatches", action: "window-swatches" },
+      { label: "Brushes", action: "window-brushes" },
       { label: "Adjustments", action: "window-adjustments" },
       { label: "Properties", action: "window-properties" },
       { label: "Layers", action: "window-layers" },

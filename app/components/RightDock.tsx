@@ -15,6 +15,7 @@ import {
   Settings2,
   SlidersHorizontal,
   SwatchBook,
+  Brush,
   Trash2,
   Zap,
 } from "lucide-react";
@@ -23,6 +24,7 @@ import Panel from "./Panel";
 import ColorPanel from "./panels/ColorPanel";
 import ColorPanelMenu from "./panels/ColorPanelMenu";
 import SwatchesPanel from "./panels/SwatchesPanel";
+import BrushesPanel from "./panels/BrushesPanel";
 import AdjustmentsPanel from "./panels/AdjustmentsPanel";
 import LayersPanel from "./panels/LayersPanel";
 import HistoryPanel from "./panels/HistoryPanel";
@@ -37,7 +39,7 @@ import type { PathsApi } from "../lib/paths";
 import { Spline } from "lucide-react";
 import type { NavigatorView, Rect } from "../lib/view";
 import type { LayersApi } from "../lib/layers";
-import type { EngineHandle, HistorySummary } from "../lib/paint";
+import type { BrushSettings, EngineHandle, HistorySummary } from "../lib/paint";
 import type { Adjustments } from "../lib/adjust";
 import type { ExtraAdjustmentType } from "../lib/adjust-extra";
 import type { ImageMetadata } from "../lib/metadata";
@@ -45,6 +47,7 @@ import type { ImageMetadata } from "../lib/metadata";
 export type PanelVisibility = {
   color: boolean;
   swatches: boolean;
+  brushes: boolean;
   adjustments: boolean;
   properties: boolean;
   layers: boolean;
@@ -61,6 +64,7 @@ export type PanelId =
   | "channels"
   | "color"
   | "swatches"
+  | "brushes"
   | "adjustments"
   | "properties"
   | "layers"
@@ -73,6 +77,7 @@ const DEFAULT_ORDER: PanelId[] = [
   "channels",
   "color",
   "swatches",
+  "brushes",
   "adjustments",
   "properties",
   "layers",
@@ -138,6 +143,7 @@ const DEFAULT_OPEN: Record<PanelId, boolean> = {
   channels: false,
   color: true,
   swatches: false,
+  brushes: false,
   adjustments: true,
   properties: true,
   layers: true,
@@ -186,6 +192,10 @@ interface Props {
   onBackground: (c: string) => void;
   activeSlot: "primary" | "secondary";
   onActiveSlot: (slot: "primary" | "secondary") => void;
+  /** Active paint-tool brush settings — the Brushes panel applies presets to it. */
+  brush: BrushSettings;
+  onBrush: (b: BrushSettings) => void;
+  tool: string;
   layers: LayersApi;
   history: HistorySummary;
   maxHistoryRows: number;
@@ -260,6 +270,9 @@ export default function RightDock({
   onBackground,
   activeSlot,
   onActiveSlot,
+  brush,
+  onBrush,
+  tool,
   layers,
   history,
   maxHistoryRows,
@@ -521,6 +534,12 @@ export default function RightDock({
               tree={layers.layers}
               docName={docName}
             />
+          </Panel>
+        ) : null;
+      case "brushes":
+        return panels.brushes ? (
+          <Panel key="brushes" title="Brushes" icon={Brush} {...dp}>
+            <BrushesPanel brush={brush} onBrush={onBrush} tool={tool} foreground={foreground} />
           </Panel>
         ) : null;
       case "adjustments":
