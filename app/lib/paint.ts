@@ -203,6 +203,18 @@ export interface HistorySummary {
   index: number;
   /** Which history state the History brush paints from (0 = the original). */
   sourceIndex: number;
+  /** Pinned snapshots (newest last), oldest-first as captured. */
+  snapshots: { id: string; label: string }[];
+  /** When set, the History brush sources from THIS snapshot, not `sourceIndex`. */
+  sourceSnapshotId: string | null;
+}
+
+/** A pinned document state: every owned layer's pixels + masks and the doc size
+ *  at capture time. Same payload as a crop snapshot, plus an identity — so the
+ *  capture/restore code is the one already proven by the crop path. */
+export interface DocSnapshot extends CropSnapshot {
+  id: string;
+  label: string;
 }
 
 /** Per-channel tonal distribution of the composite (256 bins per channel). */
@@ -220,6 +232,12 @@ export interface EngineHandle {
   jumpTo: (index: number) => void;
   /** Point the History brush at a history state (0 = the original). */
   setHistorySourceIndex: (index: number) => void;
+  /** Snapshots (TODO §10): pin / restore / drop a full pixel state. */
+  createSnapshot: (label: string, ids: string[]) => string;
+  restoreSnapshot: (id: string) => boolean;
+  deleteSnapshot: (id: string) => void;
+  /** Point the History brush at a snapshot (null = back to a history step). */
+  setHistorySourceSnapshot: (id: string | null) => void;
   fillSelection: (
     layerId: string,
     rects: Rect[],
@@ -1261,6 +1279,13 @@ export class PaintEngine {
   // original). The active layer's pixels AT that index are reconstructed from
   // its patch entries on demand (beginHistory), so no full snapshots are stored.
   private historySourceIndex = 0;
+  // Pinned snapshots (TODO §10): full pixel captures the user can restore to and
+  // point the History brush at. Engine-owned because they hold canvases; the
+  // editor pairs each with the layer TREE it was taken with.
+  private snapshots: DocSnapshot[] = [];
+  private snapSeq = 0;
+  /** When set, the History brush sources from this snapshot instead of a step. */
+  private historySourceSnap: string | null = null;
 
   onChange: () => void = () => {};
   onHistory: (s: HistorySummary) => void = () => {};
@@ -5889,8 +5914,11 @@ export class PaintEngine {
     this.historying = true;
     this.historyLayer = layerId;
     this.historyOrig = l.ctx.getImageData(0, 0, this.w, this.h);
-    // The source: this layer's pixels reconstructed at the source history state.
-    const src = this.reconstructLayerAt(layerId, this.historySourceIndex);
+    // The source: a pinned snapshot when one is selected (exact pixels), else
+    // this layer's pixels reconstructed at the source history state.
+    const src = this.historySourceSnap
+      ? this.snapshotLayer(this.historySourceSnap, layerId)
+      : this.reconstructLayerAt(layerId, this.historySourceIndex);
     this.historySource = src.ctx.getImageData(0, 0, this.w, this.h);
     this.historyCov = new Float32Array(this.w * this.h);
     this.historyOpacity = Math.max(0, Math.min(1, brush.opacity / 100));
@@ -8289,12 +8317,51 @@ export class PaintEngine {
       items: [{ label: "New" }, ...this.entries.map((e) => ({ label: e.label }))],
       index: this.pos,
       sourceIndex: this.historySourceIndex,
+      snapshots: this.snapshots.map((s) => ({ id: s.id, label: s.label })),
+      sourceSnapshotId: this.historySourceSnap,
     });
   }
 
   /** Point the History brush at a history state (0 = the original document). */
   setHistorySourceIndex(index: number) {
     this.historySourceIndex = Math.max(0, Math.min(this.entries.length, Math.round(index)));
+    this.historySourceSnap = null; // a step and a snapshot are mutually exclusive
+    this.emitHistory();
+  }
+
+  // ---- Snapshots (TODO §10) ------------------------------------------------
+  /** Pin the current pixels of `ownLayerIds` (+ their masks + the doc size) as a
+   *  named snapshot. Returns its id. Costs one full copy of those layers. */
+  createSnapshot(label: string, ownLayerIds: string[]): string {
+    const base = this.cropSnapshot(ownLayerIds); // same capture the crop path uses
+    const id = `snap-${Date.now().toString(36)}-${(this.snapSeq += 1)}`;
+    this.snapshots.push({ ...base, id, label: label.trim() || `Snapshot ${this.snapshots.length + 1}` });
+    this.emitHistory();
+    return id;
+  }
+
+  getSnapshot(id: string): DocSnapshot | null {
+    return this.snapshots.find((s) => s.id === id) ?? null;
+  }
+
+  deleteSnapshot(id: string): void {
+    this.snapshots = this.snapshots.filter((s) => s.id !== id);
+    if (this.historySourceSnap === id) this.historySourceSnap = null;
+    this.emitHistory();
+  }
+
+  /** Restore a snapshot's PIXELS + document size (the caller restores the layer
+   *  tree and journals the step — mirrors how crop undo/redo is wired). */
+  restoreSnapshot(id: string): boolean {
+    const snap = this.getSnapshot(id);
+    if (!snap) return false;
+    this.cropRestore(snap);
+    return true;
+  }
+
+  /** Point the History brush at a snapshot (null = back to a history step). */
+  setHistorySourceSnapshot(id: string | null): void {
+    this.historySourceSnap = id && this.getSnapshot(id) ? id : null;
     this.emitHistory();
   }
 
@@ -8303,6 +8370,18 @@ export class PaintEngine {
    *  of its live canvas — non-destructive and O(patches for this layer). Mask-
    *  surface and purely-structural entries are skipped (documented: sourcing
    *  across a canvas-size change or a layer's own creation is approximate). */
+  /** A doc-sized copy of `layerId`'s pixels as captured in snapshot `snapId`.
+   *  A layer missing from the snapshot (created later) yields a TRANSPARENT
+   *  source — which is what it looked like then, so the brush erases it back.
+   *  A snapshot from a differently-sized document is drawn top-left aligned. */
+  private snapshotLayer(snapId: string, layerId: string): Layer {
+    const out = this.mk(this.w, this.h, true);
+    const snap = this.getSnapshot(snapId);
+    const hit = snap?.layers.find((l) => l.id === layerId);
+    if (hit) out.ctx.drawImage(hit.c, 0, 0);
+    return out;
+  }
+
   private reconstructLayerAt(layerId: string, index: number): Layer {
     const snap = this.mk(this.w, this.h, true);
     snap.ctx.drawImage(this.layer(layerId).c, 0, 0);

@@ -202,6 +202,12 @@ interface Props {
   onHistoryJump: (index: number) => void;
   /** Point the History brush at a history state (0 = the original). */
   onSetHistorySource: (index: number) => void;
+  /** Snapshots (TODO §10): pin the current state / restore / drop one, and
+   *  point the History brush at a snapshot instead of a step. */
+  onTakeSnapshot: () => void;
+  onRestoreSnapshot: (id: string) => void;
+  onDeleteSnapshot: (id: string) => void;
+  onSetSourceSnapshot: (id: string | null) => void;
   view: NavigatorView;
   panels: PanelVisibility;
   adjust: Adjustments;
@@ -278,6 +284,10 @@ export default function RightDock({
   maxHistoryRows,
   onHistoryJump,
   onSetHistorySource,
+  onTakeSnapshot,
+  onRestoreSnapshot,
+  onDeleteSnapshot,
+  onSetSourceSnapshot,
   view,
   adjust,
   onAdjust,
@@ -600,6 +610,12 @@ export default function RightDock({
               sourceIndex={history.sourceIndex}
               onJump={onHistoryJump}
               onSetSource={onSetHistorySource}
+              snapshots={history.snapshots}
+              sourceSnapshotId={history.sourceSnapshotId}
+              onTakeSnapshot={onTakeSnapshot}
+              onRestoreSnapshot={onRestoreSnapshot}
+              onDeleteSnapshot={onDeleteSnapshot}
+              onSetSourceSnapshot={onSetSourceSnapshot}
               maxRows={maxHistoryRows}
             />
           </Panel>

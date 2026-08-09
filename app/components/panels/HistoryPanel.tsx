@@ -7,6 +7,7 @@ import {
   Blend,
   BoxSelect,
   Brush,
+  Camera,
   ClipboardPaste,
   Copy,
   Eraser,
@@ -82,6 +83,12 @@ export default function HistoryPanel({
   sourceIndex,
   onJump,
   onSetSource,
+  snapshots = [],
+  sourceSnapshotId = null,
+  onTakeSnapshot,
+  onRestoreSnapshot,
+  onDeleteSnapshot,
+  onSetSourceSnapshot,
   maxRows = 25,
 }: {
   items: { label: string }[];
@@ -90,6 +97,14 @@ export default function HistoryPanel({
   sourceIndex: number;
   onJump: (index: number) => void;
   onSetSource: (index: number) => void;
+  /** Pinned full-state snapshots, oldest first. */
+  snapshots?: { id: string; label: string }[];
+  /** When set, the History brush sources from this snapshot, not a step. */
+  sourceSnapshotId?: string | null;
+  onTakeSnapshot?: () => void;
+  onRestoreSnapshot?: (id: string) => void;
+  onDeleteSnapshot?: (id: string) => void;
+  onSetSourceSnapshot?: (id: string | null) => void;
   /** Rows shown before the list becomes scrollable. */
   maxRows?: number;
 }) {
@@ -113,7 +128,65 @@ export default function HistoryPanel({
   const maxHeight = rows * ITEM_H + (rows - 1) * GAP;
 
   return (
-    <ol ref={listRef} className={styles.history} style={{ maxHeight, overflowY: "auto" }}>
+    <div className={styles.historyWrap}>
+      {/* Snapshots: pinned full states. Click one to restore the document to it;
+          the clock pins it as the History brush's source. */}
+      <div className={styles.snapHead}>
+        <span className={styles.snapTitle}>Snapshots</span>
+        <button
+          type="button"
+          className={styles.snapAdd}
+          onClick={onTakeSnapshot}
+          title="Take a snapshot of the current state"
+          aria-label="Take snapshot"
+        >
+          <Camera size={13} />
+        </button>
+      </div>
+      {snapshots.length > 0 && (
+        <ul className={styles.snapList}>
+          {snapshots.map((s) => (
+            <li key={s.id} className={styles.historyRow}>
+              <button
+                type="button"
+                className={styles.historySource}
+                data-source={s.id === sourceSnapshotId}
+                title={
+                  s.id === sourceSnapshotId
+                    ? "History-brush source"
+                    : "Set as History-brush source"
+                }
+                aria-label={`Set ${s.label} as History-brush source`}
+                aria-pressed={s.id === sourceSnapshotId}
+                onClick={() => onSetSourceSnapshot?.(s.id === sourceSnapshotId ? null : s.id)}
+              >
+                <History size={12} />
+              </button>
+              <button
+                type="button"
+                className={styles.historyItem}
+                title={`Restore “${s.label}”`}
+                onClick={() => onRestoreSnapshot?.(s.id)}
+              >
+                <span className={styles.historyIcon}>
+                  <Camera size={13} />
+                </span>
+                <span className={styles.historyLabel}>{s.label}</span>
+              </button>
+              <button
+                type="button"
+                className={styles.snapDel}
+                title="Delete snapshot"
+                aria-label={`Delete ${s.label}`}
+                onClick={() => onDeleteSnapshot?.(s.id)}
+              >
+                <Trash2 size={12} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <ol ref={listRef} className={styles.history} style={{ maxHeight, overflowY: "auto" }}>
       {items.map((h, i) => {
         const Icon = iconForStep(h.label, i === 0);
         return (
@@ -145,6 +218,7 @@ export default function HistoryPanel({
           </li>
         );
       })}
-    </ol>
+      </ol>
+    </div>
   );
 }

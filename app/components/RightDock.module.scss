@@ -1197,6 +1197,74 @@
 }
 
 /* -------------------------------- History --------------------------------- */
+/* Snapshots (pinned full states) sit above the step list in the History panel. */
+.historyWrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.snapHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.snapTitle {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.snapAdd {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    color: var(--text);
+  }
+}
+
+.snapList {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+}
+
+.snapDel {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+
+  .historyRow:hover & {
+    opacity: 1;
+  }
+
+  &:hover {
+    color: var(--danger);
+    background: rgba(var(--danger-rgb), 0.14);
+  }
+}
+
 .history {
   list-style: none;
   display: flex;

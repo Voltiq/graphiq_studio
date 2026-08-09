@@ -509,7 +509,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       savePrefs(next);
       return next;
     });
-  const [history, setHistory] = useState<HistorySummary>({ items: [{ label: "New" }], index: 0, sourceIndex: 0 });
+  const [history, setHistory] = useState<HistorySummary>({
+    items: [{ label: "New" }],
+    index: 0,
+    sourceIndex: 0,
+    snapshots: [],
+    sourceSnapshotId: null,
+  });
   // Any history movement means unsaved work (autosave + status-bar indicator).
   const historyInitRef = useRef(true);
   useEffect(() => {
@@ -981,6 +987,57 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setCropBox({ x: 0, y: 0, w: d.width, h: d.height });
     setCropSettings((s) => ({ ...s, straighten: 0 }));
     if (cropSettingsRef.current.perspective) setCropQuad(fullCanvasQuad(d.width, d.height));
+  }, []);
+
+  // ---- Snapshots (TODO §10) -----------------------------------------------
+  // The engine pins the PIXELS (+ masks + doc size); the layer TREE that went
+  // with them is React state, so it is kept here, keyed by snapshot id. A
+  // restore therefore puts back both halves — and is journalled as one step.
+  const snapTreesRef = useRef(new Map<string, { layers: LayerNode[]; w: number; h: number }>());
+
+  const takeSnapshot = useCallback(() => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    if (!eng || !d.layers.length) return;
+    const label = `Snapshot ${snapTreesRef.current.size + 1}`;
+    const id = eng.createSnapshot(label, collectLeafIds(d.layers));
+    snapTreesRef.current.set(id, { layers: d.layers, w: d.width, h: d.height });
+  }, []);
+
+  const removeSnapshot = useCallback((id: string) => {
+    paintRef.current?.deleteSnapshot(id);
+    snapTreesRef.current.delete(id);
+  }, []);
+
+  // Restore a snapshot: swap in its pixels + tree + size as ONE undoable step
+  // (the pre-restore state is captured as a throwaway snapshot so undo is exact).
+  const restoreSnapshotNow = useCallback((id: string) => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    const target = snapTreesRef.current.get(id);
+    if (!eng || !target) return;
+    const docId = activeIdRef.current;
+    const beforeTree = d.layers;
+    const beforeW = d.width;
+    const beforeH = d.height;
+    const beforeSnap = eng.cropSnapshot(collectLeafIds(beforeTree));
+    const setState = (layers: LayerNode[], w: number, h: number) =>
+      setDocs((ds) =>
+        ds.map((x) =>
+          x.id === docId
+            ? { ...x, layers, width: w, height: h, selection: [], selectionAngle: 0, selectionPivot: null }
+            : x,
+        ),
+      );
+    const redo = () => {
+      if (eng.restoreSnapshot(id)) setState(target.layers, target.w, target.h);
+    };
+    const undo = () => {
+      eng.cropRestore(beforeSnap);
+      setState(beforeTree, beforeW, beforeH);
+    };
+    redo();
+    eng.pushStructural("Restore Snapshot", undo, redo);
   }, []);
 
   // Commit the pending crop: snapshot, crop every leaf to the box (rotating by the
@@ -5458,6 +5515,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           maxHistoryRows={prefs.maxHistory}
           onHistoryJump={(i) => paintRef.current?.jumpTo(i)}
           onSetHistorySource={(i) => paintRef.current?.setHistorySourceIndex(i)}
+          onTakeSnapshot={takeSnapshot}
+          onRestoreSnapshot={restoreSnapshotNow}
+          onDeleteSnapshot={removeSnapshot}
+          onSetSourceSnapshot={(id) => paintRef.current?.setHistorySourceSnapshot(id)}
           view={{
             zoom,
             pan,

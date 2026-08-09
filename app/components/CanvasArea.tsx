@@ -3241,6 +3241,10 @@ export default function CanvasArea({
       redo: () => engine.redo(),
       jumpTo: (i) => engine.jumpTo(i),
       setHistorySourceIndex: (i) => engine.setHistorySourceIndex(i),
+      createSnapshot: (label, ids) => engine.createSnapshot(label, ids),
+      restoreSnapshot: (id) => engine.restoreSnapshot(id),
+      deleteSnapshot: (id) => engine.deleteSnapshot(id),
+      setHistorySourceSnapshot: (id) => engine.setHistorySourceSnapshot(id),
       fillSelection: (layerId, rects, col, angle, pivot, feather) =>
         engine.fillSelection(layerId, rects, col, angle, pivot, feather),
       eraseSelection: (layerId, rects, angle, pivot, label, feather) =>
