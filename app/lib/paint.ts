@@ -6230,6 +6230,41 @@ export class PaintEngine {
     return c.c;
   }
 
+  /** Bounding box of a canvas's non-transparent pixels (null when fully clear). */
+  canvasContentBounds(c: HTMLCanvasElement): Rect | null {
+    const ctx = c.getContext("2d");
+    if (!ctx) return null;
+    return PaintEngine.alphaBounds(ctx.getImageData(0, 0, c.width, c.height), c.width, c.height);
+  }
+
+  /** Bounding box of a LAYER's non-transparent pixels (null when empty/absent).
+   *  Compared against what a vector recipe renders, this reveals how far the
+   *  layer's pixels have been moved since the recipe was last written. */
+  layerContentBounds(id: string): Rect | null {
+    const l = this.layers.get(id);
+    if (!l) return null;
+    return PaintEngine.alphaBounds(l.ctx.getImageData(0, 0, this.w, this.h), this.w, this.h);
+  }
+
+  private static alphaBounds(img: ImageData, w: number, h: number): Rect | null {
+    const d = img.data;
+    let x0 = w;
+    let y0 = h;
+    let x1 = -1;
+    let y1 = -1;
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = 0; x < w; x++) {
+        if (d[(row + x) * 4 + 3] === 0) continue;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+    return x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+  }
+
   /** Paint `spec` into `ctx` (whose canvas element is `host` — needed so
    *  OpenType features can reach the text pipeline): glyphs → optional 1-bit
    *  threshold → optional gradient fill → optional warp. */

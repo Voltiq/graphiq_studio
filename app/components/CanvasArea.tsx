@@ -1182,9 +1182,36 @@ export default function CanvasArea({
     setTextSession(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // How far a vector layer's PIXELS have drifted from where its recipe would
+  // draw them — i.e. the Move tool shifted the layer without touching the
+  // recipe. Measured by rendering the recipe and comparing its content origin
+  // to the layer's actual content origin, so it is exact (both come from the
+  // same renderer) and reads 0 for text that has never moved.
+  const textPixelOffset = (id: string, v: VectorText): { dx: number; dy: number } => {
+    const live = engine.layerContentBounds(id);
+    if (!live) return { dx: 0, dy: 0 };
+    const ref = engine.canvasContentBounds(engine.textPreview(textSpecOf(v)));
+    if (!ref) return { dx: 0, dy: 0 };
+    return { dx: Math.round(live.x - ref.x), dy: Math.round(live.y - ref.y) };
+  };
+  /** `v` shifted by however far its pixels were moved (see textPixelOffset). */
+  const textVectorAtPixels = (id: string, v: VectorText): VectorText => {
+    const { dx, dy } = textPixelOffset(id, v);
+    if (!dx && !dy) return v;
+    return {
+      ...v,
+      x: v.x + dx,
+      y: v.y + dy,
+      bbox: { ...v.bbox, x: v.bbox.x + dx, y: v.bbox.y + dy },
+    };
+  };
   // Open an existing text vector layer for editing: load its style, hide its
   // rasterized pixels (the live textarea stands in), and seat the editor on it.
-  const openTextReedit = (id: string, v: VectorText) => {
+  const openTextReedit = (id: string, vRaw: VectorText) => {
+    // Re-seat the recipe on the pixels' CURRENT position first, so a text layer
+    // that was moved with the Move tool edits (and commits) where it now sits
+    // instead of snapping back to where it was first typed.
+    const v = textVectorAtPixels(id, vRaw);
     onTextRef.current({
       fontFamily: v.fontFamily,
       fontSize: v.fontSize,
@@ -1219,10 +1246,18 @@ export default function CanvasArea({
     type: "text" | "shape",
   ): { id: string; vector: VectorData } | null => {
     const pad = 4 / (zoomRef.current / 100);
-    const hit = (v: VectorData): boolean => {
+    const hit = (v: VectorData, id: string): boolean => {
       if (v.type === "text" || v.type === "path") {
         // Axis-aligned bounds (imported vectors bake rotation into their paths).
-        const b = v.bbox;
+        // For TEXT, prefer the layer's live pixel bounds: the Move tool shifts
+        // pixels without rewriting the recipe, and hit-testing the stale recipe
+        // box would both miss the text where it now is and re-open it where it
+        // used to be (which then commits it back there).
+        let b = v.bbox;
+        if (v.type === "text") {
+          const live = engine.layerContentBounds(id);
+          if (live) b = live;
+        }
         return pt.x >= b.x - pad && pt.x <= b.x + b.w + pad && pt.y >= b.y - pad && pt.y <= b.y + b.h + pad;
       }
       const cx = v.x + v.w / 2;
@@ -1241,7 +1276,7 @@ export default function CanvasArea({
           if (!n.visible) continue;
           const r = search(n.children);
           if (r) return r;
-        } else if (n.type === "layer" && n.visible && n.vector && n.vector.type === type && hit(n.vector)) {
+        } else if (n.type === "layer" && n.visible && n.vector && n.vector.type === type && hit(n.vector, n.id)) {
           return { id: n.id, vector: n.vector };
         }
       }
