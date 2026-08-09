@@ -315,6 +315,32 @@ $ruler: 22px;
   caret-color: currentColor;
 }
 
+/* Editing with a live warp/gradient preview: the rasterized preview below is
+   the visible text, so the editor's own glyphs are painted transparent —
+   including rich-run spans that carry their own colour.
+   CRITICAL: this must NOT set `color`. The editor is serialized by reading
+   COMPUTED styles (richtext-dom `cs.color`), so a transparent `color` would be
+   captured into the runs and bake invisible text. `-webkit-text-fill-color`
+   changes only the glyph paint and leaves computed `color` intact.
+   The caret keeps its own colour (set inline) and the selection highlight still
+   paints, so editing feels normal. */
+.textInputGhost,
+.textInputGhost * {
+  -webkit-text-fill-color: transparent !important;
+}
+
+/* Doc-sized canvas stacked on the artwork inside .canvasShadow: the live
+   warp/gradient text raster. Never takes pointer events — the editor above it
+   must keep focus and the caret. */
+.textPreview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5; /* above the artwork, below .textInput (z-index 6) */
+}
+
 /* ------------------------------ Zoom control ------------------------------ */
 .zoomBar {
   position: absolute;

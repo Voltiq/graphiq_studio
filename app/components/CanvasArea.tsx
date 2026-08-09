@@ -45,6 +45,7 @@ import type {
   VectorText,
 } from "../lib/tools";
 import { measureInfo } from "../lib/tools";
+import { warpActive } from "../lib/textwarp";
 import { renderShape, type ShapeGeom, type TrapInsets } from "../lib/shapes";
 import { resolveStops } from "../lib/gradient";
 import {
@@ -468,6 +469,31 @@ function textSpecOf(v: VectorText) {
     runs: v.runs,
     features: v.features,
     axes: v.axes,
+    warp: v.warp,
+    fill: v.fill,
+  };
+}
+
+/** The style half of a render spec, taken from the live text options (the
+ *  geometry + content half is supplied per call). Mirrors Editor.buildTextSpec
+ *  so the live preview rasters exactly what a commit will bake. */
+function textSpecBase(t: TextSettings) {
+  return {
+    fontFamily: t.fontFamily,
+    fontSize: t.fontSize,
+    bold: t.bold,
+    italic: t.italic,
+    underline: t.underline,
+    strike: t.strike,
+    align: t.align,
+    lineHeight: t.lineHeight,
+    tracking: t.tracking,
+    color: t.color,
+    antialias: t.antialias,
+    features: t.features,
+    axes: t.axes,
+    warp: t.warp,
+    fill: t.fill,
   };
 }
 
@@ -1123,6 +1149,12 @@ export default function CanvasArea({
   const textEditRef = useRef<HTMLDivElement>(null);
   const textDownRef = useRef<{ x: number; y: number } | null>(null);
   const textDragRef = useRef<Rect | null>(null);
+  // Live warp/gradient preview: the contentEditable can only show flat text, so
+  // while either is active we raster the real thing onto an overlay canvas and
+  // hide the editor's own glyphs (its caret + selection stay visible).
+  const textPreviewRef = useRef<HTMLCanvasElement>(null);
+  const livePreviewOn = warpActive(text.warp) || !!text.fill;
+  const showTextPreview = !!textSession && livePreviewOn;
   // Rasterize the current text block (if it has content) and end the session.
   // A re-edit (editId set) updates that layer in place; otherwise a new layer.
   // The editor DOM is the truth for content + runs (mixed styles).
@@ -1166,6 +1198,8 @@ export default function CanvasArea({
       color: v.color,
       features: v.features,
       axes: v.axes,
+      warp: v.warp,
+      fill: v.fill,
     });
     engine.clearLayerPixels(id);
     setTextSession({
@@ -1376,6 +1410,34 @@ export default function CanvasArea({
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
   }, [textSession, text.fontFamily, text.fontSize, text.lineHeight, text.tracking, text.bold, text.italic]);
+  // Live warp / gradient preview: re-raster the block through the real text
+  // pipeline and blit it onto the overlay canvas. Reads content + runs straight
+  // from the editor DOM (the same source commitText uses), so what's previewed
+  // is exactly what will bake. Runs on every keystroke and style change.
+  useEffect(() => {
+    const cv = textPreviewRef.current;
+    if (!cv) return;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const s = textSessionRef.current;
+    if (!showTextPreview || !s) return;
+    const el = textEditRef.current;
+    const parsed = el
+      ? serializeTextEditor(el, baseRunStyle(textRef.current))
+      : { text: s.value, runs: undefined as TextRun[] | undefined };
+    if (!parsed.text) return;
+    const raster = engine.textPreview({
+      ...textSpecBase(textRef.current),
+      text: parsed.text,
+      x: s.x,
+      y: s.y,
+      boxW: s.boxW,
+      runs: parsed.runs,
+    });
+    ctx.drawImage(raster, 0, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showTextPreview, textSession, text, width, height]);
   const antsOffset = useRef(0);
   const antsRaf = useRef(0);
 
@@ -6030,6 +6092,18 @@ export default function CanvasArea({
                 }
               }}
             />
+            {/* Live warp/gradient text preview — doc-sized, stacked exactly on
+                the artwork (same box), click-through so the editor keeps focus. */}
+            <canvas
+              ref={textPreviewRef}
+              className={styles.textPreview}
+              width={width}
+              height={height}
+              style={{
+                display: showTextPreview ? "block" : "none",
+                imageRendering: zoom >= 100 ? "pixelated" : "auto",
+              }}
+            />
           </div>
           <canvas ref={gridRef} className={styles.overlay} />
           <canvas ref={overlayRef} className={styles.overlay} />
@@ -6037,7 +6111,7 @@ export default function CanvasArea({
           {textSession && (
             <div
               ref={textEditRef}
-              className={styles.textInput}
+              className={`${styles.textInput}${showTextPreview ? ` ${styles.textInputGhost}` : ""}`}
               contentEditable
               suppressContentEditableWarning
               spellCheck={false}
@@ -6128,6 +6202,10 @@ export default function CanvasArea({
                 lineHeight: String(text.lineHeight),
                 letterSpacing: `${text.tracking}px`,
                 color: text.color,
+                // Ghosted (warp/gradient preview showing): the glyphs go
+                // transparent so the raster isn't doubled, but the caret must
+                // stay visible to keep typing usable.
+                caretColor: showTextPreview ? text.color : undefined,
                 textAlign: text.align,
                 // Decorations live on runs (spans), never on the base — CSS
                 // text-decoration paints through children and can't be undone.

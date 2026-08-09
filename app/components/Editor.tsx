@@ -2364,6 +2364,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       features: t.features,
       axes: t.axes,
       warp: t.warp,
+      fill: t.fill,
     };
   };
   const textVectorOf = (spec: TextRenderSpec): VectorText => {
@@ -2394,6 +2395,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     features: v.features,
     axes: v.axes,
     warp: v.warp,
+    fill: v.fill,
   });
 
   // Commit a NEW text block: add a layer named after the text, rasterize it, and

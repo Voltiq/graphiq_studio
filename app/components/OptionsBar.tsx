@@ -7,6 +7,7 @@ import {
   Ligature,
   Lasso as LassoIcon,
   Magnet,
+  Palette,
   Waves,
   AlignCenter,
   AlignHorizontalJustifyCenter,
@@ -68,7 +69,7 @@ import {
 } from "../lib/tools";
 import type { Rect } from "../lib/view";
 import type { ActiveSurface } from "../lib/layers";
-import type { TextAxes, TextOpenType } from "../lib/tools";
+import type { TextAxes, TextGradient, TextOpenType } from "../lib/tools";
 import { WARP_STYLES, warpActive, type TextWarp, type TextWarpStyle } from "../lib/textwarp";
 import {
   OPENTYPE_FLAGS,
@@ -77,7 +78,7 @@ import {
   fontFeatureCSS,
   stretchKeyword,
 } from "../lib/richtext";
-import GradientControl from "./GradientControl";
+import GradientControl, { GradientEditor } from "./GradientControl";
 import type { BrushSettings } from "../lib/paint";
 import {
   ColorChip,
@@ -299,6 +300,129 @@ function WarpControl({ text, onText }: TextProps) {
               <BaseSlider inline label="Horizontal" min={-100} max={100} bipolar value={warp.distH} onChange={(n) => setWarp({ distH: n })} />
               <BaseSlider inline label="Vertical" min={-100} max={100} bipolar value={warp.distV} onChange={(n) => setWarp({ distV: n })} />
               <span className={styles.otHint}>Deforms the whole block; bakes when you commit the text (Enter / click away).</span>
+            </div>
+          </>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+const GRAD_FILL_TYPES: { value: GradientType; text: string; title: string }[] = [
+  { value: "linear", text: "Linear", title: "Linear" },
+  { value: "radial", text: "Radial", title: "Radial" },
+  { value: "angle", text: "Angle", title: "Angle (conic)" },
+  { value: "reflected", text: "Reflect", title: "Reflected" },
+];
+
+/** Text fill popover: Solid (the colour swatch) vs a Gradient painted through
+ *  the glyphs. Gradient geometry is relative to the text's own bounds. */
+function TextFillControl({ text, onText }: TextProps) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ left: 0, top: 0 });
+  const grad = text.fill?.gradient;
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation();
+        setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
+  const toggleOpen = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 330)), top: r.bottom + 6 });
+    }
+    setOpen((o) => !o);
+  };
+
+  // A fresh gradient starts from the current text colour → transparent-ish white,
+  // so switching to Gradient is immediately visible without further tweaking.
+  const seed = (): TextGradient => ({
+    stops: [
+      { color: text.color, pos: 0 },
+      { color: "#ffffffff", pos: 1 },
+    ],
+    type: "linear",
+    angle: 90,
+    scale: 1,
+    reverse: false,
+    smooth: false,
+  });
+  const patch = (p: Partial<TextGradient>) =>
+    onText({ fill: { kind: "gradient", gradient: { ...(grad ?? seed()), ...p } } });
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={styles.iconBtn}
+        data-active={!!grad || open}
+        title="Text fill (solid colour or gradient)"
+        onClick={toggleOpen}
+      >
+        <Palette size={15} />
+      </button>
+      {open &&
+        createPortal(
+          <>
+            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
+            <div className={styles.otPopover} style={{ left: pos.left, top: pos.top }} role="dialog" aria-label="Text fill">
+              <span className={styles.otTitle}>Text fill</span>
+              <Segmented
+                options={[
+                  { value: "solid", text: "Solid" },
+                  { value: "gradient", text: "Gradient" },
+                ]}
+                value={grad ? "gradient" : "solid"}
+                onChange={(v) =>
+                  v === "solid" ? onText({ fill: undefined }) : onText({ fill: { kind: "gradient", gradient: seed() } })
+                }
+              />
+              {grad ? (
+                <>
+                  <GradientEditor stops={grad.stops} onStops={(stops) => patch({ stops })} />
+                  <Segmented
+                    label="Style"
+                    options={GRAD_FILL_TYPES}
+                    value={grad.type}
+                    onChange={(v) => patch({ type: v as GradientType })}
+                  />
+                  <BaseSlider inline label="Angle" min={0} max={360} unit="°" value={grad.angle} onChange={(n) => patch({ angle: n })} />
+                  <BaseSlider
+                    inline
+                    label="Scale"
+                    min={10}
+                    max={300}
+                    unit="%"
+                    value={Math.round(grad.scale * 100)}
+                    onChange={(n) => patch({ scale: n / 100 })}
+                  />
+                  <div style={{ display: "flex", gap: 18 }}>
+                    <Toggle label="Reverse" checked={grad.reverse} onChange={(v) => patch({ reverse: v })} />
+                    {grad.type === "angle" && (
+                      <Toggle label="Smooth" checked={grad.smooth} onChange={(v) => patch({ smooth: v })} />
+                    )}
+                  </div>
+                  <span className={styles.otHint}>
+                    Painted through the glyphs, spanning the text&apos;s own bounds; bakes when you commit
+                    the text (Enter / click away).
+                  </span>
+                </>
+              ) : (
+                <span className={styles.otHint}>
+                  Solid uses the colour swatch in the options bar. Switch to Gradient to fill the type
+                  with a colour band.
+                </span>
+              )}
             </div>
           </>,
           document.body,
@@ -792,6 +916,7 @@ function renderOptions(
           />
           <Divider />
           <OpenTypeControl text={text} onText={onText} />
+          <TextFillControl text={text} onText={onText} />
           <WarpControl text={text} onText={onText} />
         </>
       );

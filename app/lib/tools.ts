@@ -137,6 +137,24 @@ export interface GradientSettings {
   stops: GradientStop[] | null;
 }
 
+/** A placed gradient (explicit stops + geometry) used to fill text. Mirrors the
+ *  fill-layer gradient, but its span is relative to the text's own bounds. */
+export interface TextGradient {
+  stops: GradientStop[];
+  type: GradientType;
+  /** Direction in degrees (0 = →, 90 = ↓). */
+  angle: number;
+  /** Span as a fraction of the text bounds' diagonal (1 = corner-to-corner). */
+  scale: number;
+  reverse: boolean;
+  /** Angle gradients only: soften the wrap seam. */
+  smooth: boolean;
+}
+
+/** Text fill beyond a flat colour. Absent on a text spec ⇒ the solid `color`.
+ *  (Pattern fills are a planned follow-on.) */
+export type TextFill = { kind: "gradient"; gradient: TextGradient };
+
 /** A measure/ruler line (two endpoints in document space). */
 export interface MeasureLine {
   x1: number;
@@ -418,6 +436,8 @@ export interface TextSettings {
   axes?: TextAxes;
   /** Warp preset (arc / bulge / flag / …); absent = flat text. */
   warp?: TextWarp;
+  /** Non-solid fill (gradient); absent = the solid `color`. */
+  fill?: TextFill;
 }
 
 /** Font choices offered in the text options bar (web-safe families, plus a
@@ -485,6 +505,8 @@ export interface VectorText {
   axes?: TextAxes;
   /** Warp preset (absent = flat text). */
   warp?: TextWarp;
+  /** Non-solid fill (gradient); absent = the solid `color`. */
+  fill?: TextFill;
   /** Rasterized bounds (doc px), for hit-testing the re-edit double-click. */
   bbox: { x: number; y: number; w: number; h: number };
 }

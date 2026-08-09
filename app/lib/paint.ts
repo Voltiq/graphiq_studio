@@ -70,6 +70,7 @@ import type {
   SpongeSettings,
   TextAlign,
   TextAxes,
+  TextFill,
   TextOpenType,
   TextRun,
 } from "./tools";
@@ -562,6 +563,9 @@ export interface TextRenderSpec {
   axes?: TextAxes;
   /** Warp preset (absent = flat text). */
   warp?: TextWarp;
+  /** Non-solid fill (gradient) painted through the glyph coverage; absent =
+   *  the solid `color`. Block-level (per-run fills are a follow-on). */
+  fill?: TextFill;
 }
 
 /** Pre-crop layer pixels + document size, captured so a crop can be undone. */
@@ -6212,57 +6216,133 @@ export class PaintEngine {
    */
   renderText(layerId: string, spec: TextRenderSpec) {
     const layer = this.layer(layerId);
-    const ctx = layer.ctx;
-    ctx.clearRect(0, 0, this.w, this.h);
+    layer.ctx.clearRect(0, 0, this.w, this.h);
+    this.composeText(layer.ctx, layer.c, spec);
+    this.emitChange();
+  }
+
+  /** Render a text spec into a standalone doc-sized canvas — no layer, no
+   *  history, no change event. Backs the editor's live warp/gradient preview,
+   *  which overlays the canvas while a text session is open. */
+  textPreview(spec: TextRenderSpec): HTMLCanvasElement {
+    const c = this.mk(this.w, this.h);
+    this.composeText(c.ctx, c.c, spec);
+    return c.c;
+  }
+
+  /** Paint `spec` into `ctx` (whose canvas element is `host` — needed so
+   *  OpenType features can reach the text pipeline): glyphs → optional 1-bit
+   *  threshold → optional gradient fill → optional warp. */
+  private composeText(
+    ctx: CanvasRenderingContext2D,
+    host: HTMLCanvasElement,
+    spec: TextRenderSpec,
+  ) {
     // A warp renders the flat text into a temp buffer, then texture-maps it onto
-    // a deformed mesh — so the warp target is the temp, not the layer directly.
+    // a deformed mesh — so the warp target is the temp, not the output directly.
     const warp = warpActive(spec.warp) ? spec.warp : null;
     const tmp = warp ? this.mk(this.w, this.h) : null;
     const target = tmp ? tmp.ctx : ctx;
     target.save();
     // Non-default OpenType features need the canvas mounted (hidden) so its
     // font-feature-settings CSS reaches the canvas text pipeline.
-    PaintEngine.withTextFeatures(tmp ? tmp.c : layer.c, spec.features, () => {
+    PaintEngine.withTextFeatures(tmp ? tmp.c : host, spec.features, () => {
       if (PaintEngine.isRichSpec(spec)) this.drawRichText(target, spec);
       else this.drawUniformText(target, spec);
     });
     target.restore();
-    if (warp && tmp) {
-      // The warp resamples with bilinear smoothing, so hard 1-bit edges are moot;
-      // the flat source is left anti-aliased regardless of spec.antialias.
-      this.drawWarpedText(ctx, tmp.c, this.textBounds(spec), warp);
-      this.emitChange();
-      return;
-    }
 
+    const bounds = this.textBounds(spec);
     // No anti-aliasing: threshold the rendered alpha to hard 1-bit edges. The
     // solid value is the colour's own alpha (so text opacity is preserved); edge
     // pixels (partial coverage) snap to fully on/off at the 50%-coverage line.
-    if (!spec.antialias) {
-      const b = this.textBounds(spec);
-      const pad = Math.ceil(spec.fontSize * 0.5) + 2;
-      const x = Math.max(0, Math.floor(b.x - pad));
-      const y = Math.max(0, Math.floor(b.y - pad));
-      const x1 = Math.min(this.w, Math.ceil(b.x + b.w + pad));
-      const y1 = Math.min(this.h, Math.ceil(b.y + b.h + pad));
-      const rw = x1 - x;
-      const rh = y1 - y;
-      if (rw > 0 && rh > 0) {
-        const ca = Math.round(parseColor(spec.color).a * 255);
-        const t = Math.max(1, ca >> 1);
-        const img = ctx.getImageData(x, y, rw, rh);
-        const d = img.data;
-        for (let i = 3; i < d.length; i += 4) d[i] = d[i] >= t ? ca : 0;
-        ctx.putImageData(img, x, y);
-      }
-    }
-    this.emitChange();
+    // Skipped under a warp — its bilinear resample would soften the hard edges
+    // anyway (unchanged from the flat-vs-warp behaviour that shipped).
+    if (!spec.antialias && !warp) this.thresholdTextAlpha(target, spec, bounds);
+    // Gradient fill: repaint the glyph coverage with the gradient (source-in
+    // keeps exactly the alpha the glyphs produced, so AA/threshold survive).
+    // Applied before the warp, so the mesh carries the gradient with the text.
+    if (spec.fill) this.fillTextGradient(target, spec.fill, bounds);
+
+    if (warp && tmp) this.drawWarpedText(ctx, tmp.c, bounds, warp);
   }
 
-  /** Texture-map the flat text (`src`, doc-sized) from its bounds `b` onto the
-   *  warp-deformed mesh, drawing into `ctx`. A grid of quads is split into
-   *  triangles, each drawn through the affine that maps its flat corners to its
-   *  warped corners (a piecewise-affine approximation of the smooth warp). */
+  /** Threshold text alpha to hard 1-bit edges over the text's padded bounds. */
+  private thresholdTextAlpha(
+    ctx: CanvasRenderingContext2D,
+    spec: TextRenderSpec,
+    b: { x: number; y: number; w: number; h: number },
+  ) {
+    const pad = Math.ceil(spec.fontSize * 0.5) + 2;
+    const x = Math.max(0, Math.floor(b.x - pad));
+    const y = Math.max(0, Math.floor(b.y - pad));
+    const x1 = Math.min(this.w, Math.ceil(b.x + b.w + pad));
+    const y1 = Math.min(this.h, Math.ceil(b.y + b.h + pad));
+    const rw = x1 - x;
+    const rh = y1 - y;
+    if (rw <= 0 || rh <= 0) return;
+    const ca = Math.round(parseColor(spec.color).a * 255);
+    const t = Math.max(1, ca >> 1);
+    const img = ctx.getImageData(x, y, rw, rh);
+    const d = img.data;
+    for (let i = 3; i < d.length; i += 4) d[i] = d[i] >= t ? ca : 0;
+    ctx.putImageData(img, x, y);
+  }
+
+  /** Paint `fill`'s gradient through the glyph coverage already on `ctx`:
+   *  `source-in` replaces the colour everywhere the text is opaque while keeping
+   *  its exact alpha. The gradient geometry is placed relative to the text's own
+   *  bounds, so it rides along as the block grows or moves. */
+  private fillTextGradient(
+    ctx: CanvasRenderingContext2D,
+    fill: TextFill,
+    b: { x: number; y: number; w: number; h: number },
+  ) {
+    if (b.w < 1 || b.h < 1) return;
+    const g = fill.gradient;
+    const stops = g.reverse ? g.stops.map((s) => ({ color: s.color, pos: 1 - s.pos })) : g.stops;
+    if (!stops.length) return;
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    const rad = (g.angle * Math.PI) / 180;
+    const dir = { x: Math.cos(rad), y: Math.sin(rad) };
+    const scale = g.scale || 1;
+    // Linear/reflected: span the bounds ALONG the gradient direction (the box's
+    // support function), so scale 1 uses the full colour range whatever the
+    // block's aspect — a vertical gradient on a wide, short line still ramps
+    // top-to-bottom. Radial/angle keep the corner-reaching diagonal radius.
+    const halfLinear = Math.max(
+      1,
+      scale * ((Math.abs(dir.x) * b.w) / 2 + (Math.abs(dir.y) * b.h) / 2),
+    );
+    const halfRadial = Math.max(1, (scale * Math.hypot(b.w, b.h)) / 2);
+    const radialish = g.type === "radial" || g.type === "angle";
+    const half = radialish ? halfRadial : halfLinear;
+    // Radial/angle grow from the centre; linear/reflected run through it.
+    const start = radialish
+      ? { x: cx, y: cy }
+      : { x: cx - dir.x * half, y: cy - dir.y * half };
+    const end = { x: cx + dir.x * half, y: cy + dir.y * half };
+    ctx.save();
+    ctx.globalCompositeOperation = "source-in"; // keep the glyph alpha, swap colour
+    ctx.fillStyle = buildCanvasGradient(ctx, g.type, start, end, 0.5, stops, g.smooth);
+    ctx.fillRect(0, 0, this.w, this.h);
+    ctx.restore();
+  }
+
+  /**
+   * Texture-map the flat text (`src`, doc-sized) from its bounds `b` onto the
+   * warp-deformed mesh, writing into `ctx`.
+   *
+   * The mesh is a grid of quads split into triangles, but it is resampled
+   * PER-PIXEL rather than drawn as clipped `drawImage` calls: for every output
+   * pixel inside a triangle, barycentric weights give the matching source point
+   * and the source is bilinearly sampled there. Each output pixel is therefore
+   * WRITTEN exactly once (never composited), which is what keeps the seams out —
+   * the clip-and-overlap approach blended anti-aliased triangle edges twice
+   * along the quad columns and split diagonals, leaving faint vertical/diagonal
+   * lines through the glyphs.
+   */
   private drawWarpedText(
     ctx: CanvasRenderingContext2D,
     src: HTMLCanvasElement,
@@ -6270,89 +6350,157 @@ export class PaintEngine {
     warp: TextWarp,
   ) {
     if (b.w < 1 || b.h < 1) return;
-    const cols = 40;
-    const rows = Math.max(6, Math.min(24, Math.round((b.h / b.w) * cols) || 8));
-    // Flat corner (doc coords) at grid (i,j).
-    const flat = (i: number, j: number) => ({ x: b.x + (i / cols) * b.w, y: b.y + (j / rows) * b.h });
-    // Warped corner (doc coords) at grid (i,j).
-    const warped = (i: number, j: number) => {
-      const p = warpPoint(warp, i / cols, j / rows);
-      return { x: b.x + p.u * b.w, y: b.y + p.v * b.h };
-    };
-    ctx.save();
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    for (let j = 0; j < rows; j++) {
-      for (let i = 0; i < cols; i++) {
-        const s00 = flat(i, j);
-        const s10 = flat(i + 1, j);
-        const s01 = flat(i, j + 1);
-        const s11 = flat(i + 1, j + 1);
-        const d00 = warped(i, j);
-        const d10 = warped(i + 1, j);
-        const d01 = warped(i, j + 1);
-        const d11 = warped(i + 1, j + 1);
-        this.drawTexTri(ctx, src, s00, s10, s11, d00, d10, d11);
-        this.drawTexTri(ctx, src, s00, s11, s01, d00, d11, d01);
+    const sctx = src.getContext("2d");
+    if (!sctx) return;
+    const cols = 48;
+    const rows = Math.max(8, Math.min(32, Math.round((b.h / b.w) * cols) || 8));
+    const gw = cols + 1;
+    const gh = rows + 1;
+    // Grid corners: flat (source) and warped (dest), both in doc coords.
+    const sxs = new Float64Array(gw * gh);
+    const sys = new Float64Array(gw * gh);
+    const dxs = new Float64Array(gw * gh);
+    const dys = new Float64Array(gw * gh);
+    for (let j = 0; j < gh; j++) {
+      for (let i = 0; i < gw; i++) {
+        const u = i / cols;
+        const v = j / rows;
+        const k = j * gw + i;
+        sxs[k] = b.x + u * b.w;
+        sys[k] = b.y + v * b.h;
+        const p = warpPoint(warp, u, v);
+        dxs[k] = b.x + p.u * b.w;
+        dys[k] = b.y + p.v * b.h;
       }
     }
-    ctx.restore();
+    // Output region = the warped grid's bounds, clamped to the canvas.
+    let bx0 = Infinity;
+    let by0 = Infinity;
+    let bx1 = -Infinity;
+    let by1 = -Infinity;
+    for (let k = 0; k < gw * gh; k++) {
+      if (dxs[k] < bx0) bx0 = dxs[k];
+      if (dxs[k] > bx1) bx1 = dxs[k];
+      if (dys[k] < by0) by0 = dys[k];
+      if (dys[k] > by1) by1 = dys[k];
+    }
+    const ox = Math.max(0, Math.floor(bx0) - 1);
+    const oy = Math.max(0, Math.floor(by0) - 1);
+    const ox1 = Math.min(this.w, Math.ceil(bx1) + 2);
+    const oy1 = Math.min(this.h, Math.ceil(by1) + 2);
+    const ow = ox1 - ox;
+    const oh = oy1 - oy;
+    if (ow <= 0 || oh <= 0) return;
+    // Source pixels: only the flat text's own (padded) box, not the whole doc —
+    // this runs per keystroke behind the live preview.
+    const px0 = Math.max(0, Math.floor(b.x) - 2);
+    const py0 = Math.max(0, Math.floor(b.y) - 2);
+    const px1 = Math.min(this.w, Math.ceil(b.x + b.w) + 2);
+    const py1 = Math.min(this.h, Math.ceil(b.y + b.h) + 2);
+    const sw = px1 - px0;
+    const sh = py1 - py0;
+    if (sw <= 0 || sh <= 0) return;
+    const sd = sctx.getImageData(px0, py0, sw, sh).data;
+    const out = new ImageData(ow, oh);
+    const od = out.data;
+
+    // Rasterize one triangle: barycentric coverage → interpolated source point.
+    const tri = (ka: number, kb: number, kc: number) => {
+      const ax = dxs[ka];
+      const ay = dys[ka];
+      const bx = dxs[kb];
+      const by = dys[kb];
+      const cx = dxs[kc];
+      const cy = dys[kc];
+      const det = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay);
+      if (Math.abs(det) < 1e-12) return;
+      const inv = 1 / det;
+      const minX = Math.max(ox, Math.floor(Math.min(ax, bx, cx)));
+      const maxX = Math.min(ox1 - 1, Math.ceil(Math.max(ax, bx, cx)));
+      const minY = Math.max(oy, Math.floor(Math.min(ay, by, cy)));
+      const maxY = Math.min(oy1 - 1, Math.ceil(Math.max(ay, by, cy)));
+      // Slightly generous coverage: neighbouring triangles may both claim an
+      // edge pixel, but since each WRITES (never blends) the shared value is
+      // effectively identical — overlap is harmless, gaps would not be.
+      const EPS = -1e-3;
+      for (let py = minY; py <= maxY; py++) {
+        const fy = py + 0.5;
+        for (let pxx = minX; pxx <= maxX; pxx++) {
+          const fx = pxx + 0.5;
+          const l1 = ((fx - ax) * (cy - ay) - (cx - ax) * (fy - ay)) * inv;
+          if (l1 < EPS) continue;
+          const l2 = ((bx - ax) * (fy - ay) - (fx - ax) * (by - ay)) * inv;
+          if (l2 < EPS) continue;
+          const l0 = 1 - l1 - l2;
+          if (l0 < EPS) continue;
+          const su = l0 * sxs[ka] + l1 * sxs[kb] + l2 * sxs[kc] - px0;
+          const sv = l0 * sys[ka] + l1 * sys[kb] + l2 * sys[kc] - py0;
+          this.sampleBilinear(sd, sw, sh, su - 0.5, sv - 0.5, od, ((py - oy) * ow + (pxx - ox)) * 4);
+        }
+      }
+    };
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const k00 = j * gw + i;
+        tri(k00, k00 + 1, k00 + gw + 1);
+        tri(k00, k00 + gw + 1, k00 + gw);
+      }
+    }
+    ctx.putImageData(out, ox, oy);
   }
 
-  /** Draw the `src` triangle (s0,s1,s2) into the dest triangle (d0,d1,d2): clip
-   *  to a slightly-inflated dest triangle (hides hairline seams), then blit `src`
-   *  through the affine mapping the source corners onto the dest corners. */
-  private drawTexTri(
-    ctx: CanvasRenderingContext2D,
-    src: HTMLCanvasElement,
-    s0: { x: number; y: number },
-    s1: { x: number; y: number },
-    s2: { x: number; y: number },
-    d0: { x: number; y: number },
-    d1: { x: number; y: number },
-    d2: { x: number; y: number },
+  /** Premultiplied bilinear sample of the `sw`×`sh` RGBA buffer `sd` at (`sx`,
+   *  `sy`), written (not blended) into `od` at byte offset `di`. Premultiplying
+   *  keeps transparent neighbours from darkening soft edges. Samples fully
+   *  outside the source leave the destination untouched. */
+  private sampleBilinear(
+    sd: Uint8ClampedArray,
+    sw: number,
+    sh: number,
+    sx: number,
+    sy: number,
+    od: Uint8ClampedArray,
+    di: number,
   ) {
-    // Affine M (setTransform semantics: X = a·x + c·y + e, Y = b·x + d·y + f)
-    // solved from the three source→dest correspondences (Cramer's rule).
-    const det =
-      s0.x * (s1.y - s2.y) + s1.x * (s2.y - s0.y) + s2.x * (s0.y - s1.y);
-    if (Math.abs(det) < 1e-6) return;
-    const id = 1 / det;
-    const a = (d0.x * (s1.y - s2.y) + d1.x * (s2.y - s0.y) + d2.x * (s0.y - s1.y)) * id;
-    const c = (s0.x * (d1.x - d2.x) + s1.x * (d2.x - d0.x) + s2.x * (d0.x - d1.x)) * id;
-    const e =
-      (s0.x * (s1.y * d2.x - s2.y * d1.x) +
-        s1.x * (s2.y * d0.x - s0.y * d2.x) +
-        s2.x * (s0.y * d1.x - s1.y * d0.x)) * id;
-    const bb = (d0.y * (s1.y - s2.y) + d1.y * (s2.y - s0.y) + d2.y * (s0.y - s1.y)) * id;
-    const d = (s0.x * (d1.y - d2.y) + s1.x * (d2.y - d0.y) + s2.x * (d0.y - d1.y)) * id;
-    const f =
-      (s0.x * (s1.y * d2.y - s2.y * d1.y) +
-        s1.x * (s2.y * d0.y - s0.y * d2.y) +
-        s2.x * (s0.y * d1.y - s1.y * d0.y)) * id;
-    // Inflate the dest triangle ~0.4px about its centroid so neighbours overlap.
-    const cx = (d0.x + d1.x + d2.x) / 3;
-    const cy = (d0.y + d1.y + d2.y) / 3;
-    const grow = (p: { x: number; y: number }) => {
-      const dx = p.x - cx;
-      const dy = p.y - cy;
-      const len = Math.hypot(dx, dy) || 1;
-      return { x: p.x + (dx / len) * 0.4, y: p.y + (dy / len) * 0.4 };
-    };
-    const g0 = grow(d0);
-    const g1 = grow(d1);
-    const g2 = grow(d2);
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(g0.x, g0.y);
-    ctx.lineTo(g1.x, g1.y);
-    ctx.lineTo(g2.x, g2.y);
-    ctx.closePath();
-    ctx.clip();
-    ctx.setTransform(a, bb, c, d, e, f);
-    ctx.drawImage(src, 0, 0);
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.restore();
+    if (sx <= -1 || sx >= sw || sy <= -1 || sy >= sh) return;
+    const x0f = Math.floor(sx);
+    const y0f = Math.floor(sy);
+    const fx = sx - x0f;
+    const fy = sy - y0f;
+    const x0 = x0f < 0 ? 0 : x0f >= sw ? sw - 1 : x0f;
+    const y0 = y0f < 0 ? 0 : y0f >= sh ? sh - 1 : y0f;
+    const x1 = x0f + 1 < 0 ? 0 : x0f + 1 >= sw ? sw - 1 : x0f + 1;
+    const y1 = y0f + 1 < 0 ? 0 : y0f + 1 >= sh ? sh - 1 : y0f + 1;
+    const w00 = (1 - fx) * (1 - fy);
+    const w10 = fx * (1 - fy);
+    const w01 = (1 - fx) * fy;
+    const w11 = fx * fy;
+    const o00 = (y0 * sw + x0) * 4;
+    const o10 = (y0 * sw + x1) * 4;
+    const o01 = (y1 * sw + x0) * 4;
+    const o11 = (y1 * sw + x1) * 4;
+    const a00 = sd[o00 + 3];
+    const a10 = sd[o10 + 3];
+    const a01 = sd[o01 + 3];
+    const a11 = sd[o11 + 3];
+    const a = a00 * w00 + a10 * w10 + a01 * w01 + a11 * w11;
+    od[di + 3] = Math.round(a);
+    if (a <= 0) return;
+    od[di] = Math.round(
+      (sd[o00] * a00 * w00 + sd[o10] * a10 * w10 + sd[o01] * a01 * w01 + sd[o11] * a11 * w11) / a,
+    );
+    od[di + 1] = Math.round(
+      (sd[o00 + 1] * a00 * w00 +
+        sd[o10 + 1] * a10 * w10 +
+        sd[o01 + 1] * a01 * w01 +
+        sd[o11 + 1] * a11 * w11) / a,
+    );
+    od[di + 2] = Math.round(
+      (sd[o00 + 2] * a00 * w00 +
+        sd[o10 + 2] * a10 * w10 +
+        sd[o01 + 2] * a01 * w01 +
+        sd[o11 + 2] * a11 * w11) / a,
+    );
   }
 
   /** The legacy uniform-style text body (single font/colour, canvas textAlign
