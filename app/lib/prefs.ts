@@ -145,6 +145,9 @@ export interface Preferences {
   colorVision: CvdType;
   /** Firm up borders, text ramps and the focus ring within the current theme. */
   highContrast: boolean;
+  /** Non-linear history: a new edit after undoing keeps the states it replaces
+   *  as a branch instead of discarding them (Photoshop's History Options). */
+  nonLinearHistory: boolean;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -185,6 +188,7 @@ export const DEFAULT_PREFS: Preferences = {
   palmRejection: true,
   colorVision: "none",
   highContrast: false,
+  nonLinearHistory: false,
 };
 
 const KEY = "graphiq:preferences";

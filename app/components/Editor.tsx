@@ -520,8 +520,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       return next;
     });
   const [history, setHistory] = useState<HistorySummary>({
-    items: [{ label: "New" }],
+    items: [{ label: "New", onPath: true }],
     index: 0,
+    nonLinear: false,
     sourceIndex: 0,
     snapshots: [],
     sourceSnapshotId: null,
@@ -3184,6 +3185,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     paintRef.current?.setRenderCacheBudget(prefs.cacheBudgetMB);
   }, [prefs.cacheBudgetMB]);
 
+  // Non-linear history preference -> engine (also applied to a fresh engine).
+  useEffect(() => {
+    paintRef.current?.setNonLinearHistory(prefs.nonLinearHistory);
+  }, [prefs.nonLinearHistory]);
+
   // Undo-step cap -> engine history trim (oldest steps drop first).
   useEffect(() => {
     paintRef.current?.setHistoryLimit(prefs.historyLimit);
@@ -5620,6 +5626,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           maxHistoryRows={prefs.maxHistory}
           onHistoryJump={(i) => paintRef.current?.jumpTo(i)}
           onSetHistorySource={(i) => paintRef.current?.setHistorySourceIndex(i)}
+          onNonLinearHistory={(on) => {
+            updatePrefs({ nonLinearHistory: on });
+            paintRef.current?.setNonLinearHistory(on);
+          }}
           subscribeCursor={subscribeCursor}
           docWidth={active.width}
           docHeight={active.height}

@@ -1312,6 +1312,12 @@
     background: var(--wash);
     color: var(--text);
   }
+
+  /* Non-linear history: lit while branching is on. */
+  &[data-on="true"] {
+    background: var(--selected-bg-2);
+    color: var(--accent);
+  }
 }
 
 .snapList {
@@ -1421,6 +1427,15 @@
 
   &[data-future="true"] {
     opacity: 0.38;
+  }
+
+  /* A state on a branch you stepped away from (non-linear history). Marked by a
+     rail rather than by fading further — it is still one click away, so it must
+     not read as "gone", only as "not on the way here". */
+  &[data-offpath] {
+    opacity: 0.55;
+    border-left: 2px solid var(--border-strong);
+    padding-left: 6px;
   }
 }
 

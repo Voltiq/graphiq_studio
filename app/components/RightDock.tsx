@@ -208,6 +208,8 @@ interface Props {
   onHistoryJump: (index: number) => void;
   /** Point the History brush at a history state (0 = the original). */
   onSetHistorySource: (index: number) => void;
+  /** Toggle Photoshop-style non-linear history (branch instead of truncate). */
+  onNonLinearHistory: (on: boolean) => void;
   /** Snapshots (TODO §10): pin the current state / restore / drop one, and
    *  point the History brush at a snapshot instead of a step. */
   onTakeSnapshot: () => void;
@@ -296,6 +298,7 @@ export default function RightDock({
   maxHistoryRows,
   onHistoryJump,
   onSetHistorySource,
+  onNonLinearHistory,
   onTakeSnapshot,
   onRestoreSnapshot,
   onDeleteSnapshot,
@@ -638,6 +641,8 @@ export default function RightDock({
             <HistoryPanel
               items={history.items}
               index={history.index}
+              nonLinear={history.nonLinear}
+              onNonLinear={onNonLinearHistory}
               sourceIndex={history.sourceIndex}
               onJump={onHistoryJump}
               onSetSource={onSetHistorySource}

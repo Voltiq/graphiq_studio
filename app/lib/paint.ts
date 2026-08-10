@@ -8,6 +8,15 @@ import { removeRedEyeInPlace } from "./redeye";
 import { renderShape, type ShapeGeom } from "./shapes";
 import { boxBlurPass, clampi } from "./blur";
 import {
+  ROOT,
+  ancestry,
+  newestChild,
+  offPath,
+  removeNodes,
+  transition,
+  trimVictim,
+} from "./history-tree";
+import {
   DEFAULT_DYNAMICS,
   PRESSURE_BUCKETS,
   bucketPressure,
@@ -227,8 +236,13 @@ function maskToSegments(mask: Uint8Array, w: number, h: number, b: Bounds): Seg[
 }
 
 export interface HistorySummary {
-  items: { label: string }[];
+  /** Every state in CREATION order. `onPath` marks the ones on the chain from
+   *  the original document to where you are now — with non-linear history on,
+   *  the rest are states on branches you stepped away from. */
+  items: { label: string; onPath: boolean }[];
   index: number;
+  /** Non-linear history: a new edit after undoing keeps the states it replaces. */
+  nonLinear: boolean;
   /** Which history state the History brush paints from (0 = the original). */
   sourceIndex: number;
   /** Pinned snapshots (newest last), oldest-first as captured. */
@@ -521,6 +535,8 @@ export interface EngineHandle {
   };
   setRenderCacheBudget: (mb: number) => void;
   setHistoryLimit: (n: number) => void;
+  /** Photoshop-style non-linear history (branch instead of truncating). */
+  setNonLinearHistory: (on: boolean) => void;
   setWorkersEnabled: (on: boolean) => void;
 }
 
@@ -647,6 +663,11 @@ export interface HistorySide {
 
 interface Entry {
   label: string;
+  /** Index of the entry this one was made ON TOP OF, or ROOT (-1) for the
+   *  original document. In linear mode this is always the previous entry, so
+   *  the tree degenerates to the list it has always been; in non-linear mode a
+   *  new edit made after undoing branches here instead of truncating. */
+  parent: number;
   side?: HistorySide;
   // Pixel payload — absent for purely structural entries (layer add/group/etc.),
   // whose effect lives entirely in `side`.
@@ -1028,15 +1049,16 @@ export class PaintEngine {
   private trimHistory(): void {
     let dropped = 0;
     while (this.entries.length > this.historyLimit) {
-      this.entries.shift();
+      // `trimVictim` picks a state nothing still depends on — an abandoned
+      // branch tip first, otherwise the oldest step when it is the only branch
+      // off the original. It returns -1 when every remaining state is load-
+      // bearing, which makes the cap soft rather than corrupting a branch.
+      const victim = trimVictim(this.parents(), this.cur, this.historySourceIndex - 1);
+      if (victim < 0) break;
+      this.dropNodes([victim]);
       dropped++;
     }
-    if (dropped) {
-      this.pos = Math.max(0, this.pos - dropped);
-      // The History-brush source index rides the same shifting window.
-      this.historySourceIndex = Math.max(0, this.historySourceIndex - dropped);
-      this.emitHistory();
-    }
+    if (dropped) this.emitHistory();
   }
 
   /** Route heavy compute through workers (on) or the synchronous fallbacks
@@ -1314,8 +1336,56 @@ export class PaintEngine {
   private step = 1;
   private dirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
 
+  // History is an UNDO TREE (see history-tree.ts): every entry records its
+  // parent, and `cur` is the node the document currently shows (ROOT = the
+  // original). A linear history is the degenerate case where every parent is
+  // the previous entry, so this behaves exactly as the old array + index did.
   private entries: Entry[] = [];
-  private pos = 0;
+  private cur = ROOT;
+  /** Photoshop's "Allow Non-Linear History": keep the states a new edit would
+   *  otherwise discard, as a branch, instead of truncating them. */
+  private nonLinear = false;
+  /** The parent table the pure tree helpers work on. */
+  private parents(): number[] {
+    return this.entries.map((e) => e.parent);
+  }
+  /** Items index (0 = the original state) ⇄ node index. */
+  private get pos(): number {
+    return this.cur + 1;
+  }
+
+  /**
+   * Attach a freshly built entry to the tree and move onto it. In LINEAR mode
+   * anything that was reachable only by redo is discarded first — the old
+   * `entries.length = pos` truncation, expressed as "drop everything off the
+   * path". In non-linear mode nothing is dropped and the new entry simply
+   * branches off wherever you are.
+   */
+  private linkEntry(e: Omit<Entry, "parent">): void {
+    if (!this.nonLinear) {
+      const stale = offPath(this.parents(), this.cur);
+      if (stale.length) this.dropNodes(stale);
+    }
+    const entry = e as Entry;
+    entry.parent = this.cur;
+    this.entries.push(entry);
+    this.cur = this.entries.length - 1;
+  }
+
+  /** Remove entries and renumber everything that points at them. Callers must
+   *  never drop the current node's ancestry — the document is showing it. */
+  private dropNodes(list: number[]): void {
+    if (!list.length) return;
+    const gone = new Set(list);
+    const { parents, remap } = removeNodes(this.parents(), list);
+    this.entries = this.entries.filter((_, i) => !gone.has(i));
+    this.entries.forEach((e, i) => (e.parent = parents[i]));
+    this.cur = this.cur >= 0 && !gone.has(this.cur) ? remap[this.cur] : ROOT;
+    // The History-brush source is an ITEMS index (node + 1); a dropped source
+    // falls back to the original state rather than silently sliding elsewhere.
+    const src = this.historySourceIndex - 1;
+    this.historySourceIndex = src < 0 || gone.has(src) ? 0 : remap[src] + 1;
+  }
   // History brush source: the state index the brush repaints from (0 = the
   // original). The active layer's pixels AT that index are reconstructed from
   // its patch entries on demand (beginHistory), so no full snapshots are stored.
@@ -1523,7 +1593,7 @@ export class PaintEngine {
       // Shifted content invalidates history patch coordinates (same rule as
       // resampling): clear rather than restore patches at wrong places.
       this.entries.length = 0;
-      this.pos = 0;
+      this.cur = ROOT;
       this.emitHistory();
     }
     this.emitChange();
@@ -1561,7 +1631,7 @@ export class PaintEngine {
     });
     // Resampling rewrites all pixels; a prior history would restore wrong sizes.
     this.entries.length = 0;
-    this.pos = 0;
+    this.cur = ROOT;
     this.emitHistory();
     this.emitChange();
   }
@@ -2361,9 +2431,7 @@ export class PaintEngine {
         this.layer(layerId).ctx.putImageData(after, rect.x, rect.y);
       }
     }
-    if (this.pos < this.entries.length) this.entries.length = this.pos;
-    this.entries.push({ layerId, rect, before, after, label, side, surface });
-    this.pos = this.entries.length;
+    this.linkEntry({ layerId, rect, before, after, label, side, surface });
     this.trimHistory();
     if (surface !== "mask") this.bumpPixel(layerId, rect); // layer pixels changed → restyle
     this.emitHistory();
@@ -2376,9 +2444,7 @@ export class PaintEngine {
     this.endGradient();
     this.endPath();
     this.endFill();
-    if (this.pos < this.entries.length) this.entries.length = this.pos;
-    this.entries.push({ label, side: { undo, redo } });
-    this.pos = this.entries.length;
+    this.linkEntry({ label, side: { undo, redo } });
     this.trimHistory();
     this.emitHistory();
   }
@@ -2507,10 +2573,8 @@ export class PaintEngine {
     this.paintShape(l.ctx, box, angle, kind, fill, stroke, strokeWidth, radius, geom);
     const after = l.ctx.getImageData(b.x, b.y, b.w, b.h);
     if (!this.shapeEntry) {
-      if (this.pos < this.entries.length) this.entries.length = this.pos;
-      this.shapeEntry = { layerId, rect: b, before: this.shapeOrig!, after, label: "Shape" };
-      this.entries.push(this.shapeEntry);
-      this.pos = this.entries.length;
+      this.shapeEntry = { layerId, rect: b, before: this.shapeOrig!, after, label: "Shape", parent: ROOT };
+      this.linkEntry(this.shapeEntry);
       this.emitHistory();
     } else {
       this.shapeEntry.after = after; // same entry, restyled pixels
@@ -2607,7 +2671,6 @@ export class PaintEngine {
     l.ctx.restore();
     const after = l.ctx.getImageData(b.x, b.y, b.w, b.h);
     if (!this.gradEntry) {
-      if (this.pos < this.entries.length) this.entries.length = this.pos;
       this.gradEntry = {
         layerId: mid,
         rect: b,
@@ -2615,9 +2678,9 @@ export class PaintEngine {
         after,
         label: "Gradient",
         surface: onMask ? "mask" : "layer",
+        parent: ROOT,
       };
-      this.entries.push(this.gradEntry);
-      this.pos = this.entries.length;
+      this.linkEntry(this.gradEntry);
       this.emitHistory();
     } else {
       this.gradEntry.after = after;
@@ -3283,16 +3346,15 @@ export class PaintEngine {
     l.ctx.globalCompositeOperation = "source-over";
     l.ctx.putImageData(after, 0, 0);
     if (!this.adjEntry) {
-      if (this.pos < this.entries.length) this.entries.length = this.pos;
       this.adjEntry = {
         layerId: this.adjLayer,
         rect: { x: 0, y: 0, w: this.w, h: this.h },
         before: this.adjOrig,
         after,
         label: this.adjTone ? (this.adjTone.type === "levels" ? "Levels" : "Curves") : "Adjustments",
+        parent: ROOT, // linkEntry sets the real parent
       };
-      this.entries.push(this.adjEntry);
-      this.pos = this.entries.length;
+      this.linkEntry(this.adjEntry);
       this.emitHistory();
     } else {
       this.adjEntry.after = after; // same entry, newer pixels (list unchanged)
@@ -3334,10 +3396,13 @@ export class PaintEngine {
       l.ctx.putImageData(this.adjOrig, 0, 0);
     }
     if (this.adjEntry) {
+      // Discard the live-adjustment placeholder. It is always the newest entry
+      // and the one we're sitting on, so step off it before dropping the node
+      // (dropNodes must never delete the state the document is showing).
       const idx = this.entries.indexOf(this.adjEntry);
       if (idx >= 0) {
-        this.entries.splice(idx, 1);
-        if (this.pos > idx) this.pos -= 1;
+        if (this.cur === idx) this.cur = this.entries[idx].parent;
+        this.dropNodes([idx]);
       }
     }
     this.adjLayer = null;
@@ -8380,27 +8445,45 @@ export class PaintEngine {
     this.endGradient();
     this.endPath();
     this.endFill();
-    target = Math.max(0, Math.min(this.entries.length, target));
-    while (this.pos > target) {
-      this.pos--;
-      const e = this.entries[this.pos];
+    // `target` is an ITEMS index (0 = the original document) — node + 1.
+    const node = Math.max(ROOT, Math.min(this.entries.length - 1, target - 1));
+    // Walk to the states' common ancestor and back down the other side. For a
+    // linear history that is exactly the old two loops; for a branched one it
+    // is what lets you jump between branches without replaying the whole tree.
+    const { revert, apply } = transition(this.parents(), this.cur, node);
+    for (const k of revert) {
+      const e = this.entries[k];
       this.revert(e);
       e.side?.undo();
     }
-    while (this.pos < target) {
-      const e = this.entries[this.pos];
+    for (const k of apply) {
+      const e = this.entries[k];
       e.side?.redo();
       this.apply(e);
-      this.pos++;
     }
+    this.cur = node;
     this.emitHistory();
     this.emitChange();
   }
   undo() {
-    if (this.pos > 0) this.jumpTo(this.pos - 1);
+    if (this.cur >= 0) this.jumpTo(this.entries[this.cur].parent + 1);
   }
   redo() {
-    if (this.pos < this.entries.length) this.jumpTo(this.pos + 1);
+    // With branches, "forward" is the most recently created continuation of
+    // where you are — the branch you were last working on.
+    const next = newestChild(this.parents(), this.cur);
+    if (next >= 0) this.jumpTo(next + 1);
+  }
+  /** Photoshop's History Options ▸ Allow Non-Linear History. Turning it OFF
+   *  prunes the branches you are not on, since they can no longer be reached. */
+  setNonLinearHistory(on: boolean) {
+    if (this.nonLinear === on) return;
+    this.nonLinear = on;
+    if (!on) {
+      const stale = offPath(this.parents(), this.cur);
+      if (stale.length) this.dropNodes(stale);
+    }
+    this.emitHistory();
   }
   syncHistory() {
     this.emitHistory();
@@ -8409,9 +8492,15 @@ export class PaintEngine {
     // Any history change means layer pixels changed → wand source is stale.
     this.wandSrc = null;
     this.historySourceIndex = Math.max(0, Math.min(this.entries.length, this.historySourceIndex));
+    const parents = this.parents();
+    const live = new Set(ancestry(parents, this.cur));
     this.onHistory({
-      items: [{ label: "New" }, ...this.entries.map((e) => ({ label: e.label }))],
+      items: [
+        { label: "New", onPath: true }, // the original state is on every path
+        ...this.entries.map((e, i) => ({ label: e.label, onPath: live.has(i) })),
+      ],
       index: this.pos,
+      nonLinear: this.nonLinear,
       sourceIndex: this.historySourceIndex,
       snapshots: this.snapshots.map((s) => ({ id: s.id, label: s.label })),
       sourceSnapshotId: this.historySourceSnap,
@@ -8481,20 +8570,21 @@ export class PaintEngine {
   private reconstructLayerAt(layerId: string, index: number): Layer {
     const snap = this.mk(this.w, this.h, true);
     snap.ctx.drawImage(this.layer(layerId).c, 0, 0);
-    const target = Math.max(0, Math.min(this.entries.length, index));
-    if (target < this.pos) {
-      for (let k = this.pos - 1; k >= target; k--) {
-        const e = this.entries[k];
-        if (e.layerId === layerId && e.surface !== "mask" && e.before && e.rect) {
-          snap.ctx.putImageData(e.before, e.rect.x, e.rect.y);
-        }
+    // Same walk `jumpTo` uses, but replaying only this layer's patches onto a
+    // scratch copy — so a source state on ANOTHER branch reconstructs correctly
+    // instead of replaying an index range that no longer describes a path.
+    const node = Math.max(ROOT, Math.min(this.entries.length - 1, index - 1));
+    const { revert, apply } = transition(this.parents(), this.cur, node);
+    for (const k of revert) {
+      const e = this.entries[k];
+      if (e.layerId === layerId && e.surface !== "mask" && e.before && e.rect) {
+        snap.ctx.putImageData(e.before, e.rect.x, e.rect.y);
       }
-    } else if (target > this.pos) {
-      for (let k = this.pos; k < target; k++) {
-        const e = this.entries[k];
-        if (e.layerId === layerId && e.surface !== "mask" && e.after && e.rect) {
-          snap.ctx.putImageData(e.after, e.rect.x, e.rect.y);
-        }
+    }
+    for (const k of apply) {
+      const e = this.entries[k];
+      if (e.layerId === layerId && e.surface !== "mask" && e.after && e.rect) {
+        snap.ctx.putImageData(e.after, e.rect.x, e.rect.y);
       }
     }
     return snap;

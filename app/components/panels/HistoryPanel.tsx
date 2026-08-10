@@ -8,6 +8,7 @@ import {
   BoxSelect,
   Brush,
   Camera,
+  GitBranch,
   ClipboardPaste,
   Copy,
   Eraser,
@@ -80,6 +81,8 @@ const GAP = 2;
 export default function HistoryPanel({
   items,
   index,
+  nonLinear = false,
+  onNonLinear,
   sourceIndex,
   onJump,
   onSetSource,
@@ -91,8 +94,11 @@ export default function HistoryPanel({
   onSetSourceSnapshot,
   maxRows = 25,
 }: {
-  items: { label: string }[];
+  items: { label: string; onPath?: boolean }[];
   index: number;
+  /** Non-linear history: new edits branch instead of discarding the redo tail. */
+  nonLinear?: boolean;
+  onNonLinear?: (on: boolean) => void;
   /** The state the History brush repaints from (0 = the original). */
   sourceIndex: number;
   onJump: (index: number) => void;
@@ -133,6 +139,23 @@ export default function HistoryPanel({
           the clock pins it as the History brush's source. */}
       <div className={styles.snapHead}>
         <span className={styles.snapTitle}>Snapshots</span>
+        {onNonLinear && (
+          <button
+            type="button"
+            className={styles.snapAdd}
+            data-on={nonLinear}
+            onClick={() => onNonLinear(!nonLinear)}
+            title={
+              nonLinear
+                ? "Non-linear history is ON — editing after an undo keeps the states it replaces. Turn off to drop the branches you're not on."
+                : "Non-linear history is OFF — editing after an undo discards everything after this point"
+            }
+            aria-label="Non-linear history"
+            aria-pressed={nonLinear}
+          >
+            <GitBranch size={13} />
+          </button>
+        )}
         <button
           type="button"
           className={styles.snapAdd}
@@ -207,6 +230,11 @@ export default function HistoryPanel({
               className={styles.historyItem}
               data-active={i === index}
               data-future={i > index}
+              // A state on a branch you stepped away from: still reachable —
+              // that is the whole point of non-linear history — but marked so
+              // the list doesn't read as one straight sequence.
+              data-offpath={h.onPath === false || undefined}
+              title={h.onPath === false ? `${h.label} — on another branch` : h.label}
               onClick={() => onJump(i)}
             >
               <span className={styles.historyIcon}>

@@ -302,6 +302,7 @@ export const TOPICS: HelpTopic[] = [
           { title: "Remappable shortcuts", body: "The Keyboard Shortcuts window (Settings or Help menu) is also where you change bindings: click a key chip, press the new keys — Backspace unbinds, Esc cancels — and the menus and palette update instantly. Reset per shortcut or all at once." },
           { title: "Interface scale", body: "Preferences ▸ Appearance ▸ Interface scale resizes the bars, panels, menus and dialogs — Compact (90%) through Large (125%). The canvas view is never scaled, so document pixels always render exactly." },
           { title: "History", body: "The History panel lists undoable steps — click any entry to jump. The in-memory cap is set in Preferences ▸ Performance.", keys: "Ctrl+Z" },
+          { title: "Non-linear history", body: "The branch button at the top of the History panel keeps the states a new edit would otherwise discard. With it off (the default), editing after an undo throws away everything after your position; with it on, those states stay in the list as a branch, marked with a rail because they are not on the way to where you are now — click one to go there. Redo follows the branch you were last working on, and turning the option off again drops the branches you left behind." },
         ],
       },
     ],
