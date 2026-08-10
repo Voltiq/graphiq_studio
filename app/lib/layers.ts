@@ -1,6 +1,7 @@
 import type { AdjustmentSpec } from "./adjust";
 import type { FxKey, LayerEffects } from "./effects";
 import type { SmartFilter } from "./filters";
+import type { BlendIf } from "./blendif";
 import type { GradientStop, GradientType, VectorData } from "./tools";
 
 /** Per-layer mask metadata. The mask *pixels* live in the paint engine (keyed by
@@ -86,6 +87,10 @@ export interface LayerBase {
   /** Non-destructive layer effects (drop shadow, glow, stroke, …); rendered at
    *  composite time from the layer's alpha — never baked into pixels. */
   effects?: LayerEffects;
+  /** Blend If (Photoshop's Blending Options): hide this layer's pixels by their
+   *  own tonal range and/or by the tones already composited beneath it. Absent
+   *  ⇒ no gating, and the compositor skips the work entirely. */
+  blendIf?: BlendIf;
   /** Clip this layer to the alpha silhouette of the layer directly below it in
    *  the same parent (a clipping mask). Absent ⇒ not clipped. Positional: moving
    *  the layer changes what it clips to; inert when there is no valid base below. */
@@ -175,6 +180,7 @@ export type LayerPatch = Partial<
   adjustment?: AdjustmentSpec;
   clipped?: boolean;
   effects?: LayerEffects | undefined;
+  blendIf?: BlendIf | undefined;
   filters?: SmartFilter[] | undefined;
   filterMask?: MaskMeta | undefined;
 };

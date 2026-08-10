@@ -15,6 +15,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import styles from "./LayerStyleDialog.module.scss";
+import BlendIfControl from "./BlendIfControl";
+import type { BlendIf } from "../lib/blendif";
 import { ColorChip, Segmented, Select, Slider, Toggle } from "./Controls";
 import { GradientEditor } from "./GradientControl";
 import { parseColor, toHex6 } from "../lib/color";
@@ -93,6 +95,8 @@ const Grid = ({ children }: { children: React.ReactNode }) => <div className={st
 export default function LayerStyleDialog({
   effects,
   layerName,
+  blendIf,
+  onBlendIf,
   gradientStorageKey = GRADIENT_PRESETS_KEY,
   onChange,
   onToggle,
@@ -101,6 +105,9 @@ export default function LayerStyleDialog({
 }: {
   effects: LayerEffects;
   layerName: string;
+  /** The layer's Blend If, and how to change it (omit to hide the section). */
+  blendIf?: BlendIf;
+  onBlendIf?: (b: BlendIf | undefined) => void;
   /** Preset bucket for the gradient overlay's editor (shared with the
       Gradient tool unless the "share saved gradients" preference is off). */
   gradientStorageKey?: string;
@@ -451,7 +458,13 @@ export default function LayerStyleDialog({
               </div>
             </div>
             <p className={styles.paneDesc}>{FX_DESC[sel]}</p>
-            <div className={styles.paneBody}>{renderControls()}</div>
+            <div className={styles.paneBody}>
+              {renderControls()}
+              {/* Blending Options ▸ Blend If — a property of the LAYER, not of
+                  any one effect, so it sits below the selected effect's
+                  controls rather than inside them. */}
+              {onBlendIf && <BlendIfControl value={blendIf} onChange={onBlendIf} />}
+            </div>
           </div>
         </div>
 

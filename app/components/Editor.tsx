@@ -6064,6 +6064,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             <LayerStyleDialog
               effects={node.effects ?? {}}
               layerName={node.name}
+              blendIf={node.blendIf}
+              onBlendIf={(b) =>
+                // NOTE: not journalled to history yet. This fires on every
+                // pointermove of a handle drag, so pushing a structural step
+                // here would bury the undo stack under hundreds of "Blend If"
+                // entries; it needs a commit-on-release in the control first.
+                patchActiveDoc((d) => ({
+                  ...d,
+                  layers: updateNode(d.layers, layerStyleTarget, { blendIf: b }),
+                }))
+              }
               gradientStorageKey={prefs.sharedGradients ? GRADIENT_PRESETS_KEY : FX_GRADIENT_PRESETS_KEY}
               onChange={(eff) => setLayerEffectsOp(layerStyleTarget, eff)}
               onToggle={(key, enabled) => toggleEffectOp(layerStyleTarget, key, enabled)}

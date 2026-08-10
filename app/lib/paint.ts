@@ -7,6 +7,13 @@ import { applyExtraAdjustment, extraIsDefault, isExtraSpec, type ExtraAdjustment
 import { removeRedEyeInPlace } from "./redeye";
 import { renderShape, type ShapeGeom } from "./shapes";
 import { boxBlurPass, clampi } from "./blur";
+import {
+  blendIfActive,
+  buildLut,
+  channelValue,
+  rangeActive,
+  type BlendIf,
+} from "./blendif";
 import { clampBudgetMB, overBudget, totalBytes } from "./history-budget";
 import {
   ROOT,
@@ -3889,13 +3896,59 @@ export class PaintEngine {
    *  are handled by drawStack. */
   private drawNode(ctx: CanvasRenderingContext2D, node: LayerNode) {
     if (!node.visible || node.type === "adjustment") return;
-    const src = this.renderNode(node);
+    let src = this.renderNode(node);
     if (!src) return;
+    // Blend If: gate the layer's alpha by its own channel value and by whatever
+    // is already composited beneath it. Only reached when the sliders actually
+    // hide something — an inactive blend-if costs nothing at all.
+    if (blendIfActive(node.blendIf)) src = this.applyBlendIf(ctx, src, node.blendIf!);
     ctx.globalAlpha = Math.max(0, Math.min(1, node.opacity / 100));
     ctx.globalCompositeOperation = blendOp(node.blend);
     ctx.drawImage(src, 0, 0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
+  }
+
+  /**
+   * Return a copy of `src` whose alpha has been multiplied by the Blend-If
+   * coverage. "This layer" reads `src`; "underlying" reads what is already in
+   * the destination context — which is exactly right for a painter's-algorithm
+   * compositor, because everything below this node is already there.
+   *
+   * Both ranges become 256-entry LUTs first, so the inner loop is two lookups
+   * and a multiply per pixel.
+   */
+  private applyBlendIf(
+    ctx: CanvasRenderingContext2D,
+    src: HTMLCanvasElement,
+    spec: BlendIf,
+  ): HTMLCanvasElement {
+    const out = this.mk(this.w, this.h);
+    const sctx = src.getContext("2d");
+    if (!sctx) return src;
+    const layer = sctx.getImageData(0, 0, this.w, this.h);
+    const under = ctx.getImageData(0, 0, this.w, this.h);
+    const a = layer.data;
+    const u = under.data;
+    const thisOn = rangeActive(spec.this);
+    const underOn = rangeActive(spec.under);
+    const thisLut = thisOn ? buildLut(spec.this) : null;
+    const underLut = underOn ? buildLut(spec.under) : null;
+    const ch = spec.channel;
+    for (let i = 0; i < a.length; i += 4) {
+      if (a[i + 3] === 0) continue; // already invisible — nothing to gate
+      let cover = 255;
+      if (thisLut) cover = thisLut[Math.round(channelValue(a[i], a[i + 1], a[i + 2], ch))];
+      if (cover && underLut) {
+        // Underlying pixels that are transparent read as black, which matches
+        // Photoshop: an empty document is the darkest possible backdrop.
+        const uc = u[i + 3] === 0 ? 0 : Math.round(channelValue(u[i], u[i + 1], u[i + 2], ch));
+        cover = (cover * underLut[uc]) / 255;
+      }
+      a[i + 3] = (a[i + 3] * cover) / 255;
+    }
+    out.ctx.putImageData(layer, 0, 0);
+    return out.c;
   }
 
   /** The styled buffer for a leaf with effects. Only reached on a render-cache

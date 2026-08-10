@@ -468,3 +468,126 @@
     border-color: transparent;
   }
 }
+
+
+/* ------------------------------- Blend If --------------------------------- */
+.biWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+
+.biHead {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-3);
+}
+
+.biReset {
+  margin-left: auto;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--wash);
+    color: var(--text);
+  }
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+}
+
+.biTrack {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.biLabelRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.biValues {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+/* The tonal ramp the handles cut into — black to white, so the handle
+   positions read directly as the tones they hide. */
+.biRail {
+  position: relative;
+  height: 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: linear-gradient(to right, #000, #fff);
+  touch-action: none;
+}
+
+/* The surviving band, as a bracket under the handles. */
+.biKeep {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  border-left: 1px solid var(--accent);
+  border-right: 1px solid var(--accent);
+  pointer-events: none;
+}
+
+/* Half-handles: two per end, drawn as a split triangle pair like Photoshop's. */
+.biHandle {
+  position: absolute;
+  top: -4px;
+  width: 9px;
+  height: 20px;
+  margin-left: -4.5px;
+  cursor: ew-resize;
+  touch-action: none;
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--text);
+    box-shadow: 0 0 0 1px var(--surface);
+  }
+
+  /* Left half of a pair is clipped to the left triangle, right half mirrors it,
+     so a closed pair looks like one house-shaped handle and a split pair
+     visibly separates. */
+  &[data-half="0"]::after {
+    clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  }
+  &[data-half="1"]::after {
+    clip-path: polygon(0 0, 100% 100%, 0 100%);
+  }
+  &[data-end="white"]::after {
+    background: var(--text-2);
+  }
+
+  &:focus-visible {
+    outline: none;
+    &::after {
+      box-shadow: 0 0 0 2px var(--accent);
+    }
+  }
+}
+
+.biHint {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
