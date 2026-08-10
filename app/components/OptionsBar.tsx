@@ -658,6 +658,8 @@ interface CropProps {
 export default function OptionsBar({
   tool,
   paintSurface,
+  quickMask,
+  onExitQuickMask,
   onExitMaskEdit,
   foreground,
   onForeground,
@@ -725,6 +727,10 @@ export default function OptionsBar({
 }: {
   tool: ToolId;
   paintSurface: ActiveSurface;
+  /** Quick Mask outranks the per-layer surface pill: while it is on, every tool
+   *  paints the document's quick mask whatever surface the layer has selected. */
+  quickMask: boolean;
+  onExitQuickMask: () => void;
   onExitMaskEdit: () => void;
   foreground: string;
   onForeground: (c: string) => void;
@@ -777,7 +783,19 @@ export default function OptionsBar({
         <Icon size={16} strokeWidth={2} />
         <span>{meta.name}</span>
       </div>
-      {paintSurface !== "pixels" && (
+      {quickMask && (
+        <button
+          type="button"
+          className={styles.maskPill}
+          title="Quick Mask: paint white to add to the selection, black to remove it — click to turn the coverage back into a selection"
+          onClick={onExitQuickMask}
+        >
+          <span className={styles.quickMaskDot} />
+          <span>Quick Mask</span>
+          <X size={11} strokeWidth={2.5} className={styles.maskPillX} />
+        </button>
+      )}
+      {!quickMask && paintSurface !== "pixels" && (
         <button
           type="button"
           className={styles.maskPill}

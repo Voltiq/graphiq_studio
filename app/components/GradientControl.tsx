@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeftRight, Check, Download, Plus, Save, Upload, X } from "lucide-react";
+import { ArrowLeftRight, Check, Dices, Download, Plus, Save, Upload, X } from "lucide-react";
 import styles from "./GradientControl.module.scss";
 import ColorPopover from "./ColorPopover";
 import { sampleGradient } from "../lib/gradient";
@@ -19,6 +19,7 @@ import {
   type GradientPreset,
 } from "../lib/gradientio";
 import type { GradientSettings, GradientStop } from "../lib/tools";
+import { DEFAULT_NOISE, buildNoiseStops, type NoiseGradient } from "../lib/gradient-noise";
 
 /** A CSS linear-gradient string for a preview swatch. */
 export function cssGradient(stops: GradientStop[]): string {
@@ -277,6 +278,104 @@ export function GradientEditor({
 
 /** The Gradient tool's options-bar control: a swatch that opens the editor in
  *  a portalled popover, with the extra "follow Primary → Secondary" source. */
+/**
+ * Noise gradients: a random ramp from a seed rather than hand-placed stops.
+ *
+ * It only ever writes STOPS — the generated list flows through the identical
+ * render path as every other gradient, so noise composes with reverse, dither,
+ * angle smoothing and the gradient presets for free. `noise` is kept alongside
+ * so the params stay re-editable; the moment a stop is dragged by hand it is
+ * dropped, because the list no longer matches the seed.
+ */
+function NoiseSection({
+  noise,
+  onNoise,
+}: {
+  noise: NoiseGradient | undefined;
+  onNoise: (spec: NoiseGradient | null) => void;
+}) {
+  const on = !!noise;
+  const spec = noise ?? DEFAULT_NOISE;
+  const patch = (p: Partial<NoiseGradient>) => onNoise({ ...spec, ...p });
+
+  return (
+    <div className={styles.noise}>
+      <div className={styles.noiseHead}>
+        <span className={styles.presetsLabel}>Noise</span>
+        <button
+          type="button"
+          className={styles.sourceBtn}
+          data-on={on}
+          onClick={() => (on ? onNoise(null) : patch({ seed: (Math.random() * 0xffffffff) >>> 0 }))}
+        >
+          {on ? "On" : "Off"}
+        </button>
+      </div>
+
+      {on && (
+        <>
+          <div className={styles.noiseRow}>
+            <button
+              type="button"
+              className={styles.noiseDice}
+              title="New random ramp from a fresh seed"
+              onClick={() => patch({ seed: (Math.random() * 0xffffffff) >>> 0 })}
+            >
+              <Dices size={13} />
+              Randomize
+            </button>
+            <span className={styles.noiseSeed}>#{spec.seed.toString(16).padStart(8, "0")}</span>
+          </div>
+
+          <label className={styles.noiseRow}>
+            <span className={styles.noiseLabel}>Roughness</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={spec.roughness}
+              aria-label="Roughness"
+              onChange={(e) => patch({ roughness: Number(e.target.value) })}
+            />
+            <span className={styles.noiseValue}>{spec.roughness}</span>
+          </label>
+
+          <div className={styles.noiseRow}>
+            {(["rgb", "hsb"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={styles.sourceBtn}
+                data-on={spec.model === m}
+                onClick={() => patch({ model: m })}
+              >
+                {m.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          <label className={styles.noiseCheck}>
+            <input
+              type="checkbox"
+              checked={spec.restrict}
+              onChange={(e) => patch({ restrict: e.target.checked })}
+            />
+            Restrict colours
+          </label>
+          <label className={styles.noiseCheck}>
+            <input
+              type="checkbox"
+              checked={spec.transparency}
+              onChange={(e) => patch({ transparency: e.target.checked })}
+            />
+            Add transparency
+          </label>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function GradientControl({
   gradient,
   onGradient,
@@ -365,8 +464,22 @@ export default function GradientControl({
               Primary → Secondary
             </button>
 
-            {/* Editing the stops always switches the gradient to "custom". */}
-            <GradientEditor stops={stops} onStops={(next) => onGradient({ stops: next })} />
+            {/* Editing the stops always switches the gradient to "custom" — and
+                drops any noise spec, because a hand-moved stop no longer matches
+                the seed that generated the list. */}
+            <GradientEditor
+              stops={stops}
+              onStops={(next) => onGradient({ stops: next, noise: undefined })}
+            />
+
+            <NoiseSection
+              noise={gradient.noise}
+              onNoise={(spec) =>
+                spec
+                  ? onGradient({ noise: spec, stops: buildNoiseStops(spec) })
+                  : onGradient({ noise: undefined })
+              }
+            />
           </div>,
           document.body,
         )}

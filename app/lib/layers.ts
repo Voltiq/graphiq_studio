@@ -25,6 +25,16 @@ export function filterMaskKey(id: string): string {
   return "fm:" + id;
 }
 
+/** Engine masks-map key of a DOCUMENT's Quick Mask raster. Keyed by document,
+ *  not by layer: a quick mask paints a selection, which belongs to the document
+ *  — so switching tabs leaves each document's quick mask intact. It rides the
+ *  same mask machinery as the two above, but is never composited: the red
+ *  overlay is drawn by the canvas, and the raster leaves the document's pixels
+ *  untouched until it is turned back into a selection. */
+export function quickMaskKey(docId: string): string {
+  return "qm:" + docId;
+}
+
 /** Colour-label tags for panel organization (filterable; persisted in .gproj). */
 export type LayerLabel = "red" | "orange" | "yellow" | "green" | "blue" | "purple" | "gray";
 

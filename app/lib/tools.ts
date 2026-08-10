@@ -29,6 +29,7 @@ import {
   ZoomIn,
 } from "lucide-react";
 import type { TextWarp } from "./textwarp";
+import type { NoiseGradient } from "./gradient-noise";
 
 export type ToolId =
   | "move"
@@ -72,7 +73,9 @@ export const TOOL_GROUPS: Tool[][] = [
     { id: "select", name: "Rectangular marquee", icon: BoxSelect, shortcut: "M" },
     { id: "lasso", name: "Lasso", icon: Lasso, shortcut: "L" },
     { id: "wand", name: "Magic wand", icon: Wand2, shortcut: "W" },
-    { id: "quickselect", name: "Quick selection", icon: SquareDashedMousePointer, shortcut: "Q" },
+    // Photoshop groups Quick selection with the Magic wand on W; Q is reserved
+    // for Quick Mask mode. Shift+W cycles between the two (see Editor's keydown).
+    { id: "quickselect", name: "Quick selection", icon: SquareDashedMousePointer, shortcut: "W" },
     { id: "crop", name: "Crop", icon: Crop, shortcut: "C" },
     { id: "eyedropper", name: "Eyedropper", icon: Pipette, shortcut: "I" },
     { id: "measure", name: "Measure", icon: Ruler, shortcut: "I" },
@@ -135,6 +138,16 @@ export interface GradientSettings {
   /** Angle gradients only: blend across the wrap seam to soften its hard edge. */
   smooth: boolean;
   stops: GradientStop[] | null;
+  /** Set ⇒ `stops` were GENERATED from this seed (a noise gradient). Editing a
+   *  stop by hand clears it, because the list no longer matches the seed.
+   *
+   *  NOTE: there is deliberately no `dither` option here. Chromium's 2D canvas
+   *  already dithers gradient fills — measured on a bare 1920px canvas gradient,
+   *  a vertical column alternates between two levels on 399 of 400 rows, and a
+   *  row crosses 157 levels in 1477 runs, so the level contours arrive already
+   *  stippled. An app-side ordered dither would be a second ±1 pass on top of
+   *  that: measurably different pixels, but not the thing removing the banding. */
+  noise?: NoiseGradient;
 }
 
 /** A placed gradient (explicit stops + geometry) used to fill text. Mirrors the

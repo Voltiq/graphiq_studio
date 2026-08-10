@@ -45,7 +45,7 @@ export const GUIDE: HelpEntry[] = [
   },
   {
     title: "Select, move, transform",
-    body: "M draws marquees (Shift+M cycles rectangle/ellipse/triangle), L is the lasso (Shift+L cycles freehand/polygonal/magnetic), W selects by colour. Hold Ctrl to add and Alt to subtract while dragging. V moves layers or the selected pixels; Free transform scales and rotates them.",
+    body: "M draws marquees (Shift+M cycles rectangle/ellipse/triangle), L is the lasso (Shift+L cycles freehand/polygonal/magnetic), W selects by colour (Shift+W cycles wand/quick selection), Q paints one as a red Quick Mask. Hold Ctrl to add and Alt to subtract while dragging. V moves layers or the selected pixels; Free transform scales and rotates them.",
     keys: "Ctrl+Alt+T",
   },
   {
@@ -76,7 +76,7 @@ export const TOPICS: HelpTopic[] = [
           { title: "Move", body: "Drags the active layer, or just the selected pixels when a selection exists. Arrows nudge (Ctrl+Arrows by 10 px); a mode switch moves the outline only.", keys: "V" },
           { title: "Marquee", body: "Rectangle, ellipse or triangle regions — Shift constrains to 1:1, Shift+M cycles the shape. Handles resize the outline or scale its content.", keys: "M" },
           { title: "Lasso", body: "Freehand drag, polygonal click-to-drop-vertices (Enter closes, Backspace undoes a point), or magnetic edge-snapping. Shift+L cycles the mode.", keys: "L" },
-          { title: "Magic wand", body: "Selects similar colour with a live tolerance slider; contiguous limits to the connected region, sample-all reads the composite instead of the layer.", keys: "W" },
+          { title: "Magic wand / Quick selection", body: "The wand selects similar colour with a live tolerance slider (contiguous limits to the connected region, sample-all reads the composite instead of the layer); Quick selection grows a region as you paint over it. They share W — Shift+W cycles between them, as it does for any letter two tools share.", keys: "W" },
           { title: "Crop", body: "Ratio presets or free, rule-of-thirds/grid/golden overlays, a darkening shield, and a straighten angle that levels the image as it crops.", keys: "C" },
           { title: "Eyedropper", body: "Picks a colour — point sample or 3×3/5×5/11×11 average, from the active layer or every layer.", keys: "I" },
         ],
@@ -91,7 +91,7 @@ export const TOPICS: HelpTopic[] = [
           { title: "Spot heal", body: "Paint over a blemish — on release it fills with matching texture from the surroundings, tone-blended so no seam shows.", keys: "J" },
           { title: "Red eye", body: "One click on a flash-red pupil neutralizes and darkens it; the blob is found automatically around the click.", keys: "Y" },
           { title: "Paint bucket", body: "Flood-fills by colour similarity with optional anti-aliased edges — tolerance stays live-editable until you commit.", keys: "G" },
-          { title: "Gradient", body: "Linear, radial, angle or reflected; drag to place, then re-drag the endpoints and midpoint live. Stops are editable and saveable as presets.", keys: "G" },
+          { title: "Gradient", body: "Linear, radial, angle or reflected; drag to place, then re-drag the endpoints and midpoint live. Stops are editable and saveable as presets. Noise gradients build the ramp from a seed instead: Randomize until you like one, and Roughness takes it from a soft wash to hard stripes. Shares G with the bucket — Shift+G cycles.", keys: "G" },
           { title: "Blur brush", body: "Softens where you paint (strength and kernel radius in the options bar); can sample all layers.", keys: "R" },
           { title: "Dodge / Burn", body: "Lightens or darkens, targeted at shadows, midtones or highlights, with a protect-tones mode that preserves hue.", keys: "O" },
         ],
@@ -117,6 +117,7 @@ export const TOPICS: HelpTopic[] = [
           { title: "Add and subtract", body: "Hold Ctrl while dragging any selection tool to add to the existing selection, Alt to subtract from it. The wand honours the same modifiers." },
           { title: "Select all / deselect / reselect", body: "Ctrl+A selects the canvas, Ctrl+D drops the selection, Ctrl+Shift+D brings the last one back, Ctrl+Shift+I inverts." },
           { title: "Feather & grow", body: "Select ▸ Feather softens the selection edge by a radius (fills, deletes and adjustments respect it); Grow expands the region.", keys: "Shift+F6" },
+          { title: "Quick Mask", body: "Paint a selection instead of dragging one. Q shades everything unselected in red: paint black to mask more, white to select more, then Q again to turn the coverage back into a selection. A soft brush gives a feathered selection. Every paint tool edits the mask, and your image is untouched while you're in the mode — undo steps back into it rather than discarding it.", keys: "Q" },
         ],
       },
       {

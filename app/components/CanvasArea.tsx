@@ -173,6 +173,11 @@ const MAX_ZOOM = 10000;
 /** Screen-px width of the invisible rotation ring just outside the selection. */
 const RING_OUTER = 44;
 
+/** Quick Mask overlay tint — Photoshop's rubylith, 50% red over masked areas.
+ *  The alpha is baked into the colour because the overlay is punched out with a
+ *  destination-out pass, which scales whatever opacity is already there. */
+const QUICK_MASK_COLOR = "rgba(255,0,0,0.5)";
+
 /** Rotate (x,y) about (cx,cy) by `a` radians. */
 function rotatePt(x: number, y: number, cx: number, cy: number, a: number): [number, number] {
   if (!a) return [x, y];
@@ -1678,6 +1683,9 @@ export default function CanvasArea({
   // layer is parametric (no pixels), or its pixels are locked — but never when
   // the active surface is a mask (masks are separate rasters, always paintable).
   const paintBlocked = (id: string | null): boolean => {
+    // Quick Mask paints a document-level raster, so no layer lock applies — a
+    // locked or parametric layer can still have a selection painted over it.
+    if (engine.quickMaskActive()) return false;
     if (!id || engine.getActiveSurface(id) !== "pixels") return false;
     if (isFillLayer(findNode(layersRef.current, id))) {
       onLockedActionRef.current?.("fill");
@@ -1742,6 +1750,34 @@ export default function CanvasArea({
     ctx.clearRect(0, 0, cw, ch);
     const s = zoomRef.current / 100;
     const p = panR.current;
+
+    // --- Quick Mask: shade everything the mask does NOT select in red ---------
+    // Drawn FIRST, on the just-cleared overlay, because the punch-out below is a
+    // destination-out — anything already painted inside the document rect would
+    // be eaten by it. Everything else in this function then draws on top.
+    //
+    // Screen space, not document space: filling a document-sized scratch canvas
+    // every frame would cost 24M pixels on a 6000×4000 image, while this is one
+    // fill and one scaled blit bounded by the viewport, whatever the zoom.
+    const qmCoverage = engine.quickMaskCoverage();
+    if (qmCoverage) {
+      const dw = widthRef.current * s;
+      const dh = heightRef.current * s;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(p.x, p.y, dw, dh);
+      ctx.clip();
+      // Red at the overlay opacity everywhere, then remove it in proportion to
+      // coverage: destination-out leaves dst.a × (1 − src.a), so a fully selected
+      // pixel ends fully clear and a half-covered one keeps half the shade —
+      // which is what makes a soft brush read as a feathered selection.
+      ctx.fillStyle = QUICK_MASK_COLOR;
+      ctx.fillRect(p.x, p.y, dw, dh);
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.imageSmoothingEnabled = s < 1; // match the document blit: crisp when zoomed in
+      ctx.drawImage(qmCoverage, p.x, p.y, dw, dh);
+      ctx.restore();
+    }
 
     // --- Perf HUD dirty-region flash (dev): outline what the last composite
     // re-blitted — green = a cheap region blit, red = a full-document recompute
@@ -2848,6 +2884,10 @@ export default function CanvasArea({
     antsOffset.current = (antsOffset.current + 0.18) % 8;
     drawAnts();
     if (
+      // The quick mask lives on the overlay canvas, which this loop owns and
+      // clears when it stops — so the loop has to run for as long as the mode is
+      // on, or the red would vanish the moment nothing else needed a frame.
+      engine.quickMaskActive() ||
       selectionRef.current.length > 0 ||
       dragRectRef.current ||
       lassoRef.current ||
@@ -3570,6 +3610,18 @@ export default function CanvasArea({
       applyMaskToLayer: (id) => engine.applyMaskToLayer(id),
       offsetMask: (id, dx, dy) => engine.offsetMask(id, dx, dy),
       maskSelectionRects: (id) => engine.maskSelectionRects(id),
+      quickMaskActive: () => engine.quickMaskActive(),
+      // Both entry points restart the overlay loop: it is what paints the red,
+      // and it parks itself whenever nothing on screen needs animating.
+      enterQuickMask: (key, rects, angle, pivot) => {
+        engine.enterQuickMask(key, rects, angle, pivot);
+        ensureAntsRef.current?.();
+      },
+      setQuickMask: (key) => {
+        engine.setQuickMask(key);
+        ensureAntsRef.current?.();
+      },
+      quickMaskRects: () => engine.quickMaskRects(),
       setActiveSurface: (id, surface) => engine.setActiveSurface(id, surface),
       getActiveSurface: (id) => engine.getActiveSurface(id),
       applySmartFilters: (layerId, filters, side, useFilterMask) =>
@@ -5328,9 +5380,10 @@ export default function CanvasArea({
       // for the length of that stroke without changing the selected tool.
       const erasing = tool === "eraser" || (isEraserTip(e) && !!activeLayerId);
       let layerId: string;
-      if (activeLayerId && engine.getActiveSurface(activeLayerId) !== "pixels") {
-        // Painting the active layer's (or group's) layer/filter mask — target it
-        // directly so brush/pencil don't auto-create a new layer via ensureLayer.
+      if (activeLayerId && (engine.quickMaskActive() || engine.getActiveSurface(activeLayerId) !== "pixels")) {
+        // Painting a mask — the active layer's (or group's) layer/filter mask, or
+        // the document's quick mask. Target the layer directly so brush/pencil
+        // don't auto-create a new layer via ensureLayer.
         layerId = activeLayerId;
       } else if (erasing) {
         if (!activeLayerId) return; // nothing to erase

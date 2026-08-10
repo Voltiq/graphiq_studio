@@ -121,7 +121,9 @@ export const MENUS: Menu[] = [
       { label: "Reselect", shortcut: "Ctrl+Shift+D", action: "select-reselect" },
       { label: "Inverse", shortcut: "Ctrl+Shift+I", separatorAfter: true, action: "select-inverse" },
       { label: "Feather…", shortcut: "Shift+F6", action: "select-feather" },
-      { label: "Grow…", action: "select-grow" },
+      { label: "Grow…", separatorAfter: true, action: "select-grow" },
+      // Checkable via the editor's `checks` map (keyed by action id).
+      { label: "Quick Mask mode", shortcut: "Q", action: "select-quickmask" },
     ],
   },
   {

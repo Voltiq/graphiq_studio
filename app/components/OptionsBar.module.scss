@@ -67,6 +67,17 @@
   }
 }
 
+/* Quick Mask's pill badge: the rubylith colour itself, so the pill matches the
+   red shading on the canvas rather than the accent the mask pills use. */
+.quickMaskDot {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: rgb(255 0 0 / 55%);
+  border: 1px solid rgb(255 0 0 / 90%);
+}
+
 /* The dismiss ✕ reads quieter than the label until the pill is hovered. */
 .maskPillX {
   opacity: 0.55;

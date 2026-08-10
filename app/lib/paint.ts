@@ -509,6 +509,16 @@ export interface EngineHandle {
   maskSelectionRects: (id: string) => Rect[];
   setActiveSurface: (id: string, surface: ActiveSurface) => void;
   getActiveSurface: (id: string) => ActiveSurface;
+  // ---- Quick Mask (document-level selection painting) ----
+  quickMaskActive: () => boolean;
+  enterQuickMask: (
+    key: string,
+    rects?: Rect[] | null,
+    angle?: number,
+    pivot?: { x: number; y: number } | null,
+  ) => void;
+  setQuickMask: (key: string | null) => void;
+  quickMaskRects: () => Rect[];
   /** Spec 07: bake a smart-filter stack into pixels (one combined step). */
   applySmartFilters: (layerId: string, filters: SmartFilter[], side?: HistorySide, useFilterMask?: boolean) => void;
   /** Anchored canvas reframe (Canvas Size dialog) — call before the dims patch. */
@@ -854,6 +864,12 @@ export class PaintEngine {
    *  a filter mask (fm:*) feeds the filter stack and inherits its reach. */
   private bumpMask(id: string, rect?: Rect) {
     this.maskVersion.set(id, (this.maskVersion.get(id) ?? 0) + 1);
+    // The quick mask is drawn as an overlay and composited into nothing, so a
+    // stroke on it must not invalidate a single cached tile. Skipping this is
+    // not just an optimization: changeReaches() treats an id it has never seen
+    // in the tree as "reaches everything", which would force a FULL document
+    // recomposite on every quick-mask brush segment.
+    if (id === this.qmKey) return;
     this.dropCache(id, true);
     const bounded = rect && !this.changeReaches(id, "mask") ? rect : null;
     this.pendingDirty = unionRect(this.pendingDirty, bounded);
@@ -1971,8 +1987,10 @@ export class PaintEngine {
 
   /** Binary form for paint routing: EITHER mask kind ⇒ "mask" — the stroke /
    *  fill / blur pipelines treat the two identically and resolve which raster
-   *  via maskKeyOf(). */
+   *  via maskKeyOf(). Quick Mask overrides it for EVERY layer: while it is on,
+   *  every paint tool edits the quick mask instead of any layer's pixels. */
   private activeSurface(id: string): "pixels" | "mask" {
+    if (this.qmKey) return "mask";
     return this.getActiveSurface(id) === "pixels" ? "pixels" : "mask";
   }
 
@@ -1980,7 +1998,64 @@ export class PaintEngine {
    *  the layer mask, `filterMaskKey(id)` for the filter mask. History entries for
    *  mask paint record THIS key as their layerId, so undo lands on the right raster. */
   private maskKeyOf(id: string): string {
+    if (this.qmKey) return this.qmKey; // Quick Mask claims every layer's strokes
     return this.surfaces.get(id) === "filterMask" ? filterMaskKey(id) : id;
+  }
+
+  // ---- Quick Mask (TODO §3) -----------------------------------------------
+  //
+  // A quick mask is a grayscale raster in the SAME masks map as layer and filter
+  // masks, so every paint tool, fill, blur and history path works on it with no
+  // per-tool change — activeSurface()/maskKeyOf() above are the whole routing.
+  // What makes it "quick" is that nothing composites it: the document renders
+  // exactly as if the mask were not there, and the canvas paints the red overlay
+  // from quickMaskCoverage(). Coverage means SELECTED (white = inside), matching
+  // allocMask("selection"), so the overlay inverts it to shade what is masked.
+  private qmKey: string | null = null;
+
+  /** Is a quick mask live (and its raster still present)? */
+  quickMaskActive(): boolean {
+    return this.qmKey !== null && this.masks.has(this.qmKey);
+  }
+
+  /** Turn Quick Mask on for `key`, seeding coverage from the current selection.
+   *
+   *  No selection seeds it all-WHITE, not all-black: everywhere else in the app
+   *  an empty selection means "the whole document is editable", so entering the
+   *  mode with nothing selected has to start from everything selected — i.e. no
+   *  red at all — and let the first black stroke carve the mask out. Seeding it
+   *  black would open the mode with the entire canvas shaded, which reads as a
+   *  bug and inverts what every subsequent stroke does. */
+  enterQuickMask(
+    key: string,
+    rects: Rect[] | null = null,
+    angle = 0,
+    pivot: { x: number; y: number } | null = null,
+  ): void {
+    // Set the key FIRST: allocMask derives the alpha cache, and bumpMask has to
+    // already know this raster is a quick mask so it skips composite invalidation.
+    this.qmKey = key;
+    this.allocMask(key, rects && rects.length ? "selection" : "reveal", rects, angle, pivot);
+  }
+
+  /** Point at an existing quick-mask raster, or off with null. Used by document
+   *  switches and by undo/redo of the mode toggle — never allocates, so the
+   *  painted coverage survives leaving and re-entering the mode. */
+  setQuickMask(key: string | null): void {
+    this.qmKey = key && this.masks.has(key) ? key : null;
+    this.emitChange();
+  }
+
+  /** The selection the live quick mask describes (coverage ≥ 50%). */
+  quickMaskRects(): Rect[] {
+    return this.qmKey ? this.maskSelectionRects(this.qmKey) : [];
+  }
+
+  /** Coverage canvas for the red overlay (alpha = selected). Routes through
+   *  maskDisplay so an IN-PROGRESS stroke shows immediately — without it the
+   *  overlay would only catch up on pointer-up. */
+  quickMaskCoverage(): HTMLCanvasElement | null {
+    return this.qmKey ? this.maskDisplay(this.qmKey) : null;
   }
 
   setActiveSurface(id: string, surface: ActiveSurface): void {

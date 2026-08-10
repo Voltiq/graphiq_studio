@@ -99,6 +99,7 @@ import {
   removeNode,
   replaceNodeWith,
   topLevelSelected,
+  quickMaskKey,
   ungroupNode,
   updateNode,
   type ActiveSurface,
@@ -1693,6 +1694,89 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (!eng || !layerId) return;
     if (!findNode(d.layers, layerId)?.mask) return;
     commitSelection("Load Mask as Selection", eng.maskSelectionRects(layerId), 0, null);
+  };
+
+  // ---- Quick Mask (TODO §3) ------------------------------------------------
+  //
+  // Paint a selection instead of dragging one: entering turns the current
+  // selection into a grayscale raster, clears the selection so brushes aren't
+  // clipped by it, and shades everything unselected in red. Leaving turns the
+  // coverage back into a selection.
+  //
+  // The engine holds ONE live quick mask, but the raster is keyed per document,
+  // so tabs keep their own — this list is which documents are currently in the
+  // mode, and an effect below points the engine at the right raster.
+  const [quickMaskDocs, setQuickMaskDocs] = useState<string[]>([]);
+  const quickMask = quickMaskDocs.includes(activeId);
+  const quickMaskDocsRef = useRef<string[]>([]);
+  quickMaskDocsRef.current = quickMaskDocs;
+
+  const markQuickMask = (docId: string, on: boolean) =>
+    setQuickMaskDocs((ds) => (on ? (ds.includes(docId) ? ds : [...ds, docId]) : ds.filter((d) => d !== docId)));
+
+  // Switching tabs re-points the engine at that document's quick mask (or off).
+  useEffect(() => {
+    const eng = paintRef.current;
+    if (!eng) return;
+    eng.setQuickMask(quickMaskDocs.includes(activeId) ? quickMaskKey(activeId) : null);
+  }, [activeId, quickMaskDocs]);
+
+  const toggleQuickMask = () => {
+    const eng = paintRef.current;
+    if (!eng) return;
+    const docId = activeIdRef.current;
+    const key = quickMaskKey(docId);
+    const before = selStateOf(activeDocRef.current);
+    if (eng.quickMaskActive()) {
+      // Coverage that spans the whole canvas comes back out as NO selection, the
+      // same equivalence the mode was entered under — otherwise turning quick
+      // mask on and straight off again would leave a full-canvas marquee behind.
+      const d = activeDocRef.current;
+      const rects = eng.quickMaskRects();
+      const covered = rects.reduce((n, r) => n + r.w * r.h, 0);
+      const after: SelState =
+        covered >= d.width * d.height ? { rects: [], angle: 0, pivot: null } : { rects, angle: 0, pivot: null };
+      eng.setQuickMask(null);
+      markQuickMask(docId, false);
+      setSelState(docId, after);
+      // Undo re-enters the mode rather than restoring a selection: the raster is
+      // deliberately NOT freed on exit, so stepping back lands you in the quick
+      // mask exactly as you left it — and the brush strokes inside it are still
+      // their own history entries, which then undo visibly.
+      eng.pushStructural(
+        "Exit Quick Mask",
+        () => {
+          eng.setQuickMask(key);
+          markQuickMask(docId, true);
+          setSelState(docId, before);
+        },
+        () => {
+          eng.setQuickMask(null);
+          markQuickMask(docId, false);
+          setSelState(docId, after);
+        },
+      );
+      showToast(after.rects.length ? "Quick Mask off — coverage is now the selection" : "Quick Mask off");
+    } else {
+      const empty: SelState = { rects: [], angle: 0, pivot: null };
+      eng.enterQuickMask(key, before.rects, before.angle, before.pivot);
+      markQuickMask(docId, true);
+      setSelState(docId, empty);
+      eng.pushStructural(
+        "Quick Mask",
+        () => {
+          eng.setQuickMask(null);
+          markQuickMask(docId, false);
+          setSelState(docId, before);
+        },
+        () => {
+          eng.setQuickMask(key);
+          markQuickMask(docId, true);
+          setSelState(docId, empty);
+        },
+      );
+      showToast("Quick Mask on — paint black to mask (red), white to select");
+    }
   };
 
   // ---- Adjustment layers (non-destructive) ---------------------------------
@@ -4923,6 +5007,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "select-inverse") invertSelection();
     else if (actionId === "select-feather") setSelectModify("feather");
     else if (actionId === "select-grow") setSelectModify("grow");
+    else if (actionId === "select-quickmask") toggleQuickMask();
     else if (actionId === "new-doc") requestNewDoc();
     else if (actionId === "open") openProject();
     else if (actionId === "open-recent") setRecentsOpen(true);
@@ -5446,14 +5531,22 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
               : "Triangular marquee",
         );
       } else if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
-        // Shifted tool letters (Shift+B etc.) still reach a tool bound to the
-        // bare letter — the registry pass above requires exact modifiers, and
-        // the Shift+L/M cycles just had their chance.
+        // Shifted tool letters reach the tools bound to the bare letter — the
+        // registry pass above requires exact modifiers, and the Shift+L/M cycles
+        // just had their chance. Where SEVERAL tools share a letter (Magic wand
+        // + Quick selection on W, Bucket + Gradient on G, Eyedropper + Measure
+        // on I) Shift+letter CYCLES through them the way Photoshop does — which
+        // is the only way the second tool of a pair is reachable at all, since
+        // the bare letter always fires the first one.
         const bare = canonicalBinding({ ctrl: false, alt: false, shift: false, key: e.key.toLowerCase() });
-        const tool = shortcutIndexRef.current.get(bare)?.find((d) => d.id.startsWith("tool:"));
-        if (tool) {
+        const group = shortcutIndexRef.current.get(bare)?.filter((d) => d.id.startsWith("tool:")) ?? [];
+        if (group.length) {
           e.preventDefault();
-          setTool(tool.id.slice(5) as ToolId);
+          // No current member selected ⇒ index -1 ⇒ wraps to the first.
+          const at = group.findIndex((d) => d.id.slice(5) === toolRef.current);
+          const next = group[(at + 1) % group.length];
+          setTool(next.id.slice(5) as ToolId);
+          if (group.length > 1) showToast(next.label);
         }
       }
     };
@@ -5535,11 +5628,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           "view-smart-guides": smartGuides,
           "view-perf-hud": perfHud,
           "layer-clip": !!activeLeafNode?.clipped,
+          "select-quickmask": quickMask,
         }}
       />
       <OptionsBar
         tool={tool}
         paintSurface={paintSurface}
+        quickMask={quickMask}
+        onExitQuickMask={toggleQuickMask}
         onExitMaskEdit={() => {
           const id = activeDocRef.current.activeLayerId;
           if (id) chooseSurface(id, "pixels");
