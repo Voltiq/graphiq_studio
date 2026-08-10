@@ -149,6 +149,7 @@ import {
   type SerializedNode,
 } from "../lib/project";
 import { sanitizeGuides, type Guide } from "../lib/guides";
+import { mergeLog, sanitizeLog } from "../lib/history-log";
 import {
   IMPORT_ACCEPT,
   availableFormats,
@@ -289,6 +290,13 @@ interface Doc {
   paths?: SavedPath[];
   /** Ruler guides (View ▸ Show guides). Per-document, saved in .gproj. */
   guides?: Guide[];
+  /** What was done to this document BEFORE this session — read from the file's
+   *  history labels. A record, not a navigable stack (see history-log.ts). */
+  historyLog?: string[];
+  /** How many live history steps already existed when this document opened.
+   *  The engine's undo stack is GLOBAL, so without this a file opened into a
+   *  busy session would claim the steps that came before it as its own. */
+  historyBase?: number;
   /** 32-bit float radiance source (Merge to HDR) — IN MEMORY only, never
    *  serialized (.gproj/autosave keep the tone-mapped pixels instead). */
   hdr?: HdrImage | null;
@@ -3086,9 +3094,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         guides: d.guides ?? [],
       },
       { foreground: fgRef.current, background: bgRef.current },
-      isActive
-        ? { labels: historyRef.current.items.map((i) => i.label), index: historyRef.current.index }
-        : { labels: [], index: 0 },
+      // The log a file carries = what it already had + what this session did,
+      // capped. Only the ACTIVE document has live history (it is engine-global),
+      // so an inactive tab just re-writes the log it was loaded with.
+      {
+        // Only the steps taken since THIS document opened: index 0 is the
+        // synthetic origin row, and anything before `historyBase` belonged to
+        // whatever was open before it.
+        labels: isActive
+          ? mergeLog(
+              d.historyLog ?? [],
+              historyRef.current.items.map((i) => i.label).slice(1 + (d.historyBase ?? 0)),
+            )
+          : (d.historyLog ?? []),
+        index: isActive ? historyRef.current.index : 0,
+      },
       (id) => paintRef.current?.getLayerImage(id) ?? null,
       (id) => paintRef.current?.getMaskImage(id) ?? null,
     );
@@ -3406,6 +3426,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       // v17; older files have none, and a guide outside the document is dropped
       // rather than trusted (a hand-edited file shouldn't produce ghost lines).
       guides: sanitizeGuides(p.guides, p.width, p.height),
+      // Present in every .gproj ever written — nothing read it back until now.
+      historyLog: sanitizeLog(p.history?.labels),
+      historyBase: Math.max(0, historyRef.current.items.length - 1),
     };
     setDocs((ds) => [...ds, doc]);
     if (activate) setActiveId(docId);
@@ -5785,6 +5808,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           maxHistoryRows={prefs.maxHistory}
           onHistoryJump={(i) => paintRef.current?.jumpTo(i)}
           onSetHistorySource={(i) => paintRef.current?.setHistorySourceIndex(i)}
+          historyLog={active.historyLog}
           onNonLinearHistory={(on) => {
             updatePrefs({ nonLinearHistory: on });
             paintRef.current?.setNonLinearHistory(on);

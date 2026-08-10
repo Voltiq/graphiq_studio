@@ -8,6 +8,7 @@ import {
   BoxSelect,
   Brush,
   Camera,
+  FileClock,
   GitBranch,
   ClipboardPaste,
   Copy,
@@ -38,6 +39,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import styles from "../RightDock.module.scss";
+import { groupLog, logSummary } from "../../lib/history-log";
+
+/** Stable empty log — a fresh [] each render would churn the panel. */
+const EMPTY_LOG: string[] = [];
 
 /** Pick a fitting icon for a history step from its label. */
 function iconForStep(label: string, isFirst: boolean): LucideIcon {
@@ -83,6 +88,7 @@ export default function HistoryPanel({
   index,
   nonLinear = false,
   onNonLinear,
+  priorLog = EMPTY_LOG,
   sourceIndex,
   onJump,
   onSetSource,
@@ -99,6 +105,8 @@ export default function HistoryPanel({
   /** Non-linear history: new edits branch instead of discarding the redo tail. */
   nonLinear?: boolean;
   onNonLinear?: (on: boolean) => void;
+  /** What the FILE says was done before this session (see history-log.ts). */
+  priorLog?: string[];
   /** The state the History brush repaints from (0 = the original). */
   sourceIndex: number;
   onJump: (index: number) => void;
@@ -208,6 +216,28 @@ export default function HistoryPanel({
             </li>
           ))}
         </ul>
+      )}
+      {priorLog.length > 0 && (
+        <details className={styles.logBlock}>
+          <summary className={styles.logHead}>
+            <FileClock size={12} />
+            {logSummary(priorLog.length)}
+            <em>from the file</em>
+          </summary>
+          <ol className={styles.logList}>
+            {groupLog(priorLog).map((row, i) => (
+              <li key={i} className={styles.logRow}>
+                <span className={styles.logLabel}>{row.label}</span>
+                {row.count > 1 && <span className={styles.logCount}>×{row.count}</span>}
+              </li>
+            ))}
+          </ol>
+          <p className={styles.logHint}>
+            A record of what was done before this file was opened. These states can&apos;t be
+            travelled to — a saved file holds its current pixels, not the ones each step
+            replaced.
+          </p>
+        </details>
       )}
       <ol ref={listRef} className={styles.history} style={{ maxHeight, overflowY: "auto" }}>
       {items.map((h, i) => {

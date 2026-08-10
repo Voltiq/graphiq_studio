@@ -210,6 +210,8 @@ interface Props {
   onSetHistorySource: (index: number) => void;
   /** Toggle Photoshop-style non-linear history (branch instead of truncate). */
   onNonLinearHistory: (on: boolean) => void;
+  /** The active document's persisted history log (from its .gproj). */
+  historyLog?: string[];
   /** Snapshots (TODO §10): pin the current state / restore / drop one, and
    *  point the History brush at a snapshot instead of a step. */
   onTakeSnapshot: () => void;
@@ -299,6 +301,7 @@ export default function RightDock({
   onHistoryJump,
   onSetHistorySource,
   onNonLinearHistory,
+  historyLog,
   onTakeSnapshot,
   onRestoreSnapshot,
   onDeleteSnapshot,
@@ -642,6 +645,7 @@ export default function RightDock({
               items={history.items}
               index={history.index}
               nonLinear={history.nonLinear}
+              priorLog={historyLog}
               onNonLinear={onNonLinearHistory}
               sourceIndex={history.sourceIndex}
               onJump={onHistoryJump}

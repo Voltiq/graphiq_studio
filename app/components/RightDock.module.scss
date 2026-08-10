@@ -1320,6 +1320,79 @@
   }
 }
 
+/* Persisted history log: what the FILE says happened before this session.
+   A <details> so it stays out of the way until asked for — it is provenance,
+   not a control surface. */
+.logBlock {
+  margin: 0 var(--sp-2) var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--wash);
+}
+
+.logHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+
+  &::-webkit-details-marker {
+    display: none;
+  }
+  &:hover {
+    color: var(--text);
+  }
+  em {
+    margin-left: auto;
+    font-style: normal;
+    color: var(--text-3);
+  }
+}
+
+.logList {
+  list-style: none;
+  margin: 0;
+  padding: 0 9px 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.logRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 11.5px;
+  /* Not clickable, and it must not pretend to be: these states cannot be
+     travelled to, so they get no hover affordance at all. */
+  color: var(--text-3);
+}
+
+.logLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logCount {
+  margin-left: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--text-3);
+  opacity: 0.8;
+}
+
+.logHint {
+  padding: 0 9px 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
 .snapList {
   list-style: none;
   margin: 0;
