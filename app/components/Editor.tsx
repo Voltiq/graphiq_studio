@@ -107,6 +107,7 @@ import {
   type LayerAdjustment,
   type LayerGroup,
   type LayerLocks,
+  type LayerLeaf,
   type LayerNode,
   type LayersApi,
   type MaskMeta,
@@ -158,7 +159,7 @@ import {
   type ExportOptions,
   setRawWorkerEnabled,
 } from "../lib/imageio";
-import { buildZip } from "../lib/zip";
+import { buildZip, type ZipEntry } from "../lib/zip";
 import { dedupeFilenames, targetFilename } from "../lib/exportpresets";
 import { exportSVG, looksLikeSVG, parseSVGFile, translateVectorPath } from "../lib/svg";
 import { buildPSD, parsePSD, type PsdDocument, type PsdImage, type PsdNode, type PsdOutNode } from "../lib/psd";
@@ -215,6 +216,13 @@ import {
   type ExtraAdjustmentType,
 } from "../lib/adjust-extra";
 import AdjustmentExtraDialog from "./AdjustmentExtraDialog";
+import {
+  ANIMATED_EXT,
+  decodeAnimation,
+  delayFromLabel,
+  frameLabel,
+  type AnimImage,
+} from "../lib/animated";
 import DialogFocus from "./DialogFocus";
 import FillDialog from "./FillDialog";
 import NewGuideDialog from "./NewGuideDialog";
@@ -3818,14 +3826,140 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       showToast(psd.notes[0] + (psd.notes.length > 1 ? ` (+${psd.notes.length - 1} more notes)` : ""));
   };
 
+  /**
+   * File ▸ Export frames — write each top-level LAYER out as its own numbered
+   * PNG inside a zip. This is the timeline-less half of animation support: the
+   * document already models an animation as a layer stack (that is what an
+   * animated import produces), so "export the frames" is "export the layers",
+   * and no timeline UI has to exist first.
+   *
+   * Each frame is rendered on its own — the layer alone over transparency, at
+   * full canvas size — so the sequence round-trips what was imported. Delays
+   * survive in the filenames, which is the only channel a plain image sequence
+   * has for them.
+   */
+  const exportFrames = async () => {
+    const doc = activeDocRef.current;
+    const eng = paintRef.current;
+    // Only top-level leaves are frames; a group is a composed thing, not a frame.
+    const frames = doc.layers.filter((n): n is LayerLeaf => n.type === "layer");
+    if (!eng || frames.length < 2) {
+      showToast(
+        frames.length < 2
+          ? "Export frames needs at least two layers — each layer becomes one frame."
+          : "Nothing to export.",
+      );
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = doc.width;
+    canvas.height = doc.height;
+    const ctx = canvas.getContext("2d")!;
+    const entries: ZipEntry[] = [];
+    const base = (doc.name.trim() || "frames").replace(/\.[a-z0-9]+$/i, "");
+    const pad = String(frames.length).length;
+    // Bottom-up: the stack shows frame 1 at the bottom, so reverse to play order.
+    const ordered = [...frames].reverse();
+    let skipped = 0;
+    for (let i = 0; i < ordered.length; i++) {
+      const src = eng.getLayerCanvas(ordered[i].id);
+      if (!src) {
+        skipped++;
+        continue;
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(src, 0, 0);
+      const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/png"));
+      if (!blob) {
+        skipped++;
+        continue;
+      }
+      const delay = delayFromLabel(ordered[i].name);
+      const n = String(i + 1).padStart(pad, "0");
+      entries.push({
+        name: `${base}-${n}${delay ? `-${delay}ms` : ""}.png`,
+        data: new Uint8Array(await blob.arrayBuffer()),
+      });
+    }
+    if (!entries.length) {
+      showToast("Export frames failed — nothing could be encoded.");
+      return;
+    }
+    downloadBlob(buildZip(entries), `${base}-frames.zip`);
+    showToast(
+      `Exported ${entries.length} frame${entries.length === 1 ? "" : "s"} as .zip` +
+        (skipped ? ` (${skipped} empty layer${skipped === 1 ? "" : "s"} skipped)` : ""),
+    );
+  };
+
+  /** Open an animation as its own document, one layer per frame — bottom layer
+   *  = frame 1, so the stack reads in playback order from the bottom up (the
+   *  same direction the Layers panel already shows). Each frame's delay rides
+   *  in its layer name, which is what Export frames reads back. */
+  const importAnimation = (fileName: string, anim: AnimImage) => {
+    const seq = (seqRef.current += 1);
+    const docId = `doc-${seq}`;
+    const images: PendingLoad["images"] = [];
+    const layers: LayerNode[] = [];
+    anim.frames.forEach((f, i) => {
+      const id = nextLeafId();
+      images.push({ id, source: f.bitmap });
+      layers.push({
+        id,
+        type: "layer",
+        name: frameLabel(i, f.delayMs),
+        // Only the last frame is visible, so the document opens showing the
+        // final image rather than an opaque stack of every frame at once.
+        visible: i === anim.frames.length - 1,
+        opacity: 100,
+        blend: "Normal",
+      });
+    });
+    if (!layers.length) return;
+    // Layers render top-first, so reverse to put frame 1 at the bottom.
+    layers.reverse();
+    const top = layers[0].id;
+    setDocs((ds) => [
+      ...ds,
+      {
+        id: docId,
+        name: stripExt(fileName),
+        width: anim.width,
+        height: anim.height,
+        layers,
+        activeLayerId: top,
+        selectedLayerIds: [top],
+        selection: [],
+        selectionAngle: 0,
+        selectionPivot: null,
+        metadata: null,
+      },
+    ]);
+    setActiveId(docId);
+    setPendingLoads((ls) => [...ls, { docId, images }]);
+    showToast(
+      anim.note ||
+        `Imported ${anim.frames.length} frames as layers — File ▸ Export frames writes them back out.`,
+    );
+  };
+
   const onImportPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const allFiles = Array.from(e.target.files ?? []);
     e.target.value = "";
     if (!allFiles.length) return;
-    // PSDs open as their own layered documents; everything else flows through
-    // the import dialog.
+    // PSDs and animations open as their own layered documents; everything else
+    // flows through the import dialog.
     const files: File[] = [];
     for (const f of allFiles) {
+      if (ANIMATED_EXT.test(f.name)) {
+        const anim = await decodeAnimation(f).catch(() => null);
+        // A single-frame GIF/PNG/WebP returns null and imports normally.
+        if (anim && anim.frames.length > 1) {
+          importAnimation(f.name, anim);
+          continue;
+        }
+        if (anim && anim.note) showToast(anim.note);
+      }
       if (!/\.psd$/i.test(f.name)) {
         files.push(f);
         continue;
@@ -4755,6 +4889,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "import") openImport();
     else if (actionId === "export-as") openExport();
     else if (actionId === "export-svg") exportVectorSVG();
+    else if (actionId === "export-frames") void exportFrames();
     else if (actionId === "export-psd") exportPSD();
     else if (actionId === "export-lut") setLutExportOpen(true);
     else if (actionId === "export-tiff") setTiffExportOpen(true);

@@ -30,6 +30,7 @@ export const MENUS: Menu[] = [
       { label: "Export TIFF…", action: "export-tiff" },
       { label: "Export PDF…", action: "export-pdf" },
       { label: "Export SVG (vector layers)…", action: "export-svg" },
+      { label: "Export frames (zip)…", action: "export-frames" },
       { label: "Export LUT (.cube)…", action: "export-lut" },
       { label: "Export HDR PNG…", separatorAfter: true, action: "export-hdr" },
       { label: "Print…", shortcut: "Ctrl+P", separatorAfter: true, action: "print" },
