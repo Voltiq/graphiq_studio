@@ -90,6 +90,10 @@ export interface Preferences {
   defaultDpi: number;
   /** Max undoable steps kept in memory (older steps drop off the far end). */
   historyLimit: number;
+  /** Memory cap for those steps' pixel patches, in MB. A step count is a poor
+   *  proxy for RAM — one full-canvas patch can outweigh a hundred dabs — so
+   *  this cap runs alongside it and whichever binds first wins. */
+  historyBudgetMB: number;
   /** Run heavy compute (Blur Gallery, smart filters, heal, RAW decode) in
    *  background workers. Off = synchronous fallbacks (debugging aid). */
   useWorkers: boolean;
@@ -164,6 +168,7 @@ export const DEFAULT_PREFS: Preferences = {
   unit: "px",
   defaultDpi: 300,
   historyLimit: 60,
+  historyBudgetMB: 512,
   useWorkers: true,
   reduceMotion: false,
   checkerSize: "medium",

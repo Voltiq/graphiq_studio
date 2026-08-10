@@ -25,6 +25,8 @@ import { applyTheme, currentTheme, resolvedDark } from "./ThemeToggle";
 import { ColorChip, Slider, Toggle } from "./Controls";
 import { ACCENTS, ACCENT_COOKIE, DEFAULT_ACCENT, isAccent, type Accent, type Theme } from "../lib/theme";
 import { PRESSURE_CURVES, effectivePressure, type PressureCurve } from "../lib/pointer";
+import { MIN_BUDGET_MB, budgetReport } from "../lib/history-budget";
+import type { HistorySummary } from "../lib/paint";
 import {
   CVD_TYPES,
   SAFE_DELTA_E,
@@ -305,6 +307,25 @@ function PressurePad({ curve, enabled }: { curve: PressureCurve; enabled: boolea
   );
 }
 
+/**
+ * Live undo-memory meter. Shows what the stack actually holds against the
+ * budget, because "60 steps" tells you nothing about megabytes — the whole
+ * reason the byte cap exists.
+ */
+function HistoryMeter({ history, budgetMB }: { history: HistorySummary; budgetMB: number }) {
+  // items includes the synthetic "New" row, which is a state, not a stored step.
+  const steps = Math.max(0, history.items.length - 1);
+  const r = budgetReport(history.bytes, steps, budgetMB);
+  return (
+    <div className={styles.budgetMeter}>
+      <div className={styles.budgetTrack}>
+        <span className={styles.budgetFill} data-over={r.over} style={{ width: `${r.fraction * 100}%` }} />
+      </div>
+      <span className={styles.budgetLabel}>{r.label}</span>
+    </div>
+  );
+}
+
 /** Custom confirmation modal (replaces window.confirm) — portalled above the
  *  Preferences dialog. Esc / backdrop cancel; the destructive action is a
  *  deliberate click (no Enter default), and Cancel takes initial focus. */
@@ -448,6 +469,7 @@ export default function PreferencesDialog({
   prefs,
   onChange,
   getCacheStats,
+  historySummary,
   initialTab = "appearance",
   onTabChange,
   onClose,
@@ -457,6 +479,8 @@ export default function PreferencesDialog({
   onChange: (patch: Partial<Preferences>) => void;
   /** Live render-cache stats for the Performance tab (null before first frame). */
   getCacheStats?: () => CacheStats | null;
+  /** Live undo stack, for the Performance tab's memory meter. */
+  historySummary?: HistorySummary;
   /** Section to open on (menu deep-links: Performance / Scratch disks). */
   initialTab?: PrefsTab;
   /** Reports section switches so re-opening lands on the last-visited tab. */
@@ -1345,8 +1369,9 @@ export default function PreferencesDialog({
                 <section className={styles.section}>
                   <span className={styles.groupLabel}>Undo</span>
                   <p className={styles.sectionHint}>
-                    Steps kept in memory — pixel patches are the biggest memory use. Older steps
-                    drop off the far end.
+                    Two caps, and whichever is reached first wins. A step count alone is a poor
+                    guide to memory: one full-canvas edit can weigh more than a hundred brush
+                    dabs, so the size cap is the one that actually bounds RAM.
                   </p>
                   <Slider
                     label="Undo steps"
@@ -1356,6 +1381,22 @@ export default function PreferencesDialog({
                     value={prefs.historyLimit}
                     onChange={(n) => onChange({ historyLimit: n })}
                   />
+                  <Slider
+                    label="Undo memory"
+                    min={MIN_BUDGET_MB}
+                    max={2048}
+                    step={32}
+                    unit=" MB"
+                    value={prefs.historyBudgetMB}
+                    onChange={(n) => onChange({ historyBudgetMB: n })}
+                  />
+                  {historySummary && (
+                    <HistoryMeter history={historySummary} budgetMB={prefs.historyBudgetMB} />
+                  )}
+                  <p className={styles.sectionHint}>
+                    Snapshots are not counted here — they are yours to keep until you delete
+                    them, like Photoshop&apos;s.
+                  </p>
                 </section>
                 <section className={styles.section}>
                   <span className={styles.groupLabel}>Compute</span>

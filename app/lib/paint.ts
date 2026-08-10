@@ -7,6 +7,7 @@ import { applyExtraAdjustment, extraIsDefault, isExtraSpec, type ExtraAdjustment
 import { removeRedEyeInPlace } from "./redeye";
 import { renderShape, type ShapeGeom } from "./shapes";
 import { boxBlurPass, clampi } from "./blur";
+import { clampBudgetMB, overBudget, totalBytes } from "./history-budget";
 import {
   ROOT,
   ancestry,
@@ -243,6 +244,8 @@ export interface HistorySummary {
   index: number;
   /** Non-linear history: a new edit after undoing keeps the states it replaces. */
   nonLinear: boolean;
+  /** Bytes held by the undo stack's pixel patches (snapshots are separate). */
+  bytes: number;
   /** Which history state the History brush paints from (0 = the original). */
   sourceIndex: number;
   /** Pinned snapshots (newest last), oldest-first as captured. */
@@ -535,6 +538,8 @@ export interface EngineHandle {
   };
   setRenderCacheBudget: (mb: number) => void;
   setHistoryLimit: (n: number) => void;
+  /** Memory cap for the undo stack's pixel patches, in MB. */
+  setHistoryBudgetMB: (mb: number) => void;
   /** Photoshop-style non-linear history (branch instead of truncating). */
   setNonLinearHistory: (on: boolean) => void;
   setWorkersEnabled: (on: boolean) => void;
@@ -783,6 +788,9 @@ export class PaintEngine {
   private lastDirtyAt = 0;
   private lastFrameFull = false;
   private historyLimit = 60; // max undoable steps kept (Preferences ▸ Performance)
+  /** Memory cap for those steps' pixel patches — the cap that actually bounds
+   *  RAM, since one full-canvas patch can outweigh a hundred brush dabs. */
+  private historyBudgetMB = 512;
   private workersOn = true; // background compute (blur/filters/heal) toggle
   private frameProtect = new Set<string>(); // entries used by the current frame
   private keyMemo = new Map<string, string>(); // per-composite effectiveKey memo
@@ -1046,9 +1054,25 @@ export class PaintEngine {
     this.trimHistory();
   }
 
+  /** Cap the undo history by MEMORY as well as by step count. A step count is a
+   *  poor proxy for bytes — one full-canvas patch can outweigh a hundred brush
+   *  dabs — so whichever cap binds first wins. */
+  setHistoryBudgetMB(mb: number): void {
+    this.historyBudgetMB = clampBudgetMB(mb);
+    this.trimHistory();
+  }
+
+  /** Bytes currently held by the undo stack's pixel patches. */
+  historyBytes(): number {
+    return totalBytes(this.entries);
+  }
+
   private trimHistory(): void {
     let dropped = 0;
-    while (this.entries.length > this.historyLimit) {
+    while (
+      this.entries.length > this.historyLimit ||
+      overBudget(this.historyBytes(), this.historyBudgetMB)
+    ) {
       // `trimVictim` picks a state nothing still depends on — an abandoned
       // branch tip first, otherwise the oldest step when it is the only branch
       // off the original. It returns -1 when every remaining state is load-
@@ -8501,6 +8525,7 @@ export class PaintEngine {
       ],
       index: this.pos,
       nonLinear: this.nonLinear,
+      bytes: this.historyBytes(),
       sourceIndex: this.historySourceIndex,
       snapshots: this.snapshots.map((s) => ({ id: s.id, label: s.label })),
       sourceSnapshotId: this.historySourceSnap,

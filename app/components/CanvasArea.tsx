@@ -3583,6 +3583,7 @@ export default function CanvasArea({
       renderCacheStats: () => engine.renderCacheStats(),
       setRenderCacheBudget: (mb) => engine.setRenderCacheBudget(mb),
       setHistoryLimit: (n) => engine.setHistoryLimit(n),
+      setHistoryBudgetMB: (mb) => engine.setHistoryBudgetMB(mb),
       setNonLinearHistory: (on) => engine.setNonLinearHistory(on),
       setWorkersEnabled: (on) => engine.setWorkersEnabled(on),
     };

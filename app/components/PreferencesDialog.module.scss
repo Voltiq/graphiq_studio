@@ -954,6 +954,43 @@
   }
 }
 
+/* Live undo-memory meter (Performance ▸ Undo). */
+.budgetMeter {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+.budgetTrack {
+  flex: 1;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--track);
+  overflow: hidden;
+}
+
+.budgetFill {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  transition: width var(--t-short) var(--ease);
+
+  /* Over budget is a transient state — the trim runs on the next push — but it
+     should still read as "this is being cut back", not as normal. */
+  &[data-over="true"] {
+    background: var(--warning);
+  }
+}
+
+.budgetLabel {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .colorWellRow {
   display: flex;
   gap: var(--sp-4);

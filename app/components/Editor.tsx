@@ -532,6 +532,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     items: [{ label: "New", onPath: true }],
     index: 0,
     nonLinear: false,
+    bytes: 0,
     sourceIndex: 0,
     snapshots: [],
     sourceSnapshotId: null,
@@ -3207,6 +3208,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   useEffect(() => {
     paintRef.current?.setHistoryLimit(prefs.historyLimit);
   }, [prefs.historyLimit]);
+
+  // Undo MEMORY cap -> the same trim, by bytes. Whichever cap binds first wins.
+  useEffect(() => {
+    paintRef.current?.setHistoryBudgetMB(prefs.historyBudgetMB);
+  }, [prefs.historyBudgetMB]);
 
   // Background-worker toggle -> engine compute paths + the RAW decoder.
   useEffect(() => {
@@ -5975,6 +5981,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           prefs={prefs}
           onChange={updatePrefs}
           getCacheStats={() => paintRef.current?.renderCacheStats() ?? null}
+          historySummary={history}
           initialTab={prefsTab}
           onTabChange={setPrefsTab}
           onClose={() => setPrefsOpen(false)}
