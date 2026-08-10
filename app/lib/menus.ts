@@ -155,6 +155,8 @@ export const MENUS: Menu[] = [
       { label: "Smart guides", action: "view-smart-guides" },
       { label: "New guide…", action: "view-new-guide" },
       { label: "Clear guides", separatorAfter: true, action: "view-clear-guides" },
+      { label: "Compare before/after", action: "view-compare" },
+      { label: "Compare axis: horizontal", separatorAfter: true, action: "view-compare-axis" },
       { label: "Proof colors", shortcut: "Ctrl+Alt+Y", action: "view-proof" },
       { label: "Gamut warning", shortcut: "Ctrl+Alt+Shift+Y", action: "view-gamut", separatorAfter: true },
       { label: "Compare color profiles…", separatorAfter: true, action: "color-compare" },

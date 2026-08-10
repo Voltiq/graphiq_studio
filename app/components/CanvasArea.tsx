@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { Maximize2, Minus, Plus, X } from "lucide-react";
+import { ArrowLeftRight, Maximize2, Minus, Plus, X } from "lucide-react";
 import styles from "./CanvasArea.module.scss";
 import type { WorkingSpace } from "../lib/colorspace";
 import { checkerCSS, type CheckerColors, type CheckerSize, type MeasureUnit } from "../lib/prefs";
@@ -40,6 +40,13 @@ import {
   rejectsPointer,
   type PressureCurve,
 } from "../lib/pointer";
+import {
+  bypassAdjustments,
+  compareClip,
+  dividerPos,
+  splitFromPointer,
+  type CompareAxis,
+} from "../lib/compare";
 import { clampPan, normalizeRect, type Pan, type Rect } from "../lib/view";
 import type {
   BlurSettings,
@@ -711,6 +718,9 @@ export default function CanvasArea({
   penPressure,
   pressureCurve,
   palmRejection,
+  compareSplit,
+  compareAxis,
+  onCompareSplit,
   cursorPrefs,
   viewApiRef,
   paintRef,
@@ -897,6 +907,10 @@ export default function CanvasArea({
   pressureCurve: PressureCurve;
   /** Ignore touch for TOOL input once a stylus has been used (gestures still work). */
   palmRejection: boolean;
+  /** Before/after split: divider position 0-100, or null when compare is off. */
+  compareSplit: number | null;
+  compareAxis: CompareAxis;
+  onCompareSplit: (pct: number) => void;
   /** Paint-cursor prefs (Preferences ▸ Cursors): ring vs precise, centre
    *  crosshair, ring colour. */
   cursorPrefs: { mode: "ring" | "precise"; crosshair: boolean; ringColor: string };
@@ -912,6 +926,12 @@ export default function CanvasArea({
   const viewRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const gridRef = useRef<HTMLCanvasElement>(null);
+  // Before/after compare: a doc-sized canvas holding the PRE-ADJUSTMENT
+  // composite, stacked exactly on the artwork and revealed by clip-path — so it
+  // scales with zoom for free and costs nothing while compare is off.
+  const compareRef = useRef<HTMLCanvasElement>(null);
+  const [comparePeek, setComparePeek] = useState(false);
+  const compareDragRef = useRef(false);
   const paintingRef = useRef(false);
   // Marquee selection drag state + marching-ants animation.
   const panR = useRef(pan);
@@ -3795,6 +3815,80 @@ export default function CanvasArea({
     }
   }, [showGrid, docGrid, pixelGridColor, width, height]);
   drawGuidesRef.current = drawGuidesOverlay;
+
+  // ---- Before/after compare -------------------------------------------------
+  // Render the pre-adjustment composite into the stacked canvas whenever the
+  // comparison is showing and the document changes. `exportComposite` renders
+  // an arbitrary tree through the SAME render graph and its caches, so the
+  // before image costs about one extra composite, not a second pipeline.
+  const compareOn = compareSplit !== null || comparePeek;
+  useEffect(() => {
+    const cv = compareRef.current;
+    if (!compareOn || !cv) return;
+    const before = engine.exportComposite(bypassAdjustments(layers));
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.drawImage(before, 0, 0);
+  }, [compareOn, layers, width, height, engine, activeId]);
+
+  // Hold the peek key to see the "before" across the whole canvas. Tracked on
+  // window with a blur reset, like the bird's-eye modifier — a lost keyup must
+  // not leave the canvas stuck showing the wrong image.
+  useEffect(() => {
+    const isPeekKey = (e: KeyboardEvent) => e.key === "\\" && !e.ctrlKey && !e.metaKey && !e.altKey;
+    const typing = () => {
+      const t = document.activeElement as HTMLElement | null;
+      return (
+        !!t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable ||
+          !!t.closest?.('[role="dialog"]'))
+      );
+    };
+    const down = (e: KeyboardEvent) => {
+      if (!isPeekKey(e) || e.repeat || typing()) return;
+      e.preventDefault();
+      setComparePeek(true);
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === "\\") setComparePeek(false);
+    };
+    const blur = () => setComparePeek(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
+
+  /** Drag the split divider. Window listeners so the pointer can leave the thin
+   *  line without the drag stopping. */
+  const startCompareDrag = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    compareDragRef.current = true;
+    const move = (ev: PointerEvent) => {
+      const v = viewRef.current;
+      if (!v) return;
+      onCompareSplitRef.current(splitFromPointer(ev.clientX, ev.clientY, compareAxisRef.current, v.getBoundingClientRect()));
+    };
+    const up = () => {
+      compareDragRef.current = false;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const onCompareSplitRef = useRef(onCompareSplit);
+  onCompareSplitRef.current = onCompareSplit;
+  const compareAxisRef = useRef(compareAxis);
+  compareAxisRef.current = compareAxis;
 
   // Repaint whenever anything the overlay reads from React changes. Pan/zoom are
   // read through refs inside the draw, so they must be listed here to trigger it.
@@ -6798,9 +6892,68 @@ export default function CanvasArea({
                 imageRendering: zoom >= 100 ? "pixelated" : "auto",
               }}
             />
+            {/* Before/after: the pre-adjustment composite, clipped to the split
+                (or fully revealed while the peek key is held). */}
+            {compareOn && (
+              <canvas
+                ref={compareRef}
+                className={styles.comparePane}
+                width={width}
+                height={height}
+                style={{
+                  clipPath: compareClip(compareSplit ?? 100, compareAxis, comparePeek),
+                  imageRendering: zoom >= 100 ? "pixelated" : "auto",
+                }}
+              />
+            )}
           </div>
           <canvas ref={gridRef} className={styles.overlay} />
           <canvas ref={overlayRef} className={styles.overlay} />
+          {/* Split divider + side tags, in VIEWPORT space so the line stays a
+              constant 2px however far the canvas is zoomed. */}
+          {compareSplit !== null && !comparePeek && (() => {
+            const v = viewRef.current;
+            const vp = viewportRef.current;
+            if (!v || !vp) return null;
+            const b = v.getBoundingClientRect();
+            const host = vp.getBoundingClientRect();
+            const box = { left: b.left - host.left, top: b.top - host.top, width: b.width, height: b.height };
+            const at = dividerPos(compareSplit, compareAxis, box);
+            const vertical = compareAxis === "vertical";
+            return (
+              <>
+                <div
+                  className={styles.compareDivider}
+                  data-axis={compareAxis}
+                  style={vertical ? { left: at } : { top: at }}
+                  onPointerDown={startCompareDrag}
+                  role="separator"
+                  aria-label="Before/after divider"
+                  aria-orientation={vertical ? "vertical" : "horizontal"}
+                >
+                  <span className={styles.compareGrip}>
+                    <ArrowLeftRight size={14} />
+                  </span>
+                </div>
+                <span
+                  className={styles.compareTag}
+                  style={vertical ? { left: box.left + 8, top: box.top + 8 } : { left: box.left + 8, top: box.top + 8 }}
+                >
+                  Before
+                </span>
+                <span
+                  className={styles.compareTag}
+                  style={
+                    vertical
+                      ? { left: box.left + box.width - 8, top: box.top + 8, transform: "translateX(-100%)" }
+                      : { left: box.left + 8, top: box.top + box.height - 8, transform: "translateY(-100%)" }
+                  }
+                >
+                  After
+                </span>
+              </>
+            );
+          })()}
           {perfHud && <PerfHud stats={perfStatsCb} />}
           {textSession && (
             <div

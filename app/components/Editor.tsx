@@ -223,6 +223,7 @@ import {
   frameLabel,
   type AnimImage,
 } from "../lib/animated";
+import { hasAdjustments, type CompareAxis } from "../lib/compare";
 import DialogFocus from "./DialogFocus";
 import FillDialog from "./FillDialog";
 import NewGuideDialog from "./NewGuideDialog";
@@ -560,6 +561,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [lockGuides, setLockGuides] = useState(false);
   const [smartGuides, setSmartGuides] = useState(true);
   const [newGuideOpen, setNewGuideOpen] = useState(false);
+  // Before/after compare: the split divider position (null = off) and its axis.
+  // Holding \ to peek lives in CanvasArea — it needs no editor state.
+  const [compareSplit, setCompareSplit] = useState<number | null>(null);
+  const [compareAxis, setCompareAxis] = useState<CompareAxis>("vertical");
   // Current view toggles, reachable from the one-time keydown listener.
   const viewSettingsRef = useRef({
     rulers: true,
@@ -4665,6 +4670,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "view-clear-guides") {
       if ((activeDocRef.current.guides ?? []).length) commitGuides("Clear Guides", []);
       else showToast("This document has no guides.");
+    } else if (actionId === "view-compare") {
+      // Nothing to compare against without adjustments or smart filters — say so
+      // rather than showing a split between two identical halves.
+      if (compareSplit === null && !hasAdjustments(activeDocRef.current.layers)) {
+        showToast("Nothing to compare — add an adjustment layer or a smart filter first.");
+      } else setCompareSplit((s) => (s === null ? 50 : null));
+    } else if (actionId === "view-compare-axis") {
+      setCompareAxis((a) => (a === "vertical" ? "horizontal" : "vertical"));
     } else if (actionId === "view-proof") setProofColors((p) => !p);
     else if (actionId === "view-gamut") setGamutWarn((g) => !g);
     else if (actionId === "view-perf-hud") setPerfHud((h) => !h);
@@ -5486,6 +5499,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           "view-proof": proofColors,
           "view-gamut": gamutWarn,
           "view-snap": snap,
+          "view-compare": compareSplit !== null,
+          "view-compare-axis": compareAxis === "horizontal",
           "view-guides": showGuides,
           "view-lock-guides": lockGuides,
           "view-smart-guides": smartGuides,
@@ -5732,6 +5747,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           penPressure={prefs.penPressure}
           pressureCurve={prefs.pressureCurve}
           palmRejection={prefs.palmRejection}
+          compareSplit={compareSplit}
+          compareAxis={compareAxis}
+          onCompareSplit={setCompareSplit}
           cursorPrefs={{
             mode: prefs.paintCursor,
             crosshair: prefs.brushCrosshair,
