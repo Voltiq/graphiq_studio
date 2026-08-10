@@ -7,6 +7,15 @@ import { applyExtraAdjustment, extraIsDefault, isExtraSpec, type ExtraAdjustment
 import { removeRedEyeInPlace } from "./redeye";
 import { renderShape, type ShapeGeom } from "./shapes";
 import { boxBlurPass, clampi } from "./blur";
+import {
+  DEFAULT_DYNAMICS,
+  PRESSURE_BUCKETS,
+  bucketPressure,
+  clamp01,
+  pressureBucket,
+  pressureScale,
+  type PressureDynamics,
+} from "./pointer";
 import { fxHash, hasEnabledFx, renderStyled } from "./effects";
 import {
   clampRect,
@@ -82,7 +91,26 @@ export interface BrushSettings {
   flow: number; // 0–100 (build-up within a stroke)
   blend: string;
   smoothing: number; // 0–100
+  /** Pen pressure drives the tip diameter (absent ⇒ on). */
+  pressureSize?: boolean;
+  /** Pen pressure drives flow — the paint deposited per dab (absent ⇒ off).
+   *  Opacity is deliberately NOT pressure-driven: in this engine it is the
+   *  whole-stroke ceiling applied when the stroke buffer is composited, so
+   *  per-dab variation is exactly what `flow` means. */
+  pressureFlow?: boolean;
+  /** Floor at zero pressure, as a % of the full value (absent ⇒ 20). */
+  pressureMin?: number;
 }
+
+/** Dynamics for sessions that must not respond to pressure (the clone stamp). */
+const NO_DYNAMICS: PressureDynamics = { size: false, flow: false, min: 0 };
+
+/** A brush's pressure dynamics, with the defaults filled in. */
+export const brushDynamics = (b: BrushSettings): PressureDynamics => ({
+  size: b.pressureSize ?? DEFAULT_DYNAMICS.size,
+  flow: b.pressureFlow ?? DEFAULT_DYNAMICS.flow,
+  min: b.pressureMin ?? DEFAULT_DYNAMICS.min,
+});
 
 /** A doc-space line segment (marching-ants outline edge). */
 export interface Seg {
@@ -232,6 +260,8 @@ export interface EngineHandle {
   jumpTo: (index: number) => void;
   /** Point the History brush at a history state (0 = the original). */
   setHistorySourceIndex: (index: number) => void;
+  /** Sample the composite (or one layer) — the Info panel's live readout. */
+  sampleColor: (x: number, y: number, size: number, allLayers: boolean, layerId: string | null) => string | null;
   /** Snapshots (TODO §10): pin / restore / drop a full pixel state. */
   createSnapshot: (label: string, ids: string[]) => string;
   restoreSnapshot: (id: string) => boolean;
@@ -1052,6 +1082,17 @@ export class PaintEngine {
   // smoothing. Baking once avoids re-dithering a gradient on every stamp.
   private tip: HTMLCanvasElement | null = null;
   private tipHard = false;
+  // Pen-pressure dynamics for the live stroke. Tips are baked ONE PER PRESSURE
+  // BUCKET and cached for the stroke, so a pressure-varying stroke costs the
+  // same per dab as a flat one and stays free of the per-stamp gradient dither
+  // the baked-tip design exists to avoid. `tipSpec` is what a bucket's tip is
+  // derived from; `pressFrom`/`pressTo` bracket the current segment so pressure
+  // is interpolated between samples rather than stepping at each pointer event.
+  private tipCache = new Map<number, HTMLCanvasElement>();
+  private tipSpec: { r: number; flow: number; hardness: number; cr: number; cg: number; cb: number } | null = null;
+  private dyn: PressureDynamics = DEFAULT_DYNAMICS;
+  private pressFrom = 1;
+  private pressTo = 1;
 
   // Blur-brush session. We never destroy the original pixels mid-stroke: `blurOrig`
   // holds them, `blurCov` accumulates per-pixel brush coverage (0–1), and the live
@@ -5655,6 +5696,7 @@ export class PaintEngine {
     clipAngle = 0,
     clipPivot: { x: number; y: number } | null = null,
     label: string = mode === "erase" ? "Erase" : "Brush",
+    pressure = 1,
   ) {
     if (!this.stroke) return;
     this.layer(layerId); // ensure the target layer has a canvas so the live stroke composites
@@ -5677,9 +5719,12 @@ export class PaintEngine {
     // — that per-stamp dither, accumulated over the overlapping stamps in the
     // stroke buffer, is what made solid strokes look grainy inside.
     this.tipHard = brush.hardness >= 100 || brush.size <= 1;
-    this.tip = this.tipHard
-      ? this.buildHardTip(r, c.r, c.g, c.b, flow)
-      : this.buildSoftTip(r, c.r, c.g, c.b, flow, brush.hardness);
+    this.tipSpec = { r, flow, hardness: brush.hardness, cr: c.r, cg: c.g, cb: c.b };
+    this.dyn = brushDynamics(brush);
+    this.tipCache.clear();
+    this.tip = this.tipFor(PRESSURE_BUCKETS); // full-pressure tip (what clone stamps use)
+    this.pressFrom = clamp01(pressure);
+    this.pressTo = this.pressFrom;
     this.stroke.ctx.clearRect(0, 0, this.w, this.h);
     this.step = Math.max(1, brush.size * 0.1);
     this.last = { x, y };
@@ -5687,18 +5732,51 @@ export class PaintEngine {
     this.smooth = { x, y };
     this.residual = 0;
     this.dirty = null;
-    this.stamp(x, y);
+    this.stamp(x, y, this.pressFrom);
     this.residual = this.step;
     this.emitChange();
   }
 
-  moveStroke(rawX: number, rawY: number) {
+  private dynActive(): boolean {
+    return this.dyn.size || this.dyn.flow;
+  }
+
+  /** Dab spacing at a given pressure. Spacing is a fraction of the tip DIAMETER,
+   *  so when pressure narrows the tip the spacing has to narrow with it — else a
+   *  light passage breaks into a row of beads. With size dynamics off this is
+   *  exactly the spacing the session set (which is how the clone tool keeps its
+   *  own configurable spacing). */
+  private stepFor(p: number): number {
+    if (!this.dyn.size) return this.step;
+    return Math.max(1, this.step * pressureScale(p, this.dyn.min / 100));
+  }
+
+  /** The baked tip for one pressure bucket (built on first use, cached per stroke). */
+  private tipFor(bucket: number): HTMLCanvasElement | null {
+    const spec = this.tipSpec;
+    if (!spec) return null;
+    const hit = this.tipCache.get(bucket);
+    if (hit) return hit;
+    const p = bucketPressure(bucket);
+    const min = this.dyn.min / 100;
+    const r = this.dyn.size ? Math.max(0.5, spec.r * pressureScale(p, min)) : spec.r;
+    const flow = this.dyn.flow ? spec.flow * pressureScale(p, min) : spec.flow;
+    const tip = this.tipHard
+      ? this.buildHardTip(r, spec.cr, spec.cg, spec.cb, flow)
+      : this.buildSoftTip(r, spec.cr, spec.cg, spec.cb, flow, spec.hardness);
+    this.tipCache.set(bucket, tip);
+    return tip;
+  }
+
+  moveStroke(rawX: number, rawY: number, pressure = 1) {
     if (!this.painting || !this.brush) return;
     this.lastRaw = { x: rawX, y: rawY };
+    this.pressTo = clamp01(pressure);
     const alpha = 1 - (this.brush.smoothing / 100) * 0.85;
     this.smooth.x += (rawX - this.smooth.x) * alpha;
     this.smooth.y += (rawY - this.smooth.y) * alpha;
     this.lineTo(this.smooth.x, this.smooth.y);
+    this.pressFrom = this.pressTo;
     this.emitChange();
   }
 
@@ -5707,11 +5785,16 @@ export class PaintEngine {
     const dy = y - this.last.y;
     const dist = Math.hypot(dx, dy);
     if (dist === 0) return;
+    const p0 = this.pressFrom;
+    const dp = this.pressTo - p0;
     let d = this.residual;
     while (d <= dist) {
       const t = d / dist;
-      this.stamp(this.last.x + dx * t, this.last.y + dy * t);
-      d += this.step;
+      // Pressure ramps across the segment, so a fast stroke between two widely
+      // spaced samples still tapers smoothly instead of jumping a whole step.
+      const p = p0 + dp * t;
+      this.stamp(this.last.x + dx * t, this.last.y + dy * t, p);
+      d += this.stepFor(p);
     }
     this.residual = d - dist;
     this.last = { x, y };
@@ -5749,6 +5832,8 @@ export class PaintEngine {
     this.brush = null;
     this.clip = null;
     this.tip = null;
+    this.tipSpec = null;
+    this.tipCache.clear(); // per-stroke cache — the next stroke bakes fresh tips
     this.dirty = null;
     if (this.cloneActive) {
       this.cloneActive = false;
@@ -5771,6 +5856,8 @@ export class PaintEngine {
     this.brush = null;
     this.clip = null;
     this.tip = null;
+    this.tipSpec = null;
+    this.tipCache.clear(); // per-stroke cache — the next stroke bakes fresh tips
     this.dirty = null;
     if (this.cloneActive) {
       this.cloneActive = false;
@@ -5817,6 +5904,13 @@ export class PaintEngine {
     this.tip = this.tipHard
       ? this.buildHardTip(r, 0, 0, 0, flow)
       : this.buildSoftTip(r, 0, 0, 0, flow, brush.hardness);
+    // Clone stamps a SAMPLED region through the tip, not the tip itself, so it
+    // opts out of pressure dynamics (and keeps its own configurable spacing).
+    this.dyn = NO_DYNAMICS;
+    this.tipSpec = null;
+    this.tipCache.clear();
+    this.pressFrom = 1;
+    this.pressTo = 1;
     // Snapshot the source so the clone reads a stable image, not its own output.
     const sample = this.mk(this.w, this.h, true);
     if (sampleAll && this.view) sample.ctx.drawImage(this.view, 0, 0);
@@ -8208,12 +8302,14 @@ export class PaintEngine {
     return c;
   }
 
-  private stamp(x: number, y: number) {
+  private stamp(x: number, y: number, pressure = 1) {
     if (this.cloneActive) {
       this.cloneStamp(x, y);
       return;
     }
-    const tip = this.tip;
+    // Pick the tip baked for this pressure; with dynamics off every dab lands on
+    // the top bucket, i.e. the single tip the stroke started with.
+    const tip = this.dynActive() ? this.tipFor(pressureBucket(pressure)) : this.tip;
     if (!tip) return;
     const ctx = this.stroke!.ctx;
     ctx.globalAlpha = 1;

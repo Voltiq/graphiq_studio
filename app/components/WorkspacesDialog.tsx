@@ -95,7 +95,10 @@ export default function WorkspacesDialog({
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") saveCurrent();
-                  e.stopPropagation();
+                  // Typing a name must not trip the app's single-letter tool
+                  // shortcuts — but Escape has to reach the dialog, or the
+                  // field (which now takes focus on open) traps you in here.
+                  if (e.key !== "Escape") e.stopPropagation();
                 }}
               />
             </div>

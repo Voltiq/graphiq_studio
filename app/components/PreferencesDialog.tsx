@@ -8,19 +8,33 @@ import {
   FolderOpen,
   Gauge,
   Crosshair,
+  Eye,
   Grid2x2,
   Grid3x3,
   HardDrive,
   Palette,
+  PenTool,
   Ruler,
   ShieldCheck,
   SlidersHorizontal,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import styles from "./PreferencesDialog.module.scss";
 import { applyTheme, currentTheme, resolvedDark } from "./ThemeToggle";
 import { ColorChip, Slider, Toggle } from "./Controls";
 import { ACCENTS, ACCENT_COOKIE, DEFAULT_ACCENT, isAccent, type Accent, type Theme } from "../lib/theme";
+import { PRESSURE_CURVES, effectivePressure, type PressureCurve } from "../lib/pointer";
+import {
+  CVD_TYPES,
+  SAFE_DELTA_E,
+  accentSafety,
+  deltaEUnder,
+  hexToRgb,
+  rgbToHex,
+  simulateHex,
+  type CvdType,
+} from "../lib/cvd";
 import { UI_SCALES, applyUiScale, liveUiScale, type UiScale } from "../lib/ui-scale";
 import {
   checkerCSS,
@@ -104,6 +118,8 @@ export type PrefsTab =
   | "files"
   | "guides"
   | "cursors"
+  | "pen"
+  | "a11y"
   | "units"
   | "transparency"
   | "performance"
@@ -119,9 +135,175 @@ const TABS: { id: Tab; label: string; icon: typeof Palette }[] = [
   { id: "transparency", label: "Transparency", icon: Grid2x2 },
   { id: "guides", label: "Guides & grid", icon: Grid3x3 },
   { id: "cursors", label: "Cursors", icon: Crosshair },
+  { id: "pen", label: "Touch & pen", icon: PenTool },
+  { id: "a11y", label: "Accessibility", icon: Eye },
   { id: "performance", label: "Performance", icon: Gauge },
   { id: "storage", label: "Storage", icon: HardDrive },
 ];
+
+/** The semantic colours as the running theme currently resolves them, read
+ *  straight off <html> so the preview reflects the live tokens (including any
+ *  CVD swap already applied) rather than a hard-coded copy of the palette. */
+function readSemantics(): { name: string; hex: string }[] {
+  if (typeof window === "undefined") return [];
+  const cs = getComputedStyle(document.documentElement);
+  const read = (v: string) => {
+    const raw = cs.getPropertyValue(v).trim();
+    if (/^#[0-9a-f]{3,8}$/i.test(raw)) return rgbToHex(hexToRgb(raw));
+    const m = raw.match(/(\d+(?:\.\d+)?)[,\s]+(\d+(?:\.\d+)?)[,\s]+(\d+(?:\.\d+)?)/);
+    return m ? rgbToHex({ r: +m[1], g: +m[2], b: +m[3] }) : "#808080";
+  };
+  return [
+    { name: "Danger", hex: read("--danger") },
+    { name: "Success", hex: read("--success") },
+    { name: "Warning", hex: read("--warning") },
+  ];
+}
+
+/**
+ * Side-by-side preview: each semantic colour as it is, and as the selected
+ * deficiency renders it, with the worst pairwise separation spelled out. Seeing
+ * "8" under the shipped palette is far more convincing than being told that red
+ * and green are hard to tell apart.
+ */
+function CvdPreview({ type, dark, accent }: { type: CvdType; dark: boolean; accent: Accent }) {
+  // Re-read the live tokens whenever anything that could change them changes.
+  const [swatches, setSwatches] = useState<{ name: string; hex: string }[]>([]);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setSwatches(readSemantics()));
+    return () => cancelAnimationFrame(id);
+  }, [type, dark]);
+
+  const accentHex = ACCENTS.find((a) => a.id === accent);
+  const rows = accentHex
+    ? [...swatches, { name: "Accent", hex: dark ? accentHex.dark : accentHex.light }]
+    : swatches;
+  if (!rows.length) return null;
+
+  // The worst pair in the row, as this vision sees it.
+  let worst = Infinity;
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = i + 1; j < rows.length; j++) {
+      worst = Math.min(worst, deltaEUnder(rows[i].hex, rows[j].hex, type));
+    }
+  }
+  const okSep = worst >= SAFE_DELTA_E;
+
+  return (
+    <div className={styles.cvdPreview}>
+      <div className={styles.cvdRow}>
+        {rows.map((s) => (
+          <div key={s.name} className={styles.cvdCell}>
+            <span className={styles.cvdChip} style={{ background: s.hex }} />
+            {type !== "none" && (
+              <span className={styles.cvdChip} style={{ background: simulateHex(s.hex, type) }} />
+            )}
+            <span className={styles.cvdName}>{s.name}</span>
+          </div>
+        ))}
+      </div>
+      <div className={styles.cvdVerdict} data-ok={okSep}>
+        {okSep ? <Check size={13} strokeWidth={3} /> : <TriangleAlert size={13} />}
+        <span>
+          Closest pair: <strong>ΔE {Math.round(worst)}</strong>
+          {type === "none" ? " with normal vision" : ` as ${CVD_TYPES.find((t) => t.id === type)?.label.toLowerCase()}`}
+          {okSep ? " — comfortably distinct." : " — these read as the same colour."}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Live pen tester: draw in it and it reports what the browser actually says —
+ * pointer type, raw pressure and the curved value the brush would use — plus a
+ * pressure-varying trace, so "is my tablet working?" is answerable without
+ * committing a stroke to a document. The trace is drawn with the same
+ * pressure→width relationship the engine uses.
+ */
+function PressurePad({ curve, enabled }: { curve: PressureCurve; enabled: boolean }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const lastRef = useRef<{ x: number; y: number } | null>(null);
+  const [info, setInfo] = useState<{ type: string; raw: number; eff: number } | null>(null);
+
+  const clear = () => {
+    const cv = ref.current;
+    const ctx = cv?.getContext("2d");
+    if (cv && ctx) ctx.clearRect(0, 0, cv.width, cv.height);
+    lastRef.current = null;
+  };
+
+  const draw = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const cv = ref.current;
+    const ctx = cv?.getContext("2d");
+    if (!cv || !ctx) return;
+    const r = cv.getBoundingClientRect();
+    const x = ((e.clientX - r.left) * cv.width) / r.width;
+    const y = ((e.clientY - r.top) * cv.height) / r.height;
+    const eff = effectivePressure(e.pointerType, e.pressure, { enabled, curve });
+    setInfo({ type: e.pointerType, raw: e.pressure, eff });
+    const prev = lastRef.current;
+    if (prev) {
+      ctx.strokeStyle = "var(--accent)";
+      ctx.strokeStyle = getComputedStyle(cv).getPropertyValue("color") || "#888";
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = Math.max(1, eff * 14);
+      ctx.beginPath();
+      ctx.moveTo(prev.x, prev.y);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+    lastRef.current = { x, y };
+  };
+
+  return (
+    <div className={styles.penPad}>
+      <canvas
+        ref={ref}
+        width={520}
+        height={130}
+        className={styles.penPadCanvas}
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          lastRef.current = null;
+          draw(e);
+        }}
+        onPointerMove={(e) => {
+          if (e.buttons === 0) return;
+          draw(e);
+        }}
+        onPointerUp={() => {
+          lastRef.current = null;
+        }}
+        onPointerLeave={() => {
+          lastRef.current = null;
+        }}
+      />
+      <div className={styles.penPadInfo}>
+        {info ? (
+          <>
+            <span>
+              Device <strong>{info.type || "unknown"}</strong>
+            </span>
+            <span>
+              Reported <strong>{info.raw.toFixed(2)}</strong>
+            </span>
+            <span>
+              Used <strong>{info.eff.toFixed(2)}</strong>
+            </span>
+            {info.type === "mouse" && <em>a mouse always paints at full strength</em>}
+          </>
+        ) : (
+          <span>Draw above to test — nothing here touches your document.</span>
+        )}
+        <button type="button" className={styles.penPadClear} onClick={clear}>
+          Clear
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /** Custom confirmation modal (replaces window.confirm) — portalled above the
  *  Preferences dialog. Esc / backdrop cancel; the destructive action is a
@@ -303,6 +485,33 @@ export default function PreferencesDialog({
     applyUiScale(s);
   };
 
+  // The semantic colours the accent must stay distinct from, read from the LIVE
+  // tokens (after a frame, so a just-applied theme/CVD swap is already in them).
+  const [semantics, setSemantics] = useState<{ name: string; hex: string }[]>([]);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setSemantics(readSemantics()));
+    return () => cancelAnimationFrame(id);
+  }, [dark, theme, prefs.colorVision, prefs.highContrast]);
+  // Rank the accents by how far they stay from the semantic colours under the
+  // chosen vision. Tritanopia and monochromacy leave NO accent fully clear — the
+  // triad already occupies the hue axis they can still see — so flagging all six
+  // would be true but useless. An accent is badged only when it is both below
+  // the readability threshold AND meaningfully worse than the best on offer,
+  // and the hint names the clearest choice instead of just complaining.
+  const accentReports = ACCENTS.map((a) => ({
+    id: a.id,
+    label: a.label,
+    report: accentSafety(dark ? a.dark : a.light, semantics, prefs.colorVision),
+  }));
+  const bestMargin = Math.max(...accentReports.map((r) => r.report.minDeltaE), 0);
+  const isBadged = (m: number) => m < SAFE_DELTA_E && m < bestMargin - 4;
+  const bestAccent = accentReports.find((r) => r.report.minDeltaE === bestMargin);
+  const activeReport = accentReports.find((r) => r.id === accent)?.report;
+  const unsafeAccent =
+    activeReport && activeReport.minDeltaE < SAFE_DELTA_E
+      ? activeReport.clashesWith.join(" and ")
+      : "";
+
   // Live cache stats while the Performance tab is visible (1s cadence).
   const [stats, setStats] = useState<CacheStats | null>(null);
   useEffect(() => {
@@ -415,21 +624,56 @@ export default function PreferencesDialog({
                 <section className={styles.section}>
                   <span className={styles.groupLabel}>Accent color</span>
                   <div className={styles.accentRow}>
-                    {ACCENTS.map((a) => (
-                      <button
-                        key={a.id}
-                        type="button"
-                        className={styles.accentDot}
-                        data-selected={accent === a.id}
-                        style={{ background: dark ? a.dark : a.light }}
-                        title={a.label}
-                        aria-label={`${a.label} accent`}
-                        onClick={() => pickAccent(a.id)}
-                      >
-                        {accent === a.id && <Check size={14} strokeWidth={3} />}
-                      </button>
-                    ))}
+                    {ACCENTS.map((a) => {
+                      const hex = dark ? a.dark : a.light;
+                      // The accent marks selection and active state, so it has to
+                      // stay distinct from the colours that MEAN something. The
+                      // verdict is computed, not curated — swatches are shown as
+                      // the chosen vision renders them.
+                      const report =
+                        accentReports.find((r) => r.id === a.id)?.report ??
+                        accentSafety(hex, semantics, prefs.colorVision);
+                      const badged = isBadged(report.minDeltaE);
+                      const shown = simulateHex(hex, prefs.colorVision);
+                      return (
+                        <button
+                          key={a.id}
+                          type="button"
+                          className={styles.accentDot}
+                          data-selected={accent === a.id}
+                          data-unsafe={badged || undefined}
+                          style={{ background: shown }}
+                          title={
+                            report.safe
+                              ? `${a.label} — distinct from danger / success / warning (ΔE ${Math.round(report.minDeltaE)})`
+                              : `${a.label} — hard to tell from ${report.clashesWith.join(" and ")} (ΔE ${Math.round(report.minDeltaE)})`
+                          }
+                          aria-label={`${a.label} accent${report.safe ? "" : `, may clash with ${report.clashesWith.join(" and ")}`}`}
+                          onClick={() => pickAccent(a.id)}
+                        >
+                          {accent === a.id && <Check size={14} strokeWidth={3} />}
+                          {badged && (
+                            <span className={styles.accentWarn} aria-hidden>
+                              <TriangleAlert size={11} strokeWidth={2.5} />
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
+                  {unsafeAccent && (
+                    <p className={styles.sectionHint}>
+                      <TriangleAlert size={12} style={{ verticalAlign: "-2px", marginRight: 4 }} />
+                      This accent is hard to tell apart from <strong>{unsafeAccent}</strong>
+                      {prefs.colorVision === "none"
+                        ? ""
+                        : " with the colour vision set in Accessibility"}
+                      , so a selected item can read as a warning or an error.
+                      {bestAccent && bestAccent.id !== accent && (
+                        <> The clearest here is <strong>{bestAccent.label}</strong>.</>
+                      )}
+                    </p>
+                  )}
                 </section>
 
                 <section className={styles.section}>
@@ -911,6 +1155,169 @@ export default function PreferencesDialog({
                       onPick={(c) => onChange({ ringColor: c })}
                       aria="Ring colour"
                     />
+                  </div>
+                </section>
+              </>
+            )}
+
+            {tab === "pen" && (
+              <>
+                <p className={styles.paneIntro}>
+                  Settings for drawing tablets, styluses and touchscreens. A mouse is never
+                  affected: browsers report a constant 0.5 pressure for a held mouse button, so
+                  pressure is only read from devices that actually measure it.
+                </p>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Test your pen</span>
+                  <p className={styles.sectionHint}>
+                    Draw in the box to see what the browser reports — the device type, the raw
+                    pressure and the curved value the brush will use.
+                  </p>
+                  <PressurePad curve={prefs.pressureCurve} enabled={prefs.penPressure} />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Pen pressure</span>
+                  <div className={styles.motionCard}>
+                    <div className={styles.rowText}>
+                      <strong>Use stylus pressure</strong>
+                      <em>Pressure drives the brush — each brush chooses size and/or flow</em>
+                    </div>
+                    <button
+                      type="button"
+                      className={styles.switch}
+                      role="switch"
+                      aria-checked={prefs.penPressure}
+                      aria-label="Use stylus pressure"
+                      data-on={prefs.penPressure}
+                      onClick={() => onChange({ penPressure: !prefs.penPressure })}
+                    >
+                      <span className={styles.switchThumb} />
+                    </button>
+                  </div>
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Pressure curve</span>
+                  <p className={styles.sectionHint}>
+                    How hard you have to press for full strength. Which brush properties respond
+                    is set per brush, in the brush options bar.
+                  </p>
+                  <OptionList
+                    options={PRESSURE_CURVES.map((c) => ({
+                      value: c.id,
+                      title: c.label,
+                      desc: c.hint,
+                    }))}
+                    value={prefs.pressureCurve}
+                    onPick={(v) => onChange({ pressureCurve: v })}
+                  />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Touch</span>
+                  <div className={styles.motionCard}>
+                    <div className={styles.rowText}>
+                      <strong>Palm rejection</strong>
+                      <em>
+                        Once a stylus has been used, touch stops drawing — two-finger pan and
+                        pinch-zoom keep working, so you can rest your hand on the screen
+                      </em>
+                    </div>
+                    <button
+                      type="button"
+                      className={styles.switch}
+                      role="switch"
+                      aria-checked={prefs.palmRejection}
+                      aria-label="Palm rejection"
+                      data-on={prefs.palmRejection}
+                      onClick={() => onChange({ palmRejection: !prefs.palmRejection })}
+                    >
+                      <span className={styles.switchThumb} />
+                    </button>
+                  </div>
+                  <p className={styles.sectionHint}>
+                    Two fingers pan and zoom the canvas at any time. A stylus with an eraser end
+                    erases while it&apos;s turned over, without changing the selected tool.
+                  </p>
+                </section>
+              </>
+            )}
+
+            {tab === "a11y" && (
+              <>
+                <p className={styles.paneIntro}>
+                  Colour is the one place this interface carries meaning without words — red for
+                  danger, green for success, amber for a warning. These settings retune that set so
+                  it stays readable, and firm up the whole theme.
+                </p>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Colour vision</span>
+                  <p className={styles.sectionHint}>
+                    Pick the deficiency to accommodate. The app swaps in a palette whose colours
+                    stay apart for that kind of vision, and the accent picker in Appearance starts
+                    flagging accents that would clash.
+                  </p>
+                  <OptionList
+                    options={CVD_TYPES.map((t) => ({ value: t.id, title: t.label, desc: t.hint }))}
+                    value={prefs.colorVision}
+                    onPick={(v) => onChange({ colorVision: v })}
+                  />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Preview</span>
+                  <p className={styles.sectionHint}>
+                    The semantic colours as you see them, and as this deficiency renders them. The
+                    number under each pair is the smallest colour difference in the row — below
+                    about {SAFE_DELTA_E} two colours read as the same at a glance.
+                  </p>
+                  <CvdPreview type={prefs.colorVision} dark={dark} accent={accent} />
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Contrast</span>
+                  <div className={styles.motionCard}>
+                    <div className={styles.rowText}>
+                      <strong>High contrast</strong>
+                      <em>
+                        Stronger borders and input outlines, darker secondary text and a thicker
+                        focus ring — within your current theme
+                      </em>
+                    </div>
+                    <button
+                      type="button"
+                      className={styles.switch}
+                      role="switch"
+                      aria-checked={prefs.highContrast}
+                      aria-label="High contrast"
+                      data-on={prefs.highContrast}
+                      onClick={() => onChange({ highContrast: !prefs.highContrast })}
+                    >
+                      <span className={styles.switchThumb} />
+                    </button>
+                  </div>
+                  {prefs.colorVision === "achromatopsia" && (
+                    <p className={styles.sectionHint}>
+                      With no colour vision at all, only lightness separates these — and three
+                      readable colours on one background can only spread so far. High contrast is
+                      worth turning on alongside it.
+                    </p>
+                  )}
+                </section>
+                <section className={styles.section}>
+                  <span className={styles.groupLabel}>Motion</span>
+                  <div className={styles.motionCard}>
+                    <div className={styles.rowText}>
+                      <strong>Reduce motion</strong>
+                      <em>Minimize non-essential animations and panel transitions</em>
+                    </div>
+                    <button
+                      type="button"
+                      className={styles.switch}
+                      role="switch"
+                      aria-checked={prefs.reduceMotion}
+                      aria-label="Reduce motion (accessibility)"
+                      data-on={prefs.reduceMotion}
+                      onClick={() => onChange({ reduceMotion: !prefs.reduceMotion })}
+                    >
+                      <span className={styles.switchThumb} />
+                    </button>
                   </div>
                 </section>
               </>

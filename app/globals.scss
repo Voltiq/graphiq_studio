@@ -10,6 +10,9 @@
    Theme  = [data-theme]  light | dark | system  (system follows the OS)
    Accent = [data-accent] blue | teal | green | purple | magenta | orange
    Motion = [data-motion] on | off (the "Reduce motion" preference)
+   CVD    = [data-cvd] none | protanopia | deuteranopia | tritanopia |
+            achromatopsia — retunes the semantic triad so it stays readable
+   Contrast = [data-contrast] normal | high — firms borders/text/focus ring
    All three render server-side from cookies/prefs — no flash of wrong look.
 
    Token names are the app-wide contract (consumed by every *.module.scss):
@@ -249,6 +252,86 @@
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus-color);
 }
 
+/* ------------------------- Colour-vision safe palettes ---------------------
+   [data-cvd] (Preferences ▸ Accessibility). The semantic triad — danger,
+   success, warning — is the one place where colour ALONE carries meaning, and
+   the shipped palette collapses for a dichromat: danger vs success measures
+   ΔE 8 under deuteranopia (and 0 in monochromacy) where ~22 is the threshold
+   for reading as "a different colour".
+
+   Each replacement below was searched for numerically (app/lib/cvd.ts's
+   simulation + CIE76 ΔE, maximizing the worst pair while holding a WCAG
+   contrast floor against the theme's surface) and is asserted in the Node
+   suite. The deficiency decides which axis survives:
+     protanopia/deuteranopia → blue↔yellow survives, so success goes teal
+     tritanopia              → red↔green survives, so success stays green
+     achromatopsia           → nothing but LIGHTNESS survives
+   Monochromacy has little headroom — three readable colours on one background
+   can only spread so far — which is why that tab recommends High contrast too. */
+@mixin cvd-triad($danger, $danger-rgb, $success, $warning) {
+  --danger: #{$danger};
+  --danger-rgb: #{$danger-rgb};
+  --danger-text: #{$danger};
+  --danger-bold: #{$danger};
+  --success: #{$success};
+  --success-bold: #{$success};
+  --warning: #{$warning};
+}
+
+@mixin cvd-redgreen-light {
+  @include cvd-triad(#7a221f, "122, 34, 31", #1d8187, #ad6500);
+}
+@mixin cvd-redgreen-dark {
+  @include cvd-triad(#e08060, "224, 128, 96", #3fd0dd, #f5cf3a);
+}
+@mixin cvd-tritan-light {
+  @include cvd-triad(#7a1f2b, "122, 31, 43", #295c1f, #ad6500);
+}
+@mixin cvd-tritan-dark {
+  @include cvd-triad(#e07a6c, "224, 122, 108", #5cc247, #ffe16b);
+}
+@mixin cvd-mono-light {
+  @include cvd-triad(#4f2228, "79, 34, 40", #347079, #a88338);
+}
+@mixin cvd-mono-dark {
+  @include cvd-triad(#c2564e, "194, 86, 78", #7fc4b4, #f5edb8);
+}
+
+/* ---------------------------- High contrast -------------------------------
+   [data-contrast="high"] (Preferences ▸ Accessibility). Not a separate theme:
+   it firms up the SAME theme so nothing else has to be restyled — borders and
+   input outlines become opaque and full-strength, the two quieter text ramps
+   collapse toward the primary one, tracks and washes gain weight, and the focus
+   ring is thicker so keyboard position is unmissable. */
+@mixin contrast-high-light {
+  --border: #6b6e76;
+  --border-strong: #292a2e;
+  --input: #44464d;
+  --wash: #05152417;
+  --wash-2: #0b120e33;
+  --track: #b9bcc2;
+  --text-2: #35363b;
+  --text-3: #44464d;
+  --text-disabled: #080f2180;
+  --selected-bg: color-mix(in srgb, var(--accent) 20%, var(--surface));
+  --selected-bg-2: color-mix(in srgb, var(--accent) 34%, var(--surface));
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 5px var(--focus-color);
+}
+@mixin contrast-high-dark {
+  --border: #9ea1a8;
+  --border-strong: #d6d8dd;
+  --input: #b0b3ba;
+  --wash: #ceced926;
+  --wash-2: #e3e4f236;
+  --track: #6b6e76;
+  --text-2: #e2e3e7;
+  --text-3: #cdced3;
+  --text-disabled: #e5e9f680;
+  --selected-bg: color-mix(in srgb, var(--accent) 24%, var(--surface));
+  --selected-bg-2: color-mix(in srgb, var(--accent) 38%, var(--surface));
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 5px var(--focus-color);
+}
+
 [data-theme="light"] {
   @include theme-light;
 }
@@ -267,6 +350,60 @@
   [data-theme="system"] {
     @include theme-dark;
     color-scheme: light dark;
+  }
+}
+
+/* Apply the CVD triads and the high-contrast ramp AFTER the theme mixins, and
+   at higher specificity, so they override whichever theme resolved above.
+   `system` needs both branches, exactly as the theme itself does. */
+[data-theme="light"],
+[data-theme="system"] {
+  &[data-cvd="protanopia"],
+  &[data-cvd="deuteranopia"] {
+    @include cvd-redgreen-light;
+  }
+  &[data-cvd="tritanopia"] {
+    @include cvd-tritan-light;
+  }
+  &[data-cvd="achromatopsia"] {
+    @include cvd-mono-light;
+  }
+  &[data-contrast="high"] {
+    @include contrast-high-light;
+  }
+}
+
+[data-theme="dark"] {
+  &[data-cvd="protanopia"],
+  &[data-cvd="deuteranopia"] {
+    @include cvd-redgreen-dark;
+  }
+  &[data-cvd="tritanopia"] {
+    @include cvd-tritan-dark;
+  }
+  &[data-cvd="achromatopsia"] {
+    @include cvd-mono-dark;
+  }
+  &[data-contrast="high"] {
+    @include contrast-high-dark;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-theme="system"] {
+    &[data-cvd="protanopia"],
+    &[data-cvd="deuteranopia"] {
+      @include cvd-redgreen-dark;
+    }
+    &[data-cvd="tritanopia"] {
+      @include cvd-tritan-dark;
+    }
+    &[data-cvd="achromatopsia"] {
+      @include cvd-mono-dark;
+    }
+    &[data-contrast="high"] {
+      @include contrast-high-dark;
+    }
   }
 }
 

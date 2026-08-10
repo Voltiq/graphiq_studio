@@ -704,6 +704,7 @@
 }
 
 .accentDot {
+  position: relative;
   width: 26px;
   height: 26px;
   border-radius: 50%;
@@ -719,6 +720,81 @@
 
   &[data-selected="true"] {
     box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+  }
+}
+
+/* Badge on an accent that is hard to tell from a semantic colour. It is a
+   SHAPE, not another colour — a colour-coded warning about colour would be a
+   poor joke on the very users this is for. */
+.accentWarn {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
+/* Colour-vision preview: each semantic colour as-is beside its simulation. */
+.cvdPreview {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.cvdRow {
+  display: flex;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: 12px 14px;
+}
+
+.cvdCell {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cvdChip {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  box-shadow: 0 0 0 1px var(--border);
+
+  /* The pair reads as one object: simulated half tucks against the original. */
+  & + & {
+    margin-left: -5px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+}
+
+.cvdName {
+  margin-left: 3px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.cvdVerdict {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-2);
+
+  strong {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    color: var(--text);
+  }
+  &[data-ok="false"] {
+    color: var(--danger-text);
   }
 }
 
@@ -822,6 +898,60 @@
   border: 1px solid var(--border-strong);
   border-radius: var(--r-lg);
   background: linear-gradient(115deg, #f4f0e8 0%, #c9d4dd 34%, #5a7186 68%, #1f2830 100%);
+}
+
+// Live pen tester (Touch & pen tab): a scribble surface plus the raw numbers.
+.penPad {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.penPadCanvas {
+  display: block;
+  width: 100%;
+  height: 130px;
+  background: var(--surface-2, var(--sidebar));
+  color: var(--accent); // the trace reads this through getComputedStyle
+  cursor: crosshair;
+  touch-action: none; // a stylus/finger must draw here, not scroll the pane
+}
+
+.penPadInfo {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-3);
+
+  strong {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-weight: var(--weight-medium);
+    color: var(--text);
+  }
+  em {
+    font-style: normal;
+    color: var(--text-3);
+  }
+}
+
+.penPadClear {
+  margin-left: auto;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
 }
 
 .colorWellRow {

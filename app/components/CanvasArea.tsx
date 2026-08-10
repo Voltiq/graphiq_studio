@@ -16,6 +16,30 @@ import {
 } from "../lib/richtext-dom";
 import type { LassoMode } from "../lib/tools";
 import { clamp, parseColor, toHex8 } from "../lib/color";
+import {
+  canvasTargets,
+  clampGuide,
+  dedupeTargets,
+  guideTargets,
+  hitGuide,
+  layerTargets,
+  shouldDiscard,
+  snapMove,
+  snapAxis,
+  snapPointTo,
+  type Guide,
+  type GuideAxis,
+  type SnapHit,
+  type SnapTarget,
+} from "../lib/guides";
+import {
+  effectivePressure,
+  newPalmState,
+  palmDown,
+  palmUp,
+  rejectsPointer,
+  type PressureCurve,
+} from "../lib/pointer";
 import { clampPan, normalizeRect, type Pan, type Rect } from "../lib/view";
 import type {
   BlurSettings,
@@ -678,6 +702,15 @@ export default function CanvasArea({
   docGrid,
   pixelGridColor,
   snapDistance,
+  guides,
+  showGuides,
+  lockGuides,
+  smartGuides,
+  onGuidesCommit,
+  onRevealGuides,
+  penPressure,
+  pressureCurve,
+  palmRejection,
   cursorPrefs,
   viewApiRef,
   paintRef,
@@ -844,8 +877,26 @@ export default function CanvasArea({
   docGrid: { spacing: number; subdivisions: number; color: string } | null;
   /** Pixel-grid line colour (Preferences ▸ Guides & grid). */
   pixelGridColor: string;
-  /** Snap pull distance in screen px (shape-node symmetry snaps). */
+  /** Snap pull distance in screen px (shape-node symmetry snaps, guide snapping). */
   snapDistance: number;
+  /** This document's ruler guides (View ▸ Show guides). */
+  guides: Guide[];
+  /** Hidden guides are inert: not drawn, not grabbable, and they pull on nothing. */
+  showGuides: boolean;
+  /** Locked guides still draw and still snap — they just can't be dragged. */
+  lockGuides: boolean;
+  /** Smart guides: align hints against other layers while moving. */
+  smartGuides: boolean;
+  /** Commit a guide edit as one undoable step (label shows in the History panel). */
+  onGuidesCommit: (label: string, next: Guide[]) => void;
+  /** Turn View ▸ Show guides on (dragging one off a ruler implies wanting it). */
+  onRevealGuides: () => void;
+  /** Honour stylus pressure (Preferences ▸ Touch & pen). */
+  penPressure: boolean;
+  /** How hard you must press for full size/flow. */
+  pressureCurve: PressureCurve;
+  /** Ignore touch for TOOL input once a stylus has been used (gestures still work). */
+  palmRejection: boolean;
   /** Paint-cursor prefs (Preferences ▸ Cursors): ring vs precise, centre
    *  crosshair, ring colour. */
   cursorPrefs: { mode: "ring" | "precise"; crosshair: boolean; ringColor: string };
@@ -979,6 +1030,64 @@ export default function CanvasArea({
   };
   // Hand-tool pan drag: starting pointer position + pan at the start of the drag.
   const handRef = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null);
+  // Bird's-eye (hold H + drag, like Photoshop): while H is physically down, a
+  // canvas drag zooms out to fit, shows the viewport rectangle under the
+  // pointer, and on release returns to the previous zoom centred there.
+  const hKeyRef = useRef(false);
+  const birdRef = useRef<{ prevZoom: number; x: number; y: number } | null>(null);
+
+  // ---- Touch & pen ----------------------------------------------------------
+  // Pressure and palm rejection read their settings from a ref, because the only
+  // callers are pointer handlers that must see the CURRENT prefs without being
+  // rebuilt (and, for palm state, without a re-render per contact).
+  const pointerPrefsRef = useRef({
+    pressure: penPressure,
+    curve: pressureCurve,
+    palm: palmRejection,
+  });
+  pointerPrefsRef.current = { pressure: penPressure, curve: pressureCurve, palm: palmRejection };
+  const palmRef = useRef(newPalmState());
+  /** Curved 0–1 pressure for an event — always 1 for a mouse (which reports a
+   *  constant 0.5 while held) and for pens that don't measure. */
+  const pressureOf = (e: { pointerType: string; pressure: number }): number =>
+    effectivePressure(e.pointerType, e.pressure, {
+      enabled: pointerPrefsRef.current.pressure,
+      curve: pointerPrefsRef.current.curve,
+    });
+  /** True when this pen contact is the stylus's ERASER end (barrel bit 5). */
+  const isEraserTip = (e: { pointerType: string; buttons: number }): boolean =>
+    e.pointerType === "pen" && (e.buttons & 32) !== 0;
+
+  // ---- Guides ---------------------------------------------------------------
+  // The committed guides live in Editor state; `guidesRef` is the LIVE list the
+  // overlay draws, which during a drag is the committed list with one entry
+  // rewritten. Keeping the drag out of React means a guide follows the pointer
+  // at screen rate without re-rendering the whole editor on every pointermove.
+  const guidesRef = useRef<Guide[]>(guides);
+  const guideOptsRef = useRef({ show: showGuides, lock: lockGuides, smart: smartGuides });
+  guideOptsRef.current = { show: showGuides, lock: lockGuides, smart: smartGuides };
+  // Live guide drag: which entry (index into the committed list, or -1 for a
+  // brand-new one dragged off a ruler), its axis, the list it started from, and
+  // whether the pointer has wandered far enough off-canvas to mean "delete".
+  const guideDragRef = useRef<{
+    index: number;
+    axis: GuideAxis;
+    base: Guide[];
+    discard: boolean;
+    isNew: boolean;
+  } | null>(null);
+  // Smart-guide / snap hint lines to draw for the current drag (doc space).
+  const snapHintsRef = useRef<{ v: SnapHit[]; h: SnapHit[] }>({ v: [], h: [] });
+  // Snap context captured at the start of a Move drag: the box being moved and
+  // the candidate lines it can land on (guides + canvas + other layers).
+  const moveSnapRef = useRef<{ box: Rect; v: SnapTarget[]; h: SnapTarget[] } | null>(null);
+  // Same, for drags that move a single point rather than a box (marquee corner).
+  const rectSnapRef = useRef<{ v: SnapTarget[]; h: SnapTarget[] } | null>(null);
+  // Redraw the grid/guides overlay outside React (assigned by its useCallback).
+  const drawGuidesRef = useRef<() => void>(() => {});
+  // Keep the live list in step with committed edits (undo, tab switch, dialog)
+  // unless a drag currently owns it.
+  if (!guideDragRef.current) guidesRef.current = guides;
   // Multi-touch pinch: all active touch/pen pointers (id → client x/y), the live
   // pinch gesture, and a flag that makes the tool handlers stand down for the
   // rest of a gesture (so the finger that started a stroke can't also draw).
@@ -1631,6 +1740,29 @@ export default function CanvasArea({
         ctx.fillStyle = st.full ? `rgba(248,113,113,${0.1 * a})` : `rgba(74,222,128,${0.1 * a})`;
         ctx.fillRect(x, y, r.w * s, r.h * s);
         ctx.strokeRect(x, y, r.w * s, r.h * s);
+        ctx.restore();
+      }
+    }
+
+    // --- bird's-eye: the region the release will zoom back into ---
+    const bird = birdRef.current;
+    if (bird) {
+      const vp = viewportRef.current;
+      if (vp) {
+        const r = vp.getBoundingClientRect();
+        // The remembered zoom shows this many doc px; draw that at today's scale.
+        const prevScale = bird.prevZoom / 100;
+        const bw = (vp.clientWidth / prevScale) * s;
+        const bh = (vp.clientHeight / prevScale) * s;
+        const bx = bird.x - r.left;
+        const by = bird.y - r.top;
+        ctx.save();
+        ctx.fillStyle = "rgba(8,10,14,0.35)";
+        ctx.fillRect(0, 0, cw, ch);
+        ctx.clearRect(bx - bw / 2, by - bh / 2, bw, bh);
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.strokeRect(bx - bw / 2, by - bh / 2, bw, bh);
         ctx.restore();
       }
     }
@@ -2720,6 +2852,7 @@ export default function CanvasArea({
       (toolRef.current === "text" && textDragRef.current) ||
       (toolRef.current === "eyedropper" && hoverRef.current) ||
       (toolRef.current === "measure" && measureRef.current) ||
+      birdRef.current ||
       filterAnchorRef.current ||
       // Keep the loop alive while a dirty-region flash is still fading.
       (perfHudRef.current && performance.now() - engine.perfStats().dirtyAt < 520)
@@ -3074,6 +3207,79 @@ export default function CanvasArea({
     }
   }, []);
 
+  // Track whether the H key is physically held — the bird's-eye modifier. (H
+  // also selects the Hand tool via the shortcut registry; that is the same
+  // double duty Photoshop gives it.) Cleared on blur so a lost keyup can't
+  // leave the modifier stuck on.
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === "h" || e.key === "H") hKeyRef.current = true;
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === "h" || e.key === "H") hKeyRef.current = false;
+    };
+    const clear = () => {
+      hKeyRef.current = false;
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", clear);
+    };
+  }, []);
+
+  /** Enter bird's-eye: remember the zoom, then fit the whole document so the
+   *  drag can aim anywhere in it. */
+  const beginBirdsEye = (clientX: number, clientY: number) => {
+    const vp = viewportRef.current;
+    if (!vp) return false;
+    const w = widthRef.current;
+    const h = heightRef.current;
+    const raw = Math.min(vp.clientWidth / w, vp.clientHeight / h) * 100 * 0.96;
+    const z = clamp(Math.max(1, Math.floor(raw)), MIN_ZOOM, MAX_ZOOM);
+    birdRef.current = { prevZoom: zoomRef.current, x: clientX, y: clientY };
+    const s = z / 100;
+    const px = (vp.clientWidth - w * s) / 2;
+    const py = (vp.clientHeight - h * s) / 2;
+    if (z === zoomRef.current) {
+      setPanRef.current(clampPan(px, py, s, w, h, vp.clientWidth, vp.clientHeight));
+    } else {
+      pendingPanRef.current = { pan: { x: px, y: py }, zoom: z };
+      onZoomChangeRef.current(z);
+    }
+    ensureAntsRef.current();
+    return true;
+  };
+
+  /** Leave bird's-eye: go back to the remembered zoom, centred on the document
+   *  point the pointer is over. */
+  const endBirdsEye = () => {
+    const bird = birdRef.current;
+    const vp = viewportRef.current;
+    birdRef.current = null;
+    if (!bird || !vp) return;
+    const r = vp.getBoundingClientRect();
+    const cur = zoomRef.current / 100;
+    const p = panR.current;
+    // Document point under the pointer at the CURRENT (fitted) view.
+    const docX = (bird.x - r.left - p.x) / cur;
+    const docY = (bird.y - r.top - p.y) / cur;
+    const next = clamp(Math.round(bird.prevZoom), MIN_ZOOM, MAX_ZOOM);
+    const ns = next / 100;
+    const px = vp.clientWidth / 2 - docX * ns;
+    const py = vp.clientHeight / 2 - docY * ns;
+    if (next === zoomRef.current) {
+      setPanRef.current(clampHere(px, py, ns, vp));
+    } else {
+      pendingPanRef.current = { pan: { x: px, y: py }, zoom: next };
+      onZoomChangeRef.current(next);
+    }
+    ensureAntsRef.current();
+  };
+
   // Native, non-passive wheel handling so preventDefault() works.
   useEffect(() => {
     const vp = viewportRef.current;
@@ -3241,6 +3447,7 @@ export default function CanvasArea({
       redo: () => engine.redo(),
       jumpTo: (i) => engine.jumpTo(i),
       setHistorySourceIndex: (i) => engine.setHistorySourceIndex(i),
+      sampleColor: (x, y, size, allLayers, layerId) => engine.sampleColor(x, y, size, allLayers, layerId),
       createSnapshot: (label, ids) => engine.createSnapshot(label, ids),
       restoreSnapshot: (id) => engine.restoreSnapshot(id),
       deleteSnapshot: (id) => engine.deleteSnapshot(id),
@@ -3451,10 +3658,15 @@ export default function CanvasArea({
     scheduleComposite();
   }, [layers, activeLayerId, scheduleComposite]);
 
-  // Grid overlays, drawn in screen space and kept in sync with pan/zoom:
+  // Grid + guide overlay, drawn in screen space and kept in sync with pan/zoom:
   // the DOCUMENT grid (configurable spacing/subdivisions/colour, any zoom)
-  // beneath the PIXEL grid (1px cells, only readable when zoomed right in).
-  useEffect(() => {
+  // beneath the PIXEL grid (1px cells, only readable when zoomed right in),
+  // with the guides and any live snap hints on top.
+  //
+  // This is a callback rather than a bare effect body because guide drags and
+  // snap hints have to repaint it directly, at pointer rate, without a React
+  // render in the loop (pan/zoom come from refs for exactly that reason).
+  const drawGuidesOverlay = useCallback(() => {
     const ov = gridRef.current;
     const vp = viewportRef.current;
     const ctx = ov?.getContext("2d");
@@ -3464,6 +3676,8 @@ export default function CanvasArea({
       ov.height = vp.clientHeight;
     }
     ctx.clearRect(0, 0, ov.width, ov.height);
+    const pan = panR.current;
+    const zoom = zoomRef.current;
     const s = zoom / 100;
     const x0 = Math.max(0, Math.floor(-pan.x / s));
     const x1 = Math.min(width, Math.ceil((ov.width - pan.x) / s));
@@ -3521,7 +3735,341 @@ export default function CanvasArea({
       }
       ctx.stroke();
     }
-  }, [pan, zoom, vpSize, showGrid, docGrid, pixelGridColor, width, height]);
+
+    // ---- Guides, on top of both grids --------------------------------------
+    // Cyan across the full canvas; the one being dragged goes dashed, and a
+    // guide dragged far enough off the canvas turns red to say "let go and it's
+    // gone" before you commit to it.
+    const drag = guideDragRef.current;
+    if (guideOptsRef.current.show) {
+      const gLeft = Math.round(pan.x);
+      const gRight = Math.round(pan.x + width * s);
+      const gTop = Math.round(pan.y);
+      const gBottom = Math.round(pan.y + height * s);
+      guidesRef.current.forEach((g, i) => {
+        const dragging = !!drag && drag.index === i;
+        ctx.strokeStyle = dragging && drag!.discard ? "#ff5a5a" : "rgba(0, 170, 255, 0.95)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash(dragging ? [4, 3] : []);
+        ctx.beginPath();
+        if (g.axis === "v") {
+          const sx = Math.round(pan.x + g.pos * s) + 0.5;
+          ctx.moveTo(sx, gTop);
+          ctx.lineTo(sx, gBottom);
+        } else {
+          const sy = Math.round(pan.y + g.pos * s) + 0.5;
+          ctx.moveTo(gLeft, sy);
+          ctx.lineTo(gRight, sy);
+        }
+        ctx.stroke();
+      });
+      ctx.setLineDash([]);
+    }
+
+    // ---- Snap hints ---------------------------------------------------------
+    // Magenta, Photoshop-style: a line where the snap landed. Canvas/guide hits
+    // run the full length; a layer hit is bracketed to the two boxes involved
+    // (its span, widened to include the moving edge) so it reads as "these two
+    // things line up" rather than as another guide.
+    const hints = snapHintsRef.current;
+    if (hints.v.length || hints.h.length) {
+      ctx.strokeStyle = "#ff3ea5";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (const hit of hints.v) {
+        const sx = Math.round(pan.x + hit.pos * s) + 0.5;
+        const a = hit.span ? Math.round(pan.y + hit.span[0] * s) : Math.round(pan.y);
+        const b = hit.span ? Math.round(pan.y + hit.span[1] * s) : Math.round(pan.y + height * s);
+        ctx.moveTo(sx, a);
+        ctx.lineTo(sx, b);
+      }
+      for (const hit of hints.h) {
+        const sy = Math.round(pan.y + hit.pos * s) + 0.5;
+        const a = hit.span ? Math.round(pan.x + hit.span[0] * s) : Math.round(pan.x);
+        const b = hit.span ? Math.round(pan.x + hit.span[1] * s) : Math.round(pan.x + width * s);
+        ctx.moveTo(a, sy);
+        ctx.lineTo(b, sy);
+      }
+      ctx.stroke();
+    }
+  }, [showGrid, docGrid, pixelGridColor, width, height]);
+  drawGuidesRef.current = drawGuidesOverlay;
+
+  // Repaint whenever anything the overlay reads from React changes. Pan/zoom are
+  // read through refs inside the draw, so they must be listed here to trigger it.
+  useEffect(() => {
+    drawGuidesOverlay();
+  }, [pan, zoom, vpSize, guides, showGuides, lockGuides, drawGuidesOverlay]);
+
+  // ---- Guide interaction ----------------------------------------------------
+  /** Grab radius for a guide, in screen px (guides are 1px — 5 is comfortable). */
+  const GUIDE_GRAB_PX = 5;
+  /** How far off the canvas a guide must go before dropping it deletes it. */
+  const GUIDE_DISCARD_PX = 26;
+
+  const onGuidesCommitRef = useRef(onGuidesCommit);
+  onGuidesCommitRef.current = onGuidesCommit;
+  const guideCtxRef = useRef({ width, height, snapDistance, snapOn: snap });
+  guideCtxRef.current = { width, height, snapDistance, snapOn: snap };
+
+  /** Client px → document coordinates (works anywhere, incl. over the rulers). */
+  const clientToDoc = (cx: number, cy: number) => {
+    const v = viewRef.current;
+    if (!v) return { x: 0, y: 0 };
+    const r = v.getBoundingClientRect();
+    return { x: ((cx - r.left) * width) / r.width, y: ((cy - r.top) * height) / r.height };
+  };
+
+  /** Content bounds of every visible pixel layer except `exceptIds` (doc space).
+   *  Smart guides align against what you can actually see, so hidden layers and
+   *  the layers travelling with the drag are excluded. */
+  const otherLayerBoxes = (exceptIds: Set<string>): Rect[] => {
+    const out: Rect[] = [];
+    const walk = (nodes: LayerNode[], visible: boolean) => {
+      for (const n of nodes) {
+        const vis = visible && n.visible;
+        if (n.type === "group") walk(n.children, vis);
+        else if (n.type === "layer" && vis && !exceptIds.has(n.id)) {
+          const b = engine.layerContentBounds(n.id);
+          if (b && b.w > 0 && b.h > 0) out.push(b);
+        }
+      }
+    };
+    walk(layers, true);
+    return out;
+  };
+
+  /** Snap candidates for a drag: guides (when shown) + the document's own edges
+   *  and centre, plus other layers' edges when smart guides are on. */
+  const buildSnapTargets = (exceptIds: Set<string>) => {
+    const o = guideOptsRef.current;
+    const v: SnapTarget[] = [...canvasTargets(width)];
+    const h: SnapTarget[] = [...canvasTargets(height)];
+    if (o.show) {
+      v.push(...guideTargets(guidesRef.current, "v"));
+      h.push(...guideTargets(guidesRef.current, "h"));
+    }
+    if (o.smart) {
+      const boxes = otherLayerBoxes(exceptIds);
+      v.push(...layerTargets(boxes, "v"));
+      h.push(...layerTargets(boxes, "h"));
+    }
+    return { v: dedupeTargets(v), h: dedupeTargets(h) };
+  };
+
+  /** Snap pull distance converted from screen px to document px. */
+  const snapTolDoc = () => guideCtxRef.current.snapDistance / (zoomRef.current / 100);
+
+  /** Index of the guide under a client point, or -1 (hidden/locked ⇒ none). */
+  const guideAtClient = (cx: number, cy: number): number => {
+    const o = guideOptsRef.current;
+    if (!o.show || o.lock) return -1;
+    const p = clientToDoc(cx, cy);
+    return hitGuide(guidesRef.current, p.x, p.y, GUIDE_GRAB_PX / (zoomRef.current / 100));
+  };
+
+  /**
+   * Start dragging a guide. `index` is its slot in the committed list, or -1 to
+   * pull a brand-new one off a ruler. The drag runs on WINDOW listeners rather
+   * than pointer capture because it legitimately crosses element boundaries —
+   * out of the ruler onto the canvas, and back onto the ruler to delete.
+   */
+  const startGuideDrag = (index: number, axis: GuideAxis, cx: number, cy: number) => {
+    if (guideOptsRef.current.lock) return;
+    const base = guidesRef.current;
+    const { width: dw, height: dh } = guideCtxRef.current;
+    const size = axis === "v" ? dw : dh;
+    const p = clientToDoc(cx, cy);
+    const pos = clampGuide(axis === "v" ? p.x : p.y, size);
+    const list = index >= 0 ? base.slice() : [...base, { axis, pos }];
+    const idx = index >= 0 ? index : list.length - 1;
+    list[idx] = { axis, pos };
+    guidesRef.current = list;
+    guideDragRef.current = { index: idx, axis, base, discard: false, isNew: index < 0 };
+    drawGuidesRef.current();
+
+    const move = (ev: PointerEvent) => {
+      const d = guideDragRef.current;
+      if (!d) return;
+      const ctx = guideCtxRef.current;
+      const sizeNow = d.axis === "v" ? ctx.width : ctx.height;
+      const q = clientToDoc(ev.clientX, ev.clientY);
+      let raw = d.axis === "v" ? q.x : q.y;
+      // Ctrl suspends snapping mid-drag (Photoshop's escape hatch) — otherwise a
+      // guide lands on the document edges/centre and on visible layer edges.
+      if (ctx.snapOn && !ev.ctrlKey) {
+        const t = buildSnapTargets(new Set<string>());
+        const self = guidesRef.current[d.index].pos;
+        const axisTargets = (d.axis === "v" ? t.v : t.h).filter(
+          // A guide must not snap to ITSELF via the guide candidates.
+          (c) => !(c.kind === "guide" && Math.abs(c.pos - self) < 1e-6),
+        );
+        const r = snapAxis([raw], axisTargets, snapTolDoc());
+        if (r) {
+          raw += r.delta;
+          snapHintsRef.current = d.axis === "v" ? { v: r.hits, h: [] } : { v: [], h: r.hits };
+        } else {
+          snapHintsRef.current = { v: [], h: [] };
+        }
+      }
+      const next = guidesRef.current.slice();
+      next[d.index] = { axis: d.axis, pos: clampGuide(raw, sizeNow) };
+      guidesRef.current = next;
+      d.discard = shouldDiscard(raw, sizeNow, GUIDE_DISCARD_PX / (zoomRef.current / 100));
+      drawGuidesRef.current();
+    };
+
+    const finish = (commit: boolean) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("keydown", key, true);
+      const d = guideDragRef.current;
+      guideDragRef.current = null;
+      snapHintsRef.current = { v: [], h: [] };
+      if (!d) return;
+      if (!commit) {
+        guidesRef.current = d.base;
+        drawGuidesRef.current();
+        return;
+      }
+      const next = d.discard
+        ? guidesRef.current.filter((_, i) => i !== d.index)
+        : guidesRef.current;
+      guidesRef.current = next;
+      drawGuidesRef.current();
+      // A brand-new guide dragged straight back onto the ruler leaves the list
+      // untouched, and commitGuides drops no-ops — so no phantom history step.
+      const label = d.isNew ? "New Guide" : d.discard ? "Delete Guide" : "Move Guide";
+      onGuidesCommitRef.current(label, next);
+    };
+    const up = () => finish(true);
+    const key = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      finish(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("keydown", key, true);
+  };
+
+  /**
+   * Capture what a Move drag can snap to, once, at the moment it starts: the box
+   * being moved and the candidate lines. Doing it per-frame would re-measure
+   * every layer's content bounds 60× a second — and worse, the moving layer's
+   * own bounds would change under it mid-drag.
+   */
+  const beginMoveSnap = () => {
+    moveSnapRef.current = null;
+    snapHintsRef.current = { v: [], h: [] };
+    if (!guideCtxRef.current.snapOn) return;
+    const m = moveRef.current;
+    if (!m) return;
+    const except = new Set<string>();
+    let box: Rect | null = null;
+    if (m.mode === "selection") {
+      box = selectionRef.current.length ? bboxOf(selectionRef.current) : null;
+    } else if (m.float) {
+      // Floating pixels: the lifted selection, offset to where the float sits now.
+      const off = m.baseOff ?? { x: 0, y: 0 };
+      if (selectionRef.current.length) {
+        const b = bboxOf(selectionRef.current);
+        box = { x: b.x + off.x, y: b.y + off.y, w: b.w, h: b.h };
+      }
+      if (activeLayerId) except.add(activeLayerId);
+    } else if (activeLayerId) {
+      box = engine.layerContentBounds(activeLayerId);
+      except.add(activeLayerId);
+      for (const x of linkedMoveExtras(activeLayerId)) except.add(x.id);
+    }
+    // An empty layer has no bounds and nothing meaningful to align — skip.
+    if (!box || box.w <= 0 || box.h <= 0) return;
+    const t = buildSnapTargets(except);
+    moveSnapRef.current = { box, v: t.v, h: t.h };
+  };
+
+  /** Apply guide/smart snapping to a Move delta, recording the hint lines.
+   *  Ctrl suspends it mid-drag without having to toggle View ▸ Snap. */
+  const applyMoveSnap = (dx: number, dy: number, suspend: boolean): { dx: number; dy: number } => {
+    const ms = moveSnapRef.current;
+    if (!ms || suspend) {
+      if (snapHintsRef.current.v.length || snapHintsRef.current.h.length) {
+        snapHintsRef.current = { v: [], h: [] };
+        drawGuidesRef.current();
+      }
+      return { dx, dy };
+    }
+    const r = snapMove(ms.box, dx, dy, ms.v, ms.h, snapTolDoc());
+    // Widen each layer hint's span to reach the moving box, so the line visibly
+    // connects the two things it claims are aligned.
+    const moved: Rect = { x: ms.box.x + r.dx, y: ms.box.y + r.dy, w: ms.box.w, h: ms.box.h };
+    const stretch = (hits: SnapHit[], lo: number, hi: number): SnapHit[] =>
+      hits.map((s) =>
+        s.span ? { ...s, span: [Math.min(s.span[0], lo), Math.max(s.span[1], hi)] } : s,
+      );
+    const next = {
+      v: stretch(r.hitsV, moved.y, moved.y + moved.h),
+      h: stretch(r.hitsH, moved.x, moved.x + moved.w),
+    };
+    // Repaint while hints are showing (their spans grow as the box travels) and
+    // once more on the frame they disappear.
+    const had = snapHintsRef.current.v.length || snapHintsRef.current.h.length;
+    snapHintsRef.current = next;
+    if (had || next.v.length || next.h.length) drawGuidesRef.current();
+    return { dx: r.dx, dy: r.dy };
+  };
+
+  /** Start a point-drag snap session (marquee corner): capture the candidates
+   *  once, and snap the anchor point itself. Returns the snapped anchor. */
+  const beginRectSnap = (x: number, y: number, suspend: boolean): { x: number; y: number } => {
+    rectSnapRef.current = null;
+    snapHintsRef.current = { v: [], h: [] };
+    if (!guideCtxRef.current.snapOn) return { x, y };
+    const t = buildSnapTargets(new Set<string>());
+    rectSnapRef.current = t;
+    if (suspend) return { x, y };
+    const r = snapPointTo(x, y, t.v, t.h, snapTolDoc());
+    return { x: r.x, y: r.y };
+  };
+
+  /** Snap a dragged point against the session's candidates + show the hints. */
+  const applyRectSnap = (x: number, y: number, suspend: boolean): { x: number; y: number } => {
+    const t = rectSnapRef.current;
+    if (!t || suspend) {
+      if (snapHintsRef.current.v.length || snapHintsRef.current.h.length) {
+        snapHintsRef.current = { v: [], h: [] };
+        drawGuidesRef.current();
+      }
+      return { x, y };
+    }
+    const r = snapPointTo(x, y, t.v, t.h, snapTolDoc());
+    const had = snapHintsRef.current.v.length || snapHintsRef.current.h.length;
+    snapHintsRef.current = { v: r.hitsV, h: r.hitsH };
+    if (had || r.hitsV.length || r.hitsH.length) drawGuidesRef.current();
+    return { x: r.x, y: r.y };
+  };
+
+  /** Clear any snap hints left over from a finished drag. */
+  const endMoveSnap = () => {
+    rectSnapRef.current = null;
+    moveSnapRef.current = null;
+    if (snapHintsRef.current.v.length || snapHintsRef.current.h.length) {
+      snapHintsRef.current = { v: [], h: [] };
+      drawGuidesRef.current();
+    }
+  };
+
+  /** Ruler press → drag out a guide. Alt swaps the orientation, as in Photoshop
+   *  (drag from the top ruler with Alt held to place a vertical guide). */
+  const onRulerPointerDown = (from: GuideAxis) => (e: React.PointerEvent) => {
+    if (e.button !== 0 || guideOptsRef.current.lock) return;
+    e.preventDefault();
+    const axis: GuideAxis = e.altKey ? (from === "v" ? "h" : "v") : from;
+    // Pulling a guide off the ruler means you want to see it.
+    if (!guideOptsRef.current.show) onRevealGuides();
+    startGuideDrag(-1, axis, e.clientX, e.clientY);
+  };
 
   const toDoc = (e: React.PointerEvent) => {
     const v = viewRef.current!;
@@ -4269,7 +4817,28 @@ export default function CanvasArea({
     // A pinch (tracked on the viewport, capture-phase) owns the gesture — the
     // tool stands down for touch while one is active or being wound down.
     if (e.pointerType !== "mouse" && (pinchRef.current || gestureSuppressRef.current)) return;
+    // Palm rejection: once a stylus has been used here, touch stops driving the
+    // TOOLS. It still reaches the capture-phase gesture handler above, so a hand
+    // resting on the glass is ignored while two-finger pan/zoom keeps working.
+    palmRef.current = palmDown(palmRef.current, e.pointerType);
+    if (rejectsPointer(palmRef.current, e.pointerType, pointerPrefsRef.current.palm)) return;
     commitNudge(); // a pointer gesture finalizes any pending arrow-key nudge
+    // Bird's-eye takes precedence over every tool while H is held.
+    if (hKeyRef.current && !birdRef.current) {
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      if (beginBirdsEye(e.clientX, e.clientY)) return;
+    }
+    // Grabbing a guide pre-empts the Move tool — a guide sitting over a layer
+    // has to win, or it could never be picked up again once artwork is under it.
+    if (tool === "move" && e.button === 0) {
+      const gi = guideAtClient(e.clientX, e.clientY);
+      if (gi >= 0) {
+        e.preventDefault();
+        startGuideDrag(gi, guidesRef.current[gi].axis, e.clientX, e.clientY);
+        return;
+      }
+    }
     // Levels eyedropper: sample the composite under the cursor, then hand back the
     // RGB (the active tool's normal action is suppressed for this one click).
     if (tonePick) {
@@ -4381,6 +4950,7 @@ export default function CanvasArea({
         e.preventDefault();
         viewRef.current?.setPointerCapture(e.pointerId);
         moveRef.current = { sx: p.x, sy: p.y, mode: "selection" };
+        beginMoveSnap();
       } else {
         // Pixels mode: float an active selection (or keep moving the current float),
         // leaving the layer's own content untouched until deselect.
@@ -4399,11 +4969,17 @@ export default function CanvasArea({
           e.preventDefault();
           viewRef.current?.setPointerCapture(e.pointerId);
           moveRef.current = { sx: p.x, sy: p.y, mode: "pixels", float: true, baseOff: engine.getFloatOffset() };
+          beginMoveSnap();
         } else {
           if (!activeLayerId) return; // nothing to move
           e.preventDefault();
           viewRef.current?.setPointerCapture(e.pointerId);
           moveRef.current = { sx: p.x, sy: p.y, mode: "pixels" };
+          // Snap candidates MUST be captured before beginMove: a whole-layer move
+          // lifts the pixels onto a float and clears the layer's own canvas, so
+          // measuring its content bounds afterwards finds an empty layer (and the
+          // same goes for any linked layers riding along).
+          beginMoveSnap();
           // No selection → move the whole layer; a linked mask travels with it,
           // and any linked layers ride along by the same delta.
           const moveNode = findNode(layers, activeLayerId);
@@ -4479,8 +5055,11 @@ export default function CanvasArea({
       if (op === "new" && !e.shiftKey && tryStartTransform(e, p, zoom / 100)) return;
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
-      marqueeRef.current = { x: p.x, y: p.y, mode: op };
-      dragRectRef.current = { x: p.x, y: p.y, w: 0, h: 0 };
+      // Snap the anchor corner too — a marquee that snaps only on release would
+      // start half a pixel off the guide it was clearly aimed at.
+      const a = beginRectSnap(p.x, p.y, e.ctrlKey || e.metaKey);
+      marqueeRef.current = { x: a.x, y: a.y, mode: op };
+      dragRectRef.current = { x: a.x, y: a.y, w: 0, h: 0 };
       ensureAnts();
       return;
     }
@@ -4649,12 +5228,15 @@ export default function CanvasArea({
     }
     if (tool === "brush" || tool === "pencil" || tool === "eraser") {
       if (engine.isFloating) engine.commitFloat(); // merge before painting on it
+      // Flip-to-erase: a stylus turned over reports its eraser end, and erases
+      // for the length of that stroke without changing the selected tool.
+      const erasing = tool === "eraser" || (isEraserTip(e) && !!activeLayerId);
       let layerId: string;
       if (activeLayerId && engine.getActiveSurface(activeLayerId) !== "pixels") {
         // Painting the active layer's (or group's) layer/filter mask — target it
         // directly so brush/pencil don't auto-create a new layer via ensureLayer.
         layerId = activeLayerId;
-      } else if (tool === "eraser") {
+      } else if (erasing) {
         if (!activeLayerId) return; // nothing to erase
         layerId = activeLayerId;
       } else {
@@ -4674,11 +5256,12 @@ export default function CanvasArea({
         paintCol,
         p.x,
         p.y,
-        tool === "eraser" ? "erase" : "paint",
+        erasing ? "erase" : "paint",
         selection.length ? selection : null,
         selectionAngle,
         selectionPivot,
-        tool === "eraser" ? "Erase" : tool === "pencil" ? "Pencil" : "Brush",
+        erasing ? "Erase" : tool === "pencil" ? "Pencil" : "Brush",
+        pressureOf(e),
       );
       // Actions recorder: snapshot the stroke's settings + gather its raw path.
       strokeRecRef.current = recordStrokes
@@ -4892,6 +5475,12 @@ export default function CanvasArea({
         : null,
     );
 
+    if (birdRef.current) {
+      birdRef.current = { ...birdRef.current, x: e.clientX, y: e.clientY };
+      ensureAnts();
+      return;
+    }
+
     if (curveDragYRef.current !== null) {
       onCurveTargetDrag(e.clientY - curveDragYRef.current);
       return;
@@ -5039,6 +5628,14 @@ export default function CanvasArea({
       }
       setHoverCursor((c) => (c === next ? c : next));
     }
+    // Hover feedback (Move): a resize cursor over a guide the pointer can grab,
+    // so guides are discoverable without a click. Suppressed while a real move
+    // is under way (the move cursor must not flicker as it crosses a guide).
+    if (toolRef.current === "move" && !moveRef.current && !guideDragRef.current) {
+      const gi = guideAtClient(e.clientX, e.clientY);
+      const next = gi >= 0 ? (guidesRef.current[gi].axis === "v" ? "col-resize" : "row-resize") : null;
+      setHoverCursor((c) => (c === next ? c : next));
+    }
     // Hover feedback (Gradient): grab over a handle / midpoint, grabbing while dragging.
     if (toolRef.current === "gradient") {
       const next = gradDragRef.current ? "grabbing" : gradientHandleAt(toDoc(e)) ? "grab" : null;
@@ -5137,8 +5734,15 @@ export default function CanvasArea({
     }
     if (moveRef.current) {
       const p = toDoc(e);
-      const dx = Math.round(p.x - moveRef.current.sx);
-      const dy = Math.round(p.y - moveRef.current.sy);
+      // Snap the raw delta (guides, canvas edges/centre, other layers) before it
+      // is rounded, so the box lands exactly on the line rather than a px off.
+      const s = applyMoveSnap(
+        p.x - moveRef.current.sx,
+        p.y - moveRef.current.sy,
+        e.ctrlKey || e.metaKey,
+      );
+      const dx = Math.round(s.dx);
+      const dy = Math.round(s.dy);
       moveDeltaRef.current = { x: dx, y: dy };
       if (moveRef.current.float) {
         const b = moveRef.current.baseOff!;
@@ -5353,6 +5957,13 @@ export default function CanvasArea({
         px = m.x + sx * side;
         py = m.y + sy * side;
       }
+      // The free corner snaps to guides / canvas / layer edges (Shift's 1:1
+      // constraint wins — a snapped square would stop being square).
+      if (!e.shiftKey) {
+        const s = applyRectSnap(px, py, e.ctrlKey || e.metaKey);
+        px = s.x;
+        py = s.y;
+      }
       const dr = normalizeRect(m.x, m.y, px, py, width, height);
       // Snap selections to whole pixels when Snap is on.
       dragRectRef.current = snap
@@ -5401,16 +6012,45 @@ export default function CanvasArea({
     }
     if (!paintingRef.current) return;
     const p = toDoc(e);
-    engine.moveStroke(p.x, p.y);
-    const rec = strokeRecRef.current;
-    if (rec) {
-      const last = rec.points[rec.points.length - 1];
-      if (Math.hypot(p.x - last.x, p.y - last.y) >= 0.75) rec.points.push({ x: p.x, y: p.y });
+    // A pen samples far faster than the browser fires move events; replaying the
+    // coalesced samples keeps a fast stroke smooth AND gives each dab its own
+    // pressure instead of one reading per animation frame.
+    const native = e.nativeEvent;
+    const samples =
+      e.pointerType !== "mouse" && typeof native.getCoalescedEvents === "function"
+        ? native.getCoalescedEvents()
+        : [];
+    if (samples.length > 1) {
+      for (const s of samples) {
+        const q = clientToDoc(s.clientX, s.clientY);
+        engine.moveStroke(q.x, q.y, pressureOf(s));
+        recordStrokePoint(q);
+      }
+      return;
     }
+    engine.moveStroke(p.x, p.y, pressureOf(e));
+    recordStrokePoint(p);
+  };
+
+  /** Actions recorder: thin the stroke path to ≥0.75 doc px between points. */
+  const recordStrokePoint = (p: { x: number; y: number }) => {
+    const rec = strokeRecRef.current;
+    if (!rec) return;
+    const last = rec.points[rec.points.length - 1];
+    if (Math.hypot(p.x - last.x, p.y - last.y) >= 0.75) rec.points.push({ x: p.x, y: p.y });
   };
   const onCanvasPointerUp = (e: React.PointerEvent) => {
+    const wasRejected = rejectsPointer(palmRef.current, e.pointerType, pointerPrefsRef.current.palm);
+    palmRef.current = palmUp(palmRef.current, e.pointerType);
+    if (wasRejected) return; // this contact never started anything
     // The aborted tool must not commit on lift while a gesture is winding down.
     if (e.pointerType !== "mouse" && (pinchRef.current || gestureSuppressRef.current)) return;
+    if (birdRef.current) {
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      endBirdsEye();
+      return;
+    }
     if (curveDragYRef.current !== null) {
       curveDragYRef.current = null;
       const v = viewRef.current;
@@ -5584,6 +6224,7 @@ export default function CanvasArea({
       const float = moveRef.current.float;
       const d = moveDeltaRef.current;
       moveRef.current = null;
+      endMoveSnap();
       // Float stays floating; a real lift-move bakes here.
       if (!float && mode === "pixels") engine.endMove();
       // Selection follows whatever moved (float, lifted pixels, or selection-only).
@@ -5740,6 +6381,7 @@ export default function CanvasArea({
       const rect = dragRectRef.current;
       marqueeRef.current = null;
       dragRectRef.current = null;
+      endMoveSnap();
       liveTriangleRef.current = null; // a new marquee op supersedes any live triangle
       if (rect && rect.w >= 1 && rect.h >= 1) {
         if (mode === "new" && marqueeShape === "rect") {
@@ -5961,14 +6603,26 @@ export default function CanvasArea({
         {showRulers && (
           <>
             <div className={styles.rulerCorner} />
-            <div className={styles.rulerH}>
+            {/* Press-and-drag anywhere on a ruler to pull out a guide (Alt swaps
+                the orientation). Locked guides make the rulers inert. */}
+            <div
+              className={styles.rulerH}
+              data-guides={!lockGuides || undefined}
+              onPointerDown={onRulerPointerDown("h")}
+              title={lockGuides ? "Guides are locked (View ▸ Lock guides)" : "Drag down for a guide"}
+            >
               {hTicks.map((t, i) => (
                 <span key={i} className={styles.tick} data-major={t.major} style={{ left: t.pos }}>
                   {t.label !== undefined && t.pos < vpSize.w - 24 && <em>{t.label}</em>}
                 </span>
               ))}
             </div>
-            <div className={styles.rulerV}>
+            <div
+              className={styles.rulerV}
+              data-guides={!lockGuides || undefined}
+              onPointerDown={onRulerPointerDown("v")}
+              title={lockGuides ? "Guides are locked (View ▸ Lock guides)" : "Drag right for a guide"}
+            >
               {vTicks.map((t, i) => (
                 <span key={i} className={styles.tick} data-major={t.major} style={{ top: t.pos }}>
                   {t.label !== undefined && t.pos < vpSize.h - 24 && <em>{t.label}</em>}

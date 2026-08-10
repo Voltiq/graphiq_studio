@@ -1,6 +1,7 @@
 import { filterMaskKey } from "./layers";
 import type { LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers";
 import type { ImageMetadata } from "./metadata";
+import type { Guide } from "./guides";
 import type { SavedPath } from "./paths";
 import type { Rect } from "./view";
 
@@ -46,6 +47,8 @@ export interface ProjectFile {
   metadata?: ImageMetadata | null;
   /** Stored pen paths (v11 — the Paths panel, incl. the Work Path). */
   paths?: SavedPath[];
+  /** Ruler guides (v17). Absent in older files — an empty set, not an error. */
+  guides?: Guide[];
   savedAt: string;
 }
 
@@ -70,6 +73,7 @@ export interface ProjectInput {
   selection: Rect[];
   metadata?: ImageMetadata | null;
   paths?: SavedPath[];
+  guides?: Guide[];
 }
 
 function serializeNode(
@@ -106,7 +110,7 @@ export function serializeProject(
 ): ProjectFile {
   return {
     format: "graphiq-project",
-    version: 16, // v16 adds gradient text fill (v15 text warp, v14 fill layers, v13 linked layers)
+    version: 17, // v17 adds ruler guides (v16 gradient text fill, v15 text warp, v14 fill layers)
     name: doc.name,
     width: doc.width,
     height: doc.height,
@@ -120,6 +124,7 @@ export function serializeProject(
     history,
     metadata: doc.metadata ?? null,
     paths: doc.paths ?? [],
+    guides: doc.guides ?? [],
     savedAt: new Date().toISOString(),
   };
 }

@@ -24,6 +24,7 @@ import Panel from "./Panel";
 import ColorPanel from "./panels/ColorPanel";
 import ColorPanelMenu from "./panels/ColorPanelMenu";
 import SwatchesPanel from "./panels/SwatchesPanel";
+import InfoPanel from "./panels/InfoPanel";
 import BrushesPanel from "./panels/BrushesPanel";
 import AdjustmentsPanel from "./panels/AdjustmentsPanel";
 import LayersPanel from "./panels/LayersPanel";
@@ -43,6 +44,7 @@ import type { BrushSettings, EngineHandle, HistorySummary } from "../lib/paint";
 import type { Adjustments } from "../lib/adjust";
 import type { ExtraAdjustmentType } from "../lib/adjust-extra";
 import type { ImageMetadata } from "../lib/metadata";
+import type { MeasureUnit } from "../lib/prefs";
 
 export type PanelVisibility = {
   color: boolean;
@@ -57,6 +59,7 @@ export type PanelVisibility = {
   navigator: boolean;
   channels: boolean;
   metadata: boolean;
+  info: boolean;
 };
 
 export type PanelId =
@@ -71,10 +74,12 @@ export type PanelId =
   | "paths"
   | "history"
   | "actions"
-  | "metadata";
+  | "metadata"
+  | "info";
 const DEFAULT_ORDER: PanelId[] = [
   "navigator",
   "channels",
+  "info",
   "color",
   "swatches",
   "brushes",
@@ -151,6 +156,7 @@ const DEFAULT_OPEN: Record<PanelId, boolean> = {
   history: false,
   actions: false,
   metadata: false,
+  info: false,
 };
 
 /** Read the saved panel order, dropping unknown ids and appending any new ones. */
@@ -235,6 +241,12 @@ interface Props {
   selectionPivot: { x: number; y: number } | null;
   /** Active document facts for the Metadata panel. */
   docName: string;
+  /** Info panel: live pointer readout + document metrics. */
+  subscribeCursor: (fn: (p: { x: number; y: number } | null) => void) => () => void;
+  docWidth: number;
+  docHeight: number;
+  unit?: MeasureUnit;
+  dpi?: number;
   colorSpace: WorkingSpace;
   imageMeta: ImageMetadata | null;
   /** Write an edit from the panel's editable fields (description/artist/copyright)
@@ -310,6 +322,11 @@ export default function RightDock({
   selectionAngle,
   selectionPivot,
   docName,
+  subscribeCursor,
+  docWidth,
+  docHeight,
+  unit,
+  dpi,
   colorSpace,
   imageMeta,
   onEditMeta,
@@ -543,6 +560,20 @@ export default function RightDock({
               engineRef={engineRef}
               tree={layers.layers}
               docName={docName}
+            />
+          </Panel>
+        ) : null;
+      case "info":
+        return panels.info ? (
+          <Panel key="info" title="Info" icon={Info} {...dp}>
+            <InfoPanel
+              subscribeCursor={subscribeCursor}
+              engineRef={engineRef}
+              selection={selection}
+              width={docWidth}
+              height={docHeight}
+              unit={unit}
+              dpi={dpi}
             />
           </Panel>
         ) : null;

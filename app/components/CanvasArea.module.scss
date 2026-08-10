@@ -171,11 +171,21 @@ $ruler: 22px;
 .rulerH {
   grid-area: 1 / 2;
   border-bottom: 1px solid var(--border);
+
+  // Guides are dragged out of the rulers, so advertise it with the same cursor
+  // the guide itself gets on the canvas. Absent when guides are locked.
+  &[data-guides] {
+    cursor: row-resize;
+  }
 }
 
 .rulerV {
   grid-area: 2 / 1;
   border-right: 1px solid var(--border);
+
+  &[data-guides] {
+    cursor: col-resize;
+  }
 }
 
 .tick {

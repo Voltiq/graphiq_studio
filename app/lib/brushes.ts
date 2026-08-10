@@ -11,6 +11,7 @@
 // radial falloff, the same curve the engine's soft tip is baked from.
 
 import type { BrushSettings } from "./paint";
+import { DEFAULT_DYNAMICS } from "./pointer";
 
 const KEY = "graphiq:brushes";
 
@@ -70,6 +71,11 @@ export function coerceSettings(raw: unknown): BrushSettings {
     flow: Math.round(num(o.flow, 100, 0, 100)),
     blend: typeof o.blend === "string" && o.blend ? o.blend : "Normal",
     smoothing: Math.round(num(o.smoothing, 0, 0, 100)),
+    // Pressure dynamics: absent means "the default", so an older preset (or a
+    // hand-written .gbr) keeps behaving exactly as the built-ins do.
+    pressureSize: typeof o.pressureSize === "boolean" ? o.pressureSize : DEFAULT_DYNAMICS.size,
+    pressureFlow: typeof o.pressureFlow === "boolean" ? o.pressureFlow : DEFAULT_DYNAMICS.flow,
+    pressureMin: Math.round(num(o.pressureMin, DEFAULT_DYNAMICS.min, 0, 100)),
   };
 }
 

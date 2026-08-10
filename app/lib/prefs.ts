@@ -1,5 +1,8 @@
 // User preferences, persisted to localStorage (separate from per-document state).
 
+import type { CvdType } from "./cvd";
+import type { PressureCurve } from "./pointer";
+
 /** Measurement unit for rulers and size readouts. */
 export type MeasureUnit = "px" | "in" | "cm";
 
@@ -130,6 +133,18 @@ export interface Preferences {
   brushCrosshair: boolean;
   /** Brush ring / crosshair colour (the dark under-stroke stays for contrast). */
   ringColor: string;
+  /** Honour stylus pressure in the paint tools (a mouse is never affected). */
+  penPressure: boolean;
+  /** How hard you have to press for full size/flow. */
+  pressureCurve: PressureCurve;
+  /** Ignore touch for tool input once a stylus has been used on this canvas —
+   *  two-finger pan/zoom keeps working, so a resting hand is simply ignored. */
+  palmRejection: boolean;
+  /** Colour-vision deficiency to accommodate: retunes the semantic triad
+   *  (danger / success / warning) to one that stays separable. */
+  colorVision: CvdType;
+  /** Firm up borders, text ramps and the focus ring within the current theme. */
+  highContrast: boolean;
 }
 
 export const DEFAULT_PREFS: Preferences = {
@@ -165,6 +180,11 @@ export const DEFAULT_PREFS: Preferences = {
   paintCursor: "ring",
   brushCrosshair: true,
   ringColor: "#ffffff", // reproduces the historical white strokes
+  penPressure: true,
+  pressureCurve: "linear",
+  palmRejection: true,
+  colorVision: "none",
+  highContrast: false,
 };
 
 const KEY = "graphiq:preferences";

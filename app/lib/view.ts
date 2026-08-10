@@ -78,6 +78,10 @@ export interface NavigatorView {
   /** Document size in px. */
   docW: number;
   docH: number;
+  /** Set the zoom level (%) — the canvas pivots around the viewport centre. */
+  setZoom: (z: number) => void;
+  /** Fit the whole document in the viewport. */
+  fit: () => void;
 }
 
 /** Keep at least this many px of the canvas reachable so it can't get lost. */

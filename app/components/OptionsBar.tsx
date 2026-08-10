@@ -8,6 +8,7 @@ import {
   Lasso as LassoIcon,
   Magnet,
   Palette,
+  PenLine,
   Waves,
   AlignCenter,
   AlignHorizontalJustifyCenter,
@@ -85,7 +86,7 @@ import {
   stretchKeyword,
 } from "../lib/richtext";
 import GradientControl, { GradientEditor } from "./GradientControl";
-import type { BrushSettings } from "../lib/paint";
+import { brushDynamics, type BrushSettings } from "../lib/paint";
 import {
   ColorChip,
   Divider,
@@ -306,6 +307,108 @@ function WarpControl({ text, onText }: TextProps) {
               <BaseSlider inline label="Horizontal" min={-100} max={100} bipolar value={warp.distH} onChange={(n) => setWarp({ distH: n })} />
               <BaseSlider inline label="Vertical" min={-100} max={100} bipolar value={warp.distV} onChange={(n) => setWarp({ distV: n })} />
               <span className={styles.otHint}>Deforms the whole block; bakes when you commit the text (Enter / click away).</span>
+            </div>
+          </>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+/**
+ * Pen-pressure popover for the paint tools: which brush properties a stylus
+ * drives, and how weak the lightest touch gets.
+ *
+ * Opacity is deliberately absent. In this engine opacity is the ceiling applied
+ * when the whole stroke buffer is composited, so it cannot vary within a stroke
+ * — per-dab paint IS `flow`, which is what pressure drives instead.
+ */
+function PressureControl({
+  brush,
+  onBrush,
+  showFlow,
+}: {
+  brush: BrushSettings;
+  onBrush: (b: BrushSettings) => void;
+  showFlow: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ left: 0, top: 0 });
+  const dyn = brushDynamics(brush);
+  const active = showFlow ? dyn.size || dyn.flow : dyn.size;
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation();
+        setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
+  const toggleOpen = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 300)), top: r.bottom + 6 });
+    }
+    setOpen((o) => !o);
+  };
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={styles.iconBtn}
+        data-active={active || open}
+        title="Pen pressure (size / flow)"
+        aria-label="Pen pressure"
+        onClick={toggleOpen}
+      >
+        <PenLine size={15} />
+      </button>
+      {open &&
+        createPortal(
+          <>
+            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
+            <div
+              className={styles.otPopover}
+              style={{ left: pos.left, top: pos.top }}
+              role="dialog"
+              aria-label="Pen pressure"
+            >
+              <span className={styles.otTitle}>Pen pressure</span>
+              <div style={{ display: "flex", gap: 18, padding: "2px 0 4px" }}>
+                <Toggle
+                  label="Size"
+                  checked={dyn.size}
+                  onChange={(v) => onBrush({ ...brush, pressureSize: v })}
+                />
+                {showFlow && (
+                  <Toggle
+                    label="Flow"
+                    checked={dyn.flow}
+                    onChange={(v) => onBrush({ ...brush, pressureFlow: v })}
+                  />
+                )}
+              </div>
+              <BaseSlider
+                inline
+                label="Minimum"
+                unit="%"
+                min={0}
+                max={100}
+                value={dyn.min}
+                onChange={(n) => onBrush({ ...brush, pressureMin: n })}
+              />
+              <span className={styles.otHint}>
+                What the lightest touch still puts down. A mouse always paints at full strength;
+                the response curve and palm rejection live in Preferences ▸ Touch &amp; pen.
+              </span>
             </div>
           </>,
           document.body,
@@ -802,6 +905,8 @@ function renderOptions(
         <>
           <Slider label="Size" min={1} max={500} unit="px" value={brush.size} onChange={(n) => set({ size: n })} />
           <Slider label="Opacity" unit="%" value={brush.opacity} onChange={(n) => set({ opacity: n })} />
+          {/* Pencil has no flow — only the tip width can follow the pen. */}
+          <PressureControl brush={brush} onBrush={onBrush} showFlow={false} />
           <Divider />
           <Select
             label="Blend"
@@ -825,6 +930,7 @@ function renderOptions(
           <Slider label="Hardness" unit="%" value={brush.hardness} onChange={(n) => set({ hardness: n })} />
           <Slider label="Opacity" unit="%" value={brush.opacity} onChange={(n) => set({ opacity: n })} />
           <Slider label="Flow" unit="%" value={brush.flow} onChange={(n) => set({ flow: n })} />
+          <PressureControl brush={brush} onBrush={onBrush} showFlow />
           {tool !== "eraser" && (
             <>
               <Divider />

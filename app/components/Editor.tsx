@@ -147,6 +147,7 @@ import {
   type ProjectFile,
   type SerializedNode,
 } from "../lib/project";
+import { sanitizeGuides, type Guide } from "../lib/guides";
 import {
   IMPORT_ACCEPT,
   availableFormats,
@@ -214,7 +215,9 @@ import {
   type ExtraAdjustmentType,
 } from "../lib/adjust-extra";
 import AdjustmentExtraDialog from "./AdjustmentExtraDialog";
+import DialogFocus from "./DialogFocus";
 import FillDialog from "./FillDialog";
+import NewGuideDialog from "./NewGuideDialog";
 import ExportLutDialog from "./ExportLutDialog";
 import ExportTiffDialog from "./ExportTiffDialog";
 import ExportPdfDialog from "./ExportPdfDialog";
@@ -275,6 +278,8 @@ interface Doc {
   dpi?: number;
   /** Stored pen paths (Paths panel; "work" = the latest Pen-tool commit). */
   paths?: SavedPath[];
+  /** Ruler guides (View ▸ Show guides). Per-document, saved in .gproj. */
+  guides?: Guide[];
   /** 32-bit float radiance source (Merge to HDR) — IN MEMORY only, never
    *  serialized (.gproj/autosave keep the tone-mapped pixels instead). */
   hdr?: HdrImage | null;
@@ -282,6 +287,9 @@ interface Doc {
 
 /** A layer selection: the primary (active) id plus the full selected set. */
 type Sel = { active: string | null; selected: string[] };
+
+/** Stable empty guide list — a fresh `[]` every render would churn the canvas. */
+const EMPTY_GUIDES: Guide[] = [];
 
 const ALL_PANELS: PanelVisibility = {
   color: true,
@@ -296,6 +304,7 @@ const ALL_PANELS: PanelVisibility = {
   navigator: true,
   channels: true,
   metadata: true,
+  info: true,
 };
 /** Window-menu action id → panel key. */
 const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
@@ -311,6 +320,7 @@ const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
   "window-navigator": "navigator",
   "window-channels": "channels",
   "window-metadata": "metadata",
+  "window-info": "info",
 };
 
 const makeDoc = (seq: number, size?: { w: number; h: number }, dpi = 300): Doc => ({
@@ -534,9 +544,32 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [snap, setSnap] = useState(true);
   const viewApiRef = useRef<ViewApi | null>(null);
   const [showDocGrid, setShowDocGrid] = useState(false);
+  // Guides (TODO §11). Visibility doubles as the snap switch — Photoshop's rule:
+  // hidden guides pull on nothing. Locked guides still show and still snap, they
+  // just can't be dragged. The guides themselves are per-document (see Doc).
+  const [showGuides, setShowGuides] = useState(true);
+  const [lockGuides, setLockGuides] = useState(false);
+  const [smartGuides, setSmartGuides] = useState(true);
+  const [newGuideOpen, setNewGuideOpen] = useState(false);
   // Current view toggles, reachable from the one-time keydown listener.
-  const viewSettingsRef = useRef({ rulers: true, grid: false, snap: true, docgrid: false });
-  viewSettingsRef.current = { rulers: showRulers, grid: showGrid, snap, docgrid: showDocGrid };
+  const viewSettingsRef = useRef({
+    rulers: true,
+    grid: false,
+    snap: true,
+    docgrid: false,
+    guides: true,
+    lockguides: false,
+    smartguides: true,
+  });
+  viewSettingsRef.current = {
+    rulers: showRulers,
+    grid: showGrid,
+    snap,
+    docgrid: showDocGrid,
+    guides: showGuides,
+    lockguides: lockGuides,
+    smartguides: smartGuides,
+  };
   const [colorSpace, setColorSpaceState] = useState<WorkingSpace>("srgb");
   // Soft proofing (view-only): Ctrl+Alt+Y simulate, Ctrl+Alt+Shift+Y gamut warn.
   const [proofColors, setProofColors] = useState(false);
@@ -3035,6 +3068,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         selection: d.selection,
         metadata: d.metadata ?? null,
         paths: d.paths ?? [],
+        guides: d.guides ?? [],
       },
       { foreground: fgRef.current, background: bgRef.current },
       isActive
@@ -3133,6 +3167,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   useEffect(() => {
     document.documentElement.setAttribute("data-motion", prefs.reduceMotion ? "off" : "on");
   }, [prefs.reduceMotion]);
+
+  // Accessibility preferences -> data-cvd / data-contrast on <html>, which
+  // globals.scss reads to swap the semantic triad and firm up the theme. Same
+  // client-side pattern as data-motion (theme/accent go through cookies because
+  // only those two would flash on the very first paint).
+  useEffect(() => {
+    document.documentElement.setAttribute("data-cvd", prefs.colorVision);
+  }, [prefs.colorVision]);
+  useEffect(() => {
+    document.documentElement.setAttribute("data-contrast", prefs.highContrast ? "high" : "normal");
+  }, [prefs.highContrast]);
 
   // Render-cache budget preference -> engine LRU limit (evicts when shrunk).
   useEffect(() => {
@@ -3333,6 +3378,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       selectionPivot: null,
       metadata: p.metadata ?? null, // v9; absent in older files
       paths: coercePaths(p.paths), // v11; absent in older files
+      // v17; older files have none, and a guide outside the document is dropped
+      // rather than trusted (a hand-edited file shouldn't produce ghost lines).
+      guides: sanitizeGuides(p.guides, p.width, p.height),
     };
     setDocs((ds) => [...ds, doc]);
     if (activate) setActiveId(docId);
@@ -4401,6 +4449,27 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (id) persistPanels({ ...panels, [id]: !panels[id] });
   };
 
+  // ---- Guides (View menu, ruler drags — per-document, saved in .gproj) ------
+  // Guide edits are ordinary undo steps: they're structural (no pixels), and the
+  // document they belong to is captured by id so an undo landing after a tab
+  // switch still edits the right document rather than whatever is on screen.
+  const setDocGuides = (docId: string, next: Guide[]) =>
+    setDocs((ds) => ds.map((d) => (d.id === docId ? { ...d, guides: next } : d)));
+  const commitGuides = (label: string, next: Guide[]) => {
+    const docId = activeIdRef.current;
+    const before = activeDocRef.current.guides ?? [];
+    const same =
+      before.length === next.length &&
+      before.every((g, i) => g.axis === next[i].axis && g.pos === next[i].pos);
+    if (same) return;
+    setDocGuides(docId, next);
+    paintRef.current?.pushStructural(
+      label,
+      () => setDocGuides(docId, before),
+      () => setDocGuides(docId, next),
+    );
+  };
+
   // ---- View menu: rulers / grid / snap (persisted), zoom commands ----
   useEffect(() => {
     try {
@@ -4409,16 +4478,30 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       if (typeof v.grid === "boolean") setShowGrid(v.grid);
       if (typeof v.snap === "boolean") setSnap(v.snap);
       if (typeof v.docgrid === "boolean") setShowDocGrid(v.docgrid);
+      if (typeof v.guides === "boolean") setShowGuides(v.guides);
+      if (typeof v.lockguides === "boolean") setLockGuides(v.lockguides);
+      if (typeof v.smartguides === "boolean") setSmartGuides(v.smartguides);
     } catch {
       /* ignore */
     }
   }, []);
-  const persistView = (patch: { rulers?: boolean; grid?: boolean; snap?: boolean; docgrid?: boolean }) => {
+  const persistView = (patch: {
+    rulers?: boolean;
+    grid?: boolean;
+    snap?: boolean;
+    docgrid?: boolean;
+    guides?: boolean;
+    lockguides?: boolean;
+    smartguides?: boolean;
+  }) => {
     const next = { ...viewSettingsRef.current, ...patch };
     setShowRulers(next.rulers);
     setShowGrid(next.grid);
     setSnap(next.snap);
     setShowDocGrid(next.docgrid);
+    setShowGuides(next.guides);
+    setLockGuides(next.lockguides);
+    setSmartGuides(next.smartguides);
     try {
       localStorage.setItem("pe-view", JSON.stringify(next));
     } catch {
@@ -4435,7 +4518,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "view-grid") persistView({ grid: !v.grid });
     else if (actionId === "view-docgrid") persistView({ docgrid: !v.docgrid });
     else if (actionId === "view-snap") persistView({ snap: !v.snap });
-    else if (actionId === "view-proof") setProofColors((p) => !p);
+    else if (actionId === "view-guides") persistView({ guides: !v.guides });
+    else if (actionId === "view-lock-guides") persistView({ lockguides: !v.lockguides });
+    else if (actionId === "view-smart-guides") persistView({ smartguides: !v.smartguides });
+    else if (actionId === "view-new-guide") setNewGuideOpen(true);
+    else if (actionId === "view-clear-guides") {
+      if ((activeDocRef.current.guides ?? []).length) commitGuides("Clear Guides", []);
+      else showToast("This document has no guides.");
+    } else if (actionId === "view-proof") setProofColors((p) => !p);
     else if (actionId === "view-gamut") setGamutWarn((g) => !g);
     else if (actionId === "view-perf-hud") setPerfHud((h) => !h);
   };
@@ -5223,6 +5313,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   return (
     <div className={styles.app}>
+      {/* Focus management for every modal dialog (see DialogFocus). */}
+      <DialogFocus />
       <TopBar
         mobile={mobile}
         onMenuAction={handleMenuAction}
@@ -5246,12 +5338,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           "window-navigator": panels.navigator,
           "window-channels": panels.channels,
           "window-metadata": panels.metadata,
+          "window-info": panels.info,
           "view-rulers": showRulers,
           "view-grid": showGrid,
           "view-docgrid": showDocGrid,
           "view-proof": proofColors,
           "view-gamut": gamutWarn,
           "view-snap": snap,
+          "view-guides": showGuides,
+          "view-lock-guides": lockGuides,
+          "view-smart-guides": smartGuides,
           "view-perf-hud": perfHud,
           "layer-clip": !!activeLeafNode?.clipped,
         }}
@@ -5486,6 +5582,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           }
           pixelGridColor={prefs.pixelGridColor}
           snapDistance={prefs.snapDistance}
+          guides={active.guides ?? EMPTY_GUIDES}
+          showGuides={showGuides}
+          lockGuides={lockGuides}
+          smartGuides={smartGuides}
+          onGuidesCommit={commitGuides}
+          onRevealGuides={() => persistView({ guides: true })}
+          penPressure={prefs.penPressure}
+          pressureCurve={prefs.pressureCurve}
+          palmRejection={prefs.palmRejection}
           cursorPrefs={{
             mode: prefs.paintCursor,
             crosshair: prefs.brushCrosshair,
@@ -5515,6 +5620,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           maxHistoryRows={prefs.maxHistory}
           onHistoryJump={(i) => paintRef.current?.jumpTo(i)}
           onSetHistorySource={(i) => paintRef.current?.setHistorySourceIndex(i)}
+          subscribeCursor={subscribeCursor}
+          docWidth={active.width}
+          docHeight={active.height}
+          unit={prefs.unit}
+          dpi={active.dpi ?? 300}
           onTakeSnapshot={takeSnapshot}
           onRestoreSnapshot={restoreSnapshotNow}
           onDeleteSnapshot={removeSnapshot}
@@ -5527,6 +5637,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             vpH: viewport.h,
             docW: active.width,
             docH: active.height,
+            setZoom,
+            fit: () => viewApiRef.current?.fit(),
           }}
           adjust={sliderSpec ? sliderSpec.params : adjust}
           onAdjust={sliderSpec ? editAdjustmentParams : onAdjust}
@@ -5893,6 +6005,18 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             />
           );
         })()}
+      {newGuideOpen && (
+        <NewGuideDialog
+          width={active.width}
+          height={active.height}
+          onAdd={(g) => {
+            commitGuides("New Guide", [...(activeDocRef.current.guides ?? []), g]);
+            // A guide you just asked for should be visible even if guides were off.
+            if (!viewSettingsRef.current.guides) persistView({ guides: true });
+          }}
+          onClose={() => setNewGuideOpen(false)}
+        />
+      )}
       {toneEdit && toneSpec && toneEdit.tool === "curves" && toneSpec.type === "curves" && (
         <CurvesDialog
           spec={toneSpec}
