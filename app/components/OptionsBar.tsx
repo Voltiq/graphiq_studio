@@ -971,6 +971,16 @@ function renderOptions(
             value={brush.smoothing}
             onChange={(n) => set({ smoothing: n })}
           />
+          {tool === "eraser" && (
+            <>
+              <Divider />
+              <Toggle
+                label="Erase to History"
+                checked={!!brush.eraseToHistory}
+                onChange={(v) => set({ eraseToHistory: v })}
+              />
+            </>
+          )}
           {tool !== "eraser" && (
             <>
               <Divider />

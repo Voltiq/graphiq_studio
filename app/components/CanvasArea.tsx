@@ -5400,9 +5400,38 @@ export default function CanvasArea({
       if (paintBlocked(layerId)) return; // pixels-locked layer
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
-      paintingRef.current = true;
       const p = toDoc(e);
       paintHoverRef.current = { x: p.x, y: p.y }; // ring tracks the stroke
+
+      // Erase to History: the eraser paints back from the history source instead
+      // of erasing to transparency. It IS the history-brush stroke, run with the
+      // eraser's own size/hardness/opacity/flow — so it goes through that
+      // session (which the move/up handlers already drive off historyingRef).
+      //
+      // Two deliberate limits. It applies only on LAYER PIXELS: the history
+      // source is a reconstruction of this layer's pixels at an earlier state,
+      // and a layer/filter/quick mask has no such past to erase back to — on a
+      // mask the eraser stays an eraser. And it's read from the ERASER's
+      // settings only, so a flipped stylus (which erases with the brush's
+      // settings) keeps erasing to transparency rather than silently
+      // resurrecting pixels.
+      const onPixels = !engine.quickMaskActive() && engine.getActiveSurface(layerId) === "pixels";
+      if (tool === "eraser" && brush.eraseToHistory && onPixels) {
+        historyingRef.current = true;
+        engine.beginHistory(
+          layerId,
+          brush,
+          p.x,
+          p.y,
+          selection.length ? selection : null,
+          selectionAngle,
+          selectionPivot,
+          "Erase to History",
+        );
+        return;
+      }
+
+      paintingRef.current = true;
       // Left button paints with the primary colour, right button with the secondary.
       const paintCol = e.button === 2 ? background : foreground;
       engine.beginStroke(
@@ -6898,7 +6927,9 @@ export default function CanvasArea({
                 onCursor(null);
                 // Hide the brush-ring cursors when the pointer leaves the
                 // canvas (unless mid-stroke, so the ring stays while dragging out).
-                if (!paintingRef.current) {
+                // An Erase-to-History stroke is a HISTORY session drawn with the
+                // eraser's ring, so it has to count as mid-stroke here too.
+                if (!paintingRef.current && !historyingRef.current) {
                   paintHoverRef.current = null;
                   ensureAnts();
                 }

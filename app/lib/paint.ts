@@ -124,6 +124,11 @@ export interface BrushSettings {
   pressureFlow?: boolean;
   /** Floor at zero pressure, as a % of the full value (absent ⇒ 20). */
   pressureMin?: number;
+  /** ERASER ONLY: paint back from the history source instead of erasing to
+   *  transparency — Photoshop's "Erase to History", the eraser behaving as the
+   *  History brush. Ignored by the brush and pencil, and ignored while a mask
+   *  surface is active (the history stroke targets layer pixels). */
+  eraseToHistory?: boolean;
 }
 
 /** Dynamics for sessions that must not respond to pressure (the clone stamp). */
@@ -6219,6 +6224,7 @@ export class PaintEngine {
   private historyLastRaw = { x: 0, y: 0 };
   private historySmoothPt = { x: 0, y: 0 };
   private historySelMask: Uint8ClampedArray | null = null;
+  private historyLabel = "History Brush";
 
   beginHistory(
     layerId: string,
@@ -6228,11 +6234,15 @@ export class PaintEngine {
     clip: Rect[] | null = null,
     clipAngle = 0,
     clipPivot: { x: number; y: number } | null = null,
+    /** History-step label. The eraser's "Erase to History" runs this exact
+     *  stroke, and the undo list should name the tool the user actually used. */
+    label = "History Brush",
   ) {
     if (this.w < 1 || this.h < 1) return;
     this.endAdjust();
     const l = this.layer(layerId);
     this.historying = true;
+    this.historyLabel = label;
     this.historyLayer = layerId;
     this.historyOrig = l.ctx.getImageData(0, 0, this.w, this.h);
     // The source: a pinned snapshot when one is selected (exact pixels), else
@@ -6401,7 +6411,7 @@ export class PaintEngine {
       if (w > 0 && h > 0) {
         const before = this.subImage(this.historyOrig, x, y, w, h);
         const after = this.layer(layerId).ctx.getImageData(x, y, w, h);
-        this.pushEntry(layerId, { x, y, w, h }, before, after, "History Brush");
+        this.pushEntry(layerId, { x, y, w, h }, before, after, this.historyLabel);
       }
     }
     this.historying = false;
