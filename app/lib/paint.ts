@@ -519,6 +519,10 @@ export interface EngineHandle {
   applyMaskToLayer: (id: string) => void;
   offsetMask: (id: string, dx: number, dy: number) => void;
   maskSelectionRects: (id: string) => Rect[];
+  /** Tight bounds of a layer's non-transparent pixels (null = empty layer). */
+  layerContentBounds: (id: string) => Rect | null;
+  /** Translate a layer's pixels (align/distribute); caller owns the history. */
+  offsetLayerPixels: (id: string, dx: number, dy: number, alsoMask?: boolean) => void;
   setActiveSurface: (id: string, surface: ActiveSurface) => void;
   getActiveSurface: (id: string) => ActiveSurface;
   // ---- Quick Mask (document-level selection painting) ----
@@ -6606,6 +6610,39 @@ export class PaintEngine {
     const l = this.layers.get(id);
     if (!l) return null;
     return PaintEngine.alphaBounds(l.ctx.getImageData(0, 0, this.w, this.h), this.w, this.h);
+  }
+
+  /** Alpha (0–255) of a layer's own pixel at (x, y) — the Move tool's
+   *  auto-select hit test. Reads the LAYER, not the composite, so a layer
+   *  hidden behind another is still hittable when nothing above it is opaque. */
+  layerAlphaAt(id: string, x: number, y: number): number {
+    const l = this.layers.get(id);
+    const ix = Math.floor(x);
+    const iy = Math.floor(y);
+    if (!l || ix < 0 || iy < 0 || ix >= this.w || iy >= this.h) return 0;
+    return l.ctx.getImageData(ix, iy, 1, 1).data[3];
+  }
+
+  /**
+   * Translate a layer's pixels by (dx, dy). The primitive align/distribute run
+   * on — a move DRAG can't serve them, because that session applies one delta to
+   * every layer riding along and an align gives each layer its own.
+   *
+   * No history of its own: the caller brackets a whole batch with
+   * captureLeaves/restoreLeaves so one align is one undo step, not one per layer.
+   * The vacated area clears to transparency (an offset mask fills black instead
+   * — hidden — which is why this can't just call offsetMask on the layer).
+   */
+  offsetLayerPixels(id: string, dx: number, dy: number, alsoMask = false): void {
+    const l = this.layers.get(id);
+    if (!l || (dx === 0 && dy === 0)) return;
+    const snap = l.ctx.getImageData(0, 0, this.w, this.h);
+    l.ctx.globalCompositeOperation = "source-over";
+    l.ctx.clearRect(0, 0, this.w, this.h);
+    l.ctx.putImageData(snap, Math.round(dx), Math.round(dy));
+    this.bumpPixel(id);
+    if (alsoMask && this.masks.has(id)) this.offsetMask(id, dx, dy);
+    this.emitChange();
   }
 
   private static alphaBounds(img: ImageData, w: number, h: number): Rect | null {

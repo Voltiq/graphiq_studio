@@ -89,6 +89,7 @@ import {
 } from "../lib/paint";
 import {
   collectLeafIds,
+  containsId,
   findNode,
   isFillLayer,
   isPixelsLocked,
@@ -649,6 +650,9 @@ export default function CanvasArea({
   redEye,
   clone,
   dodge,
+  autoSelect,
+  autoSelectScope,
+  onPickLayer,
   text,
   onText,
   onPlaceText,
@@ -790,6 +794,12 @@ export default function CanvasArea({
   clone: CloneSettings;
   /** Dodge/Burn brush settings. */
   dodge: DodgeSettings;
+  /** Move tool: clicking the canvas picks the layer under the pointer. */
+  autoSelect: boolean;
+  /** Auto-select target: the layer itself, or the group it lives in. */
+  autoSelectScope: "layer" | "group";
+  /** Make `id` the active layer (auto-select's pick). */
+  onPickLayer: (id: string) => void;
   /** Text tool settings (styling for the live editor + rasterization). */
   text: TextSettings;
   /** Patch the text settings (used by the in-editor Ctrl+B/I/U shortcuts). */
@@ -1380,6 +1390,36 @@ export default function CanvasArea({
       orig: v,
     });
   };
+  /**
+   * Topmost visible pixel layer whose OWN pixels are opaque at `pt` — the Move
+   * tool's auto-select target.
+   *
+   * Walked back-to-front because `drawStack` composites a sibling list
+   * bottom→top, so the last entry is the one on top. Alpha is read from the
+   * layer rather than the composite: a layer showing through a hole in the one
+   * above it is still the thing you clicked on.
+   */
+  const pickLayerAt = (pt: { x: number; y: number }): string | null => {
+    const walk = (nodes: LayerNode[]): string | null => {
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        const n = nodes[i];
+        if (!n.visible) continue;
+        if (n.type === "group") {
+          const hit = walk(n.children);
+          if (hit) return hit;
+        } else if (n.type === "layer" && engine.layerAlphaAt(n.id, pt.x, pt.y) > 8) {
+          return n.id;
+        }
+      }
+      return null;
+    };
+    const hit = walk(layersRef.current);
+    if (!hit || autoSelectScope !== "group") return hit;
+    // Group scope selects the OUTERMOST group holding the hit layer, so moving
+    // grabs the whole assembly rather than one piece of it.
+    return layersRef.current.find((n) => n.type === "group" && containsId(n, hit))?.id ?? hit;
+  };
+
   // Topmost visible vector layer of `type` whose bounds contain `pt` (or null).
   const vectorLayerAt = (
     pt: { x: number; y: number },
@@ -3616,6 +3656,8 @@ export default function CanvasArea({
       applyMaskToLayer: (id) => engine.applyMaskToLayer(id),
       offsetMask: (id, dx, dy) => engine.offsetMask(id, dx, dy),
       maskSelectionRects: (id) => engine.maskSelectionRects(id),
+      layerContentBounds: (id) => engine.layerContentBounds(id),
+      offsetLayerPixels: (id, dx, dy, alsoMask) => engine.offsetLayerPixels(id, dx, dy, alsoMask),
       quickMaskActive: () => engine.quickMaskActive(),
       // Both entry points restart the overlay loop: it is what paints the red,
       // and it parks itself whenever nothing on screen needs animating.
@@ -5099,6 +5141,22 @@ export default function CanvasArea({
     }
     if (tool === "move") {
       const p = toDoc(e);
+      // Auto-select: clicking a pixel picks the layer that owns it, so you can
+      // grab things on the canvas instead of hunting the Layers panel. Only
+      // without a selection — with a marquee up, a click starts moving THAT,
+      // and re-targeting the layer under the cursor would be a trap.
+      // `moveId` shadows the active layer for this gesture so an auto-selected
+      // pick takes effect immediately — the prop won't have updated yet, and
+      // waiting a render would drag the OLD layer on the very click that picked
+      // the new one.
+      let moveId = activeLayerId;
+      if (autoSelect && moveMode === "pixels" && !selection.length) {
+        const hit = pickLayerAt(p);
+        if (hit && hit !== activeLayerId) {
+          onPickLayer(hit);
+          moveId = hit;
+        }
+      }
       if (moveMode === "selection") {
         if (!selection.length) return; // nothing to move
         e.preventDefault();
@@ -5108,11 +5166,11 @@ export default function CanvasArea({
       } else {
         // Pixels mode: float an active selection (or keep moving the current float),
         // leaving the layer's own content untouched until deselect.
-        if (moveBlocked(activeLayerId)) return; // position-locked or fill layer
-        let floating = engine.isFloating && engine.floatLayerId === activeLayerId;
-        if (!floating && activeLayerId && selection.length) {
+        if (moveBlocked(moveId)) return; // position-locked or fill layer
+        let floating = engine.isFloating && engine.floatLayerId === moveId;
+        if (!floating && moveId && selection.length) {
           floating = engine.beginFloatFromSelection(
-            activeLayerId,
+            moveId,
             selection,
             selectionAngle,
             selectionPivot,
@@ -5125,7 +5183,7 @@ export default function CanvasArea({
           moveRef.current = { sx: p.x, sy: p.y, mode: "pixels", float: true, baseOff: engine.getFloatOffset() };
           beginMoveSnap();
         } else {
-          if (!activeLayerId) return; // nothing to move
+          if (!moveId) return; // nothing to move
           e.preventDefault();
           viewRef.current?.setPointerCapture(e.pointerId);
           moveRef.current = { sx: p.x, sy: p.y, mode: "pixels" };
@@ -5136,12 +5194,12 @@ export default function CanvasArea({
           beginMoveSnap();
           // No selection → move the whole layer; a linked mask travels with it,
           // and any linked layers ride along by the same delta.
-          const moveNode = findNode(layers, activeLayerId);
+          const moveNode = findNode(layers, moveId);
           engine.beginMove(
-            activeLayerId,
+            moveId,
             null,
             !!moveNode?.mask && moveNode.mask.linked !== false,
-            linkedMoveExtras(activeLayerId),
+            linkedMoveExtras(moveId),
           );
         }
       }

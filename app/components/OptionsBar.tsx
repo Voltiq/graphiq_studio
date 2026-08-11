@@ -11,11 +11,17 @@ import {
   PenLine,
   Waves,
   AlignCenter,
+  AlignHorizontalDistributeCenter,
   AlignHorizontalJustifyCenter,
+  AlignHorizontalJustifyEnd,
+  AlignHorizontalJustifyStart,
   AlignJustify,
   AlignLeft,
   AlignRight,
+  AlignVerticalDistributeCenter,
   AlignVerticalJustifyCenter,
+  AlignVerticalJustifyEnd,
+  AlignVerticalJustifyStart,
   ArrowLeftRight,
   Bold,
   CaseUpper,
@@ -71,6 +77,7 @@ import {
 } from "../lib/tools";
 import type { Rect } from "../lib/view";
 import type { ActiveSurface } from "../lib/layers";
+import type { AlignMode, DistributeMode } from "../lib/align";
 import type { TextAxes, TextGradient, TextOpenType } from "../lib/tools";
 import { WARP_STYLES, warpActive, type TextWarp, type TextWarpStyle } from "../lib/textwarp";
 import {
@@ -646,6 +653,22 @@ interface DodgeProps {
   onDodge: (patch: Partial<DodgeSettings>) => void;
 }
 
+/** Move-tool options beyond the pixels/selection mode: the snap toggle (shared
+ *  with View ▸ Snap) and the align / distribute commands. */
+interface MoveProps {
+  snap: boolean;
+  onSnap: (v: boolean) => void;
+  autoSelect: boolean;
+  onAutoSelect: (v: boolean) => void;
+  autoSelectScope: "layer" | "group";
+  onAutoSelectScope: (s: "layer" | "group") => void;
+  /** Align against the canvas/selection rather than the layers' own union. */
+  alignToCanvas: boolean;
+  onAlignToCanvas: (v: boolean) => void;
+  onAlign: (mode: AlignMode) => void;
+  onDistribute: (mode: DistributeMode) => void;
+}
+
 interface CropProps {
   crop: CropSettings;
   onCrop: (patch: Partial<CropSettings>) => void;
@@ -669,6 +692,16 @@ export default function OptionsBar({
   onBrush,
   moveMode,
   onMoveMode,
+  snap,
+  onSnap,
+  autoSelect,
+  onAutoSelect,
+  autoSelectScope,
+  onAutoSelectScope,
+  alignToCanvas,
+  onAlignToCanvas,
+  onAlign,
+  onDistribute,
   resizeMode,
   onResizeMode,
   resizeSmooth,
@@ -775,6 +808,7 @@ export default function OptionsBar({
   CloneProps &
   TextProps &
   DodgeProps &
+  MoveProps &
   CropProps) {
   const meta = getTool(tool);
   const Icon = meta.icon;
@@ -863,6 +897,18 @@ export default function OptionsBar({
           { clone, onClone },
           { text, onText },
           { dodge, onDodge },
+          {
+            snap,
+            onSnap,
+            autoSelect,
+            onAutoSelect,
+            autoSelectScope,
+            onAutoSelectScope,
+            alignToCanvas,
+            onAlignToCanvas,
+            onAlign,
+            onDistribute,
+          },
           measure,
           onMeasureClear,
           onStraighten,
@@ -913,6 +959,7 @@ function renderOptions(
   cloneProps: CloneProps,
   textProps: TextProps,
   dodgeProps: DodgeProps,
+  moveProps: MoveProps,
   measure: MeasureLine | null,
   onMeasureClear: () => void,
   onStraighten: () => void,
@@ -2117,29 +2164,73 @@ function renderOptions(
             ]}
           />
           <Divider />
-          <Toggle label="Auto-select" defaultChecked />
-          <Select label="Scope" options={["Layer", "Group"]} width={100} />
-          <Toggle label="Show transform controls" defaultChecked />
-          <Toggle label="Snap" defaultChecked />
+          <Toggle label="Auto-select" checked={moveProps.autoSelect} onChange={moveProps.onAutoSelect} />
+          {moveProps.autoSelect && (
+            <Segmented
+              value={moveProps.autoSelectScope}
+              onChange={(v) => moveProps.onAutoSelectScope(v as "layer" | "group")}
+              options={[
+                { value: "layer", text: "Layer", title: "Pick the layer under the pointer" },
+                { value: "group", text: "Group", title: "Pick the group that layer belongs to" },
+              ]}
+            />
+          )}
+          <Toggle label="Snap" checked={moveProps.snap} onChange={moveProps.onSnap} />
           <Divider />
-          <span className={styles.muted}>Align</span>
+          {/* Align against the layers' own union, or against the canvas (or the
+              selection, when there is one) — which is the only way a SINGLE
+              layer can be aligned, since its own union is itself. */}
           <Segmented
+            label="Align to"
+            value={moveProps.alignToCanvas ? "canvas" : "layers"}
+            onChange={(v) => moveProps.onAlignToCanvas(v === "canvas")}
             options={[
-              { value: "l", icon: <AlignLeft size={14} />, title: "Align left edges" },
-              {
-                value: "hc",
-                icon: <AlignHorizontalJustifyCenter size={14} />,
-                title: "Align horizontal centers",
-              },
-              { value: "r", icon: <AlignRight size={14} />, title: "Align right edges" },
-              { value: "t", icon: <AlignCenter size={14} />, title: "Align top edges" },
-              {
-                value: "vc",
-                icon: <AlignVerticalJustifyCenter size={14} />,
-                title: "Align vertical centers",
-              },
+              { value: "layers", text: "Layers", title: "Align the selected layers to each other" },
+              { value: "canvas", text: "Canvas", title: "Align to the canvas, or to the selection when there is one" },
             ]}
           />
+          <div className={styles.fmtGroup}>
+            {(
+              [
+                ["left", AlignHorizontalJustifyStart, "Align left edges"],
+                ["hcenter", AlignHorizontalJustifyCenter, "Align horizontal centers"],
+                ["right", AlignHorizontalJustifyEnd, "Align right edges"],
+                ["top", AlignVerticalJustifyStart, "Align top edges"],
+                ["vcenter", AlignVerticalJustifyCenter, "Align vertical centers"],
+                ["bottom", AlignVerticalJustifyEnd, "Align bottom edges"],
+              ] as const
+            ).map(([mode, Icon, title]) => (
+              <button
+                key={mode}
+                type="button"
+                className={styles.iconBtn}
+                aria-label={title}
+                title={title}
+                onClick={() => moveProps.onAlign(mode)}
+              >
+                <Icon size={14} />
+              </button>
+            ))}
+          </div>
+          <div className={styles.fmtGroup}>
+            {(
+              [
+                ["hspace", AlignHorizontalDistributeCenter, "Distribute horizontally (equal gaps)"],
+                ["vspace", AlignVerticalDistributeCenter, "Distribute vertically (equal gaps)"],
+              ] as const
+            ).map(([mode, Icon, title]) => (
+              <button
+                key={mode}
+                type="button"
+                className={styles.iconBtn}
+                aria-label={title}
+                title={title}
+                onClick={() => moveProps.onDistribute(mode)}
+              >
+                <Icon size={14} />
+              </button>
+            ))}
+          </div>
         </>
       );
 

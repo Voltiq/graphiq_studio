@@ -73,7 +73,7 @@ export const TOPICS: HelpTopic[] = [
       {
         title: "Select & frame",
         entries: [
-          { title: "Move", body: "Drags the active layer, or just the selected pixels when a selection exists. Arrows nudge (Ctrl+Arrows by 10 px); a mode switch moves the outline only.", keys: "V" },
+          { title: "Move", body: "Drags the active layer, or just the selected pixels when a selection exists. Arrows nudge (Ctrl+Arrows by 10 px); a mode switch moves the outline only. Auto-select picks the layer (or group) you click on, and the align/distribute buttons line up several selected layers at once.", keys: "V" },
           { title: "Marquee", body: "Rectangle, ellipse or triangle regions — Shift constrains to 1:1, Shift+M cycles the shape. Handles resize the outline or scale its content.", keys: "M" },
           { title: "Lasso", body: "Freehand drag, polygonal click-to-drop-vertices (Enter closes, Backspace undoes a point), or magnetic edge-snapping. Shift+L cycles the mode.", keys: "L" },
           { title: "Magic wand / Quick selection", body: "The wand selects similar colour with a live tolerance slider (contiguous limits to the connected region, sample-all reads the composite instead of the layer); Quick selection grows a region as you paint over it. They share W — Shift+W cycles between them, as it does for any letter two tools share.", keys: "W" },
@@ -115,6 +115,7 @@ export const TOPICS: HelpTopic[] = [
       {
         title: "Making & combining",
         entries: [
+          { title: "Align & distribute layers", body: "With two or more layers selected, the Move tool's options bar aligns them (left/centre/right, top/middle/bottom) and distributes them for even spacing — the outermost two stay put and the gaps between the rest even up. Switch “Align to” to Canvas to align against the document instead, which is also how you centre a single layer; with a marquee active, Canvas means inside the selection. A group counts as one object, and however many layers move it is one undo step." },
           { title: "Add and subtract", body: "Hold Ctrl while dragging any selection tool to add to the existing selection, Alt to subtract from it. The wand honours the same modifiers." },
           { title: "Select all / deselect / reselect", body: "Ctrl+A selects the canvas, Ctrl+D drops the selection, Ctrl+Shift+D brings the last one back, Ctrl+Shift+I inverts." },
           { title: "Feather & grow", body: "Select ▸ Feather softens the selection edge by a radius (fills, deletes and adjustments respect it); Grow expands the region.", keys: "Shift+F6" },

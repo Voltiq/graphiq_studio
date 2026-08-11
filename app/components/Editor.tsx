@@ -31,6 +31,18 @@ import {
 } from "../lib/autosave";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
 import {
+  ALIGN_LABEL,
+  DISTRIBUTE_LABEL,
+  alignDeltas,
+  distributeDeltas,
+  nonZero,
+  unionBox,
+  type AlignMode,
+  type Box as AlignBox,
+  type Delta,
+  type DistributeMode,
+} from "../lib/align";
+import {
   BLUR_FX_LABELS,
   DEFAULT_BLUR,
   DEFAULT_SMUDGE,
@@ -562,6 +574,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [showRulers, setShowRulers] = useState(true);
   const [showGrid, setShowGrid] = useState(false);
   const [snap, setSnap] = useState(true);
+  /** Move ▸ Align to: false = the selected layers' own union, true = the canvas
+   *  (or the selection, when there is one). */
+  const [alignToCanvas, setAlignToCanvas] = useState(false);
+  /** Move ▸ Auto-select: a canvas click picks the layer (or group) under it. */
+  const [autoSelect, setAutoSelect] = useState(true);
+  const [autoSelectScope, setAutoSelectScope] = useState<"layer" | "group">("layer");
   const viewApiRef = useRef<ViewApi | null>(null);
   const [showDocGrid, setShowDocGrid] = useState(false);
   // Guides (TODO §11). Visibility doubles as the snap switch — Photoshop's rule:
@@ -661,6 +679,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (p.text) setTextSettings((s) => ({ ...s, ...p.text }));
     if (p.crop) setCropSettings((s) => ({ ...s, ...p.crop }));
     if (p.moveMode) setMoveMode(p.moveMode);
+    if (typeof p.autoSelect === "boolean") setAutoSelect(p.autoSelect);
+    if (p.autoSelectScope) setAutoSelectScope(p.autoSelectScope);
+    if (typeof p.alignToCanvas === "boolean") setAlignToCanvas(p.alignToCanvas);
     if (p.resizeMode) setResizeMode(p.resizeMode);
     if (typeof p.resizeSmooth === "boolean") setResizeSmooth(p.resizeSmooth);
     if (p.marqueeShape) setMarqueeShape(p.marqueeShape);
@@ -700,6 +721,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           text: textSettings,
           crop: cropSettings,
           moveMode,
+          autoSelect,
+          autoSelectScope,
+          alignToCanvas,
           resizeMode,
           resizeSmooth,
           marqueeShape,
@@ -734,6 +758,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     textSettings,
     cropSettings,
     moveMode,
+    autoSelect,
+    autoSelectScope,
+    alignToCanvas,
     resizeMode,
     resizeSmooth,
     marqueeShape,
@@ -2667,6 +2694,86 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       selNow(),
       after,
       single(next),
+    );
+  };
+
+  // ---- Align & distribute (Move tool options, TODO §2) ---------------------
+  //
+  // Operates on the top-level SELECTED nodes: a group counts as one object
+  // (its box is the union of its leaves, and every leaf inside it takes the
+  // same delta), which is what makes aligning a group do the obvious thing
+  // instead of scattering its contents.
+  const alignBoxesOf = (): { boxes: AlignBox[]; leaves: Map<string, string[]> } => {
+    const eng = paintRef.current;
+    const tree = activeDocRef.current.layers;
+    const boxes: AlignBox[] = [];
+    const leaves = new Map<string, string[]>();
+    if (!eng) return { boxes, leaves };
+    for (const top of topLevelSelected(tree, new Set(targetIds()))) {
+      const ids = collectLeafIds([top]);
+      const parts = ids.map((id) => eng.layerContentBounds(id)).filter((b): b is Rect => !!b);
+      const u = unionBox(parts.map((b, i) => ({ id: String(i), ...b })));
+      if (!u) continue; // nothing painted in this node — nothing to align
+      boxes.push({ id: top.id, ...u });
+      leaves.set(top.id, ids);
+    }
+    return { boxes, leaves };
+  };
+
+  /** `toCanvas` aligns against the document (or the selection, when there is
+   *  one) instead of against the selected layers' own union — the only way a
+   *  SINGLE layer can be aligned, since its own union is itself. */
+  const alignLayersOp = (mode: AlignMode, toCanvas: boolean) => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    if (!eng) return;
+    const { boxes, leaves } = alignBoxesOf();
+    if (!boxes.length) {
+      showToast("Select a layer with pixels to align.");
+      return;
+    }
+    if (boxes.length < 2 && !toCanvas) {
+      showToast("Aligning one layer to itself does nothing — use Align to canvas.");
+      return;
+    }
+    // An active selection is the more specific frame, so it wins over the canvas
+    // — "align to canvas" with a marquee up means "align inside the marquee".
+    const selBox = unionBox(d.selection.map((r, i) => ({ id: String(i), ...r })));
+    const target = toCanvas ? (selBox ?? { x: 0, y: 0, w: d.width, h: d.height }) : unionBox(boxes)!;
+    applyDeltas(alignDeltas(boxes, mode, target), leaves, ALIGN_LABEL[mode]);
+  };
+
+  const distributeLayersOp = (mode: DistributeMode) => {
+    const { boxes, leaves } = alignBoxesOf();
+    if (boxes.length < 3) {
+      showToast("Distributing needs three or more layers — the outer two set the span.");
+      return;
+    }
+    applyDeltas(distributeDeltas(boxes, mode), leaves, DISTRIBUTE_LABEL[mode]);
+  };
+
+  /** Move each node's leaves by its delta, as ONE undoable step. */
+  const applyDeltas = (raw: Delta[], leaves: Map<string, string[]>, label: string) => {
+    const eng = paintRef.current;
+    if (!eng) return;
+    const deltas = nonZero(raw);
+    if (!deltas.length) {
+      showToast("Already in place.");
+      return;
+    }
+    const tree = activeDocRef.current.layers;
+    const touched = deltas.flatMap((d) => leaves.get(d.id) ?? []);
+    const before = eng.captureLeaves(touched);
+    for (const d of deltas)
+      for (const leafId of leaves.get(d.id) ?? []) {
+        const node = findNode(tree, leafId);
+        eng.offsetLayerPixels(leafId, d.dx, d.dy, node?.mask?.linked !== false);
+      }
+    const after = eng.captureLeaves(touched);
+    eng.pushStructural(
+      label,
+      () => eng.restoreLeaves(before),
+      () => eng.restoreLeaves(after),
     );
   };
 
@@ -5691,6 +5798,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onClone={(patch) => setClone((c) => ({ ...c, ...patch }))}
         dodge={dodge}
         onDodge={(patch) => setDodge((d) => ({ ...d, ...patch }))}
+        snap={snap}
+        onSnap={setSnap}
+        autoSelect={autoSelect}
+        onAutoSelect={setAutoSelect}
+        autoSelectScope={autoSelectScope}
+        onAutoSelectScope={setAutoSelectScope}
+        alignToCanvas={alignToCanvas}
+        onAlignToCanvas={setAlignToCanvas}
+        onAlign={(mode) => alignLayersOp(mode, alignToCanvas)}
+        onDistribute={distributeLayersOp}
         text={textSettings}
         onText={(patch) => {
           // With a live text selection, character-level changes style the
@@ -5780,6 +5897,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           redEye={redEye}
           clone={clone}
           dodge={dodge}
+          autoSelect={autoSelect}
+          autoSelectScope={autoSelectScope}
+          onPickLayer={(id) => layersApi.select(id, "replace")}
           text={textSettings}
           onText={(patch) => setTextSettings((t) => ({ ...t, ...patch }))}
           onPlaceText={placeText}
