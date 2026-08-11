@@ -500,6 +500,8 @@ function textSpecOf(v: VectorText) {
     align: v.align,
     lineHeight: v.lineHeight,
     tracking: v.tracking,
+    baseline: v.baseline,
+    caps: v.caps,
     color: v.color,
     antialias: v.antialias,
     runs: v.runs,
@@ -524,6 +526,8 @@ function textSpecBase(t: TextSettings) {
     align: t.align,
     lineHeight: t.lineHeight,
     tracking: t.tracking,
+    baseline: t.baseline,
+    caps: t.caps,
     color: t.color,
     antialias: t.antialias,
     features: t.features,
@@ -1356,6 +1360,8 @@ export default function CanvasArea({
       align: v.align,
       lineHeight: v.lineHeight,
       tracking: v.tracking,
+      baseline: v.baseline ?? 0,
+      caps: !!v.caps,
       color: v.color,
       features: v.features,
       axes: v.axes,
@@ -7089,7 +7095,11 @@ export default function CanvasArea({
               }}
               style={{
                 left: pan.x + textSession.x * scale,
-                top: pan.y + textSession.y * scale,
+                // A BASE baseline shift moves every glyph equally, which for the
+                // editor box is just a translation — folded into its placement
+                // so the DOM text sits where the raster will. Per-RUN shifts ride
+                // vertical-align on their own spans (see richtext-dom).
+                top: pan.y + (textSession.y - (text.baseline ?? 0)) * scale,
                 transform: `scale(${scale})`,
                 transformOrigin: "top left",
                 fontFamily: text.fontFamily,
@@ -7102,6 +7112,10 @@ export default function CanvasArea({
                 fontFeatureSettings: fontFeatureCSS(text.features) ?? undefined,
                 lineHeight: String(text.lineHeight),
                 letterSpacing: `${text.tracking}px`,
+                // All-caps is a display transform here exactly as it is in the
+                // raster: the DOM still holds the typed characters, so turning
+                // it off gives the original text back rather than a shouted copy.
+                textTransform: text.caps ? "uppercase" : undefined,
                 color: text.color,
                 // Ghosted (warp/gradient preview showing): the glyphs go
                 // transparent so the raster isn't doubled, but the caret must

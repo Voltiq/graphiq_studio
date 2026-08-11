@@ -2557,6 +2557,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       align: t.align,
       lineHeight: t.lineHeight,
       tracking: t.tracking,
+      baseline: t.baseline,
+      caps: t.caps,
       color: t.color,
       antialias: t.antialias,
       runs: p.runs,

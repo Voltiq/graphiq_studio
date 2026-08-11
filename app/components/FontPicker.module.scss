@@ -1,0 +1,187 @@
+.wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}
+
+.label {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  width: 150px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+
+  &:hover {
+    border-color: var(--accent);
+  }
+}
+
+/* The trigger previews the chosen face too, so the options bar answers "what am
+   I typing in?" without opening anything. */
+.triggerName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chevron {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+
+.popover {
+  zoom: var(--ui-zoom, 1); /* body-portalled — opts into the interface scale */
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-2);
+  gap: var(--sp-2);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow);
+  animation: pop var(--t-med) var(--ease-pop);
+  transform-origin: top left;
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.searchRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 7px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.search {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px 0 25px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+
+  &:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+}
+
+.list {
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.groupLabel {
+  padding: 6px 8px 2px;
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+
+  &[data-active="true"] {
+    background: var(--wash);
+  }
+
+  &[data-selected="true"] {
+    color: var(--accent);
+  }
+}
+
+.check {
+  display: inline-flex;
+  width: 12px;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+/* Big enough that a typeface's character is actually visible; the name is the
+   sample, so nothing needs translating. */
+.sample {
+  font-size: 16px;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  padding: 12px 8px;
+  font-size: 12px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.systemBtn {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+
+  &:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+    background: var(--wash);
+  }
+}
+
+.systemNote {
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: center;
+}

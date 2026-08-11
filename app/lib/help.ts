@@ -99,7 +99,7 @@ export const TOPICS: HelpTopic[] = [
       {
         title: "Text, vector & view",
         entries: [
-          { title: "Text", body: "Click for point text or drag a box for wrapped paragraph text. Selections inside the editor can mix fonts, sizes, colours, bold/italic/underline.", keys: "T" },
+          { title: "Text", body: "Click for point text or drag a box for wrapped paragraph text. Selections inside the editor can mix fonts, sizes, colours, bold/italic/underline, all-caps and baseline shift. The font control searches and previews every face.", keys: "T" },
           { title: "Pen", body: "Click-drag bezier anchors into a path, then stroke it with variable width — taper the ends, widen or narrow on curves. Enter commits.", keys: "P" },
           { title: "Shape", body: "Rectangle, ellipse, triangle, trapezoid — live handles adjust corner radius, apex and side insets until you commit. Fill and stroke stay editable.", keys: "U" },
           { title: "Hand / Zoom", body: "Pan by dragging; zoom clicks in, Alt-click zooms out.", keys: "H / Z" },
@@ -213,7 +213,9 @@ export const TOPICS: HelpTopic[] = [
         title: "Text",
         entries: [
           { title: "Point and paragraph text", body: "Click to type free-flowing text, or drag first to make a wrapping paragraph box. Alignment (including justify), line height and letter-spacing live in the options bar.", keys: "T" },
-          { title: "Rich styling", body: "Inside the editor, select characters and change font, size, colour, bold, italic, underline or strikethrough for just that run — one block can mix them all.", keys: "Ctrl+B" },
+          { title: "Rich styling", body: "Inside the editor, select characters and change font, size, colour, bold, italic, underline, strikethrough, all-caps or baseline shift for just that run — one block can mix them all.", keys: "Ctrl+B" },
+          { title: "Choosing a font", body: "The font control opens a searchable list where every entry is previewed in its own typeface. Search ranks the obvious answer first — “new” finds Times New Roman and Courier New, and initials work too (“tnr”). Fonts you pick collect under Recent. On Chrome and Edge, “Add system fonts…” asks permission and then lists everything installed on your machine." },
+          { title: "All caps & baseline shift", body: "All caps sets text in capitals without changing what you typed — turn it off and your original casing returns. Baseline shift raises (positive) or lowers (negative) the selected characters by a number of pixels, for superscripts and subscripts; underlines and strikethroughs move with them." },
           { title: "Always re-editable", body: "Text rasterizes onto its layer but keeps its recipe: click it again with the Text tool to re-open and re-edit; the layer re-renders crisply." },
         ],
       },

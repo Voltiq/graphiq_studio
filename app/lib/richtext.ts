@@ -160,7 +160,20 @@ function styleAt(runs: TextRun[], i: number): TextRunStyle {
   return runs[runs.length - 1];
 }
 
-/** Split [start, end) of the text into per-run pieces. */
+/**
+ * The text a style actually renders — all-caps applied, everything else as-is.
+ *
+ * Applied to a SLICE, never to the whole block: `toUpperCase` can change length
+ * ("ß" → "SS", "ﬁ" → "FI"), so transforming the block up front would slide every
+ * run offset out of step with the text they index into. Slicing first and
+ * transforming after keeps run boundaries anchored to the original characters,
+ * and a longer capital simply measures wider — which is correct.
+ */
+export const renderedText = (text: string, style: { caps?: boolean }): string =>
+  style.caps ? text.toUpperCase() : text;
+
+/** Split [start, end) of the text into per-run pieces, each transformed by its
+ *  own style (so measurement and painting always see the same characters). */
 function piecesOf(
   text: string,
   runs: TextRun[],
@@ -173,7 +186,7 @@ function piecesOf(
     const runEnd = runStart + r.len;
     const a = Math.max(start, runStart);
     const b = Math.min(end, runEnd);
-    if (b > a) out.push({ text: text.slice(a, b), style: r });
+    if (b > a) out.push({ text: renderedText(text.slice(a, b), r), style: r });
     runStart = runEnd;
     if (runStart >= end) break;
   }
@@ -262,6 +275,12 @@ export function layoutRuns(
       let ascent = 0;
       let descent = 0;
       let maxSize = 0;
+      // Deliberately measured UNSHIFTED. Folding the baseline shift into
+      // ascent/descent looks right until you work it through: the sum is what
+      // centres the glyphs in the line box, and raising ascent by s while
+      // lowering descent by s leaves the sum untouched — so the box moves down
+      // by exactly the amount the glyphs move up, and a uniform shift becomes a
+      // no-op. The shift is applied where it belongs, at paint time.
       for (const t of toks)
         for (const p of t.pieces) {
           ascent = Math.max(ascent, p.ascent);
@@ -336,6 +355,8 @@ export function baseRunStyle(spec: {
   underline: boolean;
   strike: boolean;
   color: string;
+  baseline?: number;
+  caps?: boolean;
 }): TextRunStyle {
   return {
     fontFamily: spec.fontFamily,
@@ -345,6 +366,8 @@ export function baseRunStyle(spec: {
     underline: spec.underline,
     strike: spec.strike,
     color: spec.color,
+    baseline: spec.baseline ?? 0,
+    caps: !!spec.caps,
   };
 }
 
@@ -359,6 +382,8 @@ export function runsAreUniform(runs: TextRun[] | undefined, base: TextRunStyle):
       r.italic === base.italic &&
       r.underline === base.underline &&
       r.strike === base.strike &&
+      (r.baseline ?? 0) === (base.baseline ?? 0) &&
+      !!r.caps === !!base.caps &&
       r.color.toLowerCase() === base.color.toLowerCase(),
   );
 }

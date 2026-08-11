@@ -83,7 +83,14 @@ import {
   type ToneLUTs16,
 } from "./tone";
 import { renderPenStroke } from "./pen";
-import { baseRunStyle, cssFontString, fontFeatureCSS, layoutRuns, type MeasureFn } from "./richtext";
+import {
+  baseRunStyle,
+  cssFontString,
+  fontFeatureCSS,
+  layoutRuns,
+  renderedText,
+  type MeasureFn,
+} from "./richtext";
 import type {
   BlurSettings,
   DodgeSettings,
@@ -637,6 +644,9 @@ export interface TextRenderSpec {
   align: TextAlign;
   lineHeight: number;
   tracking: number;
+  /** Base baseline shift / all-caps (runs carry their own; see TextRunStyle). */
+  baseline?: number;
+  caps?: boolean;
   color: string;
   /** Anti-alias edges; false thresholds the alpha to hard 1-bit edges. */
   antialias: boolean;
@@ -6467,7 +6477,10 @@ export class PaintEngine {
       out.push(cur);
       return out;
     };
-    const paras = spec.text.split("\n");
+    // All-caps is a style, not an edit: the block's own text is never changed,
+    // so the transform happens here — where measuring, wrapping and painting all
+    // read from the same string.
+    const paras = renderedText(spec.text, spec).split("\n");
     return spec.boxW != null ? paras.flatMap((p) => wrap(p, spec.boxW!)) : paras;
   }
 
@@ -6889,7 +6902,13 @@ export class PaintEngine {
     const ascent = m.fontBoundingBoxAscent || m.actualBoundingBoxAscent || spec.fontSize * 0.8;
     const descent = m.fontBoundingBoxDescent || m.actualBoundingBoxDescent || spec.fontSize * 0.2;
     const leading = spec.fontSize * spec.lineHeight;
-    const baseline0 = spec.y + (leading - (ascent + descent)) / 2 + ascent;
+    // Positive baseline raises, canvas y grows downward — hence minus. A shift
+    // this far out is normally a few px inside a much taller line box, so the
+    // reported text bounds (leading-based) still contain it; an extreme shift
+    // can push glyphs past that box, which costs re-edit hit-test precision and
+    // nothing else — the raster target is the whole document canvas.
+    const baseline0 =
+      spec.y + (leading - (ascent + descent)) / 2 + ascent - (spec.baseline ?? 0);
     const thickness = Math.max(1, spec.fontSize / 16);
 
     for (let i = 0; i < lines.length; i++) {
@@ -6935,10 +6954,14 @@ export class PaintEngine {
       for (let i = 0; i < line.segs.length; i++) {
         const seg = line.segs[i];
         const st = seg.style;
+        // Positive baseline raises, and canvas y grows downward — hence minus.
+        // The decorations below ride the same shifted baseline, so an underline
+        // stays welded to its superscript rather than to the line.
+        const sy = by - (st.baseline ?? 0);
         ctx.font = cssFontString(st, spec.axes);
         if ("letterSpacing" in ctx) lsCtx.letterSpacing = `${spec.tracking}px`;
         ctx.fillStyle = st.color;
-        if (!seg.space && seg.text) ctx.fillText(seg.text, spec.x + seg.x, by);
+        if (!seg.space && seg.text) ctx.fillText(seg.text, spec.x + seg.x, sy);
         if (st.underline || st.strike) {
           // Span to the next segment so justify-stretched gaps stay decorated.
           const next = line.segs[i + 1];
@@ -6946,8 +6969,8 @@ export class PaintEngine {
           if (w > 0) {
             const met = measure("Mg", st);
             const th = Math.max(1, st.fontSize / 16);
-            if (st.underline) ctx.fillRect(spec.x + seg.x, by + met.descent * 0.45, w, th);
-            if (st.strike) ctx.fillRect(spec.x + seg.x, by - met.ascent * 0.32, w, th);
+            if (st.underline) ctx.fillRect(spec.x + seg.x, sy + met.descent * 0.45, w, th);
+            if (st.strike) ctx.fillRect(spec.x + seg.x, sy - met.ascent * 0.32, w, th);
           }
         }
       }

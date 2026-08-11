@@ -382,6 +382,15 @@ export interface TextRunStyle {
   strike: boolean;
   /** Fill colour, #rrggbbaa. */
   color: string;
+  /** Baseline shift, px — positive RAISES (superscript), negative lowers.
+   *  A character attribute, like Photoshop's: on the whole block it would just
+   *  move the text, so it only earns its keep applied to a selection. Absent
+   *  (or 0) renders byte-identically to before the field existed. */
+  baseline?: number;
+  /** Render this run in CAPITALS without changing the stored text, so the
+   *  transform stays reversible — the same reason Photoshop's All Caps is a
+   *  style and not an edit. Absent = off. */
+  caps?: boolean;
 }
 
 /** One run of a rich text block: `len` characters (of the block's flat text,
@@ -439,6 +448,11 @@ export interface TextSettings {
   lineHeight: number;
   /** Letter spacing (tracking), px. */
   tracking: number;
+  /** Baseline shift, px (positive raises) — the caret style for new text, and
+   *  what a selection-less change applies to. See TextRunStyle.baseline. */
+  baseline?: number;
+  /** All-caps. See TextRunStyle.caps. */
+  caps?: boolean;
   /** Fill colour, #rrggbbaa. */
   color: string;
   /** Smooth (anti-aliased) edges when rasterized; off gives hard 1-bit edges. */
@@ -507,6 +521,9 @@ export interface VectorText {
   align: TextAlign;
   lineHeight: number;
   tracking: number;
+  /** Baseline shift / all-caps of the BASE style (runs carry their own). */
+  baseline?: number;
+  caps?: boolean;
   color: string;
   antialias: boolean;
   /** Rich runs (mixed fonts/sizes/colours). Absent = uniform block using the

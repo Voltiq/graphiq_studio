@@ -18,6 +18,7 @@ import {
   AlignVerticalJustifyCenter,
   ArrowLeftRight,
   Bold,
+  CaseUpper,
   Check,
   Circle,
   FlaskConical,
@@ -86,6 +87,7 @@ import {
   stretchKeyword,
 } from "../lib/richtext";
 import GradientControl, { GradientEditor } from "./GradientControl";
+import FontPicker from "./FontPicker";
 import { brushDynamics, type BrushSettings } from "../lib/paint";
 import {
   ColorChip,
@@ -1005,12 +1007,10 @@ function renderOptions(
       const { text, onText } = textProps;
       return (
         <>
-          <Select
-            label="Font"
-            options={FONT_FAMILIES}
+          <FontPicker
             value={text.fontFamily}
             onChange={(f) => onText({ fontFamily: f })}
-            width={150}
+            families={FONT_FAMILIES}
           />
           <NumberField
             label="Size"
@@ -1059,6 +1059,18 @@ function renderOptions(
             >
               <Strikethrough size={14} />
             </button>
+            <button
+              type="button"
+              className={styles.iconBtn}
+              data-active={!!text.caps}
+              // Icon-only, so it needs a short accessible name of its own; the
+              // title carries the explanation.
+              aria-label="All caps"
+              title="All caps — displays the text in capitals without changing what you typed"
+              onClick={() => onText({ caps: !text.caps })}
+            >
+              <CaseUpper size={15} />
+            </button>
           </div>
           <Segmented
             value={text.align}
@@ -1086,6 +1098,15 @@ function renderOptions(
             unit="%"
             value={Math.round(text.lineHeight * 100)}
             onChange={(n) => onText({ lineHeight: n / 100 })}
+          />
+          <NumberField
+            label="Baseline"
+            value={text.baseline ?? 0}
+            min={-500}
+            max={500}
+            onChange={(n) => onText({ baseline: n })}
+            unit="px"
+            width={62}
           />
           <Divider />
           <ColorChip color={text.color} onChange={(c) => onText({ color: c })} label="Text color" />
