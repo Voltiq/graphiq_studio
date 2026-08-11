@@ -1560,6 +1560,9 @@ export default function CanvasArea({
   marqueeShapeRef.current = marqueeShape;
   const marqueeApexRef = useRef(triangleApex);
   marqueeApexRef.current = triangleApex;
+  /** Ants-only preview of an in-flight Apex reshape (null = nothing pending).
+   *  Non-null means the drawn outline is ahead of the committed selection. */
+  const apexPreviewRef = useRef<Rect[] | null>(null);
   // Smart-blur anchor targeting: guide params for the overlay + live-drag flag.
   const filterAnchorRef = useRef(filterAnchor);
   filterAnchorRef.current = filterAnchor;
@@ -2030,7 +2033,11 @@ export default function CanvasArea({
     const mv = moveRef.current || nudgeActiveRef.current;
     const rz = resizePreviewRef.current;
     let rects: Rect[];
-    if (rz) {
+    if (apexPreviewRef.current) {
+      // Live preview while the Apex slider is moving — drawn straight from the
+      // ref so an in-flight reshape never touches React (see the apex effect).
+      rects = apexPreviewRef.current;
+    } else if (rz) {
       // Live preview while dragging a resize handle.
       rects = rz;
     } else if (m && m.mode === "new") {
@@ -3027,20 +3034,77 @@ export default function CanvasArea({
 
   // Re-shape a just-created triangle marquee live as the Apex slider moves — but
   // only while it is still the active selection (any other change drops tracking).
+  //
+  // PREVIEW IN A REF, COMMIT ONCE. Each rebuild is a full-document mask combine
+  // plus a boundary retrace; committing it to React additionally re-renders
+  // every panel subscribed to the selection, measured at ~100 dock DOM mutations
+  // per tick (2002 over one 20-step sweep). So a moving slider only ever draws
+  // from `apexPreviewRef` — the marching ants read it directly — and the real
+  // selection is committed once the slider has been still for a moment.
+  //
+  // rAF-coalesced on top, which matters for real bursty input (a high-rate mouse
+  // can deliver several ticks per frame) even though a scripted drag arrives at
+  // about one per frame and sees no benefit from it.
+  const apexRafRef = useRef(0);
+  const apexCommitRef = useRef(0);
   useEffect(() => {
-    const lt = liveTriangleRef.current;
-    if (!lt) return;
-    if (selectionRef.current !== lt.key) {
-      liveTriangleRef.current = null; // selection changed elsewhere — stop tracking
-      return;
+    if (!liveTriangleRef.current) return;
+    const commit = () => {
+      const lt = liveTriangleRef.current;
+      const preview = apexPreviewRef.current;
+      apexPreviewRef.current = null;
+      if (!lt || !preview) return;
+      // The commit is deferred, so the user can deselect (or select something
+      // else) inside the settle window — without this, that pending commit would
+      // resurrect the selection they just dismissed. While a preview is pending
+      // the committed selection is still the tracked one, so it must match.
+      if (selectionRef.current !== lt.key) {
+        liveTriangleRef.current = null;
+        ensureAnts(); // repaint without the abandoned preview
+        return;
+      }
+      const result = engine.combineSelection(
+        lt.base,
+        marqueeSelRects(lt.box, "triangle", lt.pointDown, marqueeApexRef.current),
+        lt.mode === "subtract" ? "subtract" : "add",
+      );
+      applyCombined(result);
+      liveTriangleRef.current = result && result.rects.length ? { ...lt, key: result.rects } : null;
+      ensureAnts();
+    };
+    if (!apexRafRef.current) {
+      apexRafRef.current = requestAnimationFrame(() => {
+        apexRafRef.current = 0;
+        const lt = liveTriangleRef.current;
+        if (!lt) return;
+        // The tracked selection must still be the live one; anything else means
+        // the user changed the selection elsewhere and this must stop.
+        if (!apexPreviewRef.current && selectionRef.current !== lt.key) {
+          liveTriangleRef.current = null;
+          return;
+        }
+        // Read the LATEST apex at frame time, not the value this effect closed
+        // over — coalescing is only correct if the frame uses the newest input.
+        const sel = marqueeSelRects(lt.box, "triangle", lt.pointDown, marqueeApexRef.current);
+        const result = engine.combineSelection(lt.base, sel, lt.mode === "subtract" ? "subtract" : "add");
+        apexPreviewRef.current = result?.rects.length ? result.rects : [];
+        ensureAnts();
+      });
     }
-    const sel = marqueeSelRects(lt.box, "triangle", lt.pointDown, triangleApex);
-    const result = engine.combineSelection(lt.base, sel, lt.mode === "subtract" ? "subtract" : "add");
-    applyCombined(result);
-    liveTriangleRef.current = result && result.rects.length ? { ...lt, key: result.rects } : null;
-    ensureAnts();
+    // Settle: once the slider stops, commit the real selection exactly once.
+    window.clearTimeout(apexCommitRef.current);
+    apexCommitRef.current = window.setTimeout(commit, 140);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [triangleApex]);
+
+  // Drop queued apex work on unmount so it can't run against a dead engine.
+  useEffect(
+    () => () => {
+      if (apexRafRef.current) cancelAnimationFrame(apexRafRef.current);
+      window.clearTimeout(apexCommitRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (selection.length) {
