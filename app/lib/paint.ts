@@ -93,6 +93,7 @@ import {
 } from "./tone";
 import { renderPenStroke } from "./pen";
 import { isChannelKey } from "./channels";
+import { addReach, nodeReach, padRect, stackReach, type Reach } from "./reach";
 import {
   baseRunStyle,
   cssFontString,
@@ -884,10 +885,21 @@ export class PaintEngine {
   private bumpPixel(id: string, rect?: Rect) {
     this.pixelVersion.set(id, (this.pixelVersion.get(id) ?? 0) + 1);
     this.dropCache(id);
-    const bounded = rect && !this.changeReaches(id, "pixel") ? rect : null;
+    const bounded = this.boundChange(id, "pixel", rect);
     this.pendingDirty = unionRect(this.pendingDirty, bounded);
     if (!bounded) this.lastTree = null; // unbounded change → next blit is full
     this.noteBelowChange(bounded);
+  }
+
+  /** A change rect grown by everything downstream of it spreads, or null when
+   *  that can't be bounded (→ full recompute, the old behaviour for every
+   *  styled/filtered node). */
+  private boundChange(id: string, kind: "pixel" | "mask", rect?: Rect): Rect | null {
+    if (!rect) return null;
+    const pad = this.changePadding(id, kind);
+    if (pad === null) return null;
+    const p = padRect(rect, pad, this.w, this.h);
+    return p.w > 0 && p.h > 0 ? p : null;
   }
 
   /** Mark a node's mask changed (same key mechanics as bumpPixel). A plain
@@ -898,12 +910,12 @@ export class PaintEngine {
     // Overlay rasters — the quick mask (drawn by the canvas) and saved selection
     // channels (drawn nowhere at all) — composite into nothing, so editing one
     // must not invalidate a single cached tile. Skipping this is not merely an
-    // optimization: changeReaches() treats an id it has never seen in the tree
-    // as "reaches everything", which would force a FULL document recomposite on
-    // every quick-mask brush segment and on every selection save.
+    // optimization: changePadding() treats an id it has never seen in the tree
+    // as unbounded, which would force a FULL document recomposite on every
+    // quick-mask brush segment and on every selection save.
     if (id === this.qmKey || isChannelKey(id)) return;
     this.dropCache(id, true);
-    const bounded = rect && !this.changeReaches(id, "mask") ? rect : null;
+    const bounded = this.boundChange(id, "mask", rect);
     this.pendingDirty = unionRect(this.pendingDirty, bounded);
     if (!bounded) this.lastTree = null;
     this.noteBelowChange(bounded);
@@ -915,27 +927,44 @@ export class PaintEngine {
    *  silhouette) or when ANY ancestor group is styled. Unknown ids (no tree
    *  seen yet) are conservatively treated as reaching. */
   private changeReaches(id: string, kind: "pixel" | "mask"): boolean {
+    return this.changePadding(id, kind) === null;
+  }
+
+  /**
+   * How far a rect-bounded change to `id` can spread, in px — or null when it
+   * cannot be bounded at all (an unknown node, or a filter whose output depends
+   * on absolute position; see reach.ts).
+   *
+   * This used to be a boolean: "does it reach?", answered yes for ANY node
+   * carrying effects or filters, which then threw the dirty rect away and forced
+   * a full-document recompute. Most of those spread by a knowable distance —
+   * a blur by its radius, a shadow by distance + blur — so the rect can survive,
+   * grown by that much. Reaches ACCUMULATE down the ancestor chain because each
+   * styled group re-spreads whatever its children already spread.
+   */
+  private changePadding(id: string, kind: "pixel" | "mask"): Reach {
     const tree = this.curTree;
-    if (!tree) return true;
+    if (!tree) return null; // no tree seen yet — stay conservative
     const fm = id.startsWith("fm:");
     const target = fm ? id.slice(3) : id;
-    let reach = true; // stays true when the id isn't in the tree (conservative)
-    const walk = (nodes: LayerNode[], ancStyled: boolean): boolean => {
+    let result: Reach = null; // stays null when the id isn't in the tree
+    const walk = (nodes: LayerNode[], anc: Reach): boolean => {
       for (const n of nodes) {
-        const own = hasEnabledFx(n.effects) || hasEnabledFilters(n.filters);
+        const own = nodeReach(n.filters, n.effects);
         if (n.id === target) {
-          if (ancStyled) reach = true;
-          else if (fm) reach = hasEnabledFilters(n.filters);
-          else if (kind === "mask") reach = false; // applied after fx/filters
-          else reach = own;
+          // A layer MASK is applied after fx/filters, so painting it spreads
+          // nothing of its own; a FILTER mask reshapes the stack, so it spreads
+          // as far as the stack does.
+          const self: Reach = fm ? stackReach(n.filters) : kind === "mask" ? 0 : own;
+          result = addReach(anc, self);
           return true;
         }
-        if (n.type === "group" && walk(n.children, ancStyled || own)) return true;
+        if (n.type === "group" && walk(n.children, addReach(anc, own))) return true;
       }
       return false;
     };
-    walk(tree, false);
-    return reach;
+    walk(tree, 0);
+    return result;
   }
 
   /** Fold a committed change into every cached adjustment product's dirty
@@ -8384,7 +8413,115 @@ export class PaintEngine {
     }
     // A live paint/move session mutates `src` without version bumps — the key
     // can't see those changes, so always compute in-line and never cache.
+    //
+    // In-line means SYNCHRONOUS and on the main thread: measured at ~190–250 ms
+    // per frame for one gaussian blur on a 1920×1080 document, which is why a
+    // brush stroke or a selection drag on a filtered layer blocked for seconds
+    // (≈3.9 s of long tasks over a 20-step stroke). The worker is no help here —
+    // it keys jobs by node key, and a live source has no key that describes it.
+    //
+    // So the live frames run at DRAFT resolution instead. Not a cache and not a
+    // stale product: a real filter pass over fewer pixels, with spatial params
+    // scaled to match, upscaled to document size. The moment the session ends
+    // the normal path resumes and recomputes at full resolution.
+    if (this.liveBypass.has(node.id) && !this.exporting) {
+      const draft = this.draftScale();
+      if (draft < 1) return this.renderFilteredDraft(src, node, draft);
+    }
     return this.renderFiltered(src, node.filters!, this.filterMaskAlpha(node));
+  }
+
+  /** Working scale for live filter frames: enough of a reduction to keep the
+   *  pass under a per-frame pixel budget, never below a quarter (past that the
+   *  preview stops resembling the result). 1 = compute at full size. */
+  private draftScale(): number {
+    const px = this.w * this.h;
+    if (px <= PaintEngine.DRAFT_MAX_PIXELS) return 1;
+    return Math.max(0.25, Math.sqrt(PaintEngine.DRAFT_MAX_PIXELS / px));
+  }
+
+  /** Pixel budget for one live filter frame. A gaussian blur runs at roughly
+   *  100 MP/s here, so ~0.5 MP keeps a frame near 5 ms rather than 200. */
+  private static DRAFT_MAX_PIXELS = 500_000;
+
+  /**
+   * Run the filter stack at `scale` and upscale the result to document size.
+   *
+   * `scaleFilterParams` shrinks the spatial params with the source (a radius of
+   * 8 over half as many pixels has to become 4 or the preview blurs twice as
+   * hard), which is the same contract the progressive half-res preview already
+   * relies on. The filter mask downsamples alongside so it still confines the
+   * same region.
+   */
+  private renderFilteredDraft(
+    src: HTMLCanvasElement,
+    node: LayerNode,
+    scale: number,
+  ): HTMLCanvasElement {
+    const sw = Math.max(1, Math.round(this.w * scale));
+    const sh = Math.max(1, Math.round(this.h * scale));
+
+    // Downscale the source (GPU) — the readback below is then ¼-or-less the work.
+    const small = this.mk(sw, sh, true);
+    small.ctx.imageSmoothingEnabled = true;
+    small.ctx.imageSmoothingQuality = "low"; // a draft frame; "high" costs more than it shows
+    small.ctx.drawImage(src, 0, 0, sw, sh);
+
+    let cur = small.ctx.getImageData(0, 0, sw, sh);
+    const fmFull = this.filterMaskAlpha(node);
+    let base: ImageData | null = null;
+    let maskData: Uint8ClampedArray | null = null;
+    if (fmFull) {
+      base = new ImageData(new Uint8ClampedArray(cur.data), sw, sh);
+      const m = this.mk(sw, sh, true);
+      m.ctx.imageSmoothingEnabled = true;
+      m.ctx.drawImage(fmFull, 0, 0, sw, sh);
+      maskData = m.ctx.getImageData(0, 0, sw, sh).data;
+    }
+    for (const f of node.filters ?? []) {
+      if (!f.enabled) continue;
+      const applied = applyFilter(cur, scaleFilterParams(f, scale), this.cs);
+      const op = blendOp(f.blendMode);
+      const alpha = Math.max(0, Math.min(1, f.opacity / 100));
+      if (op === "source-over" && alpha >= 1) {
+        cur = applied; // the common case: full replace
+        continue;
+      }
+      // Same per-filter blend/opacity the full path applies, at draft size — a
+      // filter set to 40% Overlay must not preview as a full replacement.
+      small.ctx.putImageData(cur, 0, 0);
+      const tmp = this.mk(sw, sh);
+      tmp.ctx.putImageData(applied, 0, 0);
+      small.ctx.globalAlpha = alpha;
+      small.ctx.globalCompositeOperation = op;
+      small.ctx.drawImage(tmp.c, 0, 0);
+      small.ctx.globalAlpha = 1;
+      small.ctx.globalCompositeOperation = "source-over";
+      cur = small.ctx.getImageData(0, 0, sw, sh);
+    }
+    if (base && maskData) {
+      const aD = base.data;
+      const bD = cur.data;
+      for (let i = 0; i < bD.length; i += 4) {
+        const t = maskData[i + 3] / 255;
+        if (t >= 1) continue;
+        const aa = aD[i + 3];
+        const ba = bD[i + 3];
+        const na = aa + (ba - aa) * t;
+        const inv = na > 0 ? 1 / na : 0;
+        bD[i] = (aD[i] * aa * (1 - t) + bD[i] * ba * t) * inv;
+        bD[i + 1] = (aD[i + 1] * aa * (1 - t) + bD[i + 1] * ba * t) * inv;
+        bD[i + 2] = (aD[i + 2] * aa * (1 - t) + bD[i + 2] * ba * t) * inv;
+        bD[i + 3] = na;
+      }
+    }
+    small.ctx.putImageData(cur, 0, 0);
+
+    const out = this.mk(this.w, this.h);
+    out.ctx.imageSmoothingEnabled = true;
+    out.ctx.imageSmoothingQuality = "high"; // the upscale IS what the user sees
+    out.ctx.drawImage(small.c, 0, 0, sw, sh, 0, 0, this.w, this.h);
+    return out.c;
   }
   private blurWorkerBroken = false;
   private blurSessionId = 0;

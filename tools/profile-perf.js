@@ -14,10 +14,17 @@
  *   A: sweeping the triangle-marquee Apex slider.
  *   B: moving a selection with, and without, a blur smart filter.
  *
- * Baseline as of 2026-08-11 (flood-filled 1920×1080, headless Edge):
- *   move, no filters     847 ms wall,  0 long tasks
+ * Baseline (flood-filled 1920×1080, headless Edge):
+ *
+ *                        2026-08-11 (before draft-res live filters)
+ *   move, no filters     847 ms wall,   0 long tasks
  *   move, one blur       5596 ms wall, 26 long tasks / 4684 ms blocking
  *   apex sweep (30)      1217 ms wall,  0 long tasks
+ *
+ *                        2026-08-11 (after — engine draftScale/renderFilteredDraft)
+ *   move, no filters     850 ms wall,   0 long tasks
+ *   move, one blur       2011 ms wall,  1 long task  /   69 ms blocking
+ *   apex sweep (30)      1231 ms wall,  0 long tasks
  */
 const { chromium } = require("playwright-core");
 
