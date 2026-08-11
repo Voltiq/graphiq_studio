@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import { Eye, EyeOff } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import styles from "../RightDock.module.scss";
 import type { ChannelHistogram, EngineHandle } from "../../lib/paint";
 import { findNode, type LayerNode, type LayersApi } from "../../lib/layers";
+import { opFromModifiers, type ChannelSelectOp, type SavedChannel } from "../../lib/channels";
 import type { Rect } from "../../lib/view";
 
 const CANVAS_H = 132;
@@ -35,6 +36,7 @@ export default function ChannelsPanel({
   selection,
   selectionAngle,
   selectionPivot,
+  channels,
 }: {
   engineRef: RefObject<EngineHandle | null>;
   tree: LayerNode[];
@@ -43,7 +45,30 @@ export default function ChannelsPanel({
   selection: Rect[];
   selectionAngle: number;
   selectionPivot: { x: number; y: number } | null;
+  /** Saved selections (alpha channels) + the operations on them. */
+  channels: {
+    list: SavedChannel[];
+    previewOf: (id: string) => string | null;
+    onSave: () => void;
+    onLoad: (id: string, op: ChannelSelectOp) => void;
+    onRename: (id: string, name: string) => void;
+    onDelete: (id: string) => void;
+  };
 }) {
+  const [renaming, setRenaming] = useState<string | null>(null);
+
+  // Thumbnails are re-encoded PNGs, and this panel re-renders on every selection
+  // change — so generating them inline would re-encode every channel on every
+  // frame of a marquee drag. A channel's raster only changes when one is saved
+  // or deleted, so keying the cache on the id list is enough (a rename doesn't
+  // touch pixels).
+  const channelIds = channels.list.map((c) => c.id).join("|");
+  const previews = useMemo(() => {
+    const m = new Map<string, string | null>();
+    for (const id of channelIds ? channelIds.split("|") : []) m.set(id, channels.previewOf(id));
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelIds]);
   const [hist, setHist] = useState<ChannelHistogram | null>(null);
   const [maskHist, setMaskHist] = useState<Uint32Array | null>(null);
   const [enabled, setEnabled] = useState<Record<ChannelKey, boolean>>({
@@ -310,6 +335,83 @@ export default function ChannelsPanel({
             {api.maskViewId === maskLayerId ? <EyeOff size={14} /> : <Eye size={14} />}
           </button>
         </div>
+      )}
+
+      {/* Saved selections (alpha channels). Modifier semantics match the Paths
+          panel exactly — the two do the same job to the same selection. */}
+      <div className={styles.savedHead}>
+        <span className={styles.savedLabel}>Saved selections</span>
+        <button
+          type="button"
+          className={styles.savedAdd}
+          title="Save the current selection as a channel"
+          aria-label="Save selection as channel"
+          disabled={!selActive}
+          onClick={() => channels.onSave()}
+        >
+          <Plus size={13} />
+        </button>
+      </div>
+      {channels.list.length === 0 ? (
+        <p className={styles.savedEmpty}>
+          {selActive
+            ? "Save the current selection to reuse it later."
+            : "Make a selection, then save it here to reuse later."}
+        </p>
+      ) : (
+        <ul className={styles.savedList}>
+          {channels.list.map((c) => (
+            <li key={c.id} className={styles.savedRow}>
+              <button
+                type="button"
+                className={styles.savedLoad}
+                title="Click to select · Ctrl add · Alt subtract · Ctrl+Alt intersect"
+                onClick={(e) => channels.onLoad(c.id, opFromModifiers(e))}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  className={styles.savedThumb}
+                  src={previews.get(c.id) ?? undefined}
+                  alt=""
+                  draggable={false}
+                />
+                {renaming === c.id ? (
+                  <input
+                    className={styles.savedName}
+                    defaultValue={c.name}
+                    autoFocus
+                    aria-label="Channel name"
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={(e) => {
+                      channels.onRename(c.id, e.target.value);
+                      setRenaming(null);
+                    }}
+                    onKeyDown={(e) => {
+                      // Keep Enter/Escape inside the field — the canvas treats
+                      // both as document-level commands.
+                      e.stopPropagation();
+                      if (e.key === "Enter") e.currentTarget.blur();
+                      else if (e.key === "Escape") setRenaming(null);
+                    }}
+                  />
+                ) : (
+                  <span className={styles.savedName} onDoubleClick={() => setRenaming(c.id)}>
+                    {c.name}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className={styles.savedDelete}
+                title={`Delete “${c.name}”`}
+                aria-label={`Delete ${c.name}`}
+                onClick={() => channels.onDelete(c.id)}
+              >
+                <Trash2 size={13} />
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

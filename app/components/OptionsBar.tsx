@@ -1424,6 +1424,15 @@ function renderOptions(
                 onChange={(n) => onCrop({ straighten: n })}
                 unit="°"
               />
+              {/* Only meaningful once the straighten actually rotates something
+                  — with no angle there are no empty corners to fill. */}
+              {crop.straighten !== 0 && (
+                <Toggle
+                  label="Content-aware"
+                  checked={!!crop.fillGaps}
+                  onChange={(v) => onCrop({ fillGaps: v })}
+                />
+              )}
             </>
           )}
           <Select

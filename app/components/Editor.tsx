@@ -31,6 +31,17 @@ import {
 } from "../lib/autosave";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
 import {
+  cleanChannelName,
+  coerceChannels,
+  freshChannelId,
+  loadLabel,
+  removeChannel,
+  renameChannel,
+  selectionChannelKey,
+  type ChannelSelectOp,
+  type SavedChannel,
+} from "../lib/channels";
+import {
   ALIGN_LABEL,
   DISTRIBUTE_LABEL,
   alignDeltas,
@@ -136,6 +147,7 @@ import type {
   TextRenderSpec,
 } from "../lib/paint";
 import BlurGalleryDialog from "./BlurGalleryDialog";
+import SelectionChannelDialog from "./SelectionChannelDialog";
 import LiquifyDialog from "./LiquifyDialog";
 import MobileBar, { type MobileDrawer } from "./MobileBar";
 import { useIsMobile } from "../lib/useMediaQuery";
@@ -303,6 +315,9 @@ interface Doc {
   paths?: SavedPath[];
   /** Ruler guides (View ▸ Show guides). Per-document, saved in .gproj. */
   guides?: Guide[];
+  /** Saved selections (named alpha channels; the rasters live in the engine
+   *  under selectionChannelKey(docId, id)). Per-document, saved in .gproj. */
+  channels?: SavedChannel[];
   /** What was done to this document BEFORE this session — read from the file's
    *  history labels. A record, not a navigable stack (see history-log.ts). */
   historyLog?: string[];
@@ -1180,9 +1195,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       rect.h === d.height
     )
       return;
+    // Content-aware only bites when the straighten actually leaves corners empty.
+    const fill = !!cropSettingsRef.current.fillGaps && angle !== 0;
     const snap = eng.cropSnapshot(leafIds);
     const redo = () => {
-      eng.applyCrop(rect, leafIds, angle);
+      eng.applyCrop(rect, leafIds, angle, fill);
       setDims(rect.w, rect.h);
     };
     const undo = () => {
@@ -1190,7 +1207,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       setDims(snap.w, snap.h);
     };
     redo();
-    eng.pushStructural("Crop", undo, redo);
+    eng.pushStructural(fill ? "Crop (content-aware)" : "Crop", undo, redo);
     // Re-seat the crop box to the new, full canvas so the tool stays usable.
     setCropBox({ x: 0, y: 0, w: rect.w, h: rect.h });
     setCropSettings((s) => ({ ...s, straighten: 0 }));
@@ -3285,6 +3302,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         metadata: d.metadata ?? null,
         paths: d.paths ?? [],
         guides: d.guides ?? [],
+        channels: d.channels ?? [],
       },
       { foreground: fgRef.current, background: bgRef.current },
       // The log a file carries = what it already had + what this session did,
@@ -3304,6 +3322,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       },
       (id) => paintRef.current?.getLayerImage(id) ?? null,
       (id) => paintRef.current?.getMaskImage(id) ?? null,
+      // Channel rasters live in the same masks map, under the doc-scoped key.
+      (chId) => paintRef.current?.getMaskImage(selectionChannelKey(d.id, chId)) ?? null,
     );
     return JSON.stringify(project);
   };
@@ -3619,6 +3639,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       // v17; older files have none, and a guide outside the document is dropped
       // rather than trusted (a hand-edited file shouldn't produce ghost lines).
       guides: sanitizeGuides(p.guides, p.width, p.height),
+      // v18; older files have none. Only channels whose RASTER is present are
+      // kept — a name with no pixels would load as an empty selection and read
+      // as a bug rather than as the missing data it is.
+      channels: coerceChannels(p.channels).filter((c) =>
+        (p.channelImages ?? []).some((i) => i.id === c.id && !!i.data),
+      ),
       // Present in every .gproj ever written — nothing read it back until now.
       historyLog: sanitizeLog(p.history?.labels),
       historyBase: Math.max(0, historyRef.current.items.length - 1),
@@ -3627,7 +3653,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (activate) setActiveId(docId);
     if (p.foreground) setForeground(p.foreground);
     if (p.background) setBackground(p.background);
-    setPendingLoads((ls) => [...ls, { docId, images, masks }]);
+    const channelLoads = (p.channelImages ?? [])
+      .filter((i) => doc.channels?.some((c) => c.id === i.id))
+      .map((i) => ({ id: i.id, data: i.data }));
+    setPendingLoads((ls) => [...ls, { docId, images, masks, channels: channelLoads }]);
     // Seed the autosave cache from the file JSON so a never-viewed restored tab
     // still snapshots correctly (refreshed from the engine once it goes active).
     docJsonCache.current.set(docId, { json: JSON.stringify(p), name: doc.name });
@@ -5021,6 +5050,98 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     return poly.length >= 3 ? (paintRef.current?.lassoSelect(poly) ?? null) : null;
   };
 
+  // ---- Saved selections (alpha channels, TODO §3) --------------------------
+  //
+  // The raster is an ordinary engine mask under a reserved key, so saving is
+  // allocMask("selection") and loading is maskSelectionRects() — the same two
+  // calls the quick mask and "Load mask as selection" already use.
+  const [channelDialog, setChannelDialog] = useState<"save" | "load" | null>(null);
+  const channelsOf = (): SavedChannel[] => activeDocRef.current.channels ?? [];
+  const setChannels = (docId: string, next: SavedChannel[]) =>
+    setDocs((ds) => ds.map((d) => (d.id === docId ? { ...d, channels: next } : d)));
+
+  const saveSelectionOp = (rawName: string) => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    if (!eng) return;
+    if (!d.selection.length) {
+      showToast("Make a selection first — there is nothing to save.");
+      return;
+    }
+    const list = channelsOf();
+    const id = freshChannelId(list);
+    const name = cleanChannelName(rawName, list);
+    const key = selectionChannelKey(d.id, id);
+    eng.allocMask(key, "selection", d.selection, d.selectionAngle, d.selectionPivot);
+    const before = list;
+    const after = [...list, { id, name }];
+    setChannels(d.id, after);
+    // The raster is deliberately NOT freed on undo: redo would then have to
+    // re-render it from a selection that may no longer exist. Keeping it costs
+    // one grayscale canvas and makes both directions exact.
+    eng.pushStructural(
+      `Save Selection: ${name}`,
+      () => setChannels(d.id, before),
+      () => setChannels(d.id, after),
+    );
+    showToast(`Saved selection “${name}”.`);
+  };
+
+  const loadSelectionOp = (channelId: string, op: ChannelSelectOp) => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    const ch = channelsOf().find((c) => c.id === channelId);
+    if (!eng || !ch) return;
+    const rects = eng.maskSelectionRects(selectionChannelKey(d.id, ch.id));
+    if (!rects.length) {
+      showToast(`“${ch.name}” is empty.`);
+      return;
+    }
+    const cur = d.selection;
+    if (op === "new" || !cur.length) {
+      commitSelection(loadLabel(ch.name, "new"), rects);
+      return;
+    }
+    if (op === "add" || op === "subtract") {
+      const combined = eng.combineSelection(cur, rects, op);
+      commitSelection(loadLabel(ch.name, op), combined?.rects ?? []);
+      return;
+    }
+    // intersect: A ∩ B = A − (A − B), built from subtract (same as the Paths panel).
+    const aMinusB = eng.combineSelection(cur, rects, "subtract");
+    const inter = eng.combineSelection(cur, aMinusB?.rects ?? [], "subtract");
+    commitSelection(loadLabel(ch.name, "intersect"), inter?.rects ?? []);
+  };
+
+  const renameChannelOp = (id: string, name: string) => {
+    const d = activeDocRef.current;
+    const before = channelsOf();
+    const after = renameChannel(before, id, name);
+    if (after === before) return;
+    setChannels(d.id, after);
+    paintRef.current?.pushStructural(
+      "Rename Channel",
+      () => setChannels(d.id, before),
+      () => setChannels(d.id, after),
+    );
+  };
+
+  const deleteChannelOp = (id: string) => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    const before = channelsOf();
+    const after = removeChannel(before, id);
+    if (after.length === before.length) return;
+    setChannels(d.id, after);
+    // Same reasoning as save: the raster stays so undo restores a real channel
+    // rather than an empty one. It is dropped when the document closes.
+    eng?.pushStructural(
+      "Delete Channel",
+      () => setChannels(d.id, before),
+      () => setChannels(d.id, after),
+    );
+  };
+
   const pathsApi: PathsApi = {
     paths: active.paths ?? [],
     toSelection: (id, op: PathSelectOp) => {
@@ -5116,6 +5237,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "select-inverse") invertSelection();
     else if (actionId === "select-feather") setSelectModify("feather");
     else if (actionId === "select-grow") setSelectModify("grow");
+    else if (actionId === "select-save") setChannelDialog("save");
+    else if (actionId === "select-load") setChannelDialog("load");
     else if (actionId === "select-quickmask") toggleQuickMask();
     else if (actionId === "new-doc") requestNewDoc();
     else if (actionId === "open") openProject();
@@ -6082,6 +6205,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           selection={active.selection}
           selectionAngle={active.selectionAngle}
           selectionPivot={active.selectionPivot}
+          channels={{
+            list: active.channels ?? [],
+            previewOf: (id) =>
+              paintRef.current?.maskPreviewURL(selectionChannelKey(active.id, id), 48) ?? null,
+            onSave: () => setChannelDialog("save"),
+            onLoad: loadSelectionOp,
+            onRename: renameChannelOp,
+            onDelete: deleteChannelOp,
+          }}
           leftHost={leftHost}
           floatHost={floatHost}
           dockRef={dockRef}
@@ -6181,6 +6313,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       )}
 
       {helpOpen && <HelpDialog start={helpOpen} onClose={() => setHelpOpen(null)} />}
+
+      {channelDialog && (
+        <SelectionChannelDialog
+          mode={channelDialog}
+          channels={active.channels ?? []}
+          hasSelection={active.selection.length > 0}
+          onSave={saveSelectionOp}
+          onLoad={loadSelectionOp}
+          onClose={() => setChannelDialog(null)}
+        />
+      )}
 
       {aboutOpen && (
         <AboutDialog

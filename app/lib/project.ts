@@ -3,6 +3,7 @@ import type { LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers
 import type { ImageMetadata } from "./metadata";
 import type { Guide } from "./guides";
 import type { SavedPath } from "./paths";
+import type { SavedChannel } from "./channels";
 import type { Rect } from "./view";
 
 /** Graphiq project file extension (keeps layers, groups & settings; lossless). */
@@ -49,6 +50,12 @@ export interface ProjectFile {
   paths?: SavedPath[];
   /** Ruler guides (v17). Absent in older files — an empty set, not an error. */
   guides?: Guide[];
+  /** Saved selections (v18): the named channels plus their grayscale rasters as
+   *  PNG data URLs, keyed by channel id. Two fields rather than one so a file
+   *  whose image failed to encode still restores the NAMES (and an empty
+   *  channel), instead of losing the list. */
+  channels?: SavedChannel[];
+  channelImages?: { id: string; data: string }[];
   savedAt: string;
 }
 
@@ -60,6 +67,9 @@ export interface PendingLoad {
   images: { id: string; data?: string; source?: CanvasImageSource }[];
   /** Grayscale layer masks to restore (PNG data URL or decoded source). */
   masks?: { id: string; data?: string; source?: CanvasImageSource }[];
+  /** Saved-selection rasters to restore, by CHANNEL id (v18). The loader turns
+   *  each into its engine masks-map key once the document id is known. */
+  channels?: { id: string; data?: string; source?: CanvasImageSource }[];
 }
 
 export interface ProjectInput {
@@ -74,6 +84,7 @@ export interface ProjectInput {
   metadata?: ImageMetadata | null;
   paths?: SavedPath[];
   guides?: Guide[];
+  channels?: SavedChannel[];
 }
 
 function serializeNode(
@@ -107,10 +118,13 @@ export function serializeProject(
   history: { labels: string[]; index: number },
   getImage: (id: string) => string | null,
   getMask: (id: string) => string | null,
+  /** Grayscale PNG of a saved selection's raster, by channel id. */
+  getChannel: (id: string) => string | null = () => null,
 ): ProjectFile {
+  const channels = doc.channels ?? [];
   return {
     format: "graphiq-project",
-    version: 17, // v17 adds ruler guides (v16 gradient text fill, v15 text warp, v14 fill layers)
+    version: 18, // v18 adds saved selections (v17 guides, v16 gradient text fill, v15 text warp)
     name: doc.name,
     width: doc.width,
     height: doc.height,
@@ -125,6 +139,10 @@ export function serializeProject(
     metadata: doc.metadata ?? null,
     paths: doc.paths ?? [],
     guides: doc.guides ?? [],
+    channels,
+    channelImages: channels
+      .map((c) => ({ id: c.id, data: getChannel(c.id) }))
+      .filter((c): c is { id: string; data: string } => !!c.data),
     savedAt: new Date().toISOString(),
   };
 }

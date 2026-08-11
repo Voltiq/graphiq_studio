@@ -40,6 +40,7 @@ import type { PathsApi } from "../lib/paths";
 import { Spline } from "lucide-react";
 import type { NavigatorView, Rect } from "../lib/view";
 import type { LayersApi } from "../lib/layers";
+import type { ChannelSelectOp, SavedChannel } from "../lib/channels";
 import type { BrushSettings, EngineHandle, HistorySummary } from "../lib/paint";
 import type { Adjustments } from "../lib/adjust";
 import type { ExtraAdjustmentType } from "../lib/adjust-extra";
@@ -243,6 +244,15 @@ interface Props {
   selection: Rect[];
   selectionAngle: number;
   selectionPivot: { x: number; y: number } | null;
+  /** Saved selections (alpha channels) for the Channels panel. */
+  channels: {
+    list: SavedChannel[];
+    previewOf: (id: string) => string | null;
+    onSave: () => void;
+    onLoad: (id: string, op: ChannelSelectOp) => void;
+    onRename: (id: string, name: string) => void;
+    onDelete: (id: string) => void;
+  };
   /** Active document facts for the Metadata panel. */
   docName: string;
   /** Info panel: live pointer readout + document metrics. */
@@ -327,6 +337,7 @@ export default function RightDock({
   selection,
   selectionAngle,
   selectionPivot,
+  channels,
   docName,
   subscribeCursor,
   docWidth,
@@ -526,6 +537,7 @@ export default function RightDock({
               selection={selection}
               selectionAngle={selectionAngle}
               selectionPivot={selectionPivot}
+              channels={channels}
             />
           </Panel>
         ) : null;

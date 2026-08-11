@@ -16,6 +16,7 @@ import {
 } from "../lib/richtext-dom";
 import type { LassoMode } from "../lib/tools";
 import { clamp, parseColor, toHex8 } from "../lib/color";
+import { selectionChannelKey } from "../lib/channels";
 import {
   canvasTargets,
   clampGuide,
@@ -3633,7 +3634,7 @@ export default function CanvasArea({
       moveSponge: (x, y) => engine.moveSponge(x, y),
       endSponge: () => engine.endSponge(),
       cropSnapshot: (ids) => engine.cropSnapshot(ids),
-      applyCrop: (rect, ids, angle) => engine.applyCrop(rect, ids, angle),
+      applyCrop: (rect, ids, angle, fillGaps) => engine.applyCrop(rect, ids, angle, fillGaps),
       applyPerspectiveCrop: (quad, outW, outH, ids) =>
         engine.applyPerspectiveCrop(quad, outW, outH, ids),
       cropRestore: (snap) => engine.cropRestore(snap),
@@ -3656,6 +3657,7 @@ export default function CanvasArea({
       applyMaskToLayer: (id) => engine.applyMaskToLayer(id),
       offsetMask: (id, dx, dy) => engine.offsetMask(id, dx, dy),
       maskSelectionRects: (id) => engine.maskSelectionRects(id),
+      maskPreviewURL: (id, maxW) => engine.maskPreviewURL(id, maxW),
       layerContentBounds: (id) => engine.layerContentBounds(id),
       offsetLayerPixels: (id, dx, dy, alsoMask) => engine.offsetLayerPixels(id, dx, dy, alsoMask),
       quickMaskActive: () => engine.quickMaskActive(),
@@ -3763,6 +3765,24 @@ export default function CanvasArea({
             return;
           }
           if (!cancelled) engine.setMaskImage(id, img);
+        }),
+        // Saved selections: the same grayscale restore, but the file stores a
+        // CHANNEL id and the engine keys them per document.
+        ...(entry.channels ?? []).map(async ({ id, data, source }) => {
+          const key = selectionChannelKey(entry.docId, id);
+          if (source) {
+            if (!cancelled) engine.setMaskImage(key, source);
+            return;
+          }
+          if (!data) return;
+          const img = new Image();
+          img.src = data;
+          try {
+            await img.decode();
+          } catch {
+            return;
+          }
+          if (!cancelled) engine.setMaskImage(key, img);
         }),
       ]);
       if (!cancelled) {

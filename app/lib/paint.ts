@@ -67,6 +67,15 @@ import {
 } from "./colorspace";
 import { GpuToneRenderer } from "./gpu";
 import { healPadding, healRegion } from "./heal";
+import {
+  boundsOf as gapBounds,
+  dilateCoverage,
+  gapArea,
+  gapRects,
+  groupGaps,
+  seedFromEdges,
+  sourceQuad,
+} from "./crop-gaps";
 import { buildCanvasGradient } from "./gradient";
 import { solveHomography } from "./homography";
 import { buildEdgeField, type EdgeField } from "./magnetic";
@@ -83,6 +92,7 @@ import {
   type ToneLUTs16,
 } from "./tone";
 import { renderPenStroke } from "./pen";
+import { isChannelKey } from "./channels";
 import {
   baseRunStyle,
   cssFontString,
@@ -470,7 +480,7 @@ export interface EngineHandle {
   /** Snapshot owned layers + size for an undoable crop. */
   cropSnapshot: (ids: string[]) => CropSnapshot;
   /** Crop (and optionally straighten) owned layers to `rect`, resizing the doc. */
-  applyCrop: (rect: Rect, ids: string[], angle?: number) => void;
+  applyCrop: (rect: Rect, ids: string[], angle?: number, fillGaps?: boolean) => void;
   /** Perspective crop: resample the quad (tl,tr,br,bl) into an outW×outH rect. */
   applyPerspectiveCrop: (
     quad: { x: number; y: number }[],
@@ -519,6 +529,8 @@ export interface EngineHandle {
   applyMaskToLayer: (id: string) => void;
   offsetMask: (id: string, dx: number, dy: number) => void;
   maskSelectionRects: (id: string) => Rect[];
+  /** Small grayscale PNG of a mask raster (Channels-panel thumbnails). */
+  maskPreviewURL: (id: string, maxW?: number) => string | null;
   /** Tight bounds of a layer's non-transparent pixels (null = empty layer). */
   layerContentBounds: (id: string) => Rect | null;
   /** Translate a layer's pixels (align/distribute); caller owns the history. */
@@ -883,12 +895,13 @@ export class PaintEngine {
    *  a filter mask (fm:*) feeds the filter stack and inherits its reach. */
   private bumpMask(id: string, rect?: Rect) {
     this.maskVersion.set(id, (this.maskVersion.get(id) ?? 0) + 1);
-    // The quick mask is drawn as an overlay and composited into nothing, so a
-    // stroke on it must not invalidate a single cached tile. Skipping this is
-    // not just an optimization: changeReaches() treats an id it has never seen
-    // in the tree as "reaches everything", which would force a FULL document
-    // recomposite on every quick-mask brush segment.
-    if (id === this.qmKey) return;
+    // Overlay rasters — the quick mask (drawn by the canvas) and saved selection
+    // channels (drawn nowhere at all) — composite into nothing, so editing one
+    // must not invalidate a single cached tile. Skipping this is not merely an
+    // optimization: changeReaches() treats an id it has never seen in the tree
+    // as "reaches everything", which would force a FULL document recomposite on
+    // every quick-mask brush segment and on every selection save.
+    if (id === this.qmKey || isChannelKey(id)) return;
     this.dropCache(id, true);
     const bounded = rect && !this.changeReaches(id, "mask") ? rect : null;
     this.pendingDirty = unionRect(this.pendingDirty, bounded);
@@ -1797,7 +1810,72 @@ export class PaintEngine {
    * Destructive — the caller pairs it with cropSnapshot/cropRestore for undo. Call
    * BEFORE updating the doc width/height (the follow-up setDoc is then a no-op).
    */
-  applyCrop(rect: Rect, ownLayerIds: string[], angle = 0) {
+  /**
+   * Repaint the wedges a straighten leaves uncovered with synthesized content.
+   *
+   * Runs SYNCHRONOUSLY through the heal library's pure core rather than the
+   * worker path the heal brush uses, and pushes no history of its own: the crop
+   * that called it is already bracketed by cropSnapshot/cropRestore, so one undo
+   * takes the whole thing — geometry and fill together — back.
+   *
+   * Called AFTER the layers have been rotated into the new canvas, so `this.w/h`
+   * are the output size and the gap geometry is in the same space as the pixels.
+   */
+  private fillStraightenGaps(
+    ownLayerIds: string[],
+    srcW: number,
+    srcH: number,
+    rect: Rect,
+    angle: number,
+  ): void {
+    const gaps = gapRects(this.w, this.h, sourceQuad(srcW, srcH, rect, angle));
+    if (!gapArea(gaps)) return;
+    const clusters = groupGaps(gaps);
+    for (const id of ownLayerIds) {
+      const l = this.layers.get(id);
+      if (!l) continue;
+      let touched = false;
+      for (const cluster of clusters) {
+        const b = gapBounds(cluster);
+        if (!b) continue;
+        const pad = healPadding(b.w, b.h);
+        const rx = Math.max(0, Math.floor(b.x - pad));
+        const ry = Math.max(0, Math.floor(b.y - pad));
+        const rw = Math.min(this.w, Math.ceil(b.x + b.w + pad)) - rx;
+        const rh = Math.min(this.h, Math.ceil(b.y + b.h + pad)) - ry;
+        if (rw <= 0 || rh <= 0) continue;
+        const src = l.ctx.getImageData(rx, ry, rw, rh);
+        // An empty layer has nothing to synthesize FROM — healing it would spend
+        // a full diffusion solve to produce the transparency it already has.
+        let opaque = false;
+        for (let i = 3; i < src.data.length; i += 4)
+          if (src.data[i] !== 0) {
+            opaque = true;
+            break;
+          }
+        if (!opaque) continue;
+        const coverage = new Uint8ClampedArray(rw * rh);
+        for (const r of cluster) {
+          const y = r.y - ry;
+          if (y < 0 || y >= rh) continue;
+          const x0 = Math.max(0, r.x - rx);
+          const x1 = Math.min(rw, r.x + r.w - rx);
+          for (let x = x0; x < x1; x++) coverage[y * rw + x] = 255;
+        }
+        dilateCoverage(coverage, rw, rh, 2); // swallow the rotation's soft rim
+        // Seed first, THEN heal: the seed guarantees every hole pixel has a
+        // plausible local colour (the heal alone leaves a big wedge's interior
+        // at transparent black), and the heal then adds texture near the edge.
+        seedFromEdges(src.data, rw, rh, coverage);
+        l.ctx.putImageData(healRegion({ src, coverage }), rx, ry);
+        touched = true;
+      }
+      if (touched) this.bumpPixel(id);
+    }
+  }
+
+  /** `fillGaps` repaints the corners a straighten leaves empty (content-aware). */
+  applyCrop(rect: Rect, ownLayerIds: string[], angle = 0, fillGaps = false) {
     const nw = Math.max(1, Math.round(rect.w));
     const nh = Math.max(1, Math.round(rect.h));
     this.endAdjust();
@@ -1807,6 +1885,8 @@ export class PaintEngine {
     const rad = (-angle * Math.PI) / 180;
     const cx = rect.x + rect.w / 2;
     const cy = rect.y + rect.h / 2;
+    const srcW = this.w; // the pre-crop document size, for the gap geometry
+    const srcH = this.h;
     for (const [id, l] of this.layers) {
       if (!ownLayerIds.includes(id)) continue;
       const next = this.mk(nw, nh, true);
@@ -1841,6 +1921,7 @@ export class PaintEngine {
         ctx.drawImage(src, -Math.round(rect.x), -Math.round(rect.y));
       }
     });
+    if (fillGaps) this.fillStraightenGaps(ownLayerIds, srcW, srcH, rect, angle);
     this.emitChange();
   }
 
@@ -2253,6 +2334,26 @@ export class PaintEngine {
       l.ctx.globalCompositeOperation = "source-over";
     }
     this.freeMask(id);
+  }
+
+  /** A small grayscale PNG of a mask, for the Channels panel's thumbnails.
+   *  Null when the key holds no raster. Scaled on the GPU rather than by
+   *  reading pixels back — a thumbnail is redrawn whenever the list re-renders. */
+  maskPreviewURL(id: string, maxW = 48): string | null {
+    const m = this.masks.get(id);
+    if (!m) return null;
+    const scale = Math.min(1, maxW / Math.max(1, this.w));
+    const w = Math.max(1, Math.round(this.w * scale));
+    const h = Math.max(1, Math.round(this.h * scale));
+    const t = makeCanvas(w, h, false, "srgb");
+    t.ctx.imageSmoothingEnabled = true;
+    t.ctx.imageSmoothingQuality = "low";
+    t.ctx.drawImage(m.c, 0, 0, w, h);
+    try {
+      return t.c.toDataURL("image/png");
+    } catch {
+      return null; // tainted canvas (shouldn't happen — masks are engine-made)
+    }
   }
 
   /** Threshold a mask's coverage (≥ 50%) into run-length selection rects. */

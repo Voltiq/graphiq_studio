@@ -255,6 +255,9 @@ export interface CropSettings {
   /** Perspective mode: the crop box becomes a free quadrilateral that resamples
    *  to a rectangle on apply (correcting perspective). */
   perspective: boolean;
+  /** Content-aware: repaint the empty corners a straighten leaves behind with
+   *  synthesized content instead of leaving them transparent. Absent = off. */
+  fillGaps?: boolean;
 }
 
 /** The four corners of a perspective-crop quad, in tl, tr, br, bl order (doc space). */
