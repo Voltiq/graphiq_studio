@@ -87,6 +87,20 @@ export function filterReach(f: SmartFilter): Reach {
       }
       return null;
     }
+    case "highpass":
+      // src − gaussian(src): the blur is what reaches.
+      return px(f.params.radius);
+    case "median":
+    case "dustscratches":
+      // A (2r+1)² window, so a changed pixel can alter the median r away.
+      // Both are position-INDEPENDENT: the window is relative to the pixel and
+      // the edge rule is clamping, exactly like a blur.
+      return px(f.params.radius);
+    case "denoise":
+      // Bilateral disc of `radius` on luma, plus a chroma blur of up to
+      // radius·2 (colour amount 100%). Take the larger — under-estimating reach
+      // is a correctness bug, over-estimating only costs efficiency.
+      return px(f.params.radius * 2);
   }
   return null; // unknown/future type: refuse to region-scope it
 }
@@ -134,6 +148,35 @@ export function effectsReach(fx: LayerEffects | undefined): Reach {
   // reach scales with it.
   const s = typeof fx.scale === "number" && fx.scale > 0 ? fx.scale / 100 : 1;
   return px(max * s);
+}
+
+/**
+ * Can this effect stack be rendered over a PADDED SUB-RECT and blitted back?
+ *
+ * This is a different question from `effectsReach`, and conflating them is the
+ * same trap `filterReach` documents for filters. Reach answers "how far does a
+ * changed pixel spread?", which is enough to pad the DIRTY RECT — the blit — and
+ * every effect has a finite answer there. Rendering a sub-rect additionally
+ * requires that each effect compute the same value for a pixel whether it is
+ * handed the whole canvas or a window onto it.
+ *
+ * Most effects pass: shadows, glows, bevel and a colour stroke are all derived
+ * from nearby alpha by blur/offset/threshold, so a padded window reproduces them
+ * exactly. Two do NOT, because they take their geometry from the canvas they are
+ * given — `cx = w/2`, `half = max(w,h)/2` — so handing them a sub-canvas silently
+ * moves and rescales the gradient:
+ *   - gradient overlay
+ *   - stroke with a gradient fill (both the centred and the legacy
+ *     top-left→bottom-right geometry depend on the canvas size)
+ *
+ * Returns true when the stack must take the full-canvas path. Effects that are
+ * disabled cannot disqualify anything.
+ */
+export function effectsPositionDependent(fx: LayerEffects | undefined): boolean {
+  if (!fx) return false;
+  if (fx.gradientOverlay?.enabled) return true;
+  if (fx.stroke?.enabled && fx.stroke.fillType === "gradient") return true;
+  return false;
 }
 
 /** Total reach of a node's filters AND effects (filters run first, then fx). */

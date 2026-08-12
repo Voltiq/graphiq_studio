@@ -8,9 +8,13 @@ import {
   Crosshair,
   Droplets,
   Focus,
+  Eraser,
   Grid3x3,
+  Layers,
   Plus,
+  ScanLine,
   Sparkles,
+  SprayCan,
   Trash2,
   Wand2,
   Waves,
@@ -36,9 +40,24 @@ const FILTER_ICONS: Record<FilterType, LucideIcon> = {
   pixelate: Grid3x3,
   distort: Waves,
   stylize: Wand2,
+  highpass: ScanLine,
+  median: Layers,
+  dustscratches: Eraser,
+  denoise: SprayCan,
 };
 
-const TYPE_ORDER: FilterType[] = ["blur", "sharpen", "noise", "pixelate", "distort", "stylize"];
+const TYPE_ORDER: FilterType[] = [
+  "blur",
+  "sharpen",
+  "highpass",
+  "denoise",
+  "median",
+  "dustscratches",
+  "noise",
+  "pixelate",
+  "distort",
+  "stylize",
+];
 
 const FILTER_DESC: Record<FilterType, string> = {
   blur: "Any Blur Gallery blur, applied non-destructively.",
@@ -47,6 +66,10 @@ const FILTER_DESC: Record<FilterType, string> = {
   pixelate: "Mosaic — averages the layer into square cells.",
   distort: "Twirl, pinch/bulge or wave displacement.",
   stylize: "Find Edges, Emboss, Posterize or Threshold.",
+  highpass: "Keeps fine detail, flattens everything coarser to grey.",
+  median: "Replaces each pixel with its neighbourhood median — kills speckle, keeps edges.",
+  dustscratches: "Median, but only where a pixel disagrees with its surroundings.",
+  denoise: "Edge-aware luma smoothing plus chroma cleanup for sensor noise.",
 };
 
 const BLUR_KINDS: BlurFxKind[] = [
@@ -392,6 +415,64 @@ export default function SmartFilterDialog({
               )}
             </div>
           </>
+        );
+      }
+      case "highpass": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>High Pass</span>
+            <div className={styles.grid2}>
+              <Slider label="Radius" min={1} max={250} unit="px" value={p.radius} onChange={(v) => patchSel({ radius: v })} />
+            </div>
+            <span className={styles.hint}>
+              Detail finer than the radius survives; everything else becomes mid-grey. Blend with
+              Overlay or Soft Light above to sharpen.
+            </span>
+          </div>
+        );
+      }
+      case "median": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Median</span>
+            <div className={styles.grid2}>
+              <Slider label="Radius" min={1} max={16} unit="px" value={p.radius} onChange={(v) => patchSel({ radius: v })} />
+            </div>
+          </div>
+        );
+      }
+      case "dustscratches": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Dust &amp; Scratches</span>
+            <div className={styles.grid2}>
+              <Slider label="Radius" min={1} max={16} unit="px" value={p.radius} onChange={(v) => patchSel({ radius: v })} />
+              <Slider label="Threshold" min={0} max={255} unit="" value={p.threshold} onChange={(v) => patchSel({ threshold: v })} />
+            </div>
+            <span className={styles.hint}>
+              Higher thresholds touch fewer pixels. At 0 this is a plain Median.
+            </span>
+          </div>
+        );
+      }
+      case "denoise": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Reduce Noise</span>
+            <div className={styles.grid2}>
+              <Slider label="Strength" min={0} max={100} unit="%" value={p.strength} onChange={(v) => patchSel({ strength: v })} />
+              <Slider label="Radius" min={1} max={24} unit="px" value={p.radius} onChange={(v) => patchSel({ radius: v })} />
+              <Slider label="Color noise" min={0} max={100} unit="%" value={p.color} onChange={(v) => patchSel({ color: v })} />
+            </div>
+            <span className={styles.hint}>
+              Strength sets how different a neighbour may be and still be averaged in — edges stay
+              crisp because they exceed it.
+            </span>
+          </div>
         );
       }
       case "stylize": {

@@ -228,6 +228,14 @@ function alphaMask(a: Float32Array, w: number, h: number): HTMLCanvasElement {
   const c = document.createElement("canvas");
   c.width = w;
   c.height = h;
+  // Two tempting micro-optimisations here are both WRONG, measured 2026-08-12:
+  //  - Dropping `willReadFrequently` makes put+draw 24 ms -> 14 ms at 4000x3000,
+  //    but the composite changes (445 of 21,788 non-empty pixels vanished in an
+  //    A/B): a GPU-backed store does not round-trip this mask unchanged.
+  //  - Writing whole pixels via a Uint32Array view (RGB is 0, so the pixel is
+  //    just alpha<<24) is ~25% faster but TRUNCATES, where the byte store below
+  //    rounds half-to-even. Blur output is fractional, so that disagreed on 498k
+  //    of 1M samples and would shift every soft edge.
   const ctx = c.getContext("2d", { willReadFrequently: true })!;
   const id = new ImageData(w, h);
   const d = id.data;
@@ -291,7 +299,12 @@ export function renderStyled(src: HTMLCanvasElement, fx: LayerEffects, space: Pr
     if (v > maxA) maxA = v;
   }
   if (maxA === 0) return { canvas: out.c, offset: { x: 0, y: 0 } }; // fully transparent
-  const layerMask = alphaMask(alpha, w, h);
+  // `src` IS the layer silhouette for every use below: they are all
+  // destination-in/-out, which read the source ALPHA and nothing else, and
+  // src's alpha is exactly what `alpha` was just read from. Building a
+  // separate mask canvas cost ~31 ms per call at 4000x3000 and was paid
+  // unconditionally, even when no enabled effect used it. Verified
+  // identical by A/B over a five-effect composite (tools/ab-effects.js).
   const octx = out.ctx;
   const drawWith = (canvas: HTMLCanvasElement, blend: string, opacity: number, dx = 0, dy = 0) => {
      octx.globalAlpha = clamp(opacity, 0, 100) / 100;
@@ -322,7 +335,7 @@ export function renderStyled(src: HTMLCanvasElement, fx: LayerEffects, space: Pr
   if (ds?.enabled || og?.enabled) {
     // "Layer knocks out drop shadow": remove behind-effects under the layer.
     octx.globalCompositeOperation = "destination-out";
-    octx.drawImage(layerMask, 0, 0);
+    octx.drawImage(src, 0, 0);
     octx.globalCompositeOperation = "source-over";
   }
 
@@ -350,7 +363,7 @@ export function renderStyled(src: HTMLCanvasElement, fx: LayerEffects, space: Pr
     g.ctx.fillStyle = buildCanvasGradient(g.ctx, type, rstart, end, 0.5, stops, go.smooth ?? true);
     g.ctx.fillRect(0, 0, w, h);
     g.ctx.globalCompositeOperation = "destination-in";
-    g.ctx.drawImage(layerMask, 0, 0);
+    g.ctx.drawImage(src, 0, 0);
     g.ctx.globalCompositeOperation = "source-over";
     drawWith(g.c, go.blendMode, go.opacity);
   }
@@ -368,7 +381,7 @@ export function renderStyled(src: HTMLCanvasElement, fx: LayerEffects, space: Pr
     const t = mk(w, h, space);
     t.ctx.drawImage(tinted(inv, w, h, is.color, space), dx, dy);
     t.ctx.globalCompositeOperation = "destination-in";
-    t.ctx.drawImage(layerMask, 0, 0); // confine to the shape
+    t.ctx.drawImage(src, 0, 0); // confine to the shape
     t.ctx.globalCompositeOperation = "source-over";
     drawWith(t.c, is.blendMode, is.opacity);
   }
@@ -381,7 +394,7 @@ export function renderStyled(src: HTMLCanvasElement, fx: LayerEffects, space: Pr
     const t = mk(w, h, space);
     t.ctx.drawImage(tinted(inv, w, h, ig.color, space), 0, 0);
     t.ctx.globalCompositeOperation = "destination-in";
-    t.ctx.drawImage(layerMask, 0, 0);
+    t.ctx.drawImage(src, 0, 0);
     t.ctx.globalCompositeOperation = "source-over";
     drawWith(t.c, ig.blendMode, ig.opacity);
   }

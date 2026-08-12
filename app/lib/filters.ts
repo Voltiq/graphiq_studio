@@ -338,7 +338,17 @@ export function computeBlurFx(
 // Smart-filter model
 // ---------------------------------------------------------------------------
 
-export type FilterType = "blur" | "sharpen" | "noise" | "pixelate" | "distort" | "stylize";
+export type FilterType =
+  | "blur"
+  | "sharpen"
+  | "noise"
+  | "pixelate"
+  | "distort"
+  | "stylize"
+  | "highpass"
+  | "median"
+  | "dustscratches"
+  | "denoise";
 
 /** Blur smart filter reuses the Blur Gallery's parameter model (minus scope). */
 export interface BlurFilterParams {
@@ -372,6 +382,21 @@ export interface DistortParams {
   amplitude: number; // wave: px
   wavelength: number; // wave: px
   edge: "clamp" | "wrap";
+}
+export interface HighPassParams {
+  radius: number; // px — everything coarser than this is flattened to mid-grey
+}
+export interface MedianParams {
+  radius: number; // px
+}
+export interface DustScratchesParams {
+  radius: number; // px
+  threshold: number; // 0–255 luma difference; only pixels differing MORE are replaced
+}
+export interface DenoiseParams {
+  strength: number; // % → how close in luma a neighbour must be to be averaged in
+  radius: number; // px
+  color: number; // % → extra chroma-only smoothing (colour speckle is low-frequency)
 }
 export interface StylizeParams {
   mode: "findEdges" | "emboss" | "posterize" | "threshold";
@@ -412,6 +437,19 @@ export function scaleFilterParams(f: SmartFilter, s: number): SmartFilter {
       return f.params.mode === "emboss"
         ? { ...f, params: { ...f.params, height: Math.max(1, f.params.height * s) } }
         : f;
+    // Each of these carries a PIXEL radius, so the half-res preview must shrink
+    // it or the preview shows a different filter. `threshold` / `strength` /
+    // `color` are value-space and pass through untouched. The cases are written
+    // out separately rather than sharing one body because a combined case widens
+    // `f.params` to the union of all four and loses the narrowing.
+    case "highpass":
+      return { ...f, params: { ...f.params, radius: Math.max(0.1, f.params.radius * s) } };
+    case "median":
+      return { ...f, params: { ...f.params, radius: Math.max(1, f.params.radius * s) } };
+    case "dustscratches":
+      return { ...f, params: { ...f.params, radius: Math.max(1, f.params.radius * s) } };
+    case "denoise":
+      return { ...f, params: { ...f.params, radius: Math.max(1, f.params.radius * s) } };
     default:
       return f;
   }
@@ -432,6 +470,10 @@ export type SmartFilter = FilterBase &
     | { type: "pixelate"; params: MosaicParams }
     | { type: "distort"; params: DistortParams }
     | { type: "stylize"; params: StylizeParams }
+    | { type: "highpass"; params: HighPassParams }
+    | { type: "median"; params: MedianParams }
+    | { type: "dustscratches"; params: DustScratchesParams }
+    | { type: "denoise"; params: DenoiseParams }
   );
 
 export const FILTER_LABELS: Record<FilterType, string> = {
@@ -441,6 +483,10 @@ export const FILTER_LABELS: Record<FilterType, string> = {
   pixelate: "Pixelate",
   distort: "Distort",
   stylize: "Stylize",
+  highpass: "High Pass",
+  median: "Median",
+  dustscratches: "Dust & Scratches",
+  denoise: "Reduce Noise",
 };
 
 /** A human label including the variant (for list rows + history steps). */
@@ -464,6 +510,14 @@ export function filterLabel(f: SmartFilter): string {
           : f.params.mode === "posterize"
             ? "Posterize"
             : "Threshold";
+    case "highpass":
+      return "High Pass";
+    case "median":
+      return "Median";
+    case "dustscratches":
+      return "Dust & Scratches";
+    case "denoise":
+      return "Reduce Noise";
   }
 }
 
@@ -492,6 +546,14 @@ export function defaultFilter(type: FilterType): SmartFilter {
       return { ...base, type, params: { mode: "twirl", angle: 120, radius: 60, amount: 50, amplitude: 10, wavelength: 60, edge: "clamp" } };
     case "stylize":
       return { ...base, type, params: { mode: "findEdges", angle: 135, height: 2, amount: 100, levels: 4, level: 128 } };
+    case "highpass":
+      return { ...base, type, params: { radius: 3 } };
+    case "median":
+      return { ...base, type, params: { radius: 2 } };
+    case "dustscratches":
+      return { ...base, type, params: { radius: 2, threshold: 12 } };
+    case "denoise":
+      return { ...base, type, params: { strength: 45, radius: 3, color: 50 } };
   }
 }
 
@@ -796,6 +858,230 @@ function stylizeFilter(src: ImageData, p: StylizeParams, cs: PredefinedColorSpac
   return new ImageData(out, w, h, { colorSpace: cs });
 }
 
+/** High Pass: keep only detail FINER than `radius`, flatten the rest to mid-grey.
+ *  src − gaussian(src) + 128. The blur runs on premultiplied channels (as Unsharp
+ *  does) so transparent regions don't bleed darkness into the edge. */
+function highPass(src: ImageData, p: HighPassParams, cs: PredefinedColorSpace): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const n = w * h;
+  const sd = src.data;
+  const { R, G, B, A } = premultChannels(sd, n);
+  const radius = Math.max(0.1, Math.min(250, p.radius));
+  for (const ch of [R, G, B, A]) gaussianChannel(ch, w, h, radius);
+  const out = new Uint8ClampedArray(sd);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    if (sd[o + 3] === 0) continue; // fully transparent stays put
+    const a = A[i];
+    const inv = a > 0 ? 255 / a : 0;
+    out[o] = clamp255(128 + sd[o] - R[i] * inv);
+    out[o + 1] = clamp255(128 + sd[o + 1] - G[i] * inv);
+    out[o + 2] = clamp255(128 + sd[o + 2] - B[i] * inv);
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
+/**
+ * Per-channel median over a (2r+1)² window, edges clamped.
+ *
+ * Sliding 256-bin histogram with an incrementally tracked median (Huang 1979):
+ * moving one pixel right removes one column and adds one, so the cost is O(r)
+ * per pixel rather than the O(r²·log r) of sorting each window independently.
+ * The median is then nudged from its previous position instead of re-scanning
+ * all 256 bins, which matters because a full scan would cost more than sorting
+ * for the small radii this filter is actually used at.
+ *
+ * `below` is invariant: the number of samples in the window strictly less than
+ * `med`. The window is a fixed (2r+1)² because clamping repeats edge pixels
+ * rather than shrinking the window, so `target` never changes.
+ */
+function medianPlanes(sd: Uint8ClampedArray, w: number, h: number, r: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(sd.length);
+  const side = 2 * r + 1;
+  const target = (side * side) >> 1; // 0-indexed rank of the median
+  const hist = new Uint32Array(256);
+  // Alpha is usually constant (an opaque photo); skip a whole pass when it is.
+  let flatAlpha = true;
+  const a0 = sd[3];
+  for (let i = 0; i < w * h; i++) {
+    if (sd[i * 4 + 3] !== a0) {
+      flatAlpha = false;
+      break;
+    }
+  }
+  const channels = flatAlpha ? 3 : 4;
+  if (flatAlpha) for (let i = 0; i < w * h; i++) out[i * 4 + 3] = a0;
+
+  for (let c = 0; c < channels; c++) {
+    for (let y = 0; y < h; y++) {
+      hist.fill(0);
+      for (let dy = -r; dy <= r; dy++) {
+        const row = clampi(y + dy, 0, h - 1) * w;
+        for (let dx = -r; dx <= r; dx++) hist[sd[(row + clampi(dx, 0, w - 1)) * 4 + c]]++;
+      }
+      let med = 0;
+      let below = 0;
+      while (below + hist[med] <= target) {
+        below += hist[med];
+        med++;
+      }
+      out[y * w * 4 + c] = med;
+      for (let x = 1; x < w; x++) {
+        const remX = clampi(x - 1 - r, 0, w - 1);
+        const addX = clampi(x + r, 0, w - 1);
+        for (let dy = -r; dy <= r; dy++) {
+          const row = clampi(y + dy, 0, h - 1) * w;
+          const rv = sd[(row + remX) * 4 + c];
+          hist[rv]--;
+          if (rv < med) below--;
+          const av = sd[(row + addX) * 4 + c];
+          hist[av]++;
+          if (av < med) below++;
+        }
+        while (below > target) {
+          med--;
+          below -= hist[med];
+        }
+        while (below + hist[med] <= target) {
+          below += hist[med];
+          med++;
+        }
+        out[(y * w + x) * 4 + c] = med;
+      }
+    }
+  }
+  return out;
+}
+
+/** Median: flattens speckle while keeping edges straighter than a blur would. */
+function medianFilter(src: ImageData, p: MedianParams, cs: PredefinedColorSpace): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const sd = src.data;
+  const r = Math.max(1, Math.min(16, Math.round(p.radius)));
+  const med = medianPlanes(sd, w, h, r);
+  const out = new Uint8ClampedArray(sd);
+  for (let i = 0, n = w * h; i < n; i++) {
+    const o = i * 4;
+    if (sd[o + 3] === 0) continue; // never resurrect transparent pixels
+    out[o] = med[o];
+    out[o + 1] = med[o + 1];
+    out[o + 2] = med[o + 2];
+    out[o + 3] = med[o + 3];
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
+/** Dust & Scratches: the median, but applied ONLY where the pixel disagrees with
+ *  it by more than `threshold` — so defects are replaced and everything else is
+ *  left alone. Threshold 0 therefore degenerates to a plain Median. */
+function dustAndScratches(
+  src: ImageData,
+  p: DustScratchesParams,
+  cs: PredefinedColorSpace,
+): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const sd = src.data;
+  const r = Math.max(1, Math.min(16, Math.round(p.radius)));
+  const th = Math.max(0, Math.min(255, p.threshold));
+  const med = medianPlanes(sd, w, h, r);
+  const out = new Uint8ClampedArray(sd);
+  for (let i = 0, n = w * h; i < n; i++) {
+    const o = i * 4;
+    if (sd[o + 3] === 0) continue;
+    const dr = sd[o] - med[o];
+    const dg = sd[o + 1] - med[o + 1];
+    const db = sd[o + 2] - med[o + 2];
+    // Luma difference, matching the threshold convention Unsharp already uses.
+    if (Math.abs(0.299 * dr + 0.587 * dg + 0.114 * db) <= th) continue;
+    out[o] = med[o];
+    out[o + 1] = med[o + 1];
+    out[o + 2] = med[o + 2];
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
+/**
+ * Reduce Noise: the denoise-tuned sibling of the Surface blur.
+ *
+ * Surface bilaterally averages RGB together, which smooths luminance grain and
+ * colour speckle at the same rate. Real sensor noise is not like that — chroma
+ * noise is coarser and far more objectionable — so this splits the image into
+ * luma and chroma (YCbCr), runs the edge-aware average on LUMA only, and blurs
+ * the two chroma planes outright. That keeps edges (which live in luma) while
+ * erasing the colour mottling a luma-preserving filter would leave behind.
+ */
+function reduceNoise(src: ImageData, p: DenoiseParams, cs: PredefinedColorSpace): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const n = w * h;
+  const sd = src.data;
+  const Y = new Float32Array(n);
+  const Cb = new Float32Array(n);
+  const Cr = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    const R = sd[o];
+    const G = sd[o + 1];
+    const B = sd[o + 2];
+    Y[i] = 0.299 * R + 0.587 * G + 0.114 * B;
+    Cb[i] = -0.168736 * R - 0.331264 * G + 0.5 * B + 128;
+    Cr[i] = 0.5 * R - 0.418688 * G - 0.081312 * B + 128;
+  }
+  // Chroma: a plain blur is right here — colour noise has no edges worth saving.
+  const colorAmt = Math.max(0, Math.min(100, p.color)) / 100;
+  if (colorAmt > 0) {
+    const cr = Math.max(1, p.radius * colorAmt * 2);
+    gaussianChannel(Cb, w, h, cr);
+    gaussianChannel(Cr, w, h, cr);
+  }
+  // Luma: edge-aware average over a golden-angle disc (same sampling as Surface).
+  const radius = Math.max(1, Math.min(64, p.radius));
+  const N = 24;
+  const offs = new Float32Array(N * 2);
+  for (let k = 0; k < N; k++) {
+    const rr = radius * Math.sqrt((k + 0.5) / N);
+    const aa = k * 2.399963229728653; // golden angle → even disc coverage
+    offs[k * 2] = rr * Math.cos(aa);
+    offs[k * 2 + 1] = rr * Math.sin(aa);
+  }
+  const th = Math.max(1, (Math.max(0, Math.min(100, p.strength)) / 100) * 48);
+  const Yout = new Float32Array(n);
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const i = py * w + px;
+      const y0 = Y[i];
+      let acc = y0;
+      let wsum = 1;
+      for (let k = 0; k < N; k++) {
+        const si =
+          clampi(Math.round(py + offs[k * 2 + 1]), 0, h - 1) * w +
+          clampi(Math.round(px + offs[k * 2]), 0, w - 1);
+        const diff = Math.abs(Y[si] - y0);
+        if (diff >= th) continue; // across an edge — do not average
+        const wgt = 1 - diff / th;
+        acc += Y[si] * wgt;
+        wsum += wgt;
+      }
+      Yout[i] = acc / wsum;
+    }
+  }
+  const out = new Uint8ClampedArray(sd);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    if (sd[o + 3] === 0) continue;
+    const y = Yout[i];
+    const cb = Cb[i] - 128;
+    const cr = Cr[i] - 128;
+    out[o] = clamp255(y + 1.402 * cr);
+    out[o + 1] = clamp255(y - 0.344136 * cb - 0.714136 * cr);
+    out[o + 2] = clamp255(y + 1.772 * cb);
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -821,5 +1107,13 @@ export function applyFilter(src: ImageData, f: SmartFilter, cs: PredefinedColorS
       return distortFilter(src, f.params, cs);
     case "stylize":
       return stylizeFilter(src, f.params, cs);
+    case "highpass":
+      return highPass(src, f.params, cs);
+    case "median":
+      return medianFilter(src, f.params, cs);
+    case "dustscratches":
+      return dustAndScratches(src, f.params, cs);
+    case "denoise":
+      return reduceNoise(src, f.params, cs);
   }
 }
