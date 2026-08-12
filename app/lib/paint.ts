@@ -844,6 +844,9 @@ export class PaintEngine {
   private frameProtect = new Set<string>(); // entries used by the current frame
   private keyMemo = new Map<string, string>(); // per-composite effectiveKey memo
   private liveBypass = new Set<string>(); // live layer ids + their ancestor path
+  /** A draft-resolution filter/effect render has been blitted to the view since
+   *  the last settled frame — the next one must repaint everything. */
+  private draftPainted = false;
   // Pending dirty region (document space) + whether the next view blit must be
   // full. Partial blits are only taken when the tree reference is unchanged
   // (same immutable tree ⇒ no structural/props change slipped past the rects).
@@ -4179,7 +4182,50 @@ export class PaintEngine {
    *  miss (renderNode caches the product, keyed by pixelVersion/fxHash/space/
    *  epoch — the old standalone effectsCache is folded into that node cache). */
   private styledLeaf(node: LayerNode, src: HTMLCanvasElement): HTMLCanvasElement {
+    // Effects have no worker and no product cache of their own, so a live
+    // gesture re-renders them in full on every frame. Measured at ~1390 ms of
+    // blocking over a 20-step stroke on a layer with one default drop shadow —
+    // six times the (already-fixed) smart-filter case.
+    //
+    // The cost is NOT the blur kernel: a shadow at size 250 measured 1450 ms
+    // against 1390 ms at the default, because renderStyled's fixed setup
+    // dominates — a full-canvas getImageData plus a Float32Array alpha buffer
+    // (8 MB at 1920×1080) per call, regardless of radius. Shrinking the surface
+    // therefore beats making the kernel faster, and it is the same draft
+    // treatment the filter path already uses.
+    if (this.liveBypass.has(node.id) && !this.exporting) {
+      const draft = this.draftScale();
+      if (draft < 1) return this.styledLeafDraft(node, src, draft);
+    }
     return renderStyled(src, node.effects!, this.cs).canvas;
+  }
+
+  /** Effects rendered on a downscaled silhouette and upscaled back. `fx.scale`
+   *  is a percent the renderer already applies to every spatial param, so the
+   *  draft factor rides in through it — a 12 px shadow over half as many pixels
+   *  has to become 6 px or the preview would show a different effect. */
+  private styledLeafDraft(
+    node: LayerNode,
+    src: HTMLCanvasElement,
+    scale: number,
+  ): HTMLCanvasElement {
+    this.draftPainted = true; // the settled frame must repaint the whole view
+    const sw = Math.max(1, Math.round(this.w * scale));
+    const sh = Math.max(1, Math.round(this.h * scale));
+    const small = this.mk(sw, sh, true);
+    small.ctx.imageSmoothingEnabled = true;
+    small.ctx.imageSmoothingQuality = "low";
+    small.ctx.drawImage(src, 0, 0, sw, sh);
+
+    const fx = node.effects!;
+    const scaled = { ...fx, scale: (fx.scale ?? 100) * scale };
+    const styled = renderStyled(small.c, scaled, this.cs).canvas;
+
+    const out = this.mk(this.w, this.h);
+    out.ctx.imageSmoothingEnabled = true;
+    out.ctx.imageSmoothingQuality = "high"; // the upscale is what the user sees
+    out.ctx.drawImage(styled, 0, 0, styled.width, styled.height, 0, 0, this.w, this.h);
+    return out.c;
   }
 
   /** Smart filters (Spec 07): run a node's enabled filter stack over `src`
@@ -4940,6 +4986,15 @@ export class PaintEngine {
     this.frameProtect.clear();
     this.liveBypass = this.computeLiveBypass(tree);
     this.curTree = tree;
+    // A gesture that painted DRAFT filter/effect pixels leaves them wherever it
+    // blitted, and those blits are region-scoped — so the first settled frame
+    // after the session must repaint the whole view, not just the last dirty
+    // rect, or draft pixels survive outside it. (Caught by the byte-identity
+    // rail: 15,470 bytes still differed after a stroke on a shadowed layer.)
+    if (this.draftPainted && this.liveBypass.size === 0) {
+      this.draftPainted = false;
+      this.lastTree = null; // ⇒ full blit below
+    }
     const acc = this.adjBuf("comp", true);
     acc.ctx.globalAlpha = 1;
     acc.ctx.globalCompositeOperation = "source-over";
@@ -5891,6 +5946,34 @@ export class PaintEngine {
    * selection (rects + ants); an empty `rects` means the result is now empty
    * (e.g. the subtraction removed everything).
    */
+  // Reusable scratch for combineSelection, plus the bounds the last call left
+  // 1s in — clearing just that beats both allocating a zeroed buffer and wiping
+  // the whole one.
+  private combineBuf: Uint8Array | null = null;
+  private combineBufW = 0;
+  private combineBufH = 0;
+  private combineDirty: Bounds | null = null;
+
+  /** The shared combine buffer for a `w × h` document, cleared and ready. */
+  private combineScratch(w: number, h: number): Uint8Array {
+    if (!this.combineBuf || this.combineBufW !== w || this.combineBufH !== h) {
+      // Keyed on BOTH dimensions, not the length: a 1920×1080 and a 1080×1920
+      // document have the same cell count but different row strides, and reusing
+      // one for the other would smear every row.
+      this.combineBuf = new Uint8Array(w * h);
+      this.combineBufW = w;
+      this.combineBufH = h;
+      this.combineDirty = null;
+      return this.combineBuf;
+    }
+    const d = this.combineDirty;
+    if (d) {
+      for (let y = d.y0; y < d.y1; y++) this.combineBuf.fill(0, y * w + d.x0, y * w + d.x1);
+      this.combineDirty = null;
+    }
+    return this.combineBuf;
+  }
+
   combineSelection(base: Rect[], region: Rect[], mode: "add" | "subtract"): WandSelection | null {
     const w = this.w;
     const h = this.h;
@@ -5901,15 +5984,16 @@ export class PaintEngine {
       x1: Math.min(w, Math.ceil(r.x + r.w)),
       y1: Math.min(h, Math.ceil(r.y + r.h)),
     });
-    const fill = (rects: Rect[], mask: Uint8Array) => {
+    const paint = (rects: Rect[], mask: Uint8Array, v: 0 | 1) => {
       for (const r of rects) {
         const c = clamp4(r);
         for (let yy = c.y0; yy < c.y1; yy++) {
           const row = yy * w;
-          for (let xx = c.x0; xx < c.x1; xx++) mask[row + xx] = 1;
+          mask.fill(v, row + c.x0, row + c.x1); // whole run per row, not per pixel
         }
       }
     };
+    const fill = (rects: Rect[], mask: Uint8Array) => paint(rects, mask, 1);
     const boundsOf = (rects: Rect[]): Bounds | null => {
       let x0 = Infinity;
       let y0 = Infinity;
@@ -5925,19 +6009,37 @@ export class PaintEngine {
       }
       return x1 > x0 && y1 > y0 ? { x0, y0, x1, y1 } : null;
     };
+    const unionBounds = (a: Bounds | null, b: Bounds | null): Bounds | null =>
+      !a ? b : !b ? a : {
+        x0: Math.min(a.x0, b.x0),
+        y0: Math.min(a.y0, b.y0),
+        x1: Math.max(a.x1, b.x1),
+        y1: Math.max(a.y1, b.y1),
+      };
 
-    const out = new Uint8Array(w * h);
+    // One scratch buffer reused across calls, cleared only over what the LAST
+    // call wrote. Allocating (and zeroing) a fresh 2 MB Uint8Array per call —
+    // two of them for a subtract — was pure overhead on a path that runs on
+    // every wand click, quick-select segment and live re-shape tick.
+    const out = this.combineScratch(w, h);
+    const bBase = boundsOf(base);
+    const bRegion = boundsOf(region);
     fill(base, out);
     let b: Bounds | null;
     if (mode === "add") {
       fill(region, out);
-      b = boundsOf([...base, ...region]);
+      b = unionBounds(bBase, bRegion);
     } else {
-      const reg = new Uint8Array(w * h);
-      fill(region, reg);
-      for (let i = 0; i < out.length; i++) if (reg[i]) out[i] = 0;
-      b = boundsOf(base); // the result is a subset of the base
+      // Subtract used to build a SECOND full-document mask for `region` and then
+      // scan all 2M cells looking for it. Zeroing the region's own rects in place
+      // is exactly equivalent — only cells the region covers can be cleared —
+      // and touches the region's area instead of the whole document.
+      paint(region, out, 0);
+      b = bBase; // the result is a subset of the base
     }
+    // Record what may still hold 1s, so the next call clears only that. Set
+    // BEFORE the tracing below so an early return can't leave it stale.
+    this.combineDirty = unionBounds(bBase, mode === "add" ? bRegion : null);
     if (!b) return { rects: [], segments: [] };
     const rects = maskToRects(out, w, b);
     return { rects, segments: rects.length ? maskToSegments(out, w, h, b) : [] };
@@ -8458,6 +8560,7 @@ export class PaintEngine {
     node: LayerNode,
     scale: number,
   ): HTMLCanvasElement {
+    this.draftPainted = true; // the settled frame must repaint the whole view
     const sw = Math.max(1, Math.round(this.w * scale));
     const sh = Math.max(1, Math.round(this.h * scale));
 

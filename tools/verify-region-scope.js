@@ -1,18 +1,23 @@
-/* Correctness rail for region-scoped change tracking (TODO §8 P0).
+/* Correctness rail for region-scoped change tracking AND draft-resolution live
+ * rendering (TODO §8 P0).
  *
  *   npm i -D playwright-core && npm run dev
  *   node tools/verify-region-scope.js
  *
- * A padded region is only allowed if the composite it produces is BYTE-IDENTICAL
- * to a full recompute — an under-estimated reach shows up as a stale band at the
- * edge of the re-blitted area. This paints on styled/filtered layers, captures,
- * then forces the always-correct path with __gqRenderCache.disable() and diffs.
+ * Two invariants, both of which have already caught real bugs:
  *
- * IMPORTANT — why the assertions are ordered the way they are: byte-identity
- * ALSO holds when the region path never activates and everything silently takes
- * the full pass, so the first version of this file passed while proving nothing.
- * Every case therefore asserts `full === false` and that the dirty rect really
- * grew by the effect's reach BEFORE comparing pixels.
+ *  1. A padded region is only allowed if the composite it produces is
+ *     BYTE-IDENTICAL to a full recompute — an under-estimated reach shows up as
+ *     a stale band at the edge of the re-blitted area.
+ *  2. A gesture that painted DRAFT-resolution filters/effects must repaint the
+ *     whole view on the frame that settles it, or draft pixels survive outside
+ *     the last dirty rect. (This caught 15,470 differing bytes.)
+ *
+ * IMPORTANT — why the assertions are ordered as they are: byte-identity ALSO
+ * holds when the region path never activates and everything silently takes the
+ * full pass, so an early version passed while proving nothing. The padding is
+ * therefore proved on an UNDO PATCH (a rect-bounded change with no live session,
+ * hence no draft), where a region blit is still expected.
  */
 const { chromium } = require("playwright-core");
 
@@ -156,9 +161,22 @@ const skipTour = async (page) => {
   // Byte-identity alone would also pass if the region path never activated and
   // everything still went through the full pass — so first prove it IS active:
   // the last composite must have been a REGION blit with a bounded dirty rect.
+  // The settled frame right after a GESTURE is deliberately a full blit: live
+  // frames painted draft-resolution effects into region blits, so the first
+  // settled frame has to repaint everywhere those landed. Prove the padding on a
+  // change with no live session instead — an undo patch, which goes through the
+  // same bumpPixel(rect) path with no draft involved.
+  const stAfterStroke = await page.evaluate(() => window.__gqPerf && window.__gqPerf.stats());
+  check(
+    "the frame settling a draft gesture repaints fully (draft pixels can't linger)",
+    stAfterStroke && stAfterStroke.full === true,
+    `full=${stAfterStroke && stAfterStroke.full}`,
+  );
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(900);
   const st1 = await page.evaluate(() => window.__gqPerf && window.__gqPerf.stats());
   check(
-    "a stroke on a SHADOWED layer now takes the region path (was always full)",
+    "an undo patch on a SHADOWED layer takes the region path (was always full)",
     st1 && st1.full === false && st1.dirty,
     st1 ? `full=${st1.full} dirty=${JSON.stringify(st1.dirty)}` : "no perf hook",
   );
@@ -171,6 +189,8 @@ const skipTour = async (page) => {
     const share = (st1.dirty.w * st1.dirty.h) / (1920 * 1080);
     check("…while staying a fraction of the document", share < 0.5, `${(share * 100).toFixed(1)}% of the canvas`);
   }
+  await page.keyboard.press("Control+Shift+z");
+  await page.waitForTimeout(900);
   const d1 = await diffAgainstFullRecompute();
   check(
     "drop shadow: the region-scoped composite is byte-identical to the full pass",

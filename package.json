@@ -1,12 +1,13 @@
 {
   "name": "graphiq_studio",
-  "version": "0.32.1",
+  "version": "0.34.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "perf": "node tools/perf-suite.js",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit"
   },

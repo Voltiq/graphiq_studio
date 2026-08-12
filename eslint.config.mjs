@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Dev-only benchmark/verification scripts run under Node, not Next: they use
+    // CommonJS require() and print to the console, both of which the app config
+    // rightly forbids. Linting them under app rules made `npm run lint` fail
+    // unconditionally from the commit that introduced tools/.
+    "tools/**",
   ]),
 ]);
 
