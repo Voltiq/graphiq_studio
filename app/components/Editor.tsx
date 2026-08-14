@@ -265,6 +265,7 @@ import type { HdrImage } from "../lib/hdr";
 import { DEFAULT_FX, type FxKey, type LayerEffects } from "../lib/effects";
 import { defaultFilter, filterLabel, type FilterType, type SmartFilter } from "../lib/filters";
 import SmartFilterDialog from "./SmartFilterDialog";
+import WarpDialog from "./WarpDialog";
 import ShortcutsDialog from "./ShortcutsDialog";
 import NewDocDialog from "./NewDocDialog";
 import RestoreDialog from "./RestoreDialog";
@@ -4010,6 +4011,31 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (!canvas) return;
     setLiquify({ layerId: id!, name: node.name, canvas });
   };
+  const [warping, setWarping] = useState<{ layerId: string; name: string; canvas: HTMLCanvasElement } | null>(null);
+  const openWarp = () => {
+    const d = activeDocRef.current;
+    const id = d.activeLayerId;
+    const node = id ? findNode(d.layers, id) : null;
+    if (!node || node.type !== "layer") {
+      showToast("Select a pixel layer to warp.");
+      return;
+    }
+    if (node.vector) {
+      showToast("Warp needs plain pixels — rasterize the vector layer first.");
+      return;
+    }
+    const canvas = paintRef.current?.getLayerCanvas(id!);
+    if (!canvas) return;
+    setWarping({ layerId: id!, name: node.name, canvas });
+  };
+  const applyWarp = (result: HTMLCanvasElement) => {
+    const wp = warping;
+    setWarping(null);
+    if (!wp) return;
+    if (!findNode(activeDocRef.current.layers, wp.layerId)) return;
+    paintRef.current?.applyLayerImage(wp.layerId, result, "Warp");
+  };
+
   const applyLiquify = (result: HTMLCanvasElement) => {
     const lq = liquify;
     setLiquify(null);
@@ -5269,6 +5295,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     } else if (actionId === "print") printCanvas();
     else if (actionId === "effect-blur") openBlurFx();
     else if (actionId === "effect-liquify") openLiquify();
+    else if (actionId === "effect-warp") openWarp();
     else if (actionId === "color-manage") openColorDialog();
     else if (actionId === "color-compare") openCompare();
     else if (actionId === "preferences") setPrefsOpen(true);
@@ -6392,6 +6419,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           docHeight={active.height}
           onApply={applyLiquify}
           onClose={() => setLiquify(null)}
+        />
+      )}
+
+      {warping && (
+        <WarpDialog
+          layerName={warping.name}
+          source={warping.canvas}
+          docWidth={active.width}
+          docHeight={active.height}
+          onApply={applyWarp}
+          onClose={() => setWarping(null)}
         />
       )}
 

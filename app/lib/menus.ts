@@ -141,6 +141,7 @@ export const MENUS: Menu[] = [
       { label: "Stylize…", action: "filter-add-stylize", separatorAfter: true },
       { label: "Smart filters…", action: "filter-open" },
       { label: "Liquify…", shortcut: "Ctrl+Shift+X", action: "effect-liquify" },
+      { label: "Warp…", action: "effect-warp" },
     ],
   },
   {
