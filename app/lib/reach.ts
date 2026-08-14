@@ -96,6 +96,12 @@ export function filterReach(f: SmartFilter): Reach {
       // Both are position-INDEPENDENT: the window is relative to the pixel and
       // the edge rule is clamping, exactly like a blur.
       return px(f.params.radius);
+    case "lens":
+      // Distortion, chromatic aberration AND vignette are all functions of the
+      // distance from the image CENTRE, so every pixel's result depends on where
+      // it is — the same trap as twirl/pinch. No amount of padding makes a
+      // cropped region agree with the full pass.
+      return null;
     case "denoise":
       // Bilateral disc of `radius` on luma, plus a chroma blur of up to
       // radius·2 (colour amount 100%). Take the larger — under-estimating reach

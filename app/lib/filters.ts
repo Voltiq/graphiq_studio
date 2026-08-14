@@ -348,7 +348,8 @@ export type FilterType =
   | "highpass"
   | "median"
   | "dustscratches"
-  | "denoise";
+  | "denoise"
+  | "lens";
 
 /** Blur smart filter reuses the Blur Gallery's parameter model (minus scope). */
 export interface BlurFilterParams {
@@ -382,6 +383,24 @@ export interface DistortParams {
   amplitude: number; // wave: px
   wavelength: number; // wave: px
   edge: "clamp" | "wrap";
+}
+/**
+ * Lens corrections. All three are radial functions of distance from the image
+ * centre, and two of them (distortion, chromatic aberration) are RESAMPLES — so
+ * they share one sampling pass rather than being three filters stacked, which
+ * would resample the image twice and visibly soften it.
+ */
+export interface LensParams {
+  /** −100…100. Positive removes BARREL (corners pull in), negative removes pincushion. */
+  distortion: number;
+  /** −100…100 lateral chromatic aberration: red scaled against green. */
+  redCyan: number;
+  /** −100…100 lateral chromatic aberration: blue scaled against green. */
+  blueYellow: number;
+  /** −100…100 vignette: negative darkens the corners, positive lightens them. */
+  vignette: number;
+  /** 0…100 — how far out from the centre the vignette starts falling off. */
+  midpoint: number;
 }
 export interface HighPassParams {
   radius: number; // px — everything coarser than this is flattened to mid-grey
@@ -474,6 +493,7 @@ export type SmartFilter = FilterBase &
     | { type: "median"; params: MedianParams }
     | { type: "dustscratches"; params: DustScratchesParams }
     | { type: "denoise"; params: DenoiseParams }
+    | { type: "lens"; params: LensParams }
   );
 
 export const FILTER_LABELS: Record<FilterType, string> = {
@@ -487,6 +507,7 @@ export const FILTER_LABELS: Record<FilterType, string> = {
   median: "Median",
   dustscratches: "Dust & Scratches",
   denoise: "Reduce Noise",
+  lens: "Lens Corrections",
 };
 
 /** A human label including the variant (for list rows + history steps). */
@@ -518,6 +539,8 @@ export function filterLabel(f: SmartFilter): string {
       return "Dust & Scratches";
     case "denoise":
       return "Reduce Noise";
+    case "lens":
+      return "Lens Corrections";
   }
 }
 
@@ -554,6 +577,8 @@ export function defaultFilter(type: FilterType): SmartFilter {
       return { ...base, type, params: { radius: 2, threshold: 12 } };
     case "denoise":
       return { ...base, type, params: { strength: 45, radius: 3, color: 50 } };
+    case "lens":
+      return { ...base, type, params: { distortion: 0, redCyan: 0, blueYellow: 0, vignette: -35, midpoint: 50 } };
   }
 }
 
@@ -1082,6 +1107,137 @@ function reduceNoise(src: ImageData, p: DenoiseParams, cs: PredefinedColorSpace)
   return new ImageData(out, w, h, { colorSpace: cs });
 }
 
+/**
+ * Lens Corrections: geometric distortion, lateral chromatic aberration and
+ * vignette — in ONE resampling pass.
+ *
+ * Distortion and CA are both radial remaps, so running them as two stacked
+ * filters would sample the image twice and lose real sharpness. Here each output
+ * pixel resolves its source position once, and the CA correction is just a
+ * per-channel tweak to that same radial scale: red and blue are sampled at
+ * slightly different radii than green, which is exactly what lateral CA is.
+ *
+ * The radial model is `scale = 1 + k·r²` with `r` normalised so the CORNER is
+ * 1.0 — normalising by the half-diagonal (rather than by pixels) is what makes
+ * the parameters resolution-independent, so the half-resolution preview shows
+ * the same correction and `scaleFilterParams` has nothing to scale.
+ *
+ * Sampling is bilinear on PREMULTIPLIED channels: CA shifts are sub-pixel by
+ * nature, so nearest-neighbour would quantise the very thing being corrected,
+ * and premultiplying keeps transparent regions from bleeding dark fringes in.
+ */
+function lensCorrection(src: ImageData, p: LensParams, cs: PredefinedColorSpace): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const n = w * h;
+  const sd = src.data;
+  const { R: sR, G: sG, B: sB, A: sA } = premultChannels(sd, n);
+  const out = new Uint8ClampedArray(sd);
+
+  const cx = (w - 1) / 2;
+  const cy = (h - 1) / 2;
+  const r0 = Math.max(1e-6, Math.hypot(cx, cy)); // half-diagonal ⇒ corner r = 1
+  const k = (Math.max(-100, Math.min(100, p.distortion)) / 100) * 0.5;
+  // 2% of image radius at full slider is a large lateral CA — real lenses need
+  // far less, so this keeps the usable range in the middle of the slider.
+  const kR = (Math.max(-100, Math.min(100, p.redCyan)) / 100) * 0.02;
+  const kB = (Math.max(-100, Math.min(100, p.blueYellow)) / 100) * 0.02;
+  const vig = Math.max(-100, Math.min(100, p.vignette)) / 100;
+  const mid = Math.max(0, Math.min(100, p.midpoint)) / 100;
+  const vigDenom = Math.max(0.01, 1 - mid);
+
+  /** Vignette multiplier at normalised radius `rn`. Shared by both paths below
+   *  so they cannot drift apart. */
+  const vignetteAt = (rn: number): number => {
+    if (vig === 0) return 1;
+    let t = (rn - mid) / vigDenom;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    t = t * t * (3 - 2 * t); // smoothstep
+    const v = 1 + vig * t;
+    return v < 0 ? 0 : v;
+  };
+
+  // Geometry is identity ⇒ the resample would return the source unchanged, so
+  // skip it and apply only the vignette. This is the DEFAULT configuration
+  // (vignette with no distortion or fringe correction), and the resample costs
+  // ~180 ms of the ~200 ms at 1920×1080. Safe because the sampling path was
+  // verified to be a BIT-EXACT identity at zero geometry before this shortcut
+  // existed — see test-lens.ts, "all-zero params are an exact identity".
+  if (k === 0 && kR === 0 && kB === 0) {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const o = (y * w + x) * 4;
+        if (sd[o + 3] === 0) continue;
+        const vf = vignetteAt(Math.hypot(x - cx, y - cy) / r0);
+        if (vf === 1) continue;
+        out[o] = clamp255(sd[o] * vf);
+        out[o + 1] = clamp255(sd[o + 1] * vf);
+        out[o + 2] = clamp255(sd[o + 2] * vf);
+      }
+    }
+    return new ImageData(out, w, h, { colorSpace: cs });
+  }
+
+  /** Bilinear sample of one premultiplied channel + alpha, edges clamped. */
+  const sample = (ch: Float32Array, fx: number, fy: number): number => {
+    const x0 = Math.floor(fx);
+    const y0 = Math.floor(fy);
+    const tx = fx - x0;
+    const ty = fy - y0;
+    const x0c = clampi(x0, 0, w - 1);
+    const x1c = clampi(x0 + 1, 0, w - 1);
+    const y0c = clampi(y0, 0, h - 1);
+    const y1c = clampi(y0 + 1, 0, h - 1);
+    const a = ch[y0c * w + x0c];
+    const b = ch[y0c * w + x1c];
+    const c = ch[y1c * w + x0c];
+    const d = ch[y1c * w + x1c];
+    const top = a + (b - a) * tx;
+    const bot = c + (d - c) * tx;
+    return top + (bot - top) * ty;
+  };
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const ox = x - cx;
+      const oy = y - cy;
+      const rn = Math.hypot(ox, oy) / r0;
+      const rn2 = rn * rn;
+      const base = 1 + k * rn2;
+      // Each channel gets its own radial scale; green is the reference, as it is
+      // for real lens CA (the green channel defines the geometry). Kept as three
+      // scalars rather than an array — this runs once per pixel, and allocating
+      // here would mean millions of throwaway arrays per pass.
+      const scR = base * (1 + kR * rn2);
+      const scB = base * (1 + kB * rn2);
+      const o = (y * w + x) * 4;
+
+      const vf = vignetteAt(rn);
+
+      // Each channel is unpremultiplied against the alpha sampled at ITS OWN
+      // position — using green's alpha for all three would tint the very fringe
+      // this is correcting.
+      const rx = cx + ox * scR;
+      const ry = cy + oy * scR;
+      const aR = sample(sA, rx, ry);
+      out[o] = clamp255((aR > 0 ? (sample(sR, rx, ry) * 255) / aR : 0) * vf);
+
+      const gx = cx + ox * base;
+      const gy = cy + oy * base;
+      const aG = sample(sA, gx, gy);
+      out[o + 1] = clamp255((aG > 0 ? (sample(sG, gx, gy) * 255) / aG : 0) * vf);
+
+      const bx = cx + ox * scB;
+      const by = cy + oy * scB;
+      const aB = sample(sA, bx, by);
+      out[o + 2] = clamp255((aB > 0 ? (sample(sB, bx, by) * 255) / aB : 0) * vf);
+
+      out[o + 3] = clamp255(aG); // the silhouette follows green's geometry
+    }
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -1115,5 +1271,7 @@ export function applyFilter(src: ImageData, f: SmartFilter, cs: PredefinedColorS
       return dustAndScratches(src, f.params, cs);
     case "denoise":
       return reduceNoise(src, f.params, cs);
+    case "lens":
+      return lensCorrection(src, f.params, cs);
   }
 }

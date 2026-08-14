@@ -13,6 +13,7 @@ import {
   Layers,
   Plus,
   ScanLine,
+  Aperture,
   Sparkles,
   SprayCan,
   Trash2,
@@ -44,6 +45,7 @@ const FILTER_ICONS: Record<FilterType, LucideIcon> = {
   median: Layers,
   dustscratches: Eraser,
   denoise: SprayCan,
+  lens: Aperture,
 };
 
 const TYPE_ORDER: FilterType[] = [
@@ -53,6 +55,7 @@ const TYPE_ORDER: FilterType[] = [
   "denoise",
   "median",
   "dustscratches",
+  "lens",
   "noise",
   "pixelate",
   "distort",
@@ -70,6 +73,7 @@ const FILTER_DESC: Record<FilterType, string> = {
   median: "Replaces each pixel with its neighbourhood median — kills speckle, keeps edges.",
   dustscratches: "Median, but only where a pixel disagrees with its surroundings.",
   denoise: "Edge-aware luma smoothing plus chroma cleanup for sensor noise.",
+  lens: "Vignette, chromatic aberration and barrel/pincushion correction.",
 };
 
 const BLUR_KINDS: BlurFxKind[] = [
@@ -471,6 +475,26 @@ export default function SmartFilterDialog({
             <span className={styles.hint}>
               Strength sets how different a neighbour may be and still be averaged in — edges stay
               crisp because they exceed it.
+            </span>
+          </div>
+        );
+      }
+      case "lens": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Lens Corrections</span>
+            <div className={styles.grid2}>
+              <Slider label="Distortion" min={-100} max={100} unit="" value={p.distortion} onChange={(v) => patchSel({ distortion: v })} />
+              <Slider label="Red / cyan" min={-100} max={100} unit="" value={p.redCyan} onChange={(v) => patchSel({ redCyan: v })} />
+              <Slider label="Blue / yellow" min={-100} max={100} unit="" value={p.blueYellow} onChange={(v) => patchSel({ blueYellow: v })} />
+              <Slider label="Vignette" min={-100} max={100} unit="" value={p.vignette} onChange={(v) => patchSel({ vignette: v })} />
+              <Slider label="Midpoint" min={0} max={100} unit="%" value={p.midpoint} onChange={(v) => patchSel({ midpoint: v })} />
+            </div>
+            <span className={styles.hint}>
+              Positive Distortion removes barrel (corners pull in), negative removes pincushion. The
+              fringe sliders scale red and blue against green. Vignette darkens below 0 and lightens
+              above; Midpoint sets how far out it starts.
             </span>
           </div>
         );
