@@ -96,6 +96,25 @@ export function filterReach(f: SmartFilter): Reach {
       // Both are position-INDEPENDENT: the window is relative to the pixel and
       // the edge rule is clamping, exactly like a blur.
       return px(f.params.radius);
+    case "oil":
+      // Modal-bucket average over a (2r+1)² window: local, relative to the
+      // pixel, clamped at the edges — the same shape as a blur.
+      return px(f.params.radius);
+    case "canvasshadow":
+      // Offset by `distance` then blurred by `size`; the angle is not resolved
+      // because a uniformly grown rect already contains every direction.
+      return px(Math.abs(f.params.distance) + Math.abs(f.params.size));
+    case "halftone":
+    case "crystallize":
+      // Both snap to a lattice anchored to the image ORIGIN — the halftone
+      // screen to a rotated grid, crystallize to jittered cells seeded from grid
+      // coordinates. An unaligned region lands on different cells, so no amount
+      // of padding reproduces the full pass. Same trap as mosaic.
+      return null;
+    case "glitch":
+      // Band offsets are seeded from the band index, which is measured from the
+      // top of the image, and the scanlines alternate on absolute row parity.
+      return null;
     case "dehaze":
       // The patch min and the transmission blur are both local and bounded —
       // but the ATMOSPHERIC LIGHT is estimated from the haziest 0.1% of the

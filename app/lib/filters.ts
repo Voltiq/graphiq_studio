@@ -352,7 +352,12 @@ export type FilterType =
   | "lens"
   | "dehaze"
   | "clarity"
-  | "grain";
+  | "grain"
+  | "oil"
+  | "halftone"
+  | "crystallize"
+  | "glitch"
+  | "canvasshadow";
 
 /** Blur smart filter reuses the Blur Gallery's parameter model (minus scope). */
 export interface BlurFilterParams {
@@ -386,6 +391,32 @@ export interface DistortParams {
   amplitude: number; // wave: px
   wavelength: number; // wave: px
   edge: "clamp" | "wrap";
+}
+export interface OilParams {
+  radius: number; // px — brush neighbourhood
+  levels: number; // intensity buckets; fewer = broader, flatter strokes
+}
+export interface HalftoneParams {
+  size: number; // px — screen cell (max dot pitch)
+  angle: number; // ° — base screen angle
+  mono: boolean; // true = single black screen; false = C/M/Y at classic offsets
+}
+export interface CrystallizeParams {
+  size: number; // px — average cell size
+}
+export interface GlitchParams {
+  amount: number; // % — horizontal band displacement
+  blockSize: number; // px — band height
+  rgbShift: number; // px — channel separation
+  scanlines: number; // % — darkening of alternate rows
+  seed: number;
+}
+export interface CanvasShadowParams {
+  distance: number; // px
+  angle: number; // °
+  size: number; // px blur
+  opacity: number; // %
+  color: string;
 }
 export interface DehazeParams {
   amount: number; // % — how much of the estimated haze to remove
@@ -493,6 +524,30 @@ export function scaleFilterParams(f: SmartFilter, s: number): SmartFilter {
       return { ...f, params: { ...f.params, radius: Math.max(1, f.params.radius * s) } };
     case "grain":
       return { ...f, params: { ...f.params, size: Math.max(1, f.params.size * s) } };
+    case "oil":
+      return { ...f, params: { ...f.params, radius: Math.max(1, f.params.radius * s) } };
+    case "halftone":
+      return { ...f, params: { ...f.params, size: Math.max(2, f.params.size * s) } };
+    case "crystallize":
+      return { ...f, params: { ...f.params, size: Math.max(2, f.params.size * s) } };
+    case "glitch":
+      return {
+        ...f,
+        params: {
+          ...f.params,
+          blockSize: Math.max(1, f.params.blockSize * s),
+          rgbShift: f.params.rgbShift * s,
+        },
+      };
+    case "canvasshadow":
+      return {
+        ...f,
+        params: {
+          ...f.params,
+          distance: f.params.distance * s,
+          size: Math.max(0, f.params.size * s),
+        },
+      };
     default:
       return f;
   }
@@ -521,6 +576,11 @@ export type SmartFilter = FilterBase &
     | { type: "dehaze"; params: DehazeParams }
     | { type: "clarity"; params: ClarityParams }
     | { type: "grain"; params: GrainParams }
+    | { type: "oil"; params: OilParams }
+    | { type: "halftone"; params: HalftoneParams }
+    | { type: "crystallize"; params: CrystallizeParams }
+    | { type: "glitch"; params: GlitchParams }
+    | { type: "canvasshadow"; params: CanvasShadowParams }
   );
 
 export const FILTER_LABELS: Record<FilterType, string> = {
@@ -538,6 +598,11 @@ export const FILTER_LABELS: Record<FilterType, string> = {
   dehaze: "Dehaze",
   clarity: "Clarity & Texture",
   grain: "Grain",
+  oil: "Oil Paint",
+  halftone: "Halftone",
+  crystallize: "Crystallize",
+  glitch: "Glitch",
+  canvasshadow: "Drop Shadow (baked)",
 };
 
 /** A human label including the variant (for list rows + history steps). */
@@ -577,6 +642,16 @@ export function filterLabel(f: SmartFilter): string {
       return "Clarity & Texture";
     case "grain":
       return "Grain";
+    case "oil":
+      return "Oil Paint";
+    case "halftone":
+      return f.params.mono ? "Halftone" : "Color Halftone";
+    case "crystallize":
+      return "Crystallize";
+    case "glitch":
+      return "Glitch";
+    case "canvasshadow":
+      return "Drop Shadow (baked)";
   }
 }
 
@@ -621,6 +696,16 @@ export function defaultFilter(type: FilterType): SmartFilter {
       return { ...base, type, params: { clarity: 35, texture: 20, radius: 40 } };
     case "grain":
       return { ...base, type, params: { amount: 30, size: 2, roughness: 50, seed: 1 } };
+    case "oil":
+      return { ...base, type, params: { radius: 4, levels: 20 } };
+    case "halftone":
+      return { ...base, type, params: { size: 8, angle: 45, mono: false } };
+    case "crystallize":
+      return { ...base, type, params: { size: 12 } };
+    case "glitch":
+      return { ...base, type, params: { amount: 40, blockSize: 12, rgbShift: 4, scanlines: 30, seed: 1 } };
+    case "canvasshadow":
+      return { ...base, type, params: { distance: 8, angle: 120, size: 10, opacity: 60, color: "#000000" } };
   }
 }
 
@@ -1554,6 +1639,332 @@ function grain(src: ImageData, p: GrainParams, cs: PredefinedColorSpace): ImageD
   return new ImageData(out, w, h, { colorSpace: cs });
 }
 
+/**
+ * Oil Paint — the intensity-histogram painterly filter: each pixel takes the
+ * AVERAGE COLOUR of whichever intensity bucket is most common in its
+ * neighbourhood. Picking the modal bucket rather than the mean is what produces
+ * flat strokes with hard boundaries instead of a blur.
+ *
+ * Uses the same sliding-window trick as Median: moving one pixel right removes a
+ * column and adds a column, so the cost is O(r) per pixel rather than O(r²).
+ * Here the window carries four accumulators per bucket (count + RGB sums)
+ * instead of one histogram.
+ */
+function oilPaint(src: ImageData, p: OilParams, cs: PredefinedColorSpace): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const n = w * h;
+  const sd = src.data;
+  const out = new Uint8ClampedArray(sd);
+  const r = clampi(Math.round(p.radius), 1, 16);
+  const levels = clampi(Math.round(p.levels), 2, 64);
+
+  const bin = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    const v = (sd[o] + sd[o + 1] + sd[o + 2]) / 3;
+    bin[i] = Math.min(levels - 1, Math.floor((v * levels) / 256));
+  }
+  const cnt = new Int32Array(levels);
+  const aR = new Int32Array(levels);
+  const aG = new Int32Array(levels);
+  const aB = new Int32Array(levels);
+  const addCol = (x: number, y: number, sign: number) => {
+    const xc = clampi(x, 0, w - 1);
+    for (let dy = -r; dy <= r; dy++) {
+      const i = clampi(y + dy, 0, h - 1) * w + xc;
+      const o = i * 4;
+      if (sd[o + 3] === 0) continue; // transparent pixels are not paint
+      const b = bin[i];
+      cnt[b] += sign;
+      aR[b] += sign * sd[o];
+      aG[b] += sign * sd[o + 1];
+      aB[b] += sign * sd[o + 2];
+    }
+  };
+
+  for (let y = 0; y < h; y++) {
+    cnt.fill(0);
+    aR.fill(0);
+    aG.fill(0);
+    aB.fill(0);
+    for (let dx = -r; dx <= r; dx++) addCol(dx, y, 1);
+    for (let x = 0; x < w; x++) {
+      if (x > 0) {
+        addCol(x - 1 - r, y, -1);
+        addCol(x + r, y, 1);
+      }
+      const o = (y * w + x) * 4;
+      if (sd[o + 3] === 0) continue;
+      let best = -1;
+      let bestC = 0;
+      for (let b = 0; b < levels; b++) {
+        if (cnt[b] > bestC) {
+          bestC = cnt[b];
+          best = b;
+        }
+      }
+      if (best < 0 || bestC === 0) continue;
+      out[o] = clamp255(aR[best] / bestC);
+      out[o + 1] = clamp255(aG[best] / bestC);
+      out[o + 2] = clamp255(aB[best] / bestC);
+    }
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
+/**
+ * Halftone — a real printing screen, not a texture overlay.
+ *
+ * Each pixel asks which screen cell it falls in (in a ROTATED lattice), reads
+ * the source value at that cell's centre, and turns it into a dot whose AREA is
+ * proportional to the value — which is how physical halftone works, and why the
+ * radius goes as √value rather than value.
+ *
+ * Colour mode screens cyan, magenta and yellow separately at the classic
+ * offsets (15° / 75° / 0° from the base angle). Those specific angles are not
+ * decoration: screens at similar angles beat against each other and produce
+ * moiré, and 30° separation is the standard remedy.
+ */
+function halftone(src: ImageData, p: HalftoneParams, cs: PredefinedColorSpace): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const sd = src.data;
+  const out = new Uint8ClampedArray(sd);
+  const cell = Math.max(2, Math.min(64, p.size));
+  const maxR = cell * 0.5 * Math.SQRT2; // dots may just touch at full value
+  const screens = p.mono ? [{ ang: p.angle, ch: -1 }] : [
+    { ang: p.angle + 15, ch: 0 }, // cyan
+    { ang: p.angle + 75, ch: 1 }, // magenta
+    { ang: p.angle, ch: 2 }, // yellow
+  ];
+  const prep = screens.map((s) => {
+    const rad = (s.ang * Math.PI) / 180;
+    return { ch: s.ch, ca: Math.cos(rad), sa: Math.sin(rad) };
+  });
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      if (sd[o + 3] === 0) continue;
+      const cov: number[] = [0, 0, 0];
+      for (const s of prep) {
+        // Rotate into screen space, snap to the nearest lattice node.
+        const u = x * s.ca + y * s.sa;
+        const v = -x * s.sa + y * s.ca;
+        const cu = Math.round(u / cell) * cell;
+        const cv = Math.round(v / cell) * cell;
+        // Rotate the node back to read the source there.
+        const sx = clampi(Math.round(cu * s.ca - cv * s.sa), 0, w - 1);
+        const sy = clampi(Math.round(cu * s.sa + cv * s.ca), 0, h - 1);
+        const so = (sy * w + sx) * 4;
+        // Ink coverage: subtractive for colour, luminance for mono.
+        const ink =
+          s.ch < 0
+            ? 1 - (0.299 * sd[so] + 0.587 * sd[so + 1] + 0.114 * sd[so + 2]) / 255
+            : 1 - sd[so + s.ch] / 255;
+        const dot = maxR * Math.sqrt(Math.max(0, Math.min(1, ink)));
+        const d = Math.hypot(u - cu, v - cv);
+        // ~1px soft edge, or the dots alias into visible stair-steps.
+        const a = dot <= 0 ? 0 : Math.max(0, Math.min(1, (dot - d) / 1 + 0.5));
+        if (s.ch < 0) {
+          cov[0] = cov[1] = cov[2] = a;
+        } else {
+          cov[s.ch] = a;
+        }
+      }
+      out[o] = clamp255(255 * (1 - cov[0]));
+      out[o + 1] = clamp255(255 * (1 - cov[1]));
+      out[o + 2] = clamp255(255 * (1 - cov[2]));
+    }
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
+/**
+ * Crystallize — a Voronoi mosaic. One jittered site per grid cell, every pixel
+ * takes the flat AVERAGE colour of the cell it belongs to.
+ *
+ * Jittering the sites inside their cells is what makes the result read as
+ * crystals rather than as the square Mosaic filter; searching only the 3×3
+ * neighbouring cells is exact, because a jittered site can never be nearer than
+ * one belonging to a cell further away than that.
+ */
+function crystallize(src: ImageData, p: CrystallizeParams, cs: PredefinedColorSpace): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const sd = src.data;
+  const out = new Uint8ClampedArray(sd);
+  const cell = Math.max(2, Math.min(200, p.size));
+  const gw = Math.max(1, Math.ceil(w / cell) + 1);
+  const gh = Math.max(1, Math.ceil(h / cell) + 1);
+  const sx = new Float32Array(gw * gh);
+  const sy = new Float32Array(gw * gh);
+  for (let gy = 0; gy < gh; gy++)
+    for (let gx = 0; gx < gw; gx++) {
+      const i = gy * gw + gx;
+      sx[i] = (gx + hash01(gx, gy, 1, 0)) * cell;
+      sy[i] = (gy + hash01(gx, gy, 1, 1)) * cell;
+    }
+
+  const owner = new Int32Array(w * h);
+  const accR = new Float64Array(gw * gh);
+  const accG = new Float64Array(gw * gh);
+  const accB = new Float64Array(gw * gh);
+  const accA = new Float64Array(gw * gh);
+  const accN = new Int32Array(gw * gh);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const gx0 = Math.min(gw - 1, Math.floor(x / cell));
+      const gy0 = Math.min(gh - 1, Math.floor(y / cell));
+      let bestI = -1;
+      let bestD = Infinity;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const gx = gx0 + dx;
+          const gy = gy0 + dy;
+          if (gx < 0 || gy < 0 || gx >= gw || gy >= gh) continue;
+          const i = gy * gw + gx;
+          const ddx = sx[i] - x;
+          const ddy = sy[i] - y;
+          const d = ddx * ddx + ddy * ddy;
+          if (d < bestD) {
+            bestD = d;
+            bestI = i;
+          }
+        }
+      const pi = y * w + x;
+      owner[pi] = bestI;
+      const o = pi * 4;
+      accR[bestI] += sd[o];
+      accG[bestI] += sd[o + 1];
+      accB[bestI] += sd[o + 2];
+      accA[bestI] += sd[o + 3];
+      accN[bestI]++;
+    }
+  }
+  for (let pi = 0, nn = w * h; pi < nn; pi++) {
+    const i = owner[pi];
+    const c = accN[i];
+    if (c === 0) continue;
+    const o = pi * 4;
+    out[o] = clamp255(accR[i] / c);
+    out[o + 1] = clamp255(accG[i] / c);
+    out[o + 2] = clamp255(accB[i] / c);
+    out[o + 3] = clamp255(accA[i] / c);
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
+/**
+ * Glitch — horizontal band displacement, channel separation and scanlines.
+ *
+ * Bands are displaced as whole blocks (all rows of a block share one offset),
+ * because per-row noise reads as static rather than as a broken signal. The
+ * channel shift is applied AFTER displacement so the fringe rides along with the
+ * torn bands, which is what a real signal fault looks like.
+ */
+function glitch(src: ImageData, p: GlitchParams, cs: PredefinedColorSpace): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const sd = src.data;
+  const out = new Uint8ClampedArray(sd.length);
+  const amt = Math.max(0, Math.min(100, p.amount)) / 100;
+  const block = Math.max(1, Math.min(256, Math.round(p.blockSize)));
+  const shift = Math.round(p.rgbShift);
+  const scan = Math.max(0, Math.min(100, p.scanlines)) / 100;
+  const seed = p.seed | 0 || 1;
+
+  for (let y = 0; y < h; y++) {
+    const b = Math.floor(y / block);
+    // Most bands stay put; a minority tear. A uniform jitter on every band just
+    // looks like horizontal noise.
+    const roll = hash01(0, b, seed, 0);
+    const off =
+      roll < 0.35 ? Math.round((hash01(1, b, seed, 1) * 2 - 1) * amt * w * 0.12) : 0;
+    const dim = scan > 0 && y % 2 === 1 ? 1 - scan * 0.6 : 1;
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      const rx = clampi(x - off, 0, w - 1);
+      const base = (y * w + rx) * 4;
+      const rxR = clampi(x - off + shift, 0, w - 1);
+      const rxB = clampi(x - off - shift, 0, w - 1);
+      out[o] = clamp255(sd[(y * w + rxR) * 4] * dim);
+      out[o + 1] = clamp255(sd[base + 1] * dim);
+      out[o + 2] = clamp255(sd[(y * w + rxB) * 4 + 2] * dim);
+      out[o + 3] = sd[base + 3];
+    }
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
+/**
+ * Drop Shadow, baked into the layer's own pixels.
+ *
+ * Layer Effects ▸ Drop Shadow is the better tool for the usual case: it is live,
+ * re-editable, and free to spill OUTSIDE the layer. This exists for the case
+ * that one cannot serve — a shadow that later filters in the stack can see,
+ * because it is part of the pixels by the time they run. The tradeoff is real
+ * and unavoidable: filters never enlarge a layer, so this shadow is CLIPPED at
+ * the layer bounds.
+ */
+function canvasShadow(src: ImageData, p: CanvasShadowParams, cs: PredefinedColorSpace): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const n = w * h;
+  const sd = src.data;
+  const out = new Uint8ClampedArray(sd);
+  const op = Math.max(0, Math.min(100, p.opacity)) / 100;
+  if (op <= 0) return new ImageData(out, w, h, { colorSpace: cs });
+
+  const rgb = parseHexRGB(p.color);
+  const rad = (p.angle * Math.PI) / 180;
+  const dx = Math.round(-Math.cos(rad) * p.distance);
+  const dy = Math.round(Math.sin(rad) * p.distance);
+
+  const shadow = new Float32Array(n);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const sxp = x - dx;
+      const syp = y - dy;
+      if (sxp < 0 || syp < 0 || sxp >= w || syp >= h) continue;
+      shadow[y * w + x] = sd[(syp * w + sxp) * 4 + 3];
+    }
+  if (p.size > 0) gaussianChannel(shadow, w, h, p.size);
+
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    const sa = (shadow[i] / 255) * op;
+    if (sa <= 0) continue;
+    const la = sd[o + 3] / 255;
+    // Shadow UNDER the layer: composite the layer over a shadow-coloured base.
+    const outA = la + sa * (1 - la);
+    if (outA <= 0) continue;
+    for (let c = 0; c < 3; c++) {
+      const under = rgb[c] * sa * (1 - la);
+      out[o + c] = clamp255((sd[o + c] * la + under) / outA);
+    }
+    out[o + 3] = clamp255(outA * 255);
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
+/** #rgb / #rrggbb → [r,g,b]. Unparseable input falls back to black. */
+function parseHexRGB(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec((hex || "").trim());
+  if (!m) return [0, 0, 0];
+  const v = m[1];
+  if (v.length === 3) {
+    return [
+      parseInt(v[0] + v[0], 16),
+      parseInt(v[1] + v[1], 16),
+      parseInt(v[2] + v[2], 16),
+    ];
+  }
+  return [parseInt(v.slice(0, 2), 16), parseInt(v.slice(2, 4), 16), parseInt(v.slice(4, 6), 16)];
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -1595,5 +2006,15 @@ export function applyFilter(src: ImageData, f: SmartFilter, cs: PredefinedColorS
       return clarityTexture(src, f.params, cs);
     case "grain":
       return grain(src, f.params, cs);
+    case "oil":
+      return oilPaint(src, f.params, cs);
+    case "halftone":
+      return halftone(src, f.params, cs);
+    case "crystallize":
+      return crystallize(src, f.params, cs);
+    case "glitch":
+      return glitch(src, f.params, cs);
+    case "canvasshadow":
+      return canvasShadow(src, f.params, cs);
   }
 }

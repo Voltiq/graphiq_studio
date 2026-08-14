@@ -13,12 +13,16 @@ import {
   Grid3x3,
   Layers,
   Plus,
+  Radio,
   ScanLine,
   Snowflake,
   Aperture,
+  Boxes,
+  Brush as BrushIcon,
   Sparkles,
   SprayCan,
   Sun,
+  Zap,
   Trash2,
   Wand2,
   Waves,
@@ -26,7 +30,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import styles from "./LayerStyleDialog.module.scss";
-import { Segmented, Select, Slider, Toggle } from "./Controls";
+import { ColorChip, Segmented, Select, Slider, Toggle } from "./Controls";
 import { BLEND_MODES, type LayerGroup, type LayerLeaf } from "../lib/layers";
 import { BLUR_FX_LABELS, type BlurFxKind } from "../lib/tools";
 import {
@@ -52,6 +56,11 @@ const FILTER_ICONS: Record<FilterType, LucideIcon> = {
   dehaze: Sun,
   clarity: Contrast,
   grain: Snowflake,
+  oil: BrushIcon,
+  halftone: Radio,
+  crystallize: Boxes,
+  glitch: Zap,
+  canvasshadow: Droplets,
 };
 
 const TYPE_ORDER: FilterType[] = [
@@ -65,6 +74,11 @@ const TYPE_ORDER: FilterType[] = [
   "dehaze",
   "clarity",
   "grain",
+  "oil",
+  "halftone",
+  "crystallize",
+  "glitch",
+  "canvasshadow",
   "noise",
   "pixelate",
   "distort",
@@ -86,6 +100,11 @@ const FILTER_DESC: Record<FilterType, string> = {
   dehaze: "Cuts atmospheric haze using the dark-channel prior.",
   clarity: "Local contrast — broad shaping plus fine detail.",
   grain: "Film grain with clump size and uneven roughness.",
+  oil: "Painterly flattening — modal colour of each neighbourhood.",
+  halftone: "Printing screen: dots whose area tracks tone.",
+  crystallize: "Voronoi mosaic of flat, irregular cells.",
+  glitch: "Torn bands, channel separation and scanlines.",
+  canvasshadow: "Bakes a drop shadow into the pixels (clipped to the layer).",
 };
 
 const BLUR_KINDS: BlurFxKind[] = [
@@ -487,6 +506,99 @@ export default function SmartFilterDialog({
             <span className={styles.hint}>
               Strength sets how different a neighbour may be and still be averaged in — edges stay
               crisp because they exceed it.
+            </span>
+          </div>
+        );
+      }
+      case "oil": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Oil Paint</span>
+            <div className={styles.grid2}>
+              <Slider label="Brush size" min={1} max={16} unit="px" value={p.radius} onChange={(v) => patchSel({ radius: v })} />
+              <Slider label="Levels" min={2} max={64} unit="" value={p.levels} onChange={(v) => patchSel({ levels: v })} />
+            </div>
+            <span className={styles.hint}>
+              Fewer levels give broader, flatter strokes. Cost grows with brush size.
+            </span>
+          </div>
+        );
+      }
+      case "halftone": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Halftone</span>
+            <Segmented
+              label="Screen"
+              value={p.mono ? "mono" : "color"}
+              onChange={(v) => patchSel({ mono: v === "mono" })}
+              options={[
+                { value: "color", text: "Colour (CMY)" },
+                { value: "mono", text: "Black" },
+              ]}
+            />
+            <div className={styles.grid2}>
+              <Slider label="Dot pitch" min={2} max={64} unit="px" value={p.size} onChange={(v) => patchSel({ size: v })} />
+              <Slider label="Angle" min={0} max={90} unit="°" value={p.angle} onChange={(v) => patchSel({ angle: v })} />
+            </div>
+            <span className={styles.hint}>
+              Colour mode screens cyan, magenta and yellow 30° apart, which is what keeps the three
+              from beating into moiré.
+            </span>
+          </div>
+        );
+      }
+      case "crystallize": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Crystallize</span>
+            <div className={styles.grid2}>
+              <Slider label="Cell size" min={2} max={200} unit="px" value={p.size} onChange={(v) => patchSel({ size: v })} />
+            </div>
+            <span className={styles.hint}>
+              Irregular Voronoi cells, each filled with its own average colour — unlike Pixelate,
+              which uses a square grid.
+            </span>
+          </div>
+        );
+      }
+      case "glitch": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Glitch</span>
+            <div className={styles.grid2}>
+              <Slider label="Displacement" min={0} max={100} unit="%" value={p.amount} onChange={(v) => patchSel({ amount: v })} />
+              <Slider label="Band height" min={1} max={128} unit="px" value={p.blockSize} onChange={(v) => patchSel({ blockSize: v })} />
+              <Slider label="Channel shift" min={-32} max={32} unit="px" value={p.rgbShift} onChange={(v) => patchSel({ rgbShift: v })} />
+              <Slider label="Scanlines" min={0} max={100} unit="%" value={p.scanlines} onChange={(v) => patchSel({ scanlines: v })} />
+              <Slider label="Seed" min={1} max={999} unit="" value={p.seed} onChange={(v) => patchSel({ seed: v })} />
+            </div>
+          </div>
+        );
+      }
+      case "canvasshadow": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Drop Shadow (baked)</span>
+            <div className={styles.grid2}>
+              <Slider label="Distance" min={0} max={200} unit="px" value={p.distance} onChange={(v) => patchSel({ distance: v })} />
+              <Slider label="Angle" min={0} max={360} unit="°" value={p.angle} onChange={(v) => patchSel({ angle: v })} />
+              <Slider label="Size" min={0} max={200} unit="px" value={p.size} onChange={(v) => patchSel({ size: v })} />
+              <Slider label="Opacity" min={0} max={100} unit="%" value={p.opacity} onChange={(v) => patchSel({ opacity: v })} />
+            </div>
+            <div className={styles.row}>
+              <span className={styles.rowLabel}>Color</span>
+              <ColorChip color={p.color} onChange={(c) => patchSel({ color: c })} label="Shadow color" />
+            </div>
+            <span className={styles.hint}>
+              For most work use Layer Style ▸ Drop Shadow instead — it stays live and can spill
+              outside the layer. This one bakes into the pixels so later filters in the stack see
+              it, and is therefore clipped at the layer bounds.
             </span>
           </div>
         );
