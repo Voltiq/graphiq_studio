@@ -3708,6 +3708,7 @@ export default function CanvasArea({
         engine.previewTone(layerId, spec, sel, angle, pivot),
       endAdjust: () => engine.endAdjust(),
       revertAdjust: () => engine.revertAdjust(),
+      modifySelection: (rects, angle, pivot, op, px) => engine.modifySelection(rects, angle, pivot, op, px),
       setRefineEdge: (r) => engine.setRefineEdge(r),
       getRefineEdge: () => engine.getRefineEdge(),
       setColorSpace: (cs) => engine.setColorSpace(cs),

@@ -260,6 +260,15 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - The **brush `stroke` buffer stays sRGB** because brush/UI colours are authored as sRGB hex; compositing onto a P3 layer lets the browser convert correctly. Layer-effect colours work the same way (sRGB hex filled onto a P3 buffer).
 - `setColorSpace` converts existing layers by drawing them through a new-space canvas; masks are **not** converted (coverage, not colour); effect/tone caches invalidate.
 
+### Select ▸ Modify
+
+- **Border**, **Smooth**, **Expand** and **Contract**, alongside the existing Grow and Feather. All four are thresholds of ONE primitive — the **signed distance** to the selection boundary: expand is `d ≤ +r`, contract is `d ≤ −r`, border is `|d| ≤ r/2`. No repeated passes, no accumulated error, and a genuinely **round** kernel.
+- Round matters. The existing Grow expands each rectangle independently, which is a correct *square* dilation (dilation distributes over union) but leaves square corners — and it cannot simply be inverted for Contract, because **erosion does not distribute over union**: shrinking each rect of a multi-rect selection is plainly wrong. Verified: expanding a square reaches r straight out from an edge but NOT r diagonally past a corner, which is exactly the difference between a round kernel and a square one.
+- The distance transform is Felzenszwalb & Huttenlocher's exact algorithm (a lower envelope of parabolas, separable, O(n) per row and column). Exactness is the point: an approximate chamfer transform would make "expand by 10" mean something measurably different along the diagonals than along the axes. Checked against Euclidean truth on both.
+- The field is computed on a one-pixel border of zeros so the **canvas edge counts as a boundary** — otherwise a selection covering the whole document has no outside anywhere, its interior distance is infinite, and Select All → Contract does nothing at all.
+- **Smooth blurs then re-thresholds**, so it rounds off corners and speckle while leaving the selection HARD. Feather is the control for softness; conflating the two would leave no way to tidy a jagged edge without also blurring it.
+- Because the morphology runs on a raster, the result comes back as axis-aligned rects with any selection rotation already baked in — so the new selection is committed at angle 0 rather than being rotated a second time. Pure math in [select-modify.ts](app/lib/select-modify.ts) (30 Node checks); the browser results agree with it to the pixel (expand 28248, contract 12144, border 8896, smooth 19132 in both).
+
 ### Refine edge
 
 - **Select ▸ Refine edge…** — **Smooth**, **Feather**, **Contrast** and **Shift edge**, previewed against **white, black or a rubylith overlay**, plus colour **decontamination**. The backdrops are not decoration: a soft edge is invisible against a background of its own colour, and fringe contamination only shows against a contrasting one — overlay tells you *where* the boundary is, white and black tell you what the fringe is *made of*.

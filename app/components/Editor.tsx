@@ -657,7 +657,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [selectionFeather, setSelectionFeather] = useState(0);
   const selectionFeatherRef = useRef(0);
   selectionFeatherRef.current = selectionFeather;
-  const [selectModify, setSelectModify] = useState<"feather" | "grow" | null>(null);
+  const [selectModify, setSelectModify] = useState<
+    "feather" | "grow" | "border" | "smooth" | "expand" | "contract" | null
+  >(null);
   const [moveMode, setMoveMode] = useState<MoveMode>("pixels");
   const [resizeMode, setResizeMode] = useState<SelectResizeMode>("bounds");
   const [resizeSmooth, setResizeSmooth] = useState(true);
@@ -1399,6 +1401,33 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     decontaminate(img.data, a, w, h, deconAmount);
     sctx.putImageData(img, 0, 0);
     paintRef.current?.applyLayerImage(id!, src, "Decontaminate colours");
+  };
+
+  // Select ▸ Modify — Border / Smooth / Expand / Contract. Unlike Feather (which
+  // only shapes how the mask is USED) these rewrite the selection geometry, so
+  // they commit a new selection and are undoable as such.
+  const modifySelectionOp = (op: "border" | "smooth" | "expand" | "contract", px: number) => {
+    const d = activeDocRef.current;
+    if (!d.selection.length) {
+      showToast(`${op[0].toUpperCase()}${op.slice(1)} needs an active selection — make one first.`);
+      return;
+    }
+    const next = paintRef.current?.modifySelection(
+      d.selection,
+      d.selectionAngle,
+      d.selectionPivot,
+      op,
+      px,
+    );
+    if (!next) return;
+    if (!next.length) {
+      showToast("That would leave nothing selected.");
+      return;
+    }
+    // The morphology works on a raster, so the result is axis-aligned and any
+    // rotation is already baked into the rects — carrying the old angle forward
+    // would rotate the shape a second time.
+    commitSelection(`${op[0].toUpperCase()}${op.slice(1)}`, next, 0, null);
   };
 
   const featherSelection = (px: number) => {
@@ -5333,6 +5362,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "select-reselect") reselect();
     else if (actionId === "select-inverse") invertSelection();
     else if (actionId === "select-refine") openRefineEdge();
+    else if (actionId === "select-border") setSelectModify("border");
+    else if (actionId === "select-smooth") setSelectModify("smooth");
+    else if (actionId === "select-expand") setSelectModify("expand");
+    else if (actionId === "select-contract") setSelectModify("contract");
     else if (actionId === "select-feather") setSelectModify("feather");
     else if (actionId === "select-grow") setSelectModify("grow");
     else if (actionId === "select-save") setChannelDialog("save");
@@ -6532,7 +6565,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           kind={selectModify}
           onApply={(px) => {
             if (selectModify === "feather") featherSelection(px);
-            else growSelection(px);
+            else if (selectModify === "grow") growSelection(px);
+            else modifySelectionOp(selectModify, px);
             setSelectModify(null);
           }}
           onClose={() => setSelectModify(null)}

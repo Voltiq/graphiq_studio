@@ -5,17 +5,62 @@ import { X } from "lucide-react";
 import styles from "./PreferencesDialog.module.scss";
 import { Slider } from "./Controls";
 
+/** Per-op copy and slider range. Border/Smooth/Expand/Contract change the
+ *  selection's GEOMETRY; Feather only softens how it is used, which is why they
+ *  are described differently even though they share one dialog. */
+const META: Record<
+  "feather" | "grow" | "border" | "smooth" | "expand" | "contract",
+  { title: string; blurb: string; label: string; button: string; min: number; max: number; initial: number }
+> = {
+  feather: {
+    button: "Feather",
+    title: "Feather selection",
+    blurb: "Soften the selection edges — applied when you fill, delete or move.",
+    label: "Radius", min: 0, max: 250, initial: 8,
+  },
+  grow: {
+    button: "Grow",
+    title: "Grow selection",
+    blurb: "Expand the selection outward by the given number of pixels.",
+    label: "Expand by", min: 1, max: 500, initial: 4,
+  },
+  border: {
+    button: "Border",
+    title: "Border selection",
+    blurb: "Replace the selection with a band straddling its edge — half inside, half outside.",
+    label: "Width", min: 1, max: 200, initial: 10,
+  },
+  smooth: {
+    button: "Smooth",
+    title: "Smooth selection",
+    blurb: "Round off corners and speckle. The edge stays hard — use Feather to soften it.",
+    label: "Radius", min: 1, max: 100, initial: 4,
+  },
+  expand: {
+    button: "Expand",
+    title: "Expand selection",
+    blurb: "Grow the selection outward with a round corner, not a square one.",
+    label: "Expand by", min: 1, max: 300, initial: 8,
+  },
+  contract: {
+    button: "Contract",
+    title: "Contract selection",
+    blurb: "Shrink the selection inward. Parts thinner than the amount disappear.",
+    label: "Contract by", min: 1, max: 300, initial: 8,
+  },
+};
+
 export default function SelectModifyDialog({
   kind,
   onApply,
   onClose,
 }: {
-  kind: "feather" | "grow";
+  kind: "feather" | "grow" | "border" | "smooth" | "expand" | "contract";
   onApply: (px: number) => void;
   onClose: () => void;
 }) {
-  const feather = kind === "feather";
-  const [value, setValue] = useState(feather ? 8 : 4);
+  const meta = META[kind];
+  const [value, setValue] = useState(meta.initial);
   const apply = () => onApply(value);
 
   // Escape/Enter close/apply — captured so they don't leak to the editor shortcuts.
@@ -42,12 +87,12 @@ export default function SelectModifyDialog({
         className={styles.dialog}
         role="dialog"
         aria-modal="true"
-        aria-label={feather ? "Feather selection" : "Grow selection"}
+        aria-label={meta.title}
         onMouseDown={(e) => e.stopPropagation()}
         style={{ width: 360 }}
       >
         <header className={styles.head}>
-          <h2>{feather ? "Feather selection" : "Grow selection"}</h2>
+          <h2>{meta.title}</h2>
           <button type="button" className={styles.close} onClick={onClose} aria-label="Close">
             <X size={16} />
           </button>
@@ -56,16 +101,12 @@ export default function SelectModifyDialog({
         <div className={styles.body}>
           <section className={styles.section}>
             <div className={styles.rowText}>
-              <em>
-                {feather
-                  ? "Soften the selection edges — applied when you fill, delete or move."
-                  : "Expand the selection outward by the given number of pixels."}
-              </em>
+              <em>{meta.blurb}</em>
             </div>
             <Slider
-              label={feather ? "Radius" : "Expand by"}
-              min={feather ? 0 : 1}
-              max={feather ? 250 : 500}
+              label={meta.label}
+              min={meta.min}
+              max={meta.max}
               unit="px"
               value={value}
               onChange={setValue}
@@ -78,7 +119,7 @@ export default function SelectModifyDialog({
             Cancel
           </button>
           <button type="button" className={`${styles.btn} ${styles.primary}`} onClick={apply}>
-            {feather ? "Feather" : "Grow"}
+            {meta.button}
           </button>
         </footer>
       </div>

@@ -68,6 +68,7 @@ import {
 import { GpuToneRenderer } from "./gpu";
 import { healPadding, healRegion } from "./heal";
 import { NO_REFINE, applyRefine, refineActive, type RefineEdge } from "./refine-edge";
+import { modifyMask, type ModifyOp } from "./select-modify";
 import {
   boundsOf as gapBounds,
   dilateCoverage,
@@ -513,6 +514,15 @@ export interface EngineHandle {
   revertAdjust: () => void;
   /** Refine Edge — smooth / contrast / shift applied when a selection mask is
    *  built. Feather stays the separate scalar the Feather… dialog already sets. */
+  /** Select ▸ Modify — Border / Smooth / Expand / Contract. Returns the new
+   *  rects; the result is axis-aligned, so any selection ROTATION is baked in. */
+  modifySelection: (
+    rects: Rect[],
+    angle: number,
+    pivot: { x: number; y: number } | null,
+    op: ModifyOp,
+    px: number,
+  ) => Rect[];
   setRefineEdge: (r: RefineEdge) => void;
   getRefineEdge: () => RefineEdge;
   setColorSpace: (ws: WorkingSpace) => void;
@@ -3485,6 +3495,44 @@ export class PaintEngine {
 
   /** A doc-sized COPY of a layer's raster as a canvas (blank if it has none
    *  yet — a fresh empty layer simply liquifies/reads as transparency). */
+  modifySelection(
+    rects: Rect[],
+    angle: number,
+    pivot: { x: number; y: number } | null,
+    op: ModifyOp,
+    px: number,
+  ): Rect[] {
+    if (!rects.length) return [];
+    // Rasterise through the existing mask builder so rotation is handled once,
+    // in the place that already gets it right — then the morphology is plain
+    // grid work and the result comes back as axis-aligned rects.
+    const prevRefine = this.refine;
+    this.refine = NO_REFINE; // Modify acts on the GEOMETRY, not the refined edge
+    const canvas = this.selectionMask(rects, angle, pivot, 0);
+    this.refine = prevRefine;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return rects;
+    const id = ctx.getImageData(0, 0, this.w, this.h);
+    const n = this.w * this.h;
+    const mask = new Uint8Array(n);
+    for (let i = 0; i < n; i++) mask[i] = id.data[i * 4 + 3] >= 128 ? 1 : 0;
+    const outMask = modifyMask(mask, this.w, this.h, op, px);
+    let x0 = this.w;
+    let y0 = this.h;
+    let x1 = 0;
+    let y1 = 0;
+    for (let y = 0; y < this.h; y++)
+      for (let x = 0; x < this.w; x++)
+        if (outMask[y * this.w + x]) {
+          if (x < x0) x0 = x;
+          if (y < y0) y0 = y;
+          if (x + 1 > x1) x1 = x + 1;
+          if (y + 1 > y1) y1 = y + 1;
+        }
+    if (x1 <= x0 || y1 <= y0) return [];
+    return maskToRects(outMask, this.w, { x0, y0, x1, y1 });
+  }
+
   setRefineEdge(r: RefineEdge) {
     this.refine = r;
     this.emitChange();
