@@ -96,6 +96,21 @@ export function filterReach(f: SmartFilter): Reach {
       // Both are position-INDEPENDENT: the window is relative to the pixel and
       // the edge rule is clamping, exactly like a blur.
       return px(f.params.radius);
+    case "dehaze":
+      // The patch min and the transmission blur are both local and bounded —
+      // but the ATMOSPHERIC LIGHT is estimated from the haziest 0.1% of the
+      // WHOLE image. A region would compute a different constant and recover
+      // different colours, so this is unsafe for a reason that has nothing to do
+      // with reach: a global statistic, not a kernel.
+      return null;
+    case "clarity":
+      // Unsharp at two radii; the clarity radius is the larger of the two.
+      return px(f.params.radius);
+    case "grain":
+      // The noise lattice is anchored to the image ORIGIN and seeded from
+      // lattice coordinates, so an unaligned region reseeds every clump — the
+      // same trap as mosaic's cell grid.
+      return null;
     case "lens":
       // Distortion, chromatic aberration AND vignette are all functions of the
       // distance from the image CENTRE, so every pixel's result depends on where

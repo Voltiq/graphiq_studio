@@ -8,14 +8,17 @@ import {
   Crosshair,
   Droplets,
   Focus,
+  Contrast,
   Eraser,
   Grid3x3,
   Layers,
   Plus,
   ScanLine,
+  Snowflake,
   Aperture,
   Sparkles,
   SprayCan,
+  Sun,
   Trash2,
   Wand2,
   Waves,
@@ -46,6 +49,9 @@ const FILTER_ICONS: Record<FilterType, LucideIcon> = {
   dustscratches: Eraser,
   denoise: SprayCan,
   lens: Aperture,
+  dehaze: Sun,
+  clarity: Contrast,
+  grain: Snowflake,
 };
 
 const TYPE_ORDER: FilterType[] = [
@@ -56,6 +62,9 @@ const TYPE_ORDER: FilterType[] = [
   "median",
   "dustscratches",
   "lens",
+  "dehaze",
+  "clarity",
+  "grain",
   "noise",
   "pixelate",
   "distort",
@@ -74,6 +83,9 @@ const FILTER_DESC: Record<FilterType, string> = {
   dustscratches: "Median, but only where a pixel disagrees with its surroundings.",
   denoise: "Edge-aware luma smoothing plus chroma cleanup for sensor noise.",
   lens: "Vignette, chromatic aberration and barrel/pincushion correction.",
+  dehaze: "Cuts atmospheric haze using the dark-channel prior.",
+  clarity: "Local contrast — broad shaping plus fine detail.",
+  grain: "Film grain with clump size and uneven roughness.",
 };
 
 const BLUR_KINDS: BlurFxKind[] = [
@@ -475,6 +487,58 @@ export default function SmartFilterDialog({
             <span className={styles.hint}>
               Strength sets how different a neighbour may be and still be averaged in — edges stay
               crisp because they exceed it.
+            </span>
+          </div>
+        );
+      }
+      case "dehaze": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Dehaze</span>
+            <div className={styles.grid2}>
+              <Slider label="Amount" min={0} max={100} unit="%" value={p.amount} onChange={(v) => patchSel({ amount: v })} />
+              <Slider label="Radius" min={1} max={64} unit="px" value={p.radius} onChange={(v) => patchSel({ radius: v })} />
+            </div>
+            <span className={styles.hint}>
+              Radius is the patch the haze estimate is measured over — larger is smoother but
+              blunter around fine detail. Strong settings can halo along a hard skyline.
+            </span>
+          </div>
+        );
+      }
+      case "clarity": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Clarity &amp; Texture</span>
+            <div className={styles.grid2}>
+              <Slider label="Clarity" min={-100} max={100} unit="" value={p.clarity} onChange={(v) => patchSel({ clarity: v })} />
+              <Slider label="Texture" min={-100} max={100} unit="" value={p.texture} onChange={(v) => patchSel({ texture: v })} />
+              <Slider label="Radius" min={5} max={200} unit="px" value={p.radius} onChange={(v) => patchSel({ radius: v })} />
+            </div>
+            <span className={styles.hint}>
+              Clarity shapes broad contrast and is weighted to the midtones so skies keep their
+              gradient; Texture works at a fraction of the radius for fine detail. Negative values
+              soften.
+            </span>
+          </div>
+        );
+      }
+      case "grain": {
+        const p = sel.params;
+        return (
+          <div className={styles.group}>
+            <span className={styles.groupTitle}>Grain</span>
+            <div className={styles.grid2}>
+              <Slider label="Amount" min={0} max={100} unit="%" value={p.amount} onChange={(v) => patchSel({ amount: v })} />
+              <Slider label="Size" min={1} max={32} unit="px" value={p.size} onChange={(v) => patchSel({ size: v })} />
+              <Slider label="Roughness" min={0} max={100} unit="%" value={p.roughness} onChange={(v) => patchSel({ roughness: v })} />
+              <Slider label="Seed" min={1} max={999} unit="" value={p.seed} onChange={(v) => patchSel({ seed: v })} />
+            </div>
+            <span className={styles.hint}>
+              Grain lands on the midtones and fades out of deep shadow and blown highlight, the way
+              film does. Roughness makes its strength vary across the frame.
             </span>
           </div>
         );

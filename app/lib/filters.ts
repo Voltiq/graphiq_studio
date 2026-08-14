@@ -349,7 +349,10 @@ export type FilterType =
   | "median"
   | "dustscratches"
   | "denoise"
-  | "lens";
+  | "lens"
+  | "dehaze"
+  | "clarity"
+  | "grain";
 
 /** Blur smart filter reuses the Blur Gallery's parameter model (minus scope). */
 export interface BlurFilterParams {
@@ -383,6 +386,21 @@ export interface DistortParams {
   amplitude: number; // wave: px
   wavelength: number; // wave: px
   edge: "clamp" | "wrap";
+}
+export interface DehazeParams {
+  amount: number; // % — how much of the estimated haze to remove
+  radius: number; // px — dark-channel patch radius
+}
+export interface ClarityParams {
+  clarity: number; // −100…100 large-scale local contrast (midtone-weighted)
+  texture: number; // −100…100 fine detail
+  radius: number; // px — the clarity radius; texture uses a small fraction of it
+}
+export interface GrainParams {
+  amount: number; // %
+  size: number; // px — grain clump size (1 = per-pixel)
+  roughness: number; // % — how unevenly the grain is distributed
+  seed: number;
 }
 /**
  * Lens corrections. All three are radial functions of distance from the image
@@ -469,6 +487,12 @@ export function scaleFilterParams(f: SmartFilter, s: number): SmartFilter {
       return { ...f, params: { ...f.params, radius: Math.max(1, f.params.radius * s) } };
     case "denoise":
       return { ...f, params: { ...f.params, radius: Math.max(1, f.params.radius * s) } };
+    case "dehaze":
+      return { ...f, params: { ...f.params, radius: Math.max(1, f.params.radius * s) } };
+    case "clarity":
+      return { ...f, params: { ...f.params, radius: Math.max(1, f.params.radius * s) } };
+    case "grain":
+      return { ...f, params: { ...f.params, size: Math.max(1, f.params.size * s) } };
     default:
       return f;
   }
@@ -494,6 +518,9 @@ export type SmartFilter = FilterBase &
     | { type: "dustscratches"; params: DustScratchesParams }
     | { type: "denoise"; params: DenoiseParams }
     | { type: "lens"; params: LensParams }
+    | { type: "dehaze"; params: DehazeParams }
+    | { type: "clarity"; params: ClarityParams }
+    | { type: "grain"; params: GrainParams }
   );
 
 export const FILTER_LABELS: Record<FilterType, string> = {
@@ -508,6 +535,9 @@ export const FILTER_LABELS: Record<FilterType, string> = {
   dustscratches: "Dust & Scratches",
   denoise: "Reduce Noise",
   lens: "Lens Corrections",
+  dehaze: "Dehaze",
+  clarity: "Clarity & Texture",
+  grain: "Grain",
 };
 
 /** A human label including the variant (for list rows + history steps). */
@@ -541,6 +571,12 @@ export function filterLabel(f: SmartFilter): string {
       return "Reduce Noise";
     case "lens":
       return "Lens Corrections";
+    case "dehaze":
+      return "Dehaze";
+    case "clarity":
+      return "Clarity & Texture";
+    case "grain":
+      return "Grain";
   }
 }
 
@@ -579,6 +615,12 @@ export function defaultFilter(type: FilterType): SmartFilter {
       return { ...base, type, params: { strength: 45, radius: 3, color: 50 } };
     case "lens":
       return { ...base, type, params: { distortion: 0, redCyan: 0, blueYellow: 0, vignette: -35, midpoint: 50 } };
+    case "dehaze":
+      return { ...base, type, params: { amount: 50, radius: 7 } };
+    case "clarity":
+      return { ...base, type, params: { clarity: 35, texture: 20, radius: 40 } };
+    case "grain":
+      return { ...base, type, params: { amount: 30, size: 2, roughness: 50, seed: 1 } };
   }
 }
 
@@ -1238,6 +1280,280 @@ function lensCorrection(src: ImageData, p: LensParams, cs: PredefinedColorSpace)
   return new ImageData(out, w, h, { colorSpace: cs });
 }
 
+/** One separable sliding-window MINIMUM pass. Min is separable exactly as a box
+ *  blur is — min over a square equals min over rows then min over columns — so
+ *  the patch costs O(r) per pixel instead of O(r²). */
+function minPass(ch: Float32Array, w: number, h: number, r: number, horizontal: boolean) {
+  if (r < 1) return;
+  const tmp = new Float32Array(horizontal ? w : h);
+  if (horizontal) {
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = 0; x < w; x++) {
+        let m = Infinity;
+        for (let k = -r; k <= r; k++) {
+          const v = ch[row + clampi(x + k, 0, w - 1)];
+          if (v < m) m = v;
+        }
+        tmp[x] = m;
+      }
+      for (let x = 0; x < w; x++) ch[row + x] = tmp[x];
+    }
+  } else {
+    for (let x = 0; x < w; x++) {
+      for (let y = 0; y < h; y++) {
+        let m = Infinity;
+        for (let k = -r; k <= r; k++) {
+          const v = ch[clampi(y + k, 0, h - 1) * w + x];
+          if (v < m) m = v;
+        }
+        tmp[y] = m;
+      }
+      for (let y = 0; y < h; y++) ch[y * w + x] = tmp[y];
+    }
+  }
+}
+
+/**
+ * Dehaze via the dark-channel prior (He, Sun & Tang 2009).
+ *
+ * Haze is additive veiling light, so in a hazy patch NO colour channel is ever
+ * really dark — whereas almost every haze-free outdoor patch has some channel
+ * near zero somewhere. That gap is the whole signal: the "dark channel" (a local
+ * minimum across space and across R/G/B) estimates how much veil sits in front
+ * of each region, and the image is then inverted through `J = (I − A)/t + A`.
+ *
+ * Two deliberate simplifications from the paper, both about cost:
+ *   - the atmospheric light `A` is averaged over the haziest 0.1% of pixels
+ *     rather than taking a single brightest pixel — cheaper AND steadier, since
+ *     one blown specular highlight would otherwise set it;
+ *   - the transmission map is refined with a blur instead of the paper's soft
+ *     matting / guided filter. That is edge-unaware, so very strong settings can
+ *     halo along a high-contrast skyline; the blur radius is tied to the patch
+ *     size to keep it modest.
+ */
+function dehaze(src: ImageData, p: DehazeParams, cs: PredefinedColorSpace): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const n = w * h;
+  const sd = src.data;
+  const r = clampi(Math.round(p.radius), 1, 64);
+  const omega = (Math.max(0, Math.min(100, p.amount)) / 100) * 0.95;
+  const out = new Uint8ClampedArray(sd);
+  if (omega <= 0) return new ImageData(out, w, h, { colorSpace: cs });
+
+  // Per-pixel darkest channel, then the local minimum over the patch.
+  const dark = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    if (sd[o + 3] === 0) {
+      dark[i] = 255; // transparent pixels must not drag the estimate down
+      continue;
+    }
+    const m = sd[o] < sd[o + 1] ? sd[o] : sd[o + 1];
+    dark[i] = m < sd[o + 2] ? m : sd[o + 2];
+  }
+  minPass(dark, w, h, r, true);
+  minPass(dark, w, h, r, false);
+
+  // Atmospheric light: mean RGB of the haziest 0.1% (highest dark-channel) pixels.
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < n; i++) hist[Math.min(255, Math.max(0, Math.round(dark[i])))]++;
+  const want = Math.max(1, Math.round(n * 0.001));
+  let cut = 255;
+  let acc = 0;
+  while (cut > 0 && acc + hist[cut] < want) {
+    acc += hist[cut];
+    cut--;
+  }
+  // Among those candidates the paper takes the single BRIGHTEST pixel, which one
+  // blown highlight can hijack. Averaging all of them instead goes too far the
+  // other way: it UNDER-estimates A, which under-estimates transmission, which
+  // over-divides — measured as a 26% contrast overshoot past the haze-free
+  // reference on a synthetic scene. So: average only the candidates brighter
+  // than the candidate mean. Robust like the mean, biased bright like the max.
+  let mean = 0;
+  let cnt = 0;
+  for (let i = 0; i < n; i++) {
+    if (dark[i] < cut) continue;
+    const o = i * 4;
+    if (sd[o + 3] === 0) continue;
+    mean += (sd[o] + sd[o + 1] + sd[o + 2]) / 3;
+    cnt++;
+  }
+  if (cnt === 0) return new ImageData(out, w, h, { colorSpace: cs });
+  mean /= cnt;
+  let aR = 0;
+  let aG = 0;
+  let aB = 0;
+  let bright = 0;
+  for (let i = 0; i < n; i++) {
+    if (dark[i] < cut) continue;
+    const o = i * 4;
+    if (sd[o + 3] === 0) continue;
+    if ((sd[o] + sd[o + 1] + sd[o + 2]) / 3 < mean) continue;
+    aR += sd[o];
+    aG += sd[o + 1];
+    aB += sd[o + 2];
+    bright++;
+  }
+  if (bright === 0) return new ImageData(out, w, h, { colorSpace: cs });
+  aR /= bright;
+  aG /= bright;
+  aB /= bright;
+  const aMean = Math.max(1, (aR + aG + aB) / 3);
+
+  // Transmission, then a cheap refinement pass.
+  const t = new Float32Array(n);
+  for (let i = 0; i < n; i++) t[i] = 1 - omega * Math.min(1, dark[i] / aMean);
+  gaussianChannel(t, w, h, Math.max(1, r * 2));
+
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    if (sd[o + 3] === 0) continue;
+    // t0 floor: as t → 0 the recovery divides by nothing and explodes into noise.
+    const tt = Math.max(0.1, t[i]);
+    out[o] = clamp255((sd[o] - aR) / tt + aR);
+    out[o + 1] = clamp255((sd[o + 1] - aG) / tt + aG);
+    out[o + 2] = clamp255((sd[o + 2] - aB) / tt + aB);
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
+/**
+ * Clarity & Texture — local contrast at two scales.
+ *
+ * Both are unsharp masking, differing only in radius: Clarity works at a large
+ * radius (broad tonal shaping) and Texture at a small one (fine detail). Two
+ * things separate this from just adding a Sharpen filter twice:
+ *   - it operates on LUMA and rescales RGB by the ratio, so boosting contrast
+ *     does not drag saturation with it the way a per-channel unsharp does;
+ *   - Clarity is weighted toward the MIDTONES (falling to zero at pure black and
+ *     white), which is what stops it from carving halos into skies and blowing
+ *     out highlights — the characteristic failure of naive clarity.
+ */
+function clarityTexture(src: ImageData, p: ClarityParams, cs: PredefinedColorSpace): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const n = w * h;
+  const sd = src.data;
+  const out = new Uint8ClampedArray(sd);
+  const kC = Math.max(-100, Math.min(100, p.clarity)) / 100;
+  const kT = Math.max(-100, Math.min(100, p.texture)) / 100;
+  if (kC === 0 && kT === 0) return new ImageData(out, w, h, { colorSpace: cs });
+
+  const Y = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    Y[i] = 0.299 * sd[o] + 0.587 * sd[o + 1] + 0.114 * sd[o + 2];
+  }
+  const rC = Math.max(1, Math.min(400, p.radius));
+  const rT = Math.max(1, rC * 0.075); // ~3 px at the default 40 px clarity radius
+  let big: Float32Array | null = null;
+  let small: Float32Array | null = null;
+  if (kC !== 0) {
+    big = Y.slice();
+    gaussianChannel(big, w, h, rC);
+  }
+  if (kT !== 0) {
+    small = Y.slice();
+    gaussianChannel(small, w, h, rT);
+  }
+
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    if (sd[o + 3] === 0) continue;
+    const y = Y[i];
+    let add = 0;
+    if (big) {
+      // Midtone weight: 1 at mid-grey, 0 at both ends.
+      const t = y / 255;
+      const mw = 1 - (2 * t - 1) * (2 * t - 1);
+      add += kC * (y - big[i]) * mw;
+    }
+    if (small) add += kT * (y - small[i]);
+    if (add === 0) continue;
+    const ny = y + add;
+    // Rescale RGB by the luma ratio so hue and saturation ride along unchanged.
+    const ratio = y > 1 ? ny / y : 1;
+    if (y > 1) {
+      out[o] = clamp255(sd[o] * ratio);
+      out[o + 1] = clamp255(sd[o + 1] * ratio);
+      out[o + 2] = clamp255(sd[o + 2] * ratio);
+    } else {
+      out[o] = clamp255(sd[o] + add);
+      out[o + 1] = clamp255(sd[o + 1] + add);
+      out[o + 2] = clamp255(sd[o + 2] + add);
+    }
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
+/**
+ * Film grain — distinct from Add Noise in three ways that matter.
+ *
+ *   SIZE. Real grain is clumps of silver, not per-pixel speckle, so the noise is
+ *   generated on a coarse lattice and bilinearly interpolated up. Size 1 gives
+ *   the per-pixel case Add Noise already covers.
+ *
+ *   ROUGHNESS. A second, much coarser noise field modulates the first one's
+ *   amplitude, so the grain varies across the frame instead of sitting at one
+ *   uniform strength — that unevenness is most of what reads as "film".
+ *
+ *   TONE RESPONSE. Grain is applied to luma and weighted toward the midtones:
+ *   film shows little grain in deep shadow or blown highlight, and skipping this
+ *   is what makes synthetic grain look like it was pasted on top.
+ */
+function grain(src: ImageData, p: GrainParams, cs: PredefinedColorSpace): ImageData {
+  const w = src.width;
+  const h = src.height;
+  const sd = src.data;
+  const out = new Uint8ClampedArray(sd);
+  const amp = (Math.max(0, Math.min(100, p.amount)) / 100) * 96;
+  if (amp <= 0) return new ImageData(out, w, h, { colorSpace: cs });
+  const size = Math.max(1, Math.min(32, p.size));
+  const rough = Math.max(0, Math.min(100, p.roughness)) / 100;
+  const seed = p.seed | 0 || 1;
+
+  /** Value noise on a lattice of spacing `cell`, bilinearly interpolated. */
+  const lattice = (x: number, y: number, cell: number, lane: number): number => {
+    const gx = x / cell;
+    const gy = y / cell;
+    const x0 = Math.floor(gx);
+    const y0 = Math.floor(gy);
+    let tx = gx - x0;
+    let ty = gy - y0;
+    tx = tx * tx * (3 - 2 * tx); // smoothstep keeps the lattice from showing
+    ty = ty * ty * (3 - 2 * ty);
+    const a = hash01(x0, y0, seed, lane);
+    const b = hash01(x0 + 1, y0, seed, lane);
+    const c = hash01(x0, y0 + 1, seed, lane);
+    const d = hash01(x0 + 1, y0 + 1, seed, lane);
+    const top = a + (b - a) * tx;
+    const bot = c + (d - c) * tx;
+    return top + (bot - top) * ty;
+  };
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      if (sd[o + 3] === 0) continue;
+      const g = lattice(x, y, size, 0) * 2 - 1; // −1…1
+      // Roughness: a coarse field (8× the grain size) scaling local amplitude.
+      const rv = rough > 0 ? lattice(x, y, size * 8, 3) : 0.5;
+      const local = 1 - rough + rough * (rv * 2);
+      const yv = 0.299 * sd[o] + 0.587 * sd[o + 1] + 0.114 * sd[o + 2];
+      const t = yv / 255;
+      const tone = 1 - (2 * t - 1) * (2 * t - 1); // midtone-weighted, 0 at the ends
+      const d = g * amp * local * tone;
+      out[o] = clamp255(sd[o] + d);
+      out[o + 1] = clamp255(sd[o + 1] + d);
+      out[o + 2] = clamp255(sd[o + 2] + d);
+    }
+  }
+  return new ImageData(out, w, h, { colorSpace: cs });
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch
 // ---------------------------------------------------------------------------
@@ -1273,5 +1589,11 @@ export function applyFilter(src: ImageData, f: SmartFilter, cs: PredefinedColorS
       return reduceNoise(src, f.params, cs);
     case "lens":
       return lensCorrection(src, f.params, cs);
+    case "dehaze":
+      return dehaze(src, f.params, cs);
+    case "clarity":
+      return clarityTexture(src, f.params, cs);
+    case "grain":
+      return grain(src, f.params, cs);
   }
 }
