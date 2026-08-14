@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -40,6 +40,7 @@ import {
   type FilterType,
   type SmartFilter,
 } from "../lib/filters";
+import { THUMB_SIZE, isBlank, renderFilterThumbs, thumbSourceRect } from "../lib/filter-thumbs";
 
 const FILTER_ICONS: Record<FilterType, LucideIcon> = {
   blur: Droplets,
@@ -158,9 +159,14 @@ export default function SmartFilterDialog({
   anchorArmId,
   onToggleAnchorArm,
   hasSelection = false,
+  previewSource,
+  space = "srgb",
   onClose,
 }: {
   node: LayerLeaf | LayerGroup;
+  /** The layer's pixels, for the Add-list thumbnails. Absent ⇒ icons only. */
+  previewSource?: HTMLCanvasElement | null;
+  space?: PredefinedColorSpace;
   /** Param-drag updates (debounced into one history step by the editor). */
   onLive: (filters: SmartFilter[]) => void;
   /** Discrete structural change (add/toggle/reorder/remove/clear). */
@@ -250,6 +256,56 @@ export default function SmartFilterDialog({
     if (live) onLive(next);
     else onCommit(next, "Edit Smart Filter");
   };
+  // ---- Add-list thumbnails -------------------------------------------------
+  // Built once per dialog open from the layer's own pixels. The work is done in
+  // an effect rather than during render so opening the dialog is never blocked
+  // by it, and a layer with nothing in it (an empty leaf, or a group with no
+  // raster of its own) falls back to plain icons instead of a row of blanks.
+  const [thumbs, setThumbs] = useState<Map<FilterType, string> | null>(null);
+  const thumbSrc = useMemo(() => {
+    if (!previewSource || previewSource.width < 1 || previewSource.height < 1) return null;
+    const { sx, sy, sw, sh } = thumbSourceRect(previewSource.width, previewSource.height);
+    const c = document.createElement("canvas");
+    c.width = THUMB_SIZE;
+    c.height = THUMB_SIZE;
+    const ctx = c.getContext("2d", { willReadFrequently: true, colorSpace: space });
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(previewSource, sx, sy, sw, sh, 0, 0, THUMB_SIZE, THUMB_SIZE);
+    const data = ctx.getImageData(0, 0, THUMB_SIZE, THUMB_SIZE);
+    return isBlank(data) ? null : data;
+  }, [previewSource, space]);
+
+  useEffect(() => {
+    let alive = true;
+    const id = requestAnimationFrame(() => {
+      if (!alive) return;
+      if (!thumbSrc) {
+        setThumbs(null);
+        return;
+      }
+      const rendered = renderFilterThumbs(thumbSrc, TYPE_ORDER, space);
+      const urls = new Map<FilterType, string>();
+      const c = document.createElement("canvas");
+      c.width = THUMB_SIZE;
+      c.height = THUMB_SIZE;
+      const ctx = c.getContext("2d", { colorSpace: space });
+      if (ctx) {
+        for (const [t, img] of rendered) {
+          ctx.clearRect(0, 0, THUMB_SIZE, THUMB_SIZE);
+          ctx.putImageData(img, 0, 0);
+          urls.set(t, c.toDataURL("image/png"));
+        }
+      }
+      if (alive) setThumbs(urls.size ? urls : null);
+    });
+    return () => {
+      alive = false;
+      cancelAnimationFrame(id);
+    };
+  }, [thumbSrc, space]);
+
   const addFilter = (type: FilterType) => {
     const f = defaultFilter(type);
     onCommit([...filters, f], `Add ${filterLabel(f)}`);
@@ -813,10 +869,16 @@ export default function SmartFilterDialog({
             </span>
             {TYPE_ORDER.map((t) => {
               const Icon = FILTER_ICONS[t];
+              const thumb = thumbs?.get(t);
               return (
                 <button key={t} type="button" className={styles.fxRow} onClick={() => addFilter(t)} title={FILTER_DESC[t]}>
                   <Plus size={12} className={styles.fxIcon} />
-                  <Icon size={14} className={styles.fxIcon} />
+                  {thumb ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={thumb} alt="" className={styles.fxThumb} width={THUMB_SIZE} height={THUMB_SIZE} />
+                  ) : (
+                    <Icon size={14} className={styles.fxIcon} />
+                  )}
                   <span className={styles.fxName}>{FILTER_LABELS[t]}</span>
                 </button>
               );

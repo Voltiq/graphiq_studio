@@ -15,7 +15,7 @@ import PreferencesDialog, { type PrefsTab } from "./PreferencesDialog";
 import HelpDialog, { type HelpStart } from "./HelpDialog";
 import AboutDialog from "./AboutDialog";
 import TooltipHost from "./Tooltip";
-import { type ProofTarget, type WorkingSpace } from "../lib/colorspace";
+import { canvasSpaceOf, type ProofTarget, type WorkingSpace } from "../lib/colorspace";
 import { extractICCProfile } from "../lib/icc";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
@@ -6471,6 +6471,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
               anchorArmId={filterAnchorId}
               onToggleAnchorArm={setFilterAnchorId}
               hasSelection={active.selection.length > 0}
+              previewSource={paintRef.current?.getLayerCanvas(filterTarget) ?? null}
+              space={canvasSpaceOf(colorSpace)}
               onClose={() => {
                 commitFilterEdit();
                 setFilterTarget(null);

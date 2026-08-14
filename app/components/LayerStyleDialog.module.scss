@@ -167,6 +167,18 @@
   }
 }
 
+/* Add-list preview: a small square render of the layer through each filter.
+   Fixed box so rows keep their rhythm whether a thumbnail resolved or not. */
+.fxThumb {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: var(--r-sm);
+  object-fit: cover;
+  image-rendering: auto;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
 /* Enable/disable — a compact custom check, brand-blue when on. */
 .fxCheck {
   display: grid;
