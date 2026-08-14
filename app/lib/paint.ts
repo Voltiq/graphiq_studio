@@ -67,6 +67,7 @@ import {
 } from "./colorspace";
 import { GpuToneRenderer } from "./gpu";
 import { healPadding, healRegion } from "./heal";
+import { NO_REFINE, applyRefine, refineActive, type RefineEdge } from "./refine-edge";
 import {
   boundsOf as gapBounds,
   dilateCoverage,
@@ -510,6 +511,10 @@ export interface EngineHandle {
   endAdjust: () => void;
   /** Discard the live adjustment session (restore original, drop its entry). */
   revertAdjust: () => void;
+  /** Refine Edge — smooth / contrast / shift applied when a selection mask is
+   *  built. Feather stays the separate scalar the Feather… dialog already sets. */
+  setRefineEdge: (r: RefineEdge) => void;
+  getRefineEdge: () => RefineEdge;
   setColorSpace: (ws: WorkingSpace) => void;
   setProofing: (simulate: boolean, warn: boolean, target: ProofTarget) => void;
   captureLeaves: (ids: string[]) => Map<string, LeafSnapshot>;
@@ -782,6 +787,8 @@ export class PaintEngine {
   // preserved); the stroke buffer + brush tip stay sRGB so brush colours, which
   // are authored from sRGB hex, convert correctly when composited onto layers.
   private cs: PredefinedColorSpace = "srgb"; // canvas (storage/display) space
+  /** Refine Edge state; feather rides the existing per-call scalar. */
+  private refine: RefineEdge = NO_REFINE;
   private ws: WorkingSpace = "srgb"; // working space (adjustment math)
   // Soft proofing (VIEW-only): simulate the target space / mark its gamut.
   private proofTarget: ProofTarget = "srgb";
@@ -2543,13 +2550,26 @@ export class PaintEngine {
       base.ctx.drawImage(flat.c, 0, 0);
       base.ctx.restore();
     }
-    if (feather <= 0) return base.c;
-    // Feather = soften the mask edges with a Gaussian blur.
-    const out = this.mk(this.w, this.h);
-    out.ctx.filter = `blur(${feather}px)`;
-    out.ctx.drawImage(base.c, 0, 0);
-    out.ctx.filter = "none";
-    return out.c;
+    const r: RefineEdge = { ...this.refine, feather };
+    if (!refineActive(r)) return base.c;
+    // One pipeline rather than a canvas blur here and a refinement elsewhere:
+    // smooth RE-THRESHOLDS, so it has to run before feather or it would throw
+    // the softness away, and contrast/shift need the ramp feather produces.
+    const id = base.ctx.getImageData(0, 0, this.w, this.h);
+    const n = this.w * this.h;
+    const a = new Float32Array(n);
+    for (let i = 0; i < n; i++) a[i] = id.data[i * 4 + 3];
+    applyRefine(a, this.w, this.h, r);
+    for (let i = 0; i < n; i++) {
+      const v = a[i];
+      const o = i * 4;
+      id.data[o] = 255;
+      id.data[o + 1] = 255;
+      id.data[o + 2] = 255;
+      id.data[o + 3] = v;
+    }
+    base.ctx.putImageData(id, 0, 0);
+    return base.c;
   }
 
   /** Draw the current stroke buffer onto a context, clipped to the selection. */
@@ -3465,6 +3485,14 @@ export class PaintEngine {
 
   /** A doc-sized COPY of a layer's raster as a canvas (blank if it has none
    *  yet — a fresh empty layer simply liquifies/reads as transparency). */
+  setRefineEdge(r: RefineEdge) {
+    this.refine = r;
+    this.emitChange();
+  }
+  getRefineEdge(): RefineEdge {
+    return this.refine;
+  }
+
   getLayerCanvas(id: string): HTMLCanvasElement {
     const c = document.createElement("canvas");
     c.width = this.w;

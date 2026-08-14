@@ -16,6 +16,7 @@ import HelpDialog, { type HelpStart } from "./HelpDialog";
 import AboutDialog from "./AboutDialog";
 import TooltipHost from "./Tooltip";
 import { canvasSpaceOf, type ProofTarget, type WorkingSpace } from "../lib/colorspace";
+import { NO_REFINE, decontaminate, type RefineEdge } from "../lib/refine-edge";
 import { extractICCProfile } from "../lib/icc";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
@@ -266,6 +267,7 @@ import { DEFAULT_FX, type FxKey, type LayerEffects } from "../lib/effects";
 import { defaultFilter, filterLabel, type FilterType, type SmartFilter } from "../lib/filters";
 import SmartFilterDialog from "./SmartFilterDialog";
 import WarpDialog from "./WarpDialog";
+import RefineEdgeDialog from "./RefineEdgeDialog";
 import ShortcutsDialog from "./ShortcutsDialog";
 import NewDocDialog from "./NewDocDialog";
 import RestoreDialog from "./RestoreDialog";
@@ -1330,6 +1332,75 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   // Select ▸ Feather — soften the selection edges by `px` for fills/erases/moves.
+  // ---- Refine edge ----
+  const [refineOpen, setRefineOpen] = useState<{
+    source: HTMLCanvasElement;
+    mask: HTMLCanvasElement;
+    initial: RefineEdge;
+  } | null>(null);
+  const openRefineEdge = () => {
+    const d = activeDocRef.current;
+    if (!d.selection.length) {
+      showToast("Refine edge needs an active selection — make one first.");
+      return;
+    }
+    const eng = paintRef.current;
+    if (!eng) return;
+    const source = eng.exportComposite(d.layers);
+    // The selection as a hard alpha mask. Built here from the rects (plus the
+    // same rotation the engine applies) rather than exposing the engine's
+    // private mask builder for one caller.
+    const mask = document.createElement("canvas");
+    mask.width = d.width;
+    mask.height = d.height;
+    const mctx = mask.getContext("2d", { willReadFrequently: true });
+    if (!mctx) return;
+    mctx.fillStyle = "#fff";
+    if (d.selectionAngle) {
+      const cx = d.selectionPivot?.x ?? d.width / 2;
+      const cy = d.selectionPivot?.y ?? d.height / 2;
+      mctx.translate(cx, cy);
+      mctx.rotate(d.selectionAngle);
+      mctx.translate(-cx, -cy);
+    }
+    for (const r of d.selection) mctx.fillRect(r.x, r.y, r.w, r.h);
+    setRefineOpen({
+      source,
+      mask,
+      initial: { ...(eng.getRefineEdge?.() ?? NO_REFINE), feather: selectionFeatherRef.current },
+    });
+  };
+  const applyRefineEdge = (r: RefineEdge, deconAmount: number) => {
+    const ctx = refineOpen;
+    setRefineOpen(null);
+    if (!ctx) return;
+    paintRef.current?.setRefineEdge({ ...r, feather: 0 }); // feather rides its own scalar
+    setSelectionFeather(r.feather);
+    if (deconAmount <= 0) return;
+    // Decontamination edits PIXELS, so it is a real, undoable layer change —
+    // unlike the edge settings, which only shape the mask.
+    const d = activeDocRef.current;
+    const id = d.activeLayerId;
+    const node = id ? findNode(d.layers, id) : null;
+    if (!node || node.type !== "layer") {
+      showToast("Decontaminate needs a pixel layer selected.");
+      return;
+    }
+    const src = paintRef.current?.getLayerCanvas(id!);
+    const mctx = ctx.mask.getContext("2d", { willReadFrequently: true });
+    const sctx = src?.getContext("2d", { willReadFrequently: true });
+    if (!src || !mctx || !sctx) return;
+    const w = d.width;
+    const h = d.height;
+    const alphaImg = mctx.getImageData(0, 0, w, h);
+    const a = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) a[i] = alphaImg.data[i * 4 + 3];
+    const img = sctx.getImageData(0, 0, w, h);
+    decontaminate(img.data, a, w, h, deconAmount);
+    sctx.putImageData(img, 0, 0);
+    paintRef.current?.applyLayerImage(id!, src, "Decontaminate colours");
+  };
+
   const featherSelection = (px: number) => {
     if (!activeDocRef.current.selection.length) {
       showToast("Feather needs an active selection — make one first.");
@@ -5261,6 +5332,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "select-deselect") deselect();
     else if (actionId === "select-reselect") reselect();
     else if (actionId === "select-inverse") invertSelection();
+    else if (actionId === "select-refine") openRefineEdge();
     else if (actionId === "select-feather") setSelectModify("feather");
     else if (actionId === "select-grow") setSelectModify("grow");
     else if (actionId === "select-save") setChannelDialog("save");
@@ -6419,6 +6491,18 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           docHeight={active.height}
           onApply={applyLiquify}
           onClose={() => setLiquify(null)}
+        />
+      )}
+
+      {refineOpen && (
+        <RefineEdgeDialog
+          source={refineOpen.source}
+          mask={refineOpen.mask}
+          docWidth={active.width}
+          docHeight={active.height}
+          initial={refineOpen.initial}
+          onApply={applyRefineEdge}
+          onClose={() => setRefineOpen(null)}
         />
       )}
 

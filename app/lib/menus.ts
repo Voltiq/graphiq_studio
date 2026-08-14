@@ -120,6 +120,7 @@ export const MENUS: Menu[] = [
       { label: "Deselect", shortcut: "Ctrl+D", action: "select-deselect" },
       { label: "Reselect", shortcut: "Ctrl+Shift+D", action: "select-reselect" },
       { label: "Inverse", shortcut: "Ctrl+Shift+I", separatorAfter: true, action: "select-inverse" },
+      { label: "Refine edge…", action: "select-refine" },
       { label: "Feather…", shortcut: "Shift+F6", action: "select-feather" },
       { label: "Grow…", separatorAfter: true, action: "select-grow" },
       { label: "Save selection…", action: "select-save" },

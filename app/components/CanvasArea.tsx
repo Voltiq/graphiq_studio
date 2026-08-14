@@ -3708,6 +3708,8 @@ export default function CanvasArea({
         engine.previewTone(layerId, spec, sel, angle, pivot),
       endAdjust: () => engine.endAdjust(),
       revertAdjust: () => engine.revertAdjust(),
+      setRefineEdge: (r) => engine.setRefineEdge(r),
+      getRefineEdge: () => engine.getRefineEdge(),
       setColorSpace: (cs) => engine.setColorSpace(cs),
       setProofing: (simulate, warn, target) => engine.setProofing(simulate, warn, target),
       captureLeaves: (ids) => engine.captureLeaves(ids),
