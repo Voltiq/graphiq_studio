@@ -20,6 +20,7 @@ import {
   Droplet,
   Droplets,
   Fingerprint,
+  Palette,
   History,
   SunMedium,
   Type,
@@ -51,6 +52,7 @@ export type ToolId =
   | "gradient"
   | "blur"
   | "smudge"
+  | "mixer"
   | "dodge"
   | "sponge"
   | "text"
@@ -94,6 +96,7 @@ export const TOOL_GROUPS: Tool[][] = [
   [
     { id: "blur", name: "Blur", icon: Droplet, shortcut: "R" },
     { id: "smudge", name: "Smudge", icon: Fingerprint, shortcut: "F" },
+    { id: "mixer", name: "Mixer brush", icon: Palette, shortcut: "B" },
     { id: "dodge", name: "Dodge", icon: SunMedium, shortcut: "O" },
     { id: "sponge", name: "Sponge", icon: Droplets, shortcut: "A" },
   ],

@@ -20,7 +20,7 @@ This document is written so someone **without the code** understands exactly wha
 - **Rotate 90° CW/CCW**, **Flip Horizontal/Vertical** (whole image).
 - **Crop** (interactive box: aspect presets, rule-of-thirds/grid overlay, straighten, shield) and **Trim** (auto-remove uniform border pixels).
 
-## Tools (26, single-key shortcuts)
+## Tools (27, single-key shortcuts)
 
 | Tool | Key | Notes |
 |---|---|---|
@@ -35,6 +35,7 @@ This document is written so someone **without the code** understands exactly wha
 | Brush / Pencil / Eraser | `B` / `N` / `E` | Independent size, hardness, opacity, flow, smoothing. **Pen pressure** drives size and/or flow from a stylus. The eraser's **Erase to History** turns it into a restore tool — it paints pixels back from the history source instead of removing them (ignored on a mask, which has no earlier state to return to). |
 | History Brush | `K` | Paints back from a chosen history state or pinned snapshot — the same coverage-lerp stroke the eraser borrows for Erase to History. |
 | Smudge | `F` | Drags colour along the stroke (wet-finger model), with a Strength control. |
+| Mixer brush | `B` | Wet paint: carries a reservoir, picks up what it is dragged through, lays down a blend. Wet / Load / Mix / Flow + five paint presets. Shares `B` with the brush — `Shift+B` cycles. |
 | Sponge | `A` | Saturates or desaturates where you paint, with Flow and a Vibrance-style mode that protects already-saturated pixels. |
 | Clone Stamp | `S` | Alt-set source, paint sampled pixels. |
 | Spot Heal | `J` | Paint a blob over a blemish; on release it heals in one pass — texture from the best-matching surroundings, tone-matched seamlessly (respects an active selection). |
@@ -287,6 +288,16 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - The field is computed on a one-pixel border of zeros so the **canvas edge counts as a boundary** — otherwise a selection covering the whole document has no outside anywhere, its interior distance is infinite, and Select All → Contract does nothing at all.
 - **Smooth blurs then re-thresholds**, so it rounds off corners and speckle while leaving the selection HARD. Feather is the control for softness; conflating the two would leave no way to tidy a jagged edge without also blurring it.
 - Because the morphology runs on a raster, the result comes back as axis-aligned rects with any selection rotation already baked in — so the new selection is committed at angle 0 rather than being rotated a second time. Pure math in [select-modify.ts](app/lib/select-modify.ts) (30 Node checks); the browser results agree with it to the pixel (expand 28248, contract 12144, border 8896, smooth 19132 in both).
+
+### Mixer brush
+
+- A wet-paint brush: it carries a **reservoir** of colour, drags a tip-sized buffer of colour **picked up** from the canvas, and lays down a mixture of the two. **Wet** is how much it absorbs per dab, **Mix** the ratio of picked-up paint to reservoir paint in what goes down, **Load** how full the reservoir is, **Flow** the deposit rate. Five named combinations (Dry / Moist / Wet / Very wet / Very wet, heavy mix) sit above the sliders, because nobody sets Wet-Load-Mix by hand until they know what the four do.
+- **The reservoir behaves like paint.** It is spent by depositing and topped up by whatever the tip picks up, so a dry brush fades out over roughly a brush-width of travel while a wet one keeps going indefinitely — it is living off the canvas. An empty *but wet* brush still paints, because what it picked up is what it is painting with.
+- **Implemented as a generalization of Smudge, not a second engine.** Smudge IS a mixer with Mix at 100 and no reservoir (its Strength is `wet = 100 − strength`), so the two share one per-pixel kernel and all the scaffolding around it — working buffer, carried tip buffer, sample-all pickup, dirty-rect blitting, selection clipping, history. In smudge mode the mixer terms are inert by construction (`deposit = 1`, `blend = 0`), which is why smudge comes out unchanged; verified in the browser alongside the new tool.
+- **Pickup averages PREMULTIPLIED colour.** Averaging straight RGB lets fully transparent pixels — whose stored RGB is usually black — vote on the result, so picking up next to an edge would drag a dark fringe into the brush. Checked directly: a half-transparent red region picks up as pure red (255), where straight averaging gives 127.5.
+- **Clean / Load after each stroke resolve when the NEXT stroke begins**, not when the last one ends. Resolving at lift-off meant the brush reloaded with whatever colour was selected *then*, so choosing a new colour and painting again silently kept using the old one — caught by the reservoir-depletion test, which measured a stroke that laid down nothing because it was still holding the previous stroke's white.
+- 40 Node checks on the colour model ([mixer.ts](app/lib/mixer.ts)); 16 in the browser. The browser test works on an opaque white ground with an indigo band and the foreground swapped to white, so the two behaviours separate cleanly: a **dry** brush carried the band's colour 0 px outward (reach 71 → 71, it was laying down its own white), a **wet, heavy-mix** brush dragged it to x=93, and smudge still reached x=142. A dry stroke's trail measured 67.5 → 17.6 → 0.1 → 0 as the paint ran out.
+- **Not yet**: brush **texture** and **dual tip**. Both are ordinary brush-engine options rather than mixer-specific ones, so they are tracked with the scattering / angle-jitter work; texture also wants the pattern-asset picker that fill layers and pattern text fills defer to.
 
 ### Merge visible & Stamp visible
 

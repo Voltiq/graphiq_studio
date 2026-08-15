@@ -98,6 +98,7 @@ import {
   linkedLeafIds,
   type LayerNode,
 } from "../lib/layers";
+import type { MixerSettings } from "../lib/mixer";
 import type { PendingLoad } from "../lib/project";
 import { effectiveSoftness } from "../lib/refine-edge";
 import PerfHud from "./PerfHud";
@@ -646,6 +647,7 @@ export default function CanvasArea({
   shape,
   blur,
   smudge,
+  mixer,
   sponge,
   historyBrush,
   heal,
@@ -785,6 +787,7 @@ export default function CanvasArea({
   blur: BlurSettings;
   /** Smudge brush settings. */
   smudge: SmudgeSettings;
+  mixer: MixerSettings;
   /** Sponge (saturate/desaturate) brush settings. */
   sponge: SpongeSettings;
   /** History brush settings (brush controls; paints from the source state). */
@@ -1231,6 +1234,8 @@ export default function CanvasArea({
   // Smudge brush: latest settings + hover ring + active flag (colour-drag stroke).
   const smudgeRef = useRef(smudge);
   smudgeRef.current = smudge;
+  const mixerRef = useRef(mixer);
+  mixerRef.current = mixer;
   const smudgeHoverRef = useRef<{ x: number; y: number } | null>(null);
   const smudgingRef = useRef(false);
   // History brush: latest settings + hover ring + active flag (coverage-lerp
@@ -2835,8 +2840,12 @@ export default function CanvasArea({
       drawBrushCursor(hx, hy, Math.max(1, (hb.size / 2) * s), hb.hardness);
     }
 
-    if (!anchorArmed && toolRef.current === "smudge" && smudgeHoverRef.current) {
-      const sm = smudgeRef.current;
+    if (
+      !anchorArmed &&
+      (toolRef.current === "smudge" || toolRef.current === "mixer") &&
+      smudgeHoverRef.current
+    ) {
+      const sm = toolRef.current === "mixer" ? mixerRef.current : smudgeRef.current;
       const hx = p.x + smudgeHoverRef.current.x * s;
       const hy = p.y + smudgeHoverRef.current.y * s;
       drawBrushCursor(hx, hy, Math.max(1, (sm.size / 2) * s), sm.hardness);
@@ -3021,7 +3030,7 @@ export default function CanvasArea({
       (toolRef.current === "blur" && blurHoverRef.current) ||
       (toolRef.current === "quickselect" && quickSelectHoverRef.current) ||
       (toolRef.current === "history" && historyHoverRef.current) ||
-      (toolRef.current === "smudge" && smudgeHoverRef.current) ||
+      ((toolRef.current === "smudge" || toolRef.current === "mixer") && smudgeHoverRef.current) ||
       (toolRef.current === "dodge" && dodgeHoverRef.current) ||
       (toolRef.current === "sponge" && spongeHoverRef.current) ||
       (toolRef.current === "clone" && cloneHoverRef.current) ||
@@ -3753,6 +3762,9 @@ export default function CanvasArea({
       endBlur: () => engine.endBlur(),
       beginSmudge: (layerId, opts, x, y, finger, clip, clipAngle, clipPivot) =>
         engine.beginSmudge(layerId, opts, x, y, finger, clip, clipAngle, clipPivot),
+      beginMixer: (layerId, opts, x, y, fg, clip, clipAngle, clipPivot) =>
+        engine.beginMixer(layerId, opts, x, y, fg, clip, clipAngle, clipPivot),
+      cleanMixer: () => engine.cleanMixer(),
       moveSmudge: (x, y) => engine.moveSmudge(x, y),
       endSmudge: () => engine.endSmudge(),
       beginSponge: (layerId, opts, x, y, clip, clipAngle, clipPivot) =>
@@ -5736,6 +5748,27 @@ export default function CanvasArea({
         selectionPivot,
       );
     }
+    if (tool === "mixer") {
+      if (!activeLayerId) return; // nothing to paint on in an empty doc
+      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      smudgingRef.current = true; // the mixer IS a smudge session with a reservoir
+      const p = toDoc(e);
+      smudgeHoverRef.current = { x: p.x, y: p.y };
+      const fc = parseColor(fgRef.current);
+      engine.beginMixer(
+        activeLayerId,
+        mixer,
+        p.x,
+        p.y,
+        { r: fc.r, g: fc.g, b: fc.b, a: Math.round(fc.a * 255) },
+        selection.length ? selection : null,
+        selectionAngle,
+        selectionPivot,
+      );
+    }
     if (tool === "dodge") {
       if (!activeLayerId) return; // nothing to dodge/burn on an empty doc
       if (paintBlocked(activeLayerId)) return; // pixels-locked layer
@@ -5933,8 +5966,8 @@ export default function CanvasArea({
       quickSelectHoverRef.current = { x: cur.x, y: cur.y };
       ensureAnts();
     }
-    // Smudge: same brush-ring tracking.
-    if (toolRef.current === "smudge") {
+    // Smudge / mixer: same brush-ring tracking (one shared session).
+    if (toolRef.current === "smudge" || toolRef.current === "mixer") {
       smudgeHoverRef.current = { x: cur.x, y: cur.y };
       ensureAnts();
     }
@@ -7081,6 +7114,7 @@ export default function CanvasArea({
                         ? "zoom-in"
                         : tool === "blur" ||
                             tool === "smudge" ||
+                            tool === "mixer" ||
                             tool === "history" ||
                             tool === "clone" ||
                             tool === "dodge" ||

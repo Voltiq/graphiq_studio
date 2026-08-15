@@ -31,6 +31,7 @@ import { extractICCProfile } from "../lib/icc";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
 import { styleToPatch, type LayerStylePreset } from "../lib/styleio";
+import { DEFAULT_MIXER, sanitizeMixer, type MixerSettings } from "../lib/mixer";
 import {
   mergeVisibleIsNoop,
   mergeVisiblePlan,
@@ -541,6 +542,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [blur, setBlur] = useState<BlurSettings>(DEFAULT_BLUR);
   const [quickSelect, setQuickSelect] = useState<QuickSelectSettings>(DEFAULT_QUICKSELECT);
   const [smudge, setSmudge] = useState<SmudgeSettings>(DEFAULT_SMUDGE);
+  const [mixer, setMixer] = useState<MixerSettings>(DEFAULT_MIXER);
   const [sponge, setSponge] = useState<SpongeSettings>(DEFAULT_SPONGE);
   const [historyBrush, setHistoryBrush] = useState<BrushSettings>({
     size: 24,
@@ -746,6 +748,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (p.blur) setBlur((s) => ({ ...s, ...p.blur }));
     if (p.quickSelect) setQuickSelect((s) => ({ ...s, ...p.quickSelect }));
     if (p.smudge) setSmudge((s) => ({ ...s, ...p.smudge }));
+    if (p.mixer) setMixer((s) => sanitizeMixer({ ...s, ...p.mixer }));
     if (p.sponge) setSponge((s) => ({ ...s, ...p.sponge }));
     if (p.historyBrush) setHistoryBrush((s) => ({ ...s, ...p.historyBrush }));
     if (p.heal) setHeal((s) => ({ ...s, ...p.heal }));
@@ -788,6 +791,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           pen,
           blur,
           smudge,
+          mixer,
           sponge,
           historyBrush,
           heal,
@@ -825,6 +829,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     pen,
     blur,
     smudge,
+    mixer,
     sponge,
     historyBrush,
     heal,
@@ -6456,6 +6461,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onBlur={(patch) => setBlur((b) => ({ ...b, ...patch }))}
         smudge={smudge}
         onSmudge={(patch) => setSmudge((s) => ({ ...s, ...patch }))}
+        mixer={mixer}
+        onMixer={(patch) => setMixer((s) => ({ ...s, ...patch }))}
+        onCleanMixer={() => {
+          paintRef.current?.cleanMixer();
+          showToast("Brush cleaned.");
+        }}
         sponge={sponge}
         onSponge={(patch) => setSponge((s) => ({ ...s, ...patch }))}
         historyBrush={historyBrush}
@@ -6561,6 +6572,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           }}
           blur={blur}
           smudge={smudge}
+          mixer={mixer}
           sponge={sponge}
           historyBrush={historyBrush}
           heal={heal}

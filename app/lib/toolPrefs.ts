@@ -1,6 +1,7 @@
 // Tool options (every options-bar slider / toggle / select), persisted to
 // localStorage so they survive a reload. Stored as one bundle under a single key.
 import type { BrushSettings } from "./paint";
+import type { MixerSettings } from "./mixer";
 import type {
   BlurSettings,
   CloneSettings,
@@ -50,6 +51,7 @@ export interface ToolPrefs {
   pen: PenSettings;
   blur: BlurSettings;
   smudge: SmudgeSettings;
+  mixer: MixerSettings;
   sponge: SpongeSettings;
   /** History brush (reuses the brush settings shape). */
   historyBrush: BrushSettings;

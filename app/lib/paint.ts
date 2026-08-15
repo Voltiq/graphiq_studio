@@ -1,4 +1,14 @@
 ﻿import { parseColor, toHex8 } from "./color";
+import {
+  afterStroke as mixerAfterStroke,
+  averageColor,
+  initialMixerState,
+  mixerBlend,
+  mixerDab,
+  type MixerSettings,
+  type MixerState,
+  type Rgba,
+} from "./mixer";
 import type { Rect } from "./view";
 import { blendOp, clipGroupsOf, filterMaskKey, type ClipGroup } from "./layers";
 import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers";
@@ -449,6 +459,19 @@ export interface EngineHandle {
     clipAngle?: number,
     clipPivot?: { x: number; y: number } | null,
   ) => void;
+  /** Mixer brush: a smudge stroke that also carries a paint reservoir. */
+  beginMixer: (
+    layerId: string,
+    opts: MixerSettings,
+    x: number,
+    y: number,
+    fg: { r: number; g: number; b: number; a: number },
+    clip?: Rect[] | null,
+    clipAngle?: number,
+    clipPivot?: { x: number; y: number } | null,
+  ) => void;
+  /** Empty the loaded brush (tool switch, or the explicit Clean button). */
+  cleanMixer: () => void;
   moveSmudge: (x: number, y: number) => void;
   endSmudge: () => void;
   /** Sponge brush: begin / extend / finish a saturate/desaturate stroke. */
@@ -1339,6 +1362,15 @@ export class PaintEngine {
   private smudgeLastRaw = { x: 0, y: 0 };
   private smudgeSmoothPt = { x: 0, y: 0 };
   private smudgeSelMask: Uint8ClampedArray | null = null;
+  // Mixer-brush mode for the smudge session. The scaffolding — working buffer,
+  // carried tip buffer, sampleAll pickup, dirty-rect blit, history — is
+  // identical; only the per-pixel kernel differs, so the session carries an
+  // optional mixer config rather than being duplicated. See mixer.ts: smudge IS
+  // a mixer with Mix 100 and no reservoir.
+  private smudgeMix: { m: MixerSettings; blend: number } | null = null;
+  /** The loaded brush, kept BETWEEN strokes — that is what Clean / Load after
+   *  each stroke are about, and it has to outlive the session to mean anything. */
+  private mixerState: MixerState | null = null;
 
   // Blur Gallery (Effects ▸ Blur Gallery) live preview session: the affected
   // layers' original pixels + a selection mask + the zoom/spin centre.
@@ -8344,10 +8376,29 @@ export class PaintEngine {
     const top = Math.floor(cy - half);
     const w = this.w;
     const h = this.h;
-    const strength = opts.strength / 100;
-    const pickup = 1 - strength; // high strength → carried persists → long smear
     const pick = this.smudgePickup; // sampleAll composite, else the live layer
     const sel = this.smudgeSelMask;
+    const mixCfg = this.smudgeMix;
+    // Mixer mode: the reservoir is updated ONCE per dab from the tip-weighted
+    // average under the tip (premultiplied — see averageColor), and supplies the
+    // dab's strength. Smudge mode keeps its own pickup rate.
+    let deposit = 1;
+    let mixBlend = 0;
+    let paint: Rgba | null = null;
+    let pickup = 0;
+    if (mixCfg) {
+      const src = pick ?? data;
+      const avg = averageColor(src, tip.data, size, this.w, left, top, this.w, h);
+      const step = mixerDab(this.mixerState!, avg, avg, mixCfg.m);
+      this.mixerState = step.next;
+      deposit = step.alpha;
+      mixBlend = mixCfg.blend;
+      paint = this.mixerState.paint;
+      pickup = Math.max(0, Math.min(1, mixCfg.m.wet / 100));
+    } else {
+      const strength = opts.strength / 100;
+      pickup = 1 - strength; // high strength → carried persists → long smear
+    }
     for (let py = 0; py < size; py++) {
       const gy = top + py;
       if (gy < 0 || gy >= h) continue;
@@ -8363,13 +8414,17 @@ export class PaintEngine {
         const ug = pick ? pick[gi + 1] : data[gi + 1];
         const ub = pick ? pick[gi + 2] : data[gi + 2];
         const ua = pick ? pick[gi + 3] : data[gi + 3];
-        let lay = f;
+        let lay = f * deposit;
         if (sel) lay *= sel[gy * w + gx] / 255;
         if (lay > 0) {
-          const cr = carried[coff];
-          const cg = carried[coff + 1];
-          const cb = carried[coff + 2];
-          const ca = carried[coff + 3];
+          // Mixer: the paint laid down is the reservoir pulled toward what this
+          // part of the tip picked up. Blended per pixel because the carried
+          // buffer varies across the tip — a soft edge that dragged through two
+          // colours must lay both back down, not one averaged smear.
+          const cr = paint ? paint.r + (carried[coff] - paint.r) * mixBlend : carried[coff];
+          const cg = paint ? paint.g + (carried[coff + 1] - paint.g) * mixBlend : carried[coff + 1];
+          const cb = paint ? paint.b + (carried[coff + 2] - paint.b) * mixBlend : carried[coff + 2];
+          const ca = paint ? paint.a + (carried[coff + 3] - paint.a) * mixBlend : carried[coff + 3];
           const dr = data[gi];
           const dg = data[gi + 1];
           const db = data[gi + 2];
@@ -8429,6 +8484,64 @@ export class PaintEngine {
     }
   }
 
+  /**
+   * Begin a mixer-brush stroke.
+   *
+   * Runs the smudge session with a mixer kernel: the tip drags a picked-up
+   * colour buffer exactly as smudge does, but what it lays down is a blend of
+   * that with a paint reservoir, and the reservoir is spent and replenished as
+   * it goes (mixer.ts owns all of that arithmetic).
+   */
+  beginMixer(
+    layerId: string,
+    opts: MixerSettings,
+    x: number,
+    y: number,
+    fg: { r: number; g: number; b: number; a: number },
+    clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
+  ) {
+    // A stroke always starts from a defined reservoir; without a previous one
+    // (first stroke of the session) that means a freshly loaded brush.
+    // Clean / Load are resolved HERE, at the start of the next stroke, rather
+    // than when the previous one ended. Same rule, but evaluated against the
+    // CURRENT foreground — resolving it at lift meant the brush reloaded with
+    // whatever colour was selected then, so picking a new colour and painting
+    // again silently kept using the old one.
+    this.mixerState = this.mixerState
+      ? mixerAfterStroke(this.mixerState, fg, opts)
+      : initialMixerState(fg, opts);
+    this.smudgeMix = { m: { ...opts }, blend: mixerBlend(opts) };
+    // The shared scaffolding only reads the mechanical fields. `strength` is
+    // unused in mixer mode (the kernel branches before it), and fingerColor is
+    // null so the carried buffer seeds from the canvas — a mixer picks up what
+    // it is passing over, and the reservoir is what supplies the paint.
+    this.beginSmudge(
+      layerId,
+      {
+        size: opts.size,
+        hardness: opts.hardness,
+        strength: 50,
+        spacing: opts.spacing,
+        smoothing: opts.smoothing,
+        sampleAll: opts.sampleAll,
+        fingerPaint: false,
+      },
+      x,
+      y,
+      null,
+      clip,
+      clipAngle,
+      clipPivot,
+    );
+  }
+
+  /** Reset the loaded brush (tool switch / explicit Clean). */
+  cleanMixer() {
+    this.mixerState = null;
+  }
+
   endSmudge() {
     if (!this.smudging) return;
     this.smudgeLineTo(this.smudgeLastRaw.x, this.smudgeLastRaw.y);
@@ -8444,7 +8557,15 @@ export class PaintEngine {
         const target = this.smudgeOnMask ? this.masks.get(mid)! : this.layer(layerId);
         const before = this.subImage(this.smudgeOrig, x, y, w, h);
         const after = target.ctx.getImageData(x, y, w, h);
-        this.pushEntry(mid, { x, y, w, h }, before, after, "Smudge", undefined, this.smudgeOnMask ? "mask" : "layer");
+        this.pushEntry(
+          mid,
+          { x, y, w, h },
+          before,
+          after,
+          this.smudgeMix ? "Mixer Brush" : "Smudge",
+          undefined,
+          this.smudgeOnMask ? "mask" : "layer",
+        );
       }
     }
     this.smudging = false;
@@ -8459,6 +8580,7 @@ export class PaintEngine {
     this.smudgeOpts = null;
     this.smudgeDirty = null;
     this.smudgeSelMask = null;
+    this.smudgeMix = null;
     this.wandSrc = null;
     this.emitChange();
   }

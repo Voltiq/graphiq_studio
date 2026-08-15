@@ -98,6 +98,12 @@ import GradientControl, { GradientEditor } from "./GradientControl";
 import FontPicker from "./FontPicker";
 import { brushDynamics, type BrushSettings } from "../lib/paint";
 import {
+  MIXER_PRESETS,
+  activeMixerPreset,
+  applyMixerPreset,
+  type MixerSettings,
+} from "../lib/mixer";
+import {
   ColorChip,
   Divider,
   NumberField,
@@ -628,6 +634,13 @@ interface SmudgeProps {
   onSmudge: (patch: Partial<SmudgeSettings>) => void;
 }
 
+interface MixerProps {
+  mixer: MixerSettings;
+  onMixer: (patch: Partial<MixerSettings>) => void;
+  /** Empty the loaded brush right now (the reservoir lives in the engine). */
+  onCleanMixer: () => void;
+}
+
 interface SpongeProps {
   sponge: SpongeSettings;
   onSponge: (patch: Partial<SpongeSettings>) => void;
@@ -892,6 +905,9 @@ export default function OptionsBar({
   onBlur,
   smudge,
   onSmudge,
+  mixer,
+  onMixer,
+  onCleanMixer,
   sponge,
   onSponge,
   historyBrush,
@@ -967,6 +983,7 @@ export default function OptionsBar({
 } & ShapeProps &
   BlurProps &
   SmudgeProps &
+  MixerProps &
   SpongeProps &
   HistoryBrushProps &
   HealProps &
@@ -1058,6 +1075,7 @@ export default function OptionsBar({
           { crop, onCrop, cropBox, onCropBox, onCropApply, onCropReset, docWidth, docHeight },
           { blur, onBlur },
           { smudge, onSmudge },
+          { mixer, onMixer, onCleanMixer },
           { sponge, onSponge },
           { historyBrush, onHistoryBrush },
           { heal, onHeal },
@@ -1122,6 +1140,7 @@ function renderOptions(
   cropProps: CropProps,
   blurProps: BlurProps,
   smudgeProps: SmudgeProps,
+  mixerProps: MixerProps,
   spongeProps: SpongeProps,
   historyBrushProps: HistoryBrushProps,
   healProps: HealProps,
@@ -2122,6 +2141,75 @@ function renderOptions(
             checked={smudge.fingerPaint}
             onChange={(v) => onSmudge({ fingerPaint: v })}
           />
+        </>
+      );
+    }
+
+    case "mixer": {
+      const { mixer, onMixer, onCleanMixer } = mixerProps;
+      const preset = activeMixerPreset(mixer);
+      return (
+        <>
+          <Slider label="Size" min={1} max={500} unit="px" value={mixer.size} onChange={(n) => onMixer({ size: n })} />
+          <Slider label="Hardness" unit="%" value={mixer.hardness} onChange={(n) => onMixer({ hardness: n })} />
+          <Divider />
+          {/* The presets come first because they are how the four sliders below
+              become learnable — "Very wet, heavy mix" teaches more in one click
+              than the numbers do. */}
+          <Select
+            label="Paint"
+            options={[
+              ...(preset ? [] : ["Custom"]),
+              ...MIXER_PRESETS.map((p) => p.name),
+            ]}
+            value={preset ? MIXER_PRESETS.find((p) => p.id === preset)!.name : "Custom"}
+            onChange={(name) => {
+              const p = MIXER_PRESETS.find((x) => x.name === name);
+              if (p) onMixer(applyMixerPreset(mixer, p.id));
+            }}
+          />
+          <Slider label="Wet" unit="%" value={mixer.wet} onChange={(n) => onMixer({ wet: n })} />
+          <Slider label="Load" unit="%" value={mixer.load} onChange={(n) => onMixer({ load: n })} />
+          {/* At Wet 0 nothing has been picked up, so there is nothing for Mix
+              to mix in — the label says so rather than the slider lying by
+              looking live. */}
+          <Slider
+            label={mixer.wet === 0 ? "Mix (dry)" : "Mix"}
+            unit="%"
+            value={mixer.mix}
+            onChange={(n) => onMixer({ mix: n })}
+          />
+          <Slider label="Flow" unit="%" value={mixer.flow} onChange={(n) => onMixer({ flow: n })} />
+          <Divider />
+          <Slider
+            label="Spacing"
+            min={1}
+            max={100}
+            unit="%"
+            value={mixer.spacing}
+            onChange={(n) => onMixer({ spacing: n })}
+          />
+          <Slider label="Smoothing" unit="%" value={mixer.smoothing} onChange={(n) => onMixer({ smoothing: n })} />
+          <Divider />
+          <Toggle
+            label="Clean after stroke"
+            checked={mixer.cleanAfter}
+            onChange={(v) => onMixer({ cleanAfter: v })}
+          />
+          <Toggle
+            label="Load after stroke"
+            checked={mixer.loadAfter}
+            onChange={(v) => onMixer({ loadAfter: v })}
+          />
+          <Toggle
+            label="Sample all layers"
+            checked={mixer.sampleAll}
+            onChange={(v) => onMixer({ sampleAll: v })}
+          />
+          <Divider />
+          <button type="button" className={styles.preset} onClick={onCleanMixer}>
+            Clean brush
+          </button>
         </>
       );
     }
