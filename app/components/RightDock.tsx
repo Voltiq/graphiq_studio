@@ -37,7 +37,9 @@ import ActionsPanel from "./panels/ActionsPanel";
 import type { ActionsApi } from "../lib/actions";
 import PathsPanel from "./panels/PathsPanel";
 import type { PathsApi } from "../lib/paths";
-import { Spline } from "lucide-react";
+import CompsPanel from "./panels/CompsPanel";
+import type { CompsApi } from "../lib/comps";
+import { Camera, Spline } from "lucide-react";
 import type { NavigatorView, Rect } from "../lib/view";
 import type { LayersApi } from "../lib/layers";
 import type { ChannelSelectOp, SavedChannel } from "../lib/channels";
@@ -55,6 +57,7 @@ export type PanelVisibility = {
   properties: boolean;
   layers: boolean;
   paths: boolean;
+  comps: boolean;
   history: boolean;
   actions: boolean;
   navigator: boolean;
@@ -73,6 +76,7 @@ export type PanelId =
   | "properties"
   | "layers"
   | "paths"
+  | "comps"
   | "history"
   | "actions"
   | "metadata"
@@ -88,6 +92,7 @@ const DEFAULT_ORDER: PanelId[] = [
   "properties",
   "layers",
   "paths",
+  "comps",
   "history",
   "actions",
   "metadata",
@@ -154,6 +159,7 @@ const DEFAULT_OPEN: Record<PanelId, boolean> = {
   properties: true,
   layers: true,
   paths: false,
+  comps: false,
   history: false,
   actions: false,
   metadata: false,
@@ -270,6 +276,8 @@ interface Props {
   actionsApi: ActionsApi;
   /** Stored pen paths + verbs for the Paths panel. */
   pathsApi: PathsApi;
+  /** Named layer-state snapshots + verbs for the Layer Comps panel. */
+  compsApi: CompsApi;
   docDpi?: number;
   /** Portal target for the LEFT dock column (Editor renders the host div). */
   leftHost?: HTMLElement | null;
@@ -349,6 +357,7 @@ export default function RightDock({
   onEditMeta,
   actionsApi,
   pathsApi,
+  compsApi,
   docDpi = 300,
   leftHost = null,
   floatHost = null,
@@ -676,6 +685,12 @@ export default function RightDock({
         return panels.paths ? (
           <Panel key="paths" title="Paths" icon={Spline} {...dp}>
             <PathsPanel api={pathsApi} />
+          </Panel>
+        ) : null;
+      case "comps":
+        return panels.comps ? (
+          <Panel key="comps" title="Layer Comps" icon={Camera} {...dp}>
+            <CompsPanel api={compsApi} />
           </Panel>
         ) : null;
       case "actions":

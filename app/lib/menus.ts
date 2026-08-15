@@ -187,6 +187,7 @@ export const MENUS: Menu[] = [
       { label: "Properties", action: "window-properties" },
       { label: "Layers", action: "window-layers" },
       { label: "Paths", action: "window-paths" },
+      { label: "Layer Comps", action: "window-comps" },
       { label: "History", action: "window-history" },
       { label: "Actions", action: "window-actions" },
       { label: "Navigator", action: "window-navigator" },

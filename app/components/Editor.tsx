@@ -32,6 +32,17 @@ import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/pr
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
 import { styleToPatch, type LayerStylePreset } from "../lib/styleio";
 import {
+  applyComp,
+  captureComp,
+  compIsCurrent,
+  freshCompId,
+  remapComps,
+  sanitizeComps,
+  uniqueCompName,
+  type CompsApi,
+  type LayerComp,
+} from "../lib/comps";
+import {
   clearAutosave,
   markSessionAlive,
   markSessionClean,
@@ -332,6 +343,9 @@ interface Doc {
   /** Saved selections (named alpha channels; the rasters live in the engine
    *  under selectionChannelKey(docId, id)). Per-document, saved in .gproj. */
   channels?: SavedChannel[];
+  /** Named layer-state snapshots (visibility / position / appearance).
+   *  Per-document, saved in .gproj. */
+  comps?: LayerComp[];
   /** What was done to this document BEFORE this session — read from the file's
    *  history labels. A record, not a navigable stack (see history-log.ts). */
   historyLog?: string[];
@@ -358,6 +372,7 @@ const ALL_PANELS: PanelVisibility = {
   properties: true,
   layers: true,
   paths: true,
+  comps: true,
   history: true,
   actions: true,
   navigator: true,
@@ -374,6 +389,7 @@ const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
   "window-properties": "properties",
   "window-layers": "layers",
   "window-paths": "paths",
+  "window-comps": "comps",
   "window-history": "history",
   "window-actions": "actions",
   "window-navigator": "navigator",
@@ -3562,6 +3578,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         paths: d.paths ?? [],
         guides: d.guides ?? [],
         channels: d.channels ?? [],
+        comps: d.comps ?? [],
       },
       { foreground: fgRef.current, background: bgRef.current },
       // The log a file carries = what it already had + what this session did,
@@ -3918,6 +3935,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       channels: coerceChannels(p.channels).filter((c) =>
         (p.channelImages ?? []).some((i) => i.id === c.id && !!i.data),
       ),
+      // v21; older files have none. Comps are keyed by LAYER ID, and the loader
+      // has just minted fresh ones — so they have to be re-keyed through the
+      // same map, or every comp would load pointing at layers that don't exist.
+      comps: remapComps(sanitizeComps((p as { comps?: unknown }).comps), idMap),
       // Present in every .gproj ever written — nothing read it back until now.
       historyLog: sanitizeLog(p.history?.labels),
       historyBase: Math.max(0, historyRef.current.items.length - 1),
@@ -5334,6 +5355,111 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   // ---- Paths panel (stored pen paths — Work Path + saved copies) ------------
+  // ---- Layer comps --------------------------------------------------------
+  // Named snapshots of layer visibility / position / appearance. The tricky half
+  // is position: a layer here is a full-canvas raster with no coordinate, so a
+  // comp records the layer's CONTENT BOUNDS and applying it translates pixels by
+  // the origin delta — see comps.ts for why the size is the guard.
+  const patchComps = (fn: (list: LayerComp[]) => LayerComp[]) =>
+    patchActiveDoc((d) => ({ ...d, comps: fn(d.comps ?? []) }));
+  const compBounds = (id: string) => paintRef.current?.layerContentBounds(id) ?? null;
+  const compById = (id: string) => (activeDocRef.current.comps ?? []).find((c) => c.id === id);
+
+  /** Apply a comp: the tree change AND the pixel moves as ONE history step. */
+  const applyCompOp = (id: string) => {
+    const comp = compById(id);
+    const eng = paintRef.current;
+    if (!comp || !eng) return;
+    const d = activeDocRef.current;
+    const res = applyComp(comp, d.layers, compBounds);
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const moved = res.moves.map((m) => m.id);
+    const pixBefore = moved.length ? eng.captureLeaves(moved) : null;
+    for (const m of res.moves) {
+      const node = findNode(before, m.id);
+      eng.offsetLayerPixels(m.id, m.dx, m.dy, node?.mask?.linked !== false);
+    }
+    const pixAfter = pixBefore ? eng.captureLeaves(moved) : null;
+    setDocSel(docId, res.layers, sel);
+    eng.pushStructural(
+      `Apply Comp: ${comp.name}`,
+      () => {
+        if (pixBefore) eng.restoreLeaves(pixBefore);
+        setDocSel(docId, before, sel);
+      },
+      () => {
+        if (pixAfter) eng.restoreLeaves(pixAfter);
+        setDocSel(docId, res.layers, sel);
+      },
+    );
+    // Say what could NOT be restored. Silence here would be the worst outcome:
+    // the comp would look applied while a layer sat in the wrong place.
+    const notes: string[] = [];
+    if (res.skipped.length)
+      notes.push(
+        `${res.skipped.length} layer${res.skipped.length > 1 ? "s" : ""} changed since capture — position kept`,
+      );
+    if (res.unknown.length) notes.push(`${res.unknown.length} newer, left alone`);
+    if (res.missing.length) notes.push(`${res.missing.length} gone`);
+    showToast(notes.length ? `${comp.name} — ${notes.join("; ")}` : comp.name);
+  };
+
+  const compsApi: CompsApi = {
+    comps: active.comps ?? [],
+    currentId:
+      (active.comps ?? []).find((c) => compIsCurrent(c, active.layers, compBounds))?.id ?? null,
+    create: (capture) =>
+      patchComps((list) => [
+        ...list,
+        {
+          ...captureComp(
+            uniqueCompName(list, `Layer Comp ${list.length + 1}`),
+            capture,
+            activeDocRef.current.layers,
+            compBounds,
+          ),
+        },
+      ]),
+    apply: applyCompOp,
+    update: (id) =>
+      patchComps((list) =>
+        list.map((c) =>
+          c.id === id
+            ? { ...captureComp(c.name, c.capture, activeDocRef.current.layers, compBounds), id: c.id }
+            : c,
+        ),
+      ),
+    rename: (id, name) =>
+      patchComps((list) =>
+        list.map((c) =>
+          c.id === id ? { ...c, name: uniqueCompName(list.filter((x) => x.id !== id), name) } : c,
+        ),
+      ),
+    // Changing what a comp records RE-CAPTURES it from the document rather than
+    // just widening the list: a comp that never recorded position has no bounds
+    // to restore, so ticking P would otherwise produce a comp that claims to
+    // record a position it does not have.
+    setCapture: (id, capture) =>
+      patchComps((list) =>
+        list.map((c) =>
+          c.id === id
+            ? { ...captureComp(c.name, capture, activeDocRef.current.layers, compBounds), id: c.id }
+            : c,
+        ),
+      ),
+    duplicate: (id) =>
+      patchComps((list) => {
+        const c = list.find((x) => x.id === id);
+        if (!c) return list;
+        const copy = { ...structuredClone(c), id: freshCompId(), name: uniqueCompName(list, c.name) };
+        const at = list.findIndex((x) => x.id === id);
+        return [...list.slice(0, at + 1), copy, ...list.slice(at + 1)];
+      }),
+    remove: (id) => patchComps((list) => list.filter((c) => c.id !== id)),
+  };
+
   const patchPaths = (fn: (list: SavedPath[]) => SavedPath[]) =>
     patchActiveDoc((d) => ({ ...d, paths: fn(d.paths ?? []) }));
   /** Every pen commit lands here (CanvasArea onPenPathCommit): the Photoshop-
@@ -6151,6 +6277,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           "window-properties": panels.properties,
           "window-layers": panels.layers,
           "window-paths": panels.paths,
+          "window-comps": panels.comps,
           "window-history": panels.history,
           "window-actions": panels.actions,
           "window-navigator": panels.navigator,
@@ -6513,6 +6640,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onEditMeta={updateDocMetadata}
           actionsApi={actionsApi}
           pathsApi={pathsApi}
+          compsApi={compsApi}
           docDpi={active.dpi ?? 300}
           selection={active.selection}
           selectionAngle={active.selectionAngle}

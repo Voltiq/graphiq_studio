@@ -4,6 +4,7 @@ import type { ImageMetadata } from "./metadata";
 import type { Guide } from "./guides";
 import type { SavedPath } from "./paths";
 import type { SavedChannel } from "./channels";
+import type { LayerComp } from "./comps";
 import type { Rect } from "./view";
 
 /** Graphiq project file extension (keeps layers, groups & settings; lossless). */
@@ -58,6 +59,9 @@ export interface ProjectFile {
    *  channel), instead of losing the list. */
   channels?: SavedChannel[];
   channelImages?: { id: string; data: string }[];
+  /** Named layer-state snapshots (v21). Absent in older files — no comps, not
+   *  an error. Purely declarative: no rasters ride along. */
+  comps?: LayerComp[];
   savedAt: string;
 }
 
@@ -89,6 +93,7 @@ export interface ProjectInput {
   paths?: SavedPath[];
   guides?: Guide[];
   channels?: SavedChannel[];
+  comps?: LayerComp[];
 }
 
 function serializeNode(
@@ -128,7 +133,7 @@ export function serializeProject(
   const channels = doc.channels ?? [];
   return {
     format: "graphiq-project",
-    version: 20, // v20 adds global light (v19 vector masks + blending options, v18 saved selections)
+    version: 21, // v21 adds layer comps (v20 global light, v19 vector masks + blending options)
     name: doc.name,
     width: doc.width,
     height: doc.height,
@@ -144,6 +149,7 @@ export function serializeProject(
     metadata: doc.metadata ?? null,
     paths: doc.paths ?? [],
     guides: doc.guides ?? [],
+    comps: doc.comps ?? [],
     channels,
     channelImages: channels
       .map((c) => ({ id: c.id, data: getChannel(c.id) }))
