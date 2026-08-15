@@ -99,6 +99,7 @@ import {
   type LayerNode,
 } from "../lib/layers";
 import type { PendingLoad } from "../lib/project";
+import { effectiveSoftness } from "../lib/refine-edge";
 import PerfHud from "./PerfHud";
 
 const ZOOM_STEPS = [
@@ -1560,6 +1561,11 @@ export default function CanvasArea({
   marqueeShapeRef.current = marqueeShape;
   const marqueeApexRef = useRef(triangleApex);
   marqueeApexRef.current = triangleApex;
+  // drawAnts is a useCallback keyed on [engine] and reads every prop through a
+  // ref for exactly this reason — reading `selectionFeather` directly captured
+  // its first-render value and the preview never appeared.
+  const selectionFeatherRef = useRef(selectionFeather);
+  selectionFeatherRef.current = selectionFeather;
   /** Ants-only preview of an in-flight Apex reshape (null = nothing pending).
    *  Non-null means the drawn outline is ahead of the committed selection. */
   const apexPreviewRef = useRef<Rect[] | null>(null);
@@ -1658,6 +1664,9 @@ export default function CanvasArea({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showTextPreview, textSession, text, width, height]);
   const antsOffset = useRef(0);
+  /** Scratch for the feather-preview outlines: carving them out needs a
+   *  destination-out, which must not touch the shared overlay. */
+  const featherLayerRef = useRef<HTMLCanvasElement | null>(null);
   const antsRaf = useRef(0);
 
   // Paint engine (created once; constructor is SSR-safe — no DOM access).
@@ -2126,20 +2135,69 @@ export default function CanvasArea({
         ang === 0
           ? [Math.round(p.x + x * s) + 0.5, Math.round(p.y + y * s) + 0.5]
           : rot(p.x + x * s, p.y + y * s);
+      const antPath = (c: CanvasRenderingContext2D) => {
+        c.beginPath();
+        for (const loop of loops) {
+          for (let i = 0; i < loop.length; i++) {
+            const [sx, sy] = tx(loop[i].x, loop[i].y);
+            if (i === 0) c.moveTo(sx, sy);
+            else c.lineTo(sx, sy);
+          }
+        }
+      };
+
+      // --- feather preview: two faint outlines at the edges of the soft band --
+      // The ants mark the 50% line, which tells you nothing about how far a
+      // feathered selection actually reaches. These show the extent.
+      //
+      // The offsets come from STROKE GEOMETRY rather than from offsetting the
+      // polygon: stroking the ant path at 2·softness and then carving the middle
+      // out with destination-out leaves exactly the inner and outer bounds, with
+      // the rasteriser doing the offset-curve work (including the corners). It
+      // needs its own canvas because that carve would otherwise eat whatever
+      // else is already on the overlay — the Quick Mask wash, for one.
+      const soft = effectiveSoftness({
+        ...engine.getRefineEdge(),
+        feather: selectionFeatherRef.current,
+      });
+      const bandPx = soft * 2 * s;
+      if (bandPx >= 3) {
+        let fc = featherLayerRef.current;
+        if (!fc) fc = featherLayerRef.current = document.createElement("canvas");
+        if (fc.width !== ov.width || fc.height !== ov.height) {
+          fc.width = ov.width;
+          fc.height = ov.height;
+        }
+        const fx2 = fc.getContext("2d");
+        if (fx2) {
+          fx2.setTransform(dpr, 0, 0, dpr, 0, 0);
+          fx2.clearRect(0, 0, cw, ch);
+          fx2.strokeStyle = "#fff";
+          fx2.lineJoin = "round";
+          fx2.lineWidth = bandPx;
+          antPath(fx2);
+          fx2.stroke();
+          fx2.globalCompositeOperation = "destination-out";
+          fx2.lineWidth = Math.max(0.5, bandPx - 1.5);
+          antPath(fx2);
+          fx2.stroke();
+          fx2.globalCompositeOperation = "source-over";
+          ctx.save();
+          ctx.globalAlpha = 0.42;
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.drawImage(fc, 0, 0);
+          ctx.restore();
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+      }
+
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       // Two passes (black, then white offset by half a dash) make the classic ants.
       for (let pass = 0; pass < 2; pass++) {
         ctx.strokeStyle = pass === 0 ? "rgba(0,0,0,0.75)" : "#fff";
         ctx.lineDashOffset = -antsOffset.current + (pass === 0 ? 0 : 4);
-        ctx.beginPath();
-        for (const loop of loops) {
-          for (let i = 0; i < loop.length; i++) {
-            const [sx, sy] = tx(loop[i].x, loop[i].y);
-            if (i === 0) ctx.moveTo(sx, sy);
-            else ctx.lineTo(sx, sy);
-          }
-        }
+        antPath(ctx);
         ctx.stroke();
       }
       ctx.setLineDash([]);

@@ -51,17 +51,36 @@ const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
  * hardens the edge somewhat, because a ramp with pinned ends cannot be moved far
  * without steepening. Photoshop presents the two as independent; they are not.
  */
-export function edgeTransfer(a: number, contrast: number, shift: number): number {
+export function edgeGain(contrast: number, shift: number): number {
   const k = Math.max(0, Math.min(100, contrast)) / 100;
+  const s = Math.max(-100, Math.min(100, shift)) / 100;
+  const threshold = Math.max(0.02, Math.min(0.98, 0.5 - s * 0.5));
+  return Math.max(1 / Math.max(0.02, 1 - k), 0.5 / Math.max(1e-6, Math.min(threshold, 1 - threshold)));
+}
+
+/**
+ * How wide the visibly-soft band actually is, in pixels either side of the
+ * boundary — what the marching-ants feather preview draws.
+ *
+ * NOT simply `feather`: contrast (and a large shift, via the gain floor)
+ * compresses the ramp, so a 20 px feather at high contrast is a much narrower
+ * soft edge than the slider suggests. Drawing `feather` directly would make the
+ * preview lie exactly where the user is least able to check it by eye.
+ */
+export function effectiveSoftness(r: RefineEdge | undefined): number {
+  if (!r || r.feather <= 0) return 0;
+  return r.feather / edgeGain(r.contrast, r.shift);
+}
+
+export function edgeTransfer(a: number, contrast: number, shift: number): number {
   const s = Math.max(-100, Math.min(100, shift)) / 100;
   // Held off the extremes: at threshold exactly 0 (or 1) the pinned end sits ON
   // the boundary and maps to 0.5 whatever the gain, which put the fully
   // unselected exterior back at half strength. ±100 therefore means "select
   // everything above 2%", not "including alpha exactly 0".
   const threshold = Math.max(0.02, Math.min(0.98, 0.5 - s * 0.5));
-  const gainFromContrast = 1 / Math.max(0.02, 1 - k);
-  const gainFloor = 0.5 / Math.max(1e-6, Math.min(threshold, 1 - threshold));
-  const gain = Math.max(gainFromContrast, gainFloor);
+  // Shared with effectiveSoftness so the preview cannot drift from the maths.
+  const gain = edgeGain(contrast, shift);
   return clamp01(0.5 + (a - threshold) * gain);
 }
 

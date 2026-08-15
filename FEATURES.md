@@ -260,6 +260,12 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - The **brush `stroke` buffer stays sRGB** because brush/UI colours are authored as sRGB hex; compositing onto a P3 layer lets the browser convert correctly. Layer-effect colours work the same way (sRGB hex filled onto a P3 buffer).
 - `setColorSpace` converts existing layers by drawing them through a new-space canvas; masks are **not** converted (coverage, not colour); effect/tone caches invalidate.
 
+### Feather preview
+
+- A feathered selection's marching ants mark the **50% line**, which says nothing about how far the softness actually reaches. Two faint outlines now show the edges of the soft band, so "feather 30" is something you can see rather than imagine.
+- The offsets come from **stroke geometry**, not from offsetting the polygon: the ant path is stroked at twice the softness and the middle is then carved out with `destination-out`, leaving exactly the inner and outer bounds with the rasteriser doing the offset-curve work — including the corners, which come out correctly rounded on the outside and sharp on the inside. It draws on its own scratch canvas, because that carve would otherwise eat whatever else is on the overlay (the Quick Mask wash, for one), and it is skipped below ~3 screen pixels where it would just fatten the ants.
+- The band width is **`effectiveSoftness`, not `feather`**: contrast (and a large shift, through the gain floor) compresses the ramp, so a 20 px feather at 80% contrast is a 4 px soft edge. It shares the exact gain function the pixel pipeline uses, so the preview cannot drift from the maths — drawing the raw slider value would have made the overlay lie precisely where it is hardest to check by eye.
+
 ### Vector masks
 
 - **Layer ▸ Vector mask from path** turns the Pen tool's current path into a mask, with **Invert** and **Delete** beside it. A layer can carry a vector mask AND a raster mask at once — they **multiply**, so a pixel survives only where both let it through: the raster mask paints softness and detail, the vector mask cuts a clean, resolution-independent edge.
