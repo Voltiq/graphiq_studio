@@ -30,6 +30,7 @@ import { DEFAULT_GLOBAL_LIGHT, sanitizeGlobalLight, type GlobalLight } from "../
 import { extractICCProfile } from "../lib/icc";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
+import { styleToPatch, type LayerStylePreset } from "../lib/styleio";
 import {
   clearAutosave,
   markSessionAlive,
@@ -2493,20 +2494,40 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     fxEditTimer.current = window.setTimeout(commitFxEdit, 500);
   };
 
-  // Discrete structural FX op (toggle / paste / clear / open) — one history step.
-  const fxStructural = (id: string, effects: LayerEffects | undefined, label: string) => {
+  // Discrete structural style op (toggle / paste / clear / preset) — one history
+  // step. Takes a whole patch because a style preset sets the blending fields
+  // alongside the effects, and undo has to take all of it back together.
+  const stylePatchStructural = (id: string, patch: Partial<LayerNode>, label: string) => {
     commitFxEdit();
     const d = activeDocRef.current;
     if (!findNode(d.layers, id)) return;
     const docId = d.id;
     const sel = selNow();
     const before = d.layers;
-    const after = updateNode(before, id, { effects });
+    const after = updateNode(before, id, patch);
     setDocSel(docId, after, sel);
     paintRef.current?.pushStructural(
       label,
       () => setDocSel(docId, before, sel),
       () => setDocSel(docId, after, sel),
+    );
+  };
+
+  const fxStructural = (id: string, effects: LayerEffects | undefined, label: string) =>
+    stylePatchStructural(id, { effects }, label);
+
+  /** Apply a saved layer style: effects AND blending, replacing what was there. */
+  const applyStylePresetOp = (id: string, p: LayerStylePreset) => {
+    const patch = styleToPatch(p);
+    stylePatchStructural(
+      id,
+      {
+        effects: patch.effects,
+        fillOpacity: patch.fillOpacity,
+        knockout: patch.knockout,
+        blendIf: patch.blendIf,
+      },
+      "Apply Layer Style",
     );
   };
 
@@ -6765,6 +6786,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
                 }))
               }
               gradientStorageKey={prefs.sharedGradients ? GRADIENT_PRESETS_KEY : FX_GRADIENT_PRESETS_KEY}
+              onApplyPreset={(p) => applyStylePresetOp(layerStyleTarget, p)}
               onChange={(eff) => setLayerEffectsOp(layerStyleTarget, eff)}
               onToggle={(key, enabled) => toggleEffectOp(layerStyleTarget, key, enabled)}
               onClear={() => {
