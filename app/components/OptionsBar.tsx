@@ -712,6 +712,8 @@ export default function OptionsBar({
   onLassoMode,
   triangleApex,
   onTriangleApex,
+  selBox,
+  onSelBox,
   wand,
   onWand,
   quickSelect,
@@ -783,6 +785,10 @@ export default function OptionsBar({
   onMarqueeShape: (s: MarqueeShape) => void;
   triangleApex: number;
   onTriangleApex: (v: number) => void;
+  /** Numeric selection transform: the current box + angle, null when nothing is
+   *  selected. Absent ⇒ the fields are hidden. */
+  selBox: { x: number; y: number; w: number; h: number; angle: number } | null;
+  onSelBox: (next: { x: number; y: number; w: number; h: number; angle: number }) => void;
   wand: { tolerance: number; contiguous: boolean; sampleAll: boolean };
   onWand: (patch: Partial<{ tolerance: number; contiguous: boolean; sampleAll: boolean }>) => void;
   quickSelect: QuickSelectSettings;
@@ -874,6 +880,8 @@ export default function OptionsBar({
           onLassoMode,
           triangleApex,
           onTriangleApex,
+          selBox,
+          onSelBox,
           wand,
           onWand,
           quickSelect,
@@ -936,6 +944,8 @@ function renderOptions(
   onLassoMode: (m: LassoMode) => void,
   triangleApex: number,
   onTriangleApex: (v: number) => void,
+  selBox: { x: number; y: number; w: number; h: number; angle: number } | null,
+  onSelBox: (next: { x: number; y: number; w: number; h: number; angle: number }) => void,
   wand: { tolerance: number; contiguous: boolean; sampleAll: boolean },
   onWand: (patch: Partial<{ tolerance: number; contiguous: boolean; sampleAll: boolean }>) => void,
   quickSelect: QuickSelectSettings,
@@ -1520,6 +1530,48 @@ function renderOptions(
               { value: "sub", icon: <Minus size={13} />, title: "Subtract" },
             ]}
           />
+          {selBox && (tool === "select" || tool === "lasso" || tool === "wand") && (
+            <>
+              <Divider />
+              <NumberField
+                label="X"
+                value={selBox.x}
+                onChange={(v) => onSelBox({ ...selBox, x: v })}
+                unit="px"
+                width={58}
+              />
+              <NumberField
+                label="Y"
+                value={selBox.y}
+                onChange={(v) => onSelBox({ ...selBox, y: v })}
+                unit="px"
+                width={58}
+              />
+              <NumberField
+                label="W"
+                value={selBox.w}
+                onChange={(v) => onSelBox({ ...selBox, w: v })}
+                unit="px"
+                width={58}
+                min={1}
+              />
+              <NumberField
+                label="H"
+                value={selBox.h}
+                onChange={(v) => onSelBox({ ...selBox, h: v })}
+                unit="px"
+                width={58}
+                min={1}
+              />
+              <NumberField
+                label="Angle"
+                value={selBox.angle}
+                onChange={(v) => onSelBox({ ...selBox, angle: v })}
+                unit="°"
+                width={58}
+              />
+            </>
+          )}
           {(tool === "select" || tool === "wand") && (
             <>
               <Divider />

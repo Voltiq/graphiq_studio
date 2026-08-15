@@ -17,6 +17,7 @@ import AboutDialog from "./AboutDialog";
 import TooltipHost from "./Tooltip";
 import { canvasSpaceOf, type ProofTarget, type WorkingSpace } from "../lib/colorspace";
 import { NO_REFINE, decontaminate, type RefineEdge } from "../lib/refine-edge";
+import { boxOf, pivotOf, sanitizeBox, transformRects } from "../lib/selection-transform";
 import { extractICCProfile } from "../lib/icc";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
@@ -1401,6 +1402,42 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     decontaminate(img.data, a, w, h, deconAmount);
     sctx.putImageData(img, 0, 0);
     paintRef.current?.applyLayerImage(id!, src, "Decontaminate colours");
+  };
+
+  // ---- Transform selection by numbers (options-bar X/Y/W/H/Angle) ----
+  // Reported from the CURRENT selection so the fields track marquee drags,
+  // Modify operations and undo without any separate state to keep in sync.
+  const selNumericBox = useMemo(() => {
+    const b = boxOf(active.selection);
+    if (!b) return null;
+    return {
+      x: Math.round(b.x),
+      y: Math.round(b.y),
+      w: Math.round(b.w),
+      h: Math.round(b.h),
+      angle: Math.round((active.selectionAngle * 180) / Math.PI),
+    };
+  }, [active.selection, active.selectionAngle]);
+
+  const applySelBox = (next: { x: number; y: number; w: number; h: number; angle: number }) => {
+    const d = activeDocRef.current;
+    const from = boxOf(d.selection);
+    if (!from) return;
+    const to = sanitizeBox(next);
+    const rads = ((next.angle || 0) * Math.PI) / 180;
+    const moved = transformRects(d.selection, from, to);
+    if (!moved.length) {
+      showToast("That would leave nothing selected.");
+      return;
+    }
+    const sameBox =
+      Math.round(from.x) === to.x &&
+      Math.round(from.y) === to.y &&
+      Math.round(from.w) === to.w &&
+      Math.round(from.h) === to.h;
+    if (sameBox && Math.abs(rads - d.selectionAngle) < 1e-6) return; // nothing to do
+    // Rotation turns about the box CENTRE, matching the on-canvas handle.
+    commitSelection("Transform selection", moved, rads, rads ? pivotOf(to) : null);
   };
 
   // Select ▸ Modify — Border / Smooth / Expand / Contract. Unlike Feather (which
@@ -6020,6 +6057,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onLassoMode={setLassoMode}
         triangleApex={triangleApex}
         onTriangleApex={setTriangleApex}
+        selBox={selNumericBox}
+        onSelBox={applySelBox}
         wand={wand}
         onWand={(patch) => setWand((wd) => ({ ...wd, ...patch }))}
         quickSelect={quickSelect}

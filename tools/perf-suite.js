@@ -23,6 +23,15 @@
  * `assertBaseline()` re-checks the layer count between scenarios so a teardown
  * that silently stops working fails the run instead of inflating the numbers.
  *
+ * CALIBRATE FIRST. The budgets are absolute wall-clock, so on their own they
+ * cannot tell "the code got slower" from "this machine got slower" — and the
+ * second really happens: the same commit that scored 7/7 scored 2/7 a few hours
+ * later, and an app-independent canvas benchmark showed the MACHINE had become
+ * 1.5-3x slower (getImageData over 8 MB: 10.5 ms -> 30.5 ms). Chasing that as a
+ * code regression cost a bisect and a git-stash scare. So the suite now measures
+ * a reference primitive on a blank page before touching the app, and says
+ * plainly when the machine is off-baseline.
+ *
  * BUDGETS sit well above the measured figure (`budget` vs `was` per scenario) so
  * ordinary noise passes, while the regressions that actually happened — every
  * one of them 1.4 s and up — trip immediately.
@@ -70,6 +79,53 @@ const INSTRUMENT = () => {
   }
   await page.addStyleTag({ content: "nextjs-portal{display:none!important}" });
   await page.waitForTimeout(600);
+
+  // ---- machine calibration -------------------------------------------------
+  // Deliberately app-independent: a bare canvas and two primitives the engine
+  // leans on. If these are off, every number below is off for the same reason,
+  // and a failure says nothing about the code.
+  const CAL_BASELINE = { read: 10.5, loop: 14.5 }; // ms, recorded 2026-08-15
+  const cal = await page.evaluate(() => {
+    const w = 4000;
+    const h = 3000;
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.fillStyle = "rgba(200,120,60,0.8)";
+    ctx.fillRect(0, 0, w, h);
+    const med = (fn) => {
+      const t = [];
+      for (let i = 0; i < 3; i++) {
+        const t0 = performance.now();
+        fn();
+        t.push(performance.now() - t0);
+      }
+      t.sort((a, b) => a - b);
+      return +t[1].toFixed(1);
+    };
+    let sd = null;
+    const read = med(() => {
+      sd = ctx.getImageData(0, 0, w, h).data;
+    });
+    const a = new Float32Array(w * h);
+    const loop = med(() => {
+      for (let i = 0; i < w * h; i++) a[i] = sd[i * 4 + 3];
+    });
+    return { read, loop };
+  });
+  const machine = (cal.read / CAL_BASELINE.read + cal.loop / CAL_BASELINE.loop) / 2;
+  console.log(
+    `calibration: getImageData ${cal.read} ms (baseline ${CAL_BASELINE.read}), ` +
+      `fill loop ${cal.loop} ms (baseline ${CAL_BASELINE.loop}) — machine is ` +
+      `${machine.toFixed(2)}x baseline\n`,
+  );
+  if (machine > 1.3)
+    console.log(
+      "  WARNING: this machine is materially slower than when the budgets were set.\n" +
+        "  Failures below are NOT evidence of a code regression. Re-measure on a quiet\n" +
+        "  machine, or compare against a known-good commit on THIS one.\n",
+    );
 
   const box = await page.locator('[data-tour="canvas"] canvas').first().boundingBox();
   const layerRows = page.locator("li[data-selected]");
@@ -268,6 +324,11 @@ const INSTRUMENT = () => {
         `${String(r.worst).padStart(6)} ${String(r.budget).padStart(7)}`,
     );
   if (errors.length) console.log("\nCONSOLE ERRORS:\n" + errors.join("\n"));
+  if (machine > 1.3)
+    console.log(
+      `\nNOTE: the machine measured ${machine.toFixed(2)}x the calibration baseline, so any ` +
+        `failure above is unproven until re-measured on a quiet machine.`,
+    );
   const failed = rows.filter((r) => !r.ok);
   console.log(
     `\n${rows.length - failed.length}/${rows.length} scenarios within budget ` +
