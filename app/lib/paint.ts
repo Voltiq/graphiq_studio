@@ -70,6 +70,7 @@ import { healPadding, healRegion } from "./heal";
 import { NO_REFINE, applyRefine, refineActive, type RefineEdge } from "./refine-edge";
 import { modifyMask, type ModifyOp } from "./select-modify";
 import { vectorMaskActive, vectorMaskHash } from "./vector-mask";
+import { fillAlpha, fillOpacityActive, knockoutActive, knockoutOf } from "./knockout";
 import { pathToSvgD } from "./paths";
 import {
   boundsOf as gapBounds,
@@ -3987,6 +3988,9 @@ export class PaintEngine {
   private nodeKey(node: LayerNode): string {
     const mv = node.mask?.enabled ? (this.maskVersion.get(node.id) ?? 0) : "x";
     const vm = vectorMaskActive(node.vectorMask) ? fnv(vectorMaskHash(node.vectorMask)) : "x";
+    // Fill opacity is baked into the styled render (effects keep theirs), so
+    // it belongs in the intrinsic key rather than in effectiveKey.
+    const fo = fillOpacityActive(node.fillOpacity) ? Math.round(node.fillOpacity!) : "x";
     const fx = hasEnabledFx(node.effects) ? fnv(fxHash(node.effects)) : "0";
     const flt = hasEnabledFilters(node.filters) ? fnv(filterStackHash(node.filters)) : "0";
     // The filter mask only shapes the render while the stack actually runs.
@@ -3997,12 +4001,12 @@ export class PaintEngine {
     if (node.type === "group") {
       let sig = "";
       for (const c of node.children) sig += this.effectiveKey(c) + ";";
-      return `G${fnv(sig)}|${flt}|${fmv}|${fx}|${mv}|${vm}|${this.cs}|${this.docEpoch}`;
+      return `G${fnv(sig)}|${flt}|${fmv}|${fx}|${mv}|${vm}|${fo}|${this.cs}|${this.docEpoch}`;
     }
     const pv = this.pixelVersion.get(node.id) ?? 0;
     // A Fill layer's render depends on its spec, not stored pixels.
     const fillH = node.type === "layer" && node.fill ? fnv(this.specHash(node.fill)) : "0";
-    return `L${pv}|${fillH}|${flt}|${fmv}|${fx}|${mv}|${vm}|${this.cs}|${this.docEpoch}`;
+    return `L${pv}|${fillH}|${flt}|${fmv}|${fx}|${mv}|${vm}|${fo}|${this.cs}|${this.docEpoch}`;
   }
 
   /** What a parent's merge depends on for one child: the child's intrinsic key
@@ -4169,6 +4173,7 @@ export class PaintEngine {
       !node.fill &&
       !node.mask?.enabled &&
       !vectorMaskActive(node.vectorMask) &&
+      !fillOpacityActive(node.fillOpacity) &&
       !hasEnabledFx(node.effects) &&
       !hasEnabledFilters(node.filters)
     ) {
@@ -4218,11 +4223,17 @@ export class PaintEngine {
     const hasAdj = node.children.some((c) => c.type === "adjustment");
     const styled = hasEnabledFx(node.effects);
     const { c: bc, ctx: bctx } = this.mk(this.w, this.h, hasAdj || styled);
+    this.pushKnockoutScope();
     this.drawStack(bctx, node.children); // sub-stack: clip groups / adjustments stay group-isolated
+    const deep = this.popKnockoutScope();
+    if (deep) this.pendingDeep.set(node.id, deep);
+    else this.pendingDeep.delete(node.id);
     // Group smart filters run on the merged children (group isolation), below
     // the group's own effects — same order as a leaf: pixels → filters → fx.
     const filtered = hasEnabledFilters(node.filters) ? this.filteredProduct(node, bc) : bc;
-    return styled ? renderStyled(filtered, node.effects!, this.cs).canvas : filtered;
+    return styled
+      ? renderStyled(filtered, node.effects!, this.cs, fillAlpha(node.fillOpacity)).canvas
+      : filtered;
   }
 
   /** The alpha buffer confining a node's smart-filter stack (null = unmasked).
@@ -4256,11 +4267,94 @@ export class PaintEngine {
     // is already composited beneath it. Only reached when the sliders actually
     // hide something — an inactive blend-if costs nothing at all.
     if (blendIfActive(node.blendIf)) src = this.applyBlendIf(ctx, src, node.blendIf!);
-    ctx.globalAlpha = Math.max(0, Math.min(1, node.opacity / 100));
+
+    // KNOCKOUT: punch this layer's own shape out of everything already
+    // composited beneath it, THEN paint the layer back over the hole. At fill
+    // opacity 100 the layer covers the hole exactly and nothing looks different
+    // — which is why knockout only reads as an effect once fill drops.
+    //
+    // The punch uses the layer's own alpha, never the styled buffer: knocking
+    // out by a drop shadow would eat a soft halo out of the backdrop.
+    // A group whose descendants knocked out DEEP: their shapes have to reach the
+    // parent, so punch them here, before the group's own buffer lands.
+    const inherited = node.type === "group" ? this.pendingDeep.get(node.id) : undefined;
+    if (inherited) {
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.drawImage(inherited, 0, 0);
+      ctx.globalCompositeOperation = "source-over";
+      this.collectDeepKnockout(inherited); // keep escaping outward
+    }
+
+    const ko = knockoutOf(node.knockout);
+    if (ko !== "none") {
+      const shape = this.knockoutShape(node);
+      if (shape) {
+        // "Shallow" is free: `ctx` here IS the enclosing group's accumulator, so
+        // punching it reaches exactly to the bottom of the group. "Deep" has to
+        // escape the group, so it is collected and punched again at the root.
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = "destination-out";
+        ctx.drawImage(shape, 0, 0);
+        ctx.globalCompositeOperation = "source-over";
+        if (ko === "deep") this.collectDeepKnockout(shape);
+      }
+    }
+
+    // Fill opacity is already baked into the styled buffer when the layer has
+    // effects (they keep their own strength); apply it here only when it is not.
+    const foAlpha = hasEnabledFx(node.effects) ? 1 : fillAlpha(node.fillOpacity);
+    ctx.globalAlpha = Math.max(0, Math.min(1, node.opacity / 100)) * foAlpha;
     ctx.globalCompositeOperation = blendOp(node.blend);
     ctx.drawImage(src, 0, 0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
+  }
+
+  /**
+   * Deep knockout, done by PROPAGATION rather than a final root punch.
+   *
+   * The obvious implementation — union every deep shape and punch it out of the
+   * finished composite — is wrong, and measurably so: by then the knockout layer
+   * has already painted itself back over its own hole, so the final punch erases
+   * the layer too. A hole appeared even at fill opacity 100, where the layer is
+   * supposed to cover it exactly.
+   *
+   * What deep actually means is "punch everything BELOW me, even outside my
+   * group". A layer at the top level already gets that from the inline punch,
+   * because `ctx` there IS the root accumulator. Only nesting needs more: the
+   * shape has to escape upward, so each group render collects its descendants'
+   * deep shapes and the parent punches them just before drawing that group.
+   */
+  private koScopes: { c: HTMLCanvasElement; ctx: CanvasRenderingContext2D; used: boolean }[] = [];
+  /** Per-group union of descendant deep-knockout shapes, awaiting the merge. */
+  private pendingDeep = new Map<string, HTMLCanvasElement>();
+
+  private pushKnockoutScope() {
+    const b = this.mk(this.w, this.h);
+    this.koScopes.push({ c: b.c, ctx: b.ctx, used: false });
+  }
+
+  /** Pop the current scope, returning its union (or null if nothing deep ran). */
+  private popKnockoutScope(): HTMLCanvasElement | null {
+    const sc = this.koScopes.pop();
+    return sc && sc.used ? sc.c : null;
+  }
+
+  /** Record a deep shape in the innermost open scope so the enclosing group can
+   *  punch it out of ITS parent when it merges. */
+  private collectDeepKnockout(shape: HTMLCanvasElement) {
+    const sc = this.koScopes[this.koScopes.length - 1];
+    if (!sc) return; // top level: the inline punch already reached the root
+    sc.ctx.drawImage(shape, 0, 0);
+    sc.used = true;
+  }
+
+  /** The silhouette a knockout punches with: the layer's OWN pixels (or a
+   *  group's merged render), never its effects. */
+  private knockoutShape(node: LayerNode): HTMLCanvasElement | null {
+    if (node.type === "layer" && !node.fill) return this.leafDisplay(node.id);
+    return this.renderNode(node);
   }
 
   /**
@@ -4324,7 +4418,7 @@ export class PaintEngine {
       const draft = this.draftScale();
       if (draft < 1) return this.styledLeafDraft(node, src, draft);
     }
-    return renderStyled(src, node.effects!, this.cs).canvas;
+    return renderStyled(src, node.effects!, this.cs, fillAlpha(node.fillOpacity)).canvas;
   }
 
   /** Effects rendered on a downscaled silhouette and upscaled back. `fx.scale`
@@ -4346,7 +4440,7 @@ export class PaintEngine {
 
     const fx = node.effects!;
     const scaled = { ...fx, scale: (fx.scale ?? 100) * scale };
-    const styled = renderStyled(small.c, scaled, this.cs).canvas;
+    const styled = renderStyled(small.c, scaled, this.cs, fillAlpha(node.fillOpacity)).canvas;
 
     const out = this.mk(this.w, this.h);
     out.ctx.imageSmoothingEnabled = true;

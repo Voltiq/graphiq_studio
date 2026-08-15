@@ -24,6 +24,7 @@ import {
   defaultVectorMask,
   type VectorMask,
 } from "../lib/vector-mask";
+import { coerceBlendingOptions, type KnockoutMode } from "../lib/knockout";
 import { extractICCProfile } from "../lib/icc";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
@@ -3745,6 +3746,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         // into all three node branches made the union too complex to represent.
         const vmRaw = coerceVectorMask((n as { vectorMask?: unknown }).vectorMask);
         const vmask: { vectorMask?: VectorMask } = vmRaw ? { vectorMask: vmRaw } : {};
+        // v19 also carries Blending Options (fill opacity + knockout).
+        const blending: { fillOpacity?: number; knockout?: KnockoutMode } =
+          coerceBlendingOptions(n as { fillOpacity?: unknown; knockout?: unknown });
         const flt = n.filters?.length ? { filters: n.filters } : {};
         const lbl = n.label ? { label: n.label } : {}; // v10 colour label
         const lck = n.locks ? { locks: n.locks } : {}; // v12 edit locks
@@ -3773,6 +3777,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             expanded: n.expanded,
             ...mask,
             ...vmask,
+            ...blending,
             ...fx,
             ...clip,
             ...flt,
@@ -3798,6 +3803,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             clipped: !!n.clipped,
             ...mask,
             ...vmask,
+            ...blending,
             ...fx,
             ...lbl,
             ...lck,
@@ -3820,6 +3826,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           ...(n.fill ? { fill: n.fill } : {}), // v14 fill layer (no pixel data)
           ...mask,
           ...vmask,
+          ...blending,
           ...fx,
           ...clip,
           ...flt,
@@ -6709,6 +6716,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
                 patchActiveDoc((d) => ({
                   ...d,
                   layers: updateNode(d.layers, layerStyleTarget, { blendIf: b }),
+                }))
+              }
+              fillOpacity={node.fillOpacity}
+              knockout={node.knockout}
+              onBlending={(patch) =>
+                // Same reasoning as onBlendIf: the fill slider fires per
+                // pointermove, so this is a live doc patch rather than a
+                // structural history step.
+                patchActiveDoc((d) => ({
+                  ...d,
+                  layers: updateNode(d.layers, layerStyleTarget, patch),
                 }))
               }
               gradientStorageKey={prefs.sharedGradients ? GRADIENT_PRESETS_KEY : FX_GRADIENT_PRESETS_KEY}

@@ -7,6 +7,7 @@ import type { GradientStop, GradientType, VectorData } from "./tools";
 /** Per-layer mask metadata. The mask *pixels* live in the paint engine (keyed by
  *  layer id, mirroring layer pixels); only this metadata lives on the tree. */
 import type { VectorMask } from "./vector-mask";
+import type { KnockoutMode } from "./knockout";
 
 export interface MaskMeta {
   /** Mask participates in compositing when true; false = temporarily disabled. */
@@ -96,6 +97,10 @@ export interface LayerBase {
   linkKey?: string;
   /** Present ⇒ the layer carries a raster mask (pixels held by the engine). */
   mask?: MaskMeta;
+  /** 0–100 — scales the layer's own PIXELS but not its effects. Absent = 100. */
+  fillOpacity?: number;
+  /** Punch this layer's shape through what is beneath it (see knockout.ts). */
+  knockout?: KnockoutMode;
   /** A pen path used as a mask, alongside (and multiplied with) the raster one.
    *  The path stays the source of truth, so it re-rasterises crisply at any
    *  document size — see vector-mask.ts. */
@@ -194,6 +199,8 @@ export type LayerPatch = Partial<
   fill?: FillSpec | undefined;
   mask?: MaskMeta | undefined;
   vectorMask?: VectorMask | undefined;
+  fillOpacity?: number | undefined;
+  knockout?: KnockoutMode | undefined;
   adjustment?: AdjustmentSpec;
   clipped?: boolean;
   effects?: LayerEffects | undefined;

@@ -279,7 +279,14 @@ function morph(a: Float32Array, w: number, h: number, r: number, dilate: boolean
 
 /** Render a layer's display canvas with its effects into a (doc-sized) styled
  *  buffer, in the document's colour space. Returns the buffer + a (0,0) offset. */
-export function renderStyled(src: HTMLCanvasElement, fx: LayerEffects, space: PredefinedColorSpace): StyledResult {
+export function renderStyled(
+  src: HTMLCanvasElement,
+  fx: LayerEffects,
+  space: PredefinedColorSpace,
+  /** 0–1 — scales the LAYER FILL only. Effects keep their own opacity, which is
+   *  exactly what separates fill opacity from plain layer opacity. */
+  fillAlpha = 1,
+): StyledResult {
   const w = src.width;
   const h = src.height;
   const out = mk(w, h, space);
@@ -340,7 +347,11 @@ export function renderStyled(src: HTMLCanvasElement, fx: LayerEffects, space: Pr
   }
 
   // ---- 3. the layer fill ----
+  // The ONLY place fill opacity applies: shadows and glows above/below keep
+  // their own strength, so a layer at fill 0 still casts its shadow.
+  if (fillAlpha < 1) octx.globalAlpha = Math.max(0, fillAlpha);
   octx.drawImage(src, 0, 0);
+  octx.globalAlpha = 1;
 
   // overlays (clipped to alpha by tinting / destination-in)
   const co = fx.colorOverlay;

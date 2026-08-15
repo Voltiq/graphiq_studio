@@ -17,6 +17,7 @@ import {
 import styles from "./LayerStyleDialog.module.scss";
 import BlendIfControl from "./BlendIfControl";
 import type { BlendIf } from "../lib/blendif";
+import { KNOCKOUT_MODES, fillOpacityOf, knockoutOf, type KnockoutMode } from "../lib/knockout";
 import { ColorChip, Segmented, Select, Slider, Toggle } from "./Controls";
 import { GradientEditor } from "./GradientControl";
 import { parseColor, toHex6 } from "../lib/color";
@@ -97,6 +98,9 @@ export default function LayerStyleDialog({
   layerName,
   blendIf,
   onBlendIf,
+  fillOpacity,
+  knockout,
+  onBlending,
   gradientStorageKey = GRADIENT_PRESETS_KEY,
   onChange,
   onToggle,
@@ -108,6 +112,10 @@ export default function LayerStyleDialog({
   /** The layer's Blend If, and how to change it (omit to hide the section). */
   blendIf?: BlendIf;
   onBlendIf?: (b: BlendIf | undefined) => void;
+  /** Blending Options ▸ fill opacity + knockout (layer-level, like Blend If). */
+  fillOpacity?: number;
+  knockout?: KnockoutMode;
+  onBlending?: (patch: { fillOpacity?: number; knockout?: KnockoutMode }) => void;
   /** Preset bucket for the gradient overlay's editor (shared with the
       Gradient tool unless the "share saved gradients" preference is off). */
   gradientStorageKey?: string;
@@ -463,6 +471,31 @@ export default function LayerStyleDialog({
               {/* Blending Options ▸ Blend If — a property of the LAYER, not of
                   any one effect, so it sits below the selected effect's
                   controls rather than inside them. */}
+              {onBlending && (
+                <div className={styles.group}>
+                  <span className={styles.groupTitle}>Blending Options</span>
+                  <Slider
+                    label="Fill opacity"
+                    min={0}
+                    max={100}
+                    unit="%"
+                    value={fillOpacityOf(fillOpacity)}
+                    onChange={(v) => onBlending({ fillOpacity: v })}
+                  />
+                  <Segmented
+                    label="Knockout"
+                    value={knockoutOf(knockout)}
+                    onChange={(v) => onBlending({ knockout: v as KnockoutMode })}
+                    options={KNOCKOUT_MODES.map((k) => ({ value: k.id, text: k.label }))}
+                  />
+                  <p className={styles.hint}>
+                    Fill opacity fades the layer&apos;s own pixels but leaves its effects at full
+                    strength. Knockout punches the layer&apos;s shape through what is beneath it —
+                    Shallow stops at the bottom of its group, Deep goes through the whole document.
+                    You only see the hole once Fill opacity drops below 100.
+                  </p>
+                </div>
+              )}
               {onBlendIf && <BlendIfControl value={blendIf} onChange={onBlendIf} />}
             </div>
           </div>
