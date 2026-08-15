@@ -60,6 +60,8 @@ export default function StatusBar({
   unit = "px",
   dpi = 300,
   layerCount,
+  isolatedCount = 0,
+  onExitIsolate,
   saveState,
   selection,
   measure = null,
@@ -75,6 +77,9 @@ export default function StatusBar({
   unit?: MeasureUnit;
   dpi?: number;
   layerCount: number;
+  /** >0 while Isolate mode is on — how many visible layers it is hiding. */
+  isolatedCount?: number;
+  onExitIsolate?: () => void;
   saveState: { label: string; ok: boolean };
   selection: Rect[];
   measure?: MeasureLine | null;
@@ -165,6 +170,22 @@ export default function StatusBar({
         >
           Doc {fmtBytes(width * height * 4)} / {fmtBytes(Math.max(1, layerCount) * width * height * 4)}
         </span>
+        {isolatedCount > 0 && (
+          <>
+            <span className={styles.sep}>|</span>
+            {/* Isolate mode changes what the canvas shows without changing the
+                document, so it MUST be visible somewhere permanent — a toast
+                would scroll away and leave the canvas quietly lying. */}
+            <button
+              type="button"
+              className={styles.isolateChip}
+              onClick={onExitIsolate}
+              title={`Isolate mode is hiding ${isolatedCount} layer${isolatedCount > 1 ? "s" : ""} — click to exit`}
+            >
+              Isolated
+            </button>
+          </>
+        )}
         <span className={styles.sep}>|</span>
         <div className={styles.zoom}>
           <input

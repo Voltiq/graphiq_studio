@@ -32,6 +32,12 @@ import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/pr
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
 import { styleToPatch, type LayerStylePreset } from "../lib/styleio";
 import {
+  applyIsolation,
+  hiddenByIsolation,
+  normalizeIsolation,
+  resolveIsolation,
+} from "../lib/isolate";
+import {
   applyComp,
   captureComp,
   compIsCurrent,
@@ -3201,6 +3207,54 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     });
   };
 
+  // ---- Isolate mode -------------------------------------------------------
+  // A VIEW state: the canvas renders a derived tree while the document keeps its
+  // real visibility flags, so nothing here touches history, the .gproj, or what
+  // an export sees. Held with the document id so switching tabs cannot leave you
+  // looking at another document's isolation.
+  const [isolate, setIsolate] = useState<{ docId: string; ids: string[] } | null>(null);
+  const isolatedIds = useMemo(
+    () => normalizeIsolation(active.layers, isolate?.docId === active.id ? isolate.ids : null),
+    [active.layers, active.id, isolate],
+  );
+  const isolation = useMemo(
+    () => (isolatedIds ? resolveIsolation(active.layers, isolatedIds) : null),
+    [active.layers, isolatedIds],
+  );
+  // The tree the CANVAS renders (and hit-tests, and draws smart guides from).
+  // Every other consumer — export, flatten, the Layers panel — keeps reading
+  // `active.layers`, which is what makes this a view state rather than an edit.
+  // `applyIsolation` returns the SAME tree when nothing changes, so the render
+  // graph keeps every cached layer when isolate is off.
+  const viewLayers = useMemo(
+    () => (isolation ? applyIsolation(active.layers, isolation) : active.layers),
+    [active.layers, isolation],
+  );
+  const isolatedHiding = isolation ? hiddenByIsolation(active.layers, isolation) : 0;
+
+  const toggleIsolate = () => {
+    if (isolatedIds) {
+      setIsolate(null);
+      return;
+    }
+    const ids = active.selectedLayerIds.length
+      ? active.selectedLayerIds
+      : active.activeLayerId
+        ? [active.activeLayerId]
+        : [];
+    if (!ids.length) {
+      showToast("Select a layer to isolate.");
+      return;
+    }
+    // Soloing everything would be a no-op that still shows the "Isolated" chip —
+    // more confusing than just saying so.
+    if (hiddenByIsolation(active.layers, resolveIsolation(active.layers, ids)) === 0) {
+      showToast("Nothing else is visible to hide.");
+      return;
+    }
+    setIsolate({ docId: active.id, ids });
+  };
+
   const layersApi: LayersApi = {
     layers: active.layers,
     activeLayerId: active.activeLayerId,
@@ -3241,6 +3295,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         layers: updateNode(d.layers, id, { locks: any ? clean : undefined }),
       }));
     },
+    isolatedIds,
+    toggleIsolate,
     toggleLinkSelected: () => {
       const ids = active.selectedLayerIds;
       if (!ids.length) return;
@@ -5721,6 +5777,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "layer-group") groupSelected();
     else if (actionId === "layer-ungroup") {
       if (al) ungroupLayerOp(al);
+    } else if (actionId === "layer-isolate") {
+      toggleIsolate();
     } else if (actionId === "layer-merge-down") mergeSelected();
     else if (actionId === "layer-flatten") flattenImage();
     else if (actionId === "mask-add") addMaskOp("reveal");
@@ -6475,7 +6533,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           cropStraighten={cropSettings.straighten}
           cropAspect={cropAspect(cropSettings, active.height ? active.width / active.height : 1)}
           onCropApply={applyCropNow}
-          layers={active.layers}
+          layers={viewLayers}
           activeLayerId={active.activeLayerId}
           ensureLayer={ensureLayer}
           onLockedAction={(kind) =>
@@ -6671,6 +6729,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         unit={prefs.unit}
         dpi={active.dpi ?? 300}
         layerCount={collectLeafIds(active.layers).length}
+        isolatedCount={isolatedHiding}
+        onExitIsolate={() => setIsolate(null)}
         saveState={saveState}
         selection={active.selection}
         measure={tool === "measure" ? measure : null}

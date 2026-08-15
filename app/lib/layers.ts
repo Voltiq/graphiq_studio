@@ -693,6 +693,11 @@ export interface LayersApi {
   setLock: (id: string, flag: LockFlag, on: boolean) => void;
   /** Link the current multi-selection, or unlink it if it's already all linked. */
   toggleLinkSelected: () => void;
+  // ---- Isolate mode (a VIEW state — no history, nothing stored) ----
+  /** Ids currently soloed on the canvas, or null when isolate is off. */
+  isolatedIds: string[] | null;
+  /** Solo the current selection, or leave isolate mode if it is already on. */
+  toggleIsolate: () => void;
   /** Unlink one layer from its link set (row chain / context menu). */
   unlinkLayer: (id: string) => void;
   /** Add a Solid/Gradient fill layer (creates it and opens its editor). */

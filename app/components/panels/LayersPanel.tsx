@@ -12,11 +12,13 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Focus,
   Folder,
   FolderMinus,
   FolderOpen,
   FolderPlus,
   Grid2x2,
+  ScanEye,
   Layers as LayersIcon,
   Link2,
   Lock,
@@ -60,6 +62,7 @@ import {
   type LayersApi,
   type LockFlag,
 } from "../../lib/layers";
+import { resolveIsolation } from "../../lib/isolate";
 import { hasEnabledFx } from "../../lib/effects";
 import { hasEnabledFilters } from "../../lib/filters";
 
@@ -219,6 +222,22 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
   };
 
   const rows = flattenRows(layers, vis);
+  // Isolate mode dims the rows the canvas is not showing. The panel keeps
+  // listing them: they are still in the document, and hiding them here would
+  // make isolate feel like a destructive filter rather than a viewing aid.
+  const isolatedOut = useMemo(() => {
+    if (!api.isolatedIds?.length) return null;
+    const keep = resolveIsolation(layers, api.isolatedIds).keep;
+    const out = new Set<string>();
+    const walk = (nodes: typeof layers) => {
+      for (const n of nodes) {
+        if (!keep.has(n.id)) out.add(n.id);
+        if (n.type === "group") walk(n.children);
+      }
+    };
+    walk(layers);
+    return out;
+  }, [layers, api.isolatedIds]);
   const multi = selectedLayerIds.length > 1;
 
   // Link button: bind 2+ selected layers, or unlink when everything selected is
@@ -357,7 +376,7 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                 data-selected={selected.has(l.id)}
                 data-active={l.id === activeLayerId}
                 data-hidden={!l.visible}
-                data-dim={dim}
+                data-dim={dim || (isolatedOut ? isolatedOut.has(l.id) : false)}
                 data-dragging={l.id === dragId}
                 style={{ paddingLeft: 8 + depth * 14 + (clip === "member" ? 14 : 0) } as React.CSSProperties}
                 draggable={editingId !== l.id && !filterActive}
@@ -663,6 +682,19 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
       <div className={styles.layerFooter}>
         <button type="button" title="New layer" onClick={api.add}>
           <Plus size={15} />
+        </button>
+        <button
+          type="button"
+          title={
+            api.isolatedIds
+              ? "Leave isolate mode — show every layer again"
+              : "Isolate the selected layers (Ctrl+Alt+L) — a view only, nothing is changed"
+          }
+          aria-label={api.isolatedIds ? "Exit isolate mode" : "Isolate selected layers"}
+          data-on={api.isolatedIds ? true : undefined}
+          onClick={() => api.toggleIsolate()}
+        >
+          {api.isolatedIds ? <ScanEye size={15} /> : <Focus size={15} />}
         </button>
         <button
           type="button"
