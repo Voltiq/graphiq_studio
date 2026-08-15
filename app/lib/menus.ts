@@ -83,6 +83,8 @@ export const MENUS: Menu[] = [
       { label: "Ungroup", action: "layer-ungroup" },
       { label: "Isolate layers", shortcut: "Ctrl+Alt+L", separatorAfter: true, action: "layer-isolate" },
       { label: "Merge down", shortcut: "Ctrl+E", action: "layer-merge-down" },
+      { label: "Merge visible", action: "layer-merge-visible" },
+      { label: "Stamp visible", shortcut: "Ctrl+Alt+Shift+E", action: "layer-stamp-visible" },
       { label: "Flatten image", action: "layer-flatten" },
       { label: "Clipping mask", shortcut: "Ctrl+Alt+G", separatorAfter: true, action: "layer-clip" },
       { label: "Add layer mask", action: "mask-add" },

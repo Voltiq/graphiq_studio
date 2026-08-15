@@ -79,6 +79,8 @@ const RECORDABLE_EXACT = new Set<string>([
   "layer-group",
   "layer-ungroup",
   "layer-merge-down",
+  "layer-merge-visible",
+  "layer-stamp-visible",
   "layer-flatten",
   "layer-clip",
   "mask-add",

@@ -32,6 +32,12 @@ import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/pr
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
 import { styleToPatch, type LayerStylePreset } from "../lib/styleio";
 import {
+  mergeVisibleIsNoop,
+  mergeVisiblePlan,
+  stampVisiblePlan,
+  visibleLeafIds,
+} from "../lib/merge-visible";
+import {
   applyIsolation,
   hiddenByIsolation,
   normalizeIsolation,
@@ -3168,6 +3174,48 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     });
   };
 
+  /**
+   * Merge Visible — collapse everything on screen into one layer.
+   *
+   * Reads `active.layers`, never the isolate-derived view: a document operation
+   * must see the document. Merging while isolated therefore merges everything
+   * that is really visible, not just what is being soloed.
+   */
+  const mergeVisibleOp = () => {
+    const before = active.layers;
+    if (!visibleLeafIds(before).length) {
+      showToast("Nothing visible to merge.");
+      return;
+    }
+    if (mergeVisibleIsNoop(before)) {
+      showToast("Only one visible layer — nothing to merge into.");
+      return;
+    }
+    const tid = nextLeafId();
+    const plan = mergeVisiblePlan(before, tid);
+    commitLayerChange("Merge Visible", before, selNow(), plan.tree, single(tid), () => {
+      // Composite from the PRE-merge tree: it still has the layers being merged,
+      // and drawStack already honours visibility, so the result is exactly what
+      // was on screen.
+      paintRef.current?.rasterize(tid, before, plan.freeIds);
+    });
+  };
+
+  /** Stamp Visible — the same composite, as a NEW layer, originals untouched. */
+  const stampVisibleOp = () => {
+    const before = active.layers;
+    if (!visibleLeafIds(before).length) {
+      showToast("Nothing visible to stamp.");
+      return;
+    }
+    const tid = nextLeafId();
+    const after = stampVisiblePlan(before, tid, active.activeLayerId);
+    commitLayerChange("Stamp Visible", before, selNow(), after, single(tid), () => {
+      // No ids to free — that is the entire difference from Merge Visible.
+      paintRef.current?.rasterize(tid, before, []);
+    });
+  };
+
   const flattenImage = () => {
     const before = active.layers;
     if (before.length === 0) return;
@@ -5779,7 +5827,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       if (al) ungroupLayerOp(al);
     } else if (actionId === "layer-isolate") {
       toggleIsolate();
-    } else if (actionId === "layer-merge-down") mergeSelected();
+    } else if (actionId === "layer-merge-visible") mergeVisibleOp();
+    else if (actionId === "layer-stamp-visible") stampVisibleOp();
+    else if (actionId === "layer-merge-down") mergeSelected();
     else if (actionId === "layer-flatten") flattenImage();
     else if (actionId === "mask-add") addMaskOp("reveal");
     else if (actionId === "mask-add-hide") addMaskOp("hide");
