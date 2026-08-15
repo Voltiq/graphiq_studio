@@ -26,6 +26,7 @@ import {
 } from "../lib/vector-mask";
 import { coerceBlendingOptions, type KnockoutMode } from "../lib/knockout";
 import { textFxCount } from "../lib/text-fx";
+import { DEFAULT_GLOBAL_LIGHT, sanitizeGlobalLight, type GlobalLight } from "../lib/global-light";
 import { extractICCProfile } from "../lib/icc";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
@@ -525,6 +526,23 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [clone, setClone] = useState<CloneSettings>(DEFAULT_CLONE);
   const [dodge, setDodge] = useState<DodgeSettings>(DEFAULT_DODGE);
   const [textSettings, setTextSettings] = useState<TextSettings>(DEFAULT_TEXT);
+  // Global light is DOCUMENT state, not per-layer: one angle every effect that
+  // opts in follows, so turning it anywhere turns it everywhere.
+  const [globalLight, setGlobalLightState] = useState<GlobalLight>(DEFAULT_GLOBAL_LIGHT);
+  const globalLightRef = useRef(globalLight);
+  globalLightRef.current = globalLight;
+  /** Restore the document light when a project loads (v20+; older files use the
+   *  default, which is what every effect was authored against anyway). */
+  const restoreGlobalLight = (raw: unknown) => {
+    const l = sanitizeGlobalLight(raw);
+    setGlobalLightState(l);
+    paintRef.current?.setGlobalLight(l);
+  };
+  const applyGlobalLight = (l: GlobalLight) => {
+    const next = sanitizeGlobalLight(l);
+    setGlobalLightState(next);
+    paintRef.current?.setGlobalLight(next);
+  };
   const [cropSettings, setCropSettings] = useState<CropSettings>(DEFAULT_CROP);
   // The pending crop rectangle (doc coords) while the crop tool is active; null
   // means no crop is in progress. Edited interactively on the canvas overlay and
@@ -3512,6 +3530,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         width: d.width,
         height: d.height,
         dpi: d.dpi,
+        // Document state, not per-layer — saved so a reopened file keeps the
+        // lighting the effects in it were authored against.
+        globalLight: globalLightRef.current,
         layers: d.layers,
         activeLayerId: d.activeLayerId,
         selectedLayerIds: d.selectedLayerIds,
@@ -3882,6 +3903,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     };
     setDocs((ds) => [...ds, doc]);
     if (activate) setActiveId(docId);
+    // v20; older files fall back to the default, which is what every effect in
+    // them was authored against anyway.
+    if (activate) restoreGlobalLight((p as { globalLight?: unknown }).globalLight);
     if (p.foreground) setForeground(p.foreground);
     if (p.background) setBackground(p.background);
     const channelLoads = (p.channelImages ?? [])
@@ -6727,6 +6751,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
                   layers: updateNode(d.layers, layerStyleTarget, { blendIf: b }),
                 }))
               }
+              globalLight={globalLight}
+              onGlobalLight={applyGlobalLight}
               fillOpacity={node.fillOpacity}
               knockout={node.knockout}
               onBlending={(patch) =>

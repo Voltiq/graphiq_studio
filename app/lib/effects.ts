@@ -19,6 +19,8 @@ export interface ShadowFX {
   distance: number; // px
   spread: number; // %
   size: number; // px (blur)
+  /** Follow the document's global light instead of this effect's own angle. */
+  useGlobalLight?: boolean;
 }
 export interface GlowFX {
   enabled: boolean;
@@ -77,6 +79,8 @@ export interface BevelFX {
   shadowMode: FxBlend;
   shadowColor: string;
   shadowOpacity: number;
+  /** Follow the document's global light (angle AND altitude). */
+  useGlobalLight?: boolean;
 }
 
 export interface LayerEffects {
@@ -140,6 +144,7 @@ const SHADOW = (over: Partial<ShadowFX> = {}): ShadowFX => ({
   distance: 8,
   spread: 0,
   size: 10,
+  useGlobalLight: true,
   ...over,
 });
 const GLOW = (over: Partial<GlowFX> = {}): GlowFX => ({
@@ -178,6 +183,7 @@ export const DEFAULT_FX: Record<FxKey, () => NonNullable<LayerEffects[FxKey]>> =
     soften: 0,
     angle: 120,
     altitude: 30,
+    useGlobalLight: true,
     highlightMode: "Screen",
     highlightColor: "#ffffff",
     highlightOpacity: 75,

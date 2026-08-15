@@ -71,6 +71,12 @@ import { NO_REFINE, applyRefine, refineActive, type RefineEdge } from "./refine-
 import { modifyMask, type ModifyOp } from "./select-modify";
 import { vectorMaskActive, vectorMaskHash } from "./vector-mask";
 import { fillAlpha, fillOpacityActive, knockoutActive, knockoutOf } from "./knockout";
+import {
+  DEFAULT_GLOBAL_LIGHT,
+  globalLightKey,
+  resolveGlobalLight,
+  type GlobalLight,
+} from "./global-light";
 import { pathToSvgD } from "./paths";
 import {
   boundsOf as gapBounds,
@@ -526,6 +532,9 @@ export interface EngineHandle {
     op: ModifyOp,
     px: number,
   ) => Rect[];
+  /** Global light — one angle shared by shadows and bevels that follow it. */
+  setGlobalLight: (l: GlobalLight) => void;
+  getGlobalLight: () => GlobalLight;
   setRefineEdge: (r: RefineEdge) => void;
   getRefineEdge: () => RefineEdge;
   setColorSpace: (ws: WorkingSpace) => void;
@@ -802,6 +811,8 @@ export class PaintEngine {
   private cs: PredefinedColorSpace = "srgb"; // canvas (storage/display) space
   /** Refine Edge state; feather rides the existing per-call scalar. */
   private refine: RefineEdge = NO_REFINE;
+  /** Document-level lighting angle shared by effects that opt in. */
+  private globalLight: GlobalLight = { ...DEFAULT_GLOBAL_LIGHT };
   private ws: WorkingSpace = "srgb"; // working space (adjustment math)
   // Soft proofing (VIEW-only): simulate the target space / mark its gamut.
   private proofTarget: ProofTarget = "srgb";
@@ -3539,6 +3550,15 @@ export class PaintEngine {
     return maskToRects(outMask, this.w, { x0, y0, x1, y1 });
   }
 
+  setGlobalLight(l: GlobalLight) {
+    this.globalLight = l;
+    this.clearRenderCaches();
+    this.emitChange();
+  }
+  getGlobalLight(): GlobalLight {
+    return this.globalLight;
+  }
+
   setRefineEdge(r: RefineEdge) {
     this.refine = r;
     this.emitChange();
@@ -3992,6 +4012,8 @@ export class PaintEngine {
     // it belongs in the intrinsic key rather than in effectiveKey.
     const fo = fillOpacityActive(node.fillOpacity) ? Math.round(node.fillOpacity!) : "x";
     const fx = hasEnabledFx(node.effects) ? fnv(fxHash(node.effects)) : "0";
+    // The light lives on the DOCUMENT, so `fxHash` cannot see it changing.
+    const gl = globalLightKey(node.effects, this.globalLight);
     const flt = hasEnabledFilters(node.filters) ? fnv(filterStackHash(node.filters)) : "0";
     // The filter mask only shapes the render while the stack actually runs.
     const fmv =
@@ -4001,12 +4023,12 @@ export class PaintEngine {
     if (node.type === "group") {
       let sig = "";
       for (const c of node.children) sig += this.effectiveKey(c) + ";";
-      return `G${fnv(sig)}|${flt}|${fmv}|${fx}|${mv}|${vm}|${fo}|${this.cs}|${this.docEpoch}`;
+      return `G${fnv(sig)}|${flt}|${fmv}|${fx}|${gl}|${mv}|${vm}|${fo}|${this.cs}|${this.docEpoch}`;
     }
     const pv = this.pixelVersion.get(node.id) ?? 0;
     // A Fill layer's render depends on its spec, not stored pixels.
     const fillH = node.type === "layer" && node.fill ? fnv(this.specHash(node.fill)) : "0";
-    return `L${pv}|${fillH}|${flt}|${fmv}|${fx}|${mv}|${vm}|${fo}|${this.cs}|${this.docEpoch}`;
+    return `L${pv}|${fillH}|${flt}|${fmv}|${fx}|${gl}|${mv}|${vm}|${fo}|${this.cs}|${this.docEpoch}`;
   }
 
   /** What a parent's merge depends on for one child: the child's intrinsic key
@@ -4232,7 +4254,12 @@ export class PaintEngine {
     // the group's own effects — same order as a leaf: pixels → filters → fx.
     const filtered = hasEnabledFilters(node.filters) ? this.filteredProduct(node, bc) : bc;
     return styled
-      ? renderStyled(filtered, node.effects!, this.cs, fillAlpha(node.fillOpacity)).canvas
+      ? renderStyled(
+          filtered,
+          resolveGlobalLight(node.effects, this.globalLight)!,
+          this.cs,
+          fillAlpha(node.fillOpacity),
+        ).canvas
       : filtered;
   }
 
@@ -4418,7 +4445,8 @@ export class PaintEngine {
       const draft = this.draftScale();
       if (draft < 1) return this.styledLeafDraft(node, src, draft);
     }
-    return renderStyled(src, node.effects!, this.cs, fillAlpha(node.fillOpacity)).canvas;
+    const litFx = resolveGlobalLight(node.effects, this.globalLight)!;
+    return renderStyled(src, litFx, this.cs, fillAlpha(node.fillOpacity)).canvas;
   }
 
   /** Effects rendered on a downscaled silhouette and upscaled back. `fx.scale`
@@ -4438,7 +4466,7 @@ export class PaintEngine {
     small.ctx.imageSmoothingQuality = "low";
     small.ctx.drawImage(src, 0, 0, sw, sh);
 
-    const fx = node.effects!;
+    const fx = resolveGlobalLight(node.effects, this.globalLight)!;
     const scaled = { ...fx, scale: (fx.scale ?? 100) * scale };
     const styled = renderStyled(small.c, scaled, this.cs, fillAlpha(node.fillOpacity)).canvas;
 

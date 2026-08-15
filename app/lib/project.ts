@@ -34,6 +34,8 @@ export interface ProjectFile {
   height: number;
   /** Pixels per inch (physical-unit rulers + print size). Absent in old files. */
   dpi?: number;
+  /** Document lighting angle shared by effects that follow it (v20). */
+  globalLight?: { angle: number; altitude: number };
   foreground: string;
   background: string;
   activeLayerId: string | null;
@@ -77,6 +79,8 @@ export interface ProjectInput {
   width: number;
   height: number;
   dpi?: number;
+  /** Document lighting angle shared by effects that follow it (v20). */
+  globalLight?: { angle: number; altitude: number };
   layers: LayerNode[];
   activeLayerId: string | null;
   selectedLayerIds: string[];
@@ -124,11 +128,12 @@ export function serializeProject(
   const channels = doc.channels ?? [];
   return {
     format: "graphiq-project",
-    version: 19, // v19 adds vector masks (v18 saved selections, v17 guides, v16 gradient text fill)
+    version: 20, // v20 adds global light (v19 vector masks + blending options, v18 saved selections)
     name: doc.name,
     width: doc.width,
     height: doc.height,
     dpi: doc.dpi ?? 300,
+    globalLight: doc.globalLight,
     foreground: colors.foreground,
     background: colors.background,
     activeLayerId: doc.activeLayerId,

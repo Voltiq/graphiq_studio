@@ -18,6 +18,7 @@ import styles from "./LayerStyleDialog.module.scss";
 import BlendIfControl from "./BlendIfControl";
 import type { BlendIf } from "../lib/blendif";
 import { KNOCKOUT_MODES, fillOpacityOf, knockoutOf, type KnockoutMode } from "../lib/knockout";
+import { lightFromEffect, type GlobalLight, type LitKey } from "../lib/global-light";
 import { ColorChip, Segmented, Select, Slider, Toggle } from "./Controls";
 import { GradientEditor } from "./GradientControl";
 import { parseColor, toHex6 } from "../lib/color";
@@ -100,6 +101,8 @@ export default function LayerStyleDialog({
   onBlendIf,
   fillOpacity,
   knockout,
+  globalLight,
+  onGlobalLight,
   onBlending,
   gradientStorageKey = GRADIENT_PRESETS_KEY,
   onChange,
@@ -115,6 +118,9 @@ export default function LayerStyleDialog({
   /** Blending Options ▸ fill opacity + knockout (layer-level, like Blend If). */
   fillOpacity?: number;
   knockout?: KnockoutMode;
+  /** Document-level lighting angle; effects can follow it instead of their own. */
+  globalLight?: GlobalLight;
+  onGlobalLight?: (l: GlobalLight) => void;
   onBlending?: (patch: { fillOpacity?: number; knockout?: KnockoutMode }) => void;
   /** Preset bucket for the gradient overlay's editor (shared with the
       Gradient tool unless the "share saved gradients" preference is off). */
@@ -171,11 +177,31 @@ export default function LayerStyleDialog({
             </Group>
             <Group title="Geometry">
               <Grid>
-                <Slider label="Angle" min={0} max={360} unit="°" value={s.angle} onChange={(v) => set(sel, { angle: v })} />
+                <Slider
+                  label="Angle"
+                  min={0}
+                  max={360}
+                  unit="°"
+                  value={s.useGlobalLight && globalLight ? globalLight.angle : s.angle}
+                  onChange={(v) =>
+                    // Following the light means the slider steers the DOCUMENT,
+                    // not this one effect — that is the whole point of it.
+                    s.useGlobalLight && onGlobalLight && globalLight
+                      ? onGlobalLight(lightFromEffect(globalLight, sel as LitKey, { angle: v }))
+                      : set(sel, { angle: v })
+                  }
+                />
                 <Slider label="Distance" min={0} max={250} unit="px" value={s.distance} onChange={(v) => set(sel, { distance: v })} />
                 <Slider label="Spread" min={0} max={100} unit="%" value={s.spread} onChange={(v) => set(sel, { spread: v })} />
                 <Slider label="Size" min={0} max={250} unit="px" value={s.size} onChange={(v) => set(sel, { size: v })} />
               </Grid>
+              {onGlobalLight && (
+                <Toggle
+                  label="Use global light"
+                  checked={!!s.useGlobalLight}
+                  onChange={(v) => set(sel, { useGlobalLight: v })}
+                />
+              )}
             </Group>
           </>
         );
@@ -358,9 +384,38 @@ export default function LayerStyleDialog({
             </Group>
             <Group title="Light">
               <Grid>
-                <Slider label="Angle" min={0} max={360} unit="°" value={b.angle} onChange={(v) => set("bevel", { angle: v })} />
-                <Slider label="Altitude" min={0} max={90} unit="°" value={b.altitude} onChange={(v) => set("bevel", { altitude: v })} />
+                <Slider
+                  label="Angle"
+                  min={0}
+                  max={360}
+                  unit="°"
+                  value={b.useGlobalLight && globalLight ? globalLight.angle : b.angle}
+                  onChange={(v) =>
+                    b.useGlobalLight && onGlobalLight && globalLight
+                      ? onGlobalLight(lightFromEffect(globalLight, "bevel", { angle: v }))
+                      : set("bevel", { angle: v })
+                  }
+                />
+                <Slider
+                  label="Altitude"
+                  min={0}
+                  max={90}
+                  unit="°"
+                  value={b.useGlobalLight && globalLight ? globalLight.altitude : b.altitude}
+                  onChange={(v) =>
+                    b.useGlobalLight && onGlobalLight && globalLight
+                      ? onGlobalLight(lightFromEffect(globalLight, "bevel", { altitude: v }))
+                      : set("bevel", { altitude: v })
+                  }
+                />
               </Grid>
+              {onGlobalLight && (
+                <Toggle
+                  label="Use global light"
+                  checked={!!b.useGlobalLight}
+                  onChange={(v) => set("bevel", { useGlobalLight: v })}
+                />
+              )}
             </Group>
             <Group title="Highlight">
               <Grid>
