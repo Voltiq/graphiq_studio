@@ -69,6 +69,8 @@ import { GpuToneRenderer } from "./gpu";
 import { healPadding, healRegion } from "./heal";
 import { NO_REFINE, applyRefine, refineActive, type RefineEdge } from "./refine-edge";
 import { modifyMask, type ModifyOp } from "./select-modify";
+import { vectorMaskActive, vectorMaskHash } from "./vector-mask";
+import { pathToSvgD } from "./paths";
 import {
   boundsOf as gapBounds,
   dilateCoverage,
@@ -813,6 +815,9 @@ export class PaintEngine {
   // mutation, scoped to the changed rect — never per composite frame. The mask's
   // own alpha is folded in (A = R × maskAlpha/255) so eraser strokes read right.
   private maskAlpha = new Map<string, Layer>();
+  /** Rasterised vector masks, keyed by node id; the entry carries the hash it
+   *  was built from so an anchor drag re-renders and nothing else does. */
+  private vectorMaskCache = new Map<string, { key: string; c: HTMLCanvasElement }>();
   // Which surface paint tools target, per layer ("pixels" default; "mask" only
   // while that layer has a mask).
   private surfaces = new Map<string, ActiveSurface>();
@@ -3901,9 +3906,11 @@ export class PaintEngine {
    *  returns `src` unchanged when the node has no enabled mask. One extra
    *  destination-in drawImage against the cached alpha — no per-pixel JS loop. */
   private maskedSource(node: LayerNode, src: HTMLCanvasElement): HTMLCanvasElement {
-    if (!node.mask?.enabled) return src;
-    const alpha = this.maskDisplay(node.id);
-    if (!alpha) return src;
+    const alpha = node.mask?.enabled ? this.maskDisplay(node.id) : null;
+    // Both masks MULTIPLY: a pixel survives only where the raster mask and the
+    // vector mask both let it through.
+    const vec = this.vectorMaskAlpha(node);
+    if (!alpha && !vec) return src;
     if (!this.maskTmp || this.maskTmp.c.width !== this.w || this.maskTmp.c.height !== this.h)
       this.maskTmp = this.mk(this.w, this.h);
     const t = this.maskTmp;
@@ -3912,9 +3919,48 @@ export class PaintEngine {
     t.ctx.clearRect(0, 0, this.w, this.h);
     t.ctx.drawImage(src, 0, 0);
     t.ctx.globalCompositeOperation = "destination-in";
-    t.ctx.drawImage(alpha, 0, 0);
+    if (alpha) t.ctx.drawImage(alpha, 0, 0);
+    if (vec) t.ctx.drawImage(vec, 0, 0);
     t.ctx.globalCompositeOperation = "source-over";
     return t.c;
+  }
+
+  /**
+   * The vector mask as a doc-sized alpha canvas (RGB irrelevant, alpha is the
+   * coverage). Rasterised with Path2D so the edge is anti-aliased by the same
+   * rasteriser that draws every other vector in the app, rather than by a
+   * hand-rolled scan converter.
+   *
+   * An OPEN path is filled as though closed: a mask is an area, and Photoshop
+   * treats a vector mask's path the same way.
+   */
+  private vectorMaskAlpha(node: LayerNode): HTMLCanvasElement | null {
+    const vm = node.vectorMask;
+    if (!vectorMaskActive(vm)) return null;
+    const key = `${vectorMaskHash(vm)}|${this.w}x${this.h}`;
+    const hit = this.vectorMaskCache.get(node.id);
+    if (hit && hit.key === key) return hit.c;
+    const buf = this.mk(this.w, this.h);
+    const p = new Path2D(pathToSvgD(vm.anchors, true));
+    buf.ctx.fillStyle = "#fff";
+    if (vm.inverted) {
+      buf.ctx.fillRect(0, 0, this.w, this.h);
+      buf.ctx.globalCompositeOperation = "destination-out";
+      buf.ctx.fill(p);
+      buf.ctx.globalCompositeOperation = "source-over";
+    } else {
+      buf.ctx.fill(p);
+    }
+    let out = buf.c;
+    if (vm.feather > 0) {
+      const soft = this.mk(this.w, this.h);
+      soft.ctx.filter = `blur(${vm.feather}px)`;
+      soft.ctx.drawImage(buf.c, 0, 0);
+      soft.ctx.filter = "none";
+      out = soft.c;
+    }
+    this.vectorMaskCache.set(node.id, { key, c: out });
+    return out;
   }
 
   // ---- render-graph keys (Spec 06) ------------------------------------------
@@ -3940,6 +3986,7 @@ export class PaintEngine {
   /** Intrinsic dependency key of a leaf/group (pre-opacity/blend render). */
   private nodeKey(node: LayerNode): string {
     const mv = node.mask?.enabled ? (this.maskVersion.get(node.id) ?? 0) : "x";
+    const vm = vectorMaskActive(node.vectorMask) ? fnv(vectorMaskHash(node.vectorMask)) : "x";
     const fx = hasEnabledFx(node.effects) ? fnv(fxHash(node.effects)) : "0";
     const flt = hasEnabledFilters(node.filters) ? fnv(filterStackHash(node.filters)) : "0";
     // The filter mask only shapes the render while the stack actually runs.
@@ -3950,12 +3997,12 @@ export class PaintEngine {
     if (node.type === "group") {
       let sig = "";
       for (const c of node.children) sig += this.effectiveKey(c) + ";";
-      return `G${fnv(sig)}|${flt}|${fmv}|${fx}|${mv}|${this.cs}|${this.docEpoch}`;
+      return `G${fnv(sig)}|${flt}|${fmv}|${fx}|${mv}|${vm}|${this.cs}|${this.docEpoch}`;
     }
     const pv = this.pixelVersion.get(node.id) ?? 0;
     // A Fill layer's render depends on its spec, not stored pixels.
     const fillH = node.type === "layer" && node.fill ? fnv(this.specHash(node.fill)) : "0";
-    return `L${pv}|${fillH}|${flt}|${fmv}|${fx}|${mv}|${this.cs}|${this.docEpoch}`;
+    return `L${pv}|${fillH}|${flt}|${fmv}|${fx}|${mv}|${vm}|${this.cs}|${this.docEpoch}`;
   }
 
   /** What a parent's merge depends on for one child: the child's intrinsic key
@@ -4114,12 +4161,14 @@ export class PaintEngine {
 
   private renderNode(node: LayerNode): HTMLCanvasElement | null {
     if (node.type === "adjustment") return null; // handled by drawStack
-    // Plain leaf (no fill, no mask, no effects, no smart filters): its layer
-    // canvas IS the intrinsic render — alias it, no copy, no cache entry needed.
+    // Plain leaf (no fill, no mask of EITHER kind, no effects, no smart
+    // filters): its layer canvas IS the intrinsic render — alias it, no copy,
+    // no cache entry needed.
     if (
       node.type === "layer" &&
       !node.fill &&
       !node.mask?.enabled &&
+      !vectorMaskActive(node.vectorMask) &&
       !hasEnabledFx(node.effects) &&
       !hasEnabledFilters(node.filters)
     ) {
@@ -4142,7 +4191,9 @@ export class PaintEngine {
     if (!styled) return null;
     let result: HTMLCanvasElement;
     let owned: boolean;
-    if (node.mask?.enabled) {
+    // Either mask sends the render through maskedSource — a layer carrying only
+    // a VECTOR mask must not take the unmasked fast path.
+    if (node.mask?.enabled || vectorMaskActive(node.vectorMask)) {
       // maskedSource writes into a shared temp — copy into an owned buffer.
       const src = this.maskedSource(node, styled);
       const own = this.mk(this.w, this.h);

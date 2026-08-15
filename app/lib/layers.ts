@@ -6,6 +6,8 @@ import type { GradientStop, GradientType, VectorData } from "./tools";
 
 /** Per-layer mask metadata. The mask *pixels* live in the paint engine (keyed by
  *  layer id, mirroring layer pixels); only this metadata lives on the tree. */
+import type { VectorMask } from "./vector-mask";
+
 export interface MaskMeta {
   /** Mask participates in compositing when true; false = temporarily disabled. */
   enabled: boolean;
@@ -94,6 +96,10 @@ export interface LayerBase {
   linkKey?: string;
   /** Present ⇒ the layer carries a raster mask (pixels held by the engine). */
   mask?: MaskMeta;
+  /** A pen path used as a mask, alongside (and multiplied with) the raster one.
+   *  The path stays the source of truth, so it re-rasterises crisply at any
+   *  document size — see vector-mask.ts. */
+  vectorMask?: VectorMask;
   /** Non-destructive layer effects (drop shadow, glow, stroke, …); rendered at
    *  composite time from the layer's alpha — never baked into pixels. */
   effects?: LayerEffects;
@@ -187,6 +193,7 @@ export type LayerPatch = Partial<
   vector?: VectorData;
   fill?: FillSpec | undefined;
   mask?: MaskMeta | undefined;
+  vectorMask?: VectorMask | undefined;
   adjustment?: AdjustmentSpec;
   clipped?: boolean;
   effects?: LayerEffects | undefined;

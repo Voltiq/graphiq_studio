@@ -4,7 +4,7 @@ A browser-based, **fully client-side** raster photo editor with a non-destructiv
 
 **Stack:** Next.js 16 (App Router) · React 19 (with the React Compiler) · TypeScript (strict) · SCSS modules · `lucide-react` icons. **No image-processing libraries** — every pixel operation (compositing, blending, blurs, filters, tone curves, selections, layer effects, history) is hand-written against the Canvas 2D API and `ImageData`.
 
-**Status:** the destructive editor (19 tools, 19 blend modes, selections, live sessions, colour management) plus the **full non-destructive stack** — layer **masks**, **adjustment layers**, **layer effects**, **Curves & Levels**, **clipping masks**, **smart filters**, and the **render-graph cache**. Project files (`.gproj`, formerly `.aproj` — old files still open) are at **format version 11** (v8 filter masks, v9 document metadata, v10 colour labels, v11 stored paths). See [Part 3 — Known limitations](#part-3--known-limitations--not-yet-implemented) for what's partial or absent.
+**Status:** the destructive editor (19 tools, 19 blend modes, selections, live sessions, colour management) plus the **full non-destructive stack** — layer **masks**, **adjustment layers**, **layer effects**, **Curves & Levels**, **clipping masks**, **smart filters**, and the **render-graph cache**. Project files (`.gproj`, formerly `.aproj` — old files still open) are at **format version 19** (v8 filter masks, v9 metadata, v10 colour labels, v11 stored paths, v14 fill layers, v18 saved selections, v19 vector masks). See [Part 3 — Known limitations](#part-3--known-limitations--not-yet-implemented) for what's partial or absent.
 
 This document is written so someone **without the code** understands exactly what exists, what works, **how** it works, and what does not.
 
@@ -259,6 +259,13 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - Per-document **working colour space: sRGB or Display-P3** (feature-detected). Layer/scratch/group/accumulator/export buffers are all in that space, so wide-gamut content is preserved end to end.
 - The **brush `stroke` buffer stays sRGB** because brush/UI colours are authored as sRGB hex; compositing onto a P3 layer lets the browser convert correctly. Layer-effect colours work the same way (sRGB hex filled onto a P3 buffer).
 - `setColorSpace` converts existing layers by drawing them through a new-space canvas; masks are **not** converted (coverage, not colour); effect/tone caches invalidate.
+
+### Vector masks
+
+- **Layer ▸ Vector mask from path** turns the Pen tool's current path into a mask, with **Invert** and **Delete** beside it. A layer can carry a vector mask AND a raster mask at once — they **multiply**, so a pixel survives only where both let it through: the raster mask paints softness and detail, the vector mask cuts a clean, resolution-independent edge.
+- The **path stays the source of truth**, not a raster. It is a few hundred bytes in the project file instead of a full-canvas PNG, it re-rasterises crisply at any document size, and it remains re-editable. The engine rasterises it with `Path2D` — the same anti-aliasing every other vector in the app gets — and caches the result keyed by a hash of the anchors, handles, inversion and feather, so moving one anchor re-renders that layer and nothing else. The hash rounds to a tenth of a pixel: finer than any visible change, but coarse enough that float jitter cannot churn the cache every frame. An open path is filled as though closed, because a mask is an area.
+- Two fast paths had to learn about it, and both would have silently ignored it: `renderNode` aliases a "plain leaf" straight to its layer canvas when it has no fill, mask, effects or filters, and the masking step itself was guarded on the raster mask alone. A vector-mask-only layer matched both and composited completely unmasked — the feature was correct and simply unreachable. Verified on the composite: a full-canvas fill clipped to a triangle goes 120000 → 27300 opaque px, inverting gives 92700, and **27300 + 92700 = 120000** exactly.
+- Persists in `.gproj` (**format v19**) and survives a save/reopen round-trip unchanged (27300 → 27300 px). That needed wiring by hand into all three node branches of the loader, which builds nodes field by field rather than spreading them — a new field is dropped otherwise, and it typechecks either way.
 
 ### Transform selection by numbers
 

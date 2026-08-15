@@ -18,6 +18,12 @@ import TooltipHost from "./Tooltip";
 import { canvasSpaceOf, type ProofTarget, type WorkingSpace } from "../lib/colorspace";
 import { NO_REFINE, decontaminate, type RefineEdge } from "../lib/refine-edge";
 import { boxOf, pivotOf, sanitizeBox, transformRects } from "../lib/selection-transform";
+import {
+  MIN_ANCHORS,
+  coerceVectorMask,
+  defaultVectorMask,
+  type VectorMask,
+} from "../lib/vector-mask";
 import { extractICCProfile } from "../lib/icc";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
@@ -2493,6 +2499,69 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     fxStructural(id, { ...cur, [key]: eff } as LayerEffects, enabled ? "Enable Effect" : "Disable Effect");
   };
 
+  // ---- Vector masks -------------------------------------------------------
+  // The PATH stays the source of truth; the engine rasterises it and caches the
+  // result by hash. Stored on the node like effects, so it rides the existing
+  // structural-undo and .gproj spread for free.
+  const vectorMaskStructural = (
+    id: string,
+    vectorMask: VectorMask | undefined,
+    label: string,
+  ) => {
+    const d = activeDocRef.current;
+    if (!findNode(d.layers, id)) return;
+    const docId = d.id;
+    const sel = selNow();
+    const before = d.layers;
+    const after = updateNode(before, id, { vectorMask });
+    setDocSel(docId, after, sel);
+    paintRef.current?.pushStructural(
+      label,
+      () => setDocSel(docId, before, sel),
+      () => setDocSel(docId, after, sel),
+    );
+  };
+  const addVectorMask = () => {
+    const d = activeDocRef.current;
+    const id = d.activeLayerId;
+    if (!id || !findNode(d.layers, id)) {
+      showToast("Select a layer to mask.");
+      return;
+    }
+    // The Work Path is whatever the Pen tool last committed — the same path the
+    // Paths panel shows at the top, so "from path" means what it looks like.
+    const p = (d.paths ?? []).find((x) => x.id === WORK_PATH_ID) ?? (d.paths ?? [])[0];
+    if (!p || p.anchors.length < MIN_ANCHORS) {
+      showToast(`Draw a path with the Pen tool first (at least ${MIN_ANCHORS} points).`);
+      return;
+    }
+    vectorMaskStructural(id, defaultVectorMask(p.anchors), "Add Vector Mask");
+  };
+  const invertVectorMask = () => {
+    const d = activeDocRef.current;
+    const id = d.activeLayerId;
+    const node = id ? findNode(d.layers, id) : null;
+    if (!node?.vectorMask) {
+      showToast("This layer has no vector mask.");
+      return;
+    }
+    vectorMaskStructural(
+      id!,
+      { ...node.vectorMask, inverted: !node.vectorMask.inverted },
+      "Invert Vector Mask",
+    );
+  };
+  const deleteVectorMask = () => {
+    const d = activeDocRef.current;
+    const id = d.activeLayerId;
+    const node = id ? findNode(d.layers, id) : null;
+    if (!node?.vectorMask) {
+      showToast("This layer has no vector mask.");
+      return;
+    }
+    vectorMaskStructural(id!, undefined, "Delete Vector Mask");
+  };
+
   const copyLayerStyleOp = (id: string) => {
     const fx = findNode(activeDocRef.current.layers, id)?.effects;
     setFxClipboard(fx ? structuredClone(fx) : null);
@@ -3671,6 +3740,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         const mask = n.mask ? { mask: { enabled: n.mask.enabled, linked: n.mask.linked } } : {};
         const fx = n.effects ? { effects: n.effects } : {};
         const clip = n.clipped ? { clipped: true } : {};
+        // v19: vector mask (a pen path, not a raster — see vector-mask.ts).
+        // Typed explicitly: letting TS infer `{vectorMask} | {}` and spreading it
+        // into all three node branches made the union too complex to represent.
+        const vmRaw = coerceVectorMask((n as { vectorMask?: unknown }).vectorMask);
+        const vmask: { vectorMask?: VectorMask } = vmRaw ? { vectorMask: vmRaw } : {};
         const flt = n.filters?.length ? { filters: n.filters } : {};
         const lbl = n.label ? { label: n.label } : {}; // v10 colour label
         const lck = n.locks ? { locks: n.locks } : {}; // v12 edit locks
@@ -3698,6 +3772,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             blend: n.blend,
             expanded: n.expanded,
             ...mask,
+            ...vmask,
             ...fx,
             ...clip,
             ...flt,
@@ -3722,6 +3797,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             adjustment: n.adjustment,
             clipped: !!n.clipped,
             ...mask,
+            ...vmask,
             ...fx,
             ...lbl,
             ...lck,
@@ -3743,6 +3819,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           ...(n.vector ? { vector: n.vector } : {}),
           ...(n.fill ? { fill: n.fill } : {}), // v14 fill layer (no pixel data)
           ...mask,
+          ...vmask,
           ...fx,
           ...clip,
           ...flt,
@@ -5398,6 +5475,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "select-deselect") deselect();
     else if (actionId === "select-reselect") reselect();
     else if (actionId === "select-inverse") invertSelection();
+    else if (actionId === "vmask-add") addVectorMask();
+    else if (actionId === "vmask-invert") invertVectorMask();
+    else if (actionId === "vmask-delete") deleteVectorMask();
     else if (actionId === "select-refine") openRefineEdge();
     else if (actionId === "select-border") setSelectModify("border");
     else if (actionId === "select-smooth") setSelectModify("smooth");

@@ -124,7 +124,7 @@ export function serializeProject(
   const channels = doc.channels ?? [];
   return {
     format: "graphiq-project",
-    version: 18, // v18 adds saved selections (v17 guides, v16 gradient text fill, v15 text warp)
+    version: 19, // v19 adds vector masks (v18 saved selections, v17 guides, v16 gradient text fill)
     name: doc.name,
     width: doc.width,
     height: doc.height,
