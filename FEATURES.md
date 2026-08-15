@@ -288,6 +288,14 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Smooth blurs then re-thresholds**, so it rounds off corners and speckle while leaving the selection HARD. Feather is the control for softness; conflating the two would leave no way to tidy a jagged edge without also blurring it.
 - Because the morphology runs on a raster, the result comes back as axis-aligned rects with any selection rotation already baked in — so the new selection is committed at angle 0 rather than being rotated a second time. Pure math in [select-modify.ts](app/lib/select-modify.ts) (30 Node checks); the browser results agree with it to the pixel (expand 28248, contract 12144, border 8896, smooth 19132 in both).
 
+### Type effects from the Text tool
+
+- An **FX popover** in the Text tool's options bar (beside Warp and Text fill) toggles and edits **drop shadow, outer glow, inner glow and stroke** without leaving the type context, plus three one-click presets — **Soft shadow, Neon glow, Outlined**.
+- Nothing re-implements the shadow/glow maths. These are the same `LayerEffects` the Layer Style dialog edits and the engine already renders from a layer's alpha, so anything set from the Text tool is visible and editable in Layer Style, is non-destructive, and re-applies automatically whenever the type re-renders.
+- What IS text-specific is the policy: seeds are **fractions of the font size** rather than the artwork defaults, because a 10 px shadow at 8 px distance is a fine drop shadow under a photo and a smear under 24 px type — a 24 px face seeds size 4 / distance 3, a 200 px face size 32. The seeded stroke sits **outside** so it cannot close up counters or thin the face, and its ink is chosen by luminance against the text colour so it is always visible. Presets **replace** the four type effects but preserve anything the popover does not surface (bevel, overlays), which can only have been set from the full dialog.
+- A new text block has no layer yet, so the choice rides `TextSettings.fx` until commit — exactly as Warp and the gradient fill do. On re-edit it is seeded back **from the layer**, so the popover always shows what is actually applied. Same preview caveat as Warp: effects render on the committed raster, not on the live contentEditable overlay, so they appear once you finish editing.
+- Measured in the browser, each in a fresh document: plain "EFFECTS" 2737 ink px, Outlined 3596, Neon glow 11218.
+
 ### Blending Options — fill opacity & knockout
 
 - **Fill opacity** scales a layer's own PIXELS but leaves its effects at full strength — a layer at fill 0 with a drop shadow keeps the shadow and loses the artwork. That is the one thing separating it from plain opacity, and it is applied at exactly one point: the layer-fill draw inside the effects renderer.

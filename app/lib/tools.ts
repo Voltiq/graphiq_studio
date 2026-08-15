@@ -438,6 +438,8 @@ export interface TextAxes {
   wdth?: number;
 }
 
+import type { LayerEffects } from "./effects";
+
 export interface TextSettings {
   fontFamily: string;
   /** Font size, px. */
@@ -468,6 +470,16 @@ export interface TextSettings {
   warp?: TextWarp;
   /** Non-solid fill (gradient); absent = the solid `color`. */
   fill?: TextFill;
+  /**
+   * Type effects carried by the TOOL — drop shadow / glows / stroke.
+   *
+   * These are layer effects, not text properties: the engine already renders
+   * them from a layer's alpha at composite time. They live here because a new
+   * text block has no layer yet, so the tool has to hold them until commit,
+   * exactly as warp and fill do. On re-edit they are seeded back from the
+   * layer, so the popover always shows what is actually applied.
+   */
+  fx?: LayerEffects;
 }
 
 /** Font choices offered in the text options bar (web-safe families, plus a

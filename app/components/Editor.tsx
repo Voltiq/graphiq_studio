@@ -25,6 +25,7 @@ import {
   type VectorMask,
 } from "../lib/vector-mask";
 import { coerceBlendingOptions, type KnockoutMode } from "../lib/knockout";
+import { textFxCount } from "../lib/text-fx";
 import { extractICCProfile } from "../lib/icc";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
@@ -2866,6 +2867,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       opacity: 100,
       blend: "Normal",
       vector: textVectorOf(spec),
+      // Type effects chosen in the Text tool's FX popover. They are ordinary
+      // layer effects — the engine renders them from the layer's alpha — so the
+      // tool only has to hand them over once the layer exists.
+      ...(textFxCount(textSettingsRef.current.fx) ? { effects: textSettingsRef.current.fx } : {}),
     };
     const node = active.activeLayerId ? findNode(before, active.activeLayerId) : null;
     let after: LayerNode[];
@@ -2891,6 +2896,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const treeAfter = updateNode(treeBefore, layerId, {
       vector: newVec,
       name: textLayerName(p.value),
+      // The FX popover was seeded from this layer on re-edit, so writing it back
+      // round-trips; a layer whose effects were never touched writes the same
+      // value it started with.
+      ...(textSettingsRef.current.fx ? { effects: textSettingsRef.current.fx } : {}),
     });
     const setLayers = (tree: LayerNode[]) =>
       setDocs((ds) => ds.map((d) => (d.id === docId ? { ...d, layers: tree } : d)));

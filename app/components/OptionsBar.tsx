@@ -8,6 +8,7 @@ import {
   Lasso as LassoIcon,
   Magnet,
   Palette,
+  Sparkle,
   PenLine,
   Waves,
   AlignCenter,
@@ -105,6 +106,15 @@ import {
   Slider as BaseSlider,
   Toggle,
 } from "./Controls";
+import {
+  TEXT_FX_KEYS,
+  TEXT_FX_PRESETS,
+  applyTextFxPreset,
+  seedTextFx,
+  textFxCount,
+  type TextFxKey,
+  type TextFxPreset,
+} from "../lib/text-fx";
 
 /** In the options bar every slider is the compact inline (label-beside) variant. */
 function Slider(props: React.ComponentProps<typeof BaseSlider>) {
@@ -641,6 +651,156 @@ interface RedEyeProps {
 interface CloneProps {
   clone: CloneSettings;
   onClone: (patch: Partial<CloneSettings>) => void;
+}
+
+/**
+ * Type effects — drop shadow, outer/inner glow and stroke, from the Text tool.
+ *
+ * These are the SAME layer effects the Layer Style dialog edits; nothing here
+ * re-implements them. The point is ergonomics: styling type should not require
+ * leaving the type context. A new text block has no layer yet, so the choices
+ * ride `text.fx` and are applied to the layer on commit — the same "bakes on
+ * commit" behaviour Warp and the gradient fill already have, which is also why
+ * the live contentEditable overlay cannot show them until you commit.
+ */
+function TextFxControl({ text, onText }: TextProps) {
+  const Slider = BaseSlider;
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ left: 0, top: 0 });
+  const fx = text.fx;
+  const on = textFxCount(fx);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation();
+        setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
+  const toggleOpen = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 330)), top: r.bottom + 6 });
+    }
+    setOpen((o) => !o);
+  };
+
+  const setKey = (key: TextFxKey, patch: object) =>
+    onText({ fx: { ...fx, [key]: { ...(fx?.[key] ?? seedTextFx(key, text.fontSize, text.color)), ...patch } } });
+  const toggleKey = (key: TextFxKey, enabled: boolean) =>
+    onText({
+      fx: {
+        ...fx,
+        [key]: enabled
+          ? { ...(fx?.[key] ?? seedTextFx(key, text.fontSize, text.color)), enabled: true }
+          : { ...(fx?.[key] ?? seedTextFx(key, text.fontSize, text.color)), enabled: false },
+      },
+    });
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={styles.iconBtn}
+        data-active={on > 0 || open}
+        title="Type effects — drop shadow, glow, stroke"
+        onClick={toggleOpen}
+      >
+        <Sparkle size={15} />
+      </button>
+      {open &&
+        createPortal(
+          <>
+            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
+            <div
+              className={styles.otPopover}
+              style={{ left: pos.left, top: pos.top }}
+              role="dialog"
+              aria-label="Type effects"
+            >
+              <span className={styles.otTitle}>Type effects</span>
+              <Segmented
+                label="Preset"
+                value=""
+                onChange={(v) =>
+                  onText({ fx: applyTextFxPreset(v as TextFxPreset, fx, text.fontSize, text.color) })
+                }
+                options={TEXT_FX_PRESETS.map((p) => ({ value: p.id, text: p.label }))}
+              />
+              {TEXT_FX_KEYS.map((k) => {
+                const e = fx?.[k.id];
+                const isOn = !!e?.enabled;
+                return (
+                  <div key={k.id} className={styles.otGroup}>
+                    <Toggle label={k.label} checked={isOn} onChange={(v) => toggleKey(k.id, v)} />
+                    {isOn && e && (
+                      <>
+                        <div className={styles.otRow}>
+                          <span className={styles.otLabel}>Colour</span>
+                          <ColorChip
+                            color={(e as { color?: string }).color ?? "#000000"}
+                            onChange={(c) => setKey(k.id, { color: c })}
+                            label={`${k.label} colour`}
+                          />
+                        </div>
+                        <Slider
+                          label="Size"
+                          min={0}
+                          max={Math.max(40, Math.round(text.fontSize))}
+                          unit="px"
+                          value={(e as { size: number }).size}
+                          onChange={(v) => setKey(k.id, { size: v })}
+                        />
+                        <Slider
+                          label="Opacity"
+                          min={0}
+                          max={100}
+                          unit="%"
+                          value={(e as { opacity: number }).opacity}
+                          onChange={(v) => setKey(k.id, { opacity: v })}
+                        />
+                        {k.id === "dropShadow" && (
+                          <>
+                            <Slider
+                              label="Distance"
+                              min={0}
+                              max={Math.max(40, Math.round(text.fontSize))}
+                              unit="px"
+                              value={(e as { distance: number }).distance}
+                              onChange={(v) => setKey(k.id, { distance: v })}
+                            />
+                            <Slider
+                              label="Angle"
+                              min={0}
+                              max={360}
+                              unit="°"
+                              value={(e as { angle: number }).angle}
+                              onChange={(v) => setKey(k.id, { angle: v })}
+                            />
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+              <span className={styles.otHint}>
+                Type effects render on the committed text, so they appear when you finish editing —
+                the same as Warp. Layer Style has the full set (bevel, overlays) for the text layer.
+              </span>
+            </div>
+          </>,
+          document.body,
+        )}
+    </>
+  );
 }
 
 interface TextProps {
@@ -1186,6 +1346,7 @@ function renderOptions(
           <OpenTypeControl text={text} onText={onText} />
           <TextFillControl text={text} onText={onText} />
           <WarpControl text={text} onText={onText} />
+          <TextFxControl text={text} onText={onText} />
         </>
       );
     }

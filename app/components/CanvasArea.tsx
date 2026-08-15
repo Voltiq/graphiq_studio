@@ -1379,6 +1379,10 @@ export default function CanvasArea({
       axes: v.axes,
       warp: v.warp,
       fill: v.fill,
+      // Seed the FX popover from the layer that is actually being edited, so it
+      // shows what is applied rather than whatever the tool was last set to —
+      // including effects added from the full Layer Style dialog.
+      fx: findNode(layersRef.current, id)?.effects,
     });
     engine.clearLayerPixels(id);
     setTextSession({
