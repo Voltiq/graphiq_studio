@@ -53,6 +53,7 @@ export type ToolId =
   | "blur"
   | "smudge"
   | "mixer"
+  | "directselect"
   | "dodge"
   | "sponge"
   | "text"
@@ -97,6 +98,7 @@ export const TOOL_GROUPS: Tool[][] = [
     { id: "blur", name: "Blur", icon: Droplet, shortcut: "R" },
     { id: "smudge", name: "Smudge", icon: Fingerprint, shortcut: "F" },
     { id: "mixer", name: "Mixer brush", icon: Palette, shortcut: "B" },
+    { id: "directselect", name: "Direct selection", icon: MousePointer2, shortcut: "A" },
     { id: "dodge", name: "Dodge", icon: SunMedium, shortcut: "O" },
     { id: "sponge", name: "Sponge", icon: Droplets, shortcut: "A" },
   ],

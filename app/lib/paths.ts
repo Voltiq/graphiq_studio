@@ -136,8 +136,10 @@ export interface PathsApi {
   stroke: (id: string) => void;
   /** Fill the path's region on the active layer with the foreground colour. */
   fill: (id: string) => void;
-  /** Load the path back into the Pen tool for editing. */
+  /** Load the path into the Direct Selection tool for editing. */
   edit: (id: string) => void;
+  /** Write edited anchors back to a stored path (Direct Selection commit). */
+  replace: (id: string, anchors: PenAnchor[], closed: boolean) => void;
   /** Duplicate the Work Path (or any path) under a permanent name. */
   save: (id: string) => void;
   rename: (id: string, name: string) => void;

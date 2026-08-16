@@ -100,6 +100,15 @@ import {
 } from "../lib/layers";
 import type { MixerSettings } from "../lib/mixer";
 import { builtinShapes, loadSavedShapes } from "../lib/shape-library";
+import {
+  anchorsInRect,
+  deleteAnchors,
+  dragHandle,
+  hitTest,
+  insertAnchor,
+  moveAnchors,
+  toggleSmooth,
+} from "../lib/path-edit";
 import type { PendingLoad } from "../lib/project";
 import { effectiveSoftness } from "../lib/refine-edge";
 import PerfHud from "./PerfHud";
@@ -125,7 +134,9 @@ export interface ViewApi {
   applyTextStyle: (patch: TextStylePatch) => boolean;
   /** Load a stored path into the Pen tool as the live editing path (Paths
    *  panel ▸ Edit). The caller switches the tool to "pen". */
-  loadPenPath: (anchors: PenAnchor[], closed: boolean) => void;
+  /** Load a path for editing. `sourceId` (a stored path) makes the commit write
+   *  BACK to that path instead of producing a new Work Path. */
+  loadPenPath: (anchors: PenAnchor[], closed: boolean, sourceId?: string) => void;
 }
 
 interface RulerTick {
@@ -707,6 +718,7 @@ export default function CanvasArea({
   filterAnchor,
   onFilterAnchorDrag,
   onPenPathCommit,
+  onPathEdited,
   recordStrokes,
   onStrokeRecord,
   pendingPaste,
@@ -897,6 +909,8 @@ export default function CanvasArea({
   onFilterAnchorDrag: (nx: number, ny: number) => void;
   /** A pen path was committed (baked) — the Paths panel stores it as Work Path. */
   onPenPathCommit: (anchors: PenAnchor[], closed: boolean) => void;
+  /** Direct Selection committing an edit of an existing stored path. */
+  onPathEdited?: (id: string, anchors: PenAnchor[], closed: boolean) => void;
   /** Actions recorder: capture brush/pencil/eraser strokes while armed. */
   recordStrokes: boolean;
   onStrokeRecord: (stroke: StrokeStep) => void;
@@ -1215,6 +1229,16 @@ export default function CanvasArea({
   // editable (re-stroked) until committed (Enter / double-click / tool switch).
   const penPathRef = useRef<{ anchors: PenAnchor[]; closed: boolean; layerId: string } | null>(null);
   const penDragRef = useRef<{ kind: "new" | "anchor" | "in" | "out"; index: number } | null>(null);
+  // ---- Direct Selection -----------------------------------------------------
+  // Shares `penPathRef` as its working path, so the skeleton/handle overlay and
+  // the live engine render are the ones the Pen already has. What it adds is a
+  // SELECTION of anchors, a marquee, and the structural edits (insert, delete,
+  // corner⇄smooth) the pen has no verb for.
+  /** Stored path being edited; a commit writes back to it. */
+  const dsSourceRef = useRef<string | null>(null);
+  const dsSelRef = useRef<Set<number>>(new Set());
+  const dsDragRef = useRef<{ kind: "anchors" | "in" | "out"; index: number; px: number; py: number } | null>(null);
+  const dsMarqueeRef = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const penGrabRef = useRef<{ px: number; py: number; anchor: PenAnchor } | null>(null);
   const penOptsRef = useRef(pen);
   penOptsRef.current = pen;
@@ -2532,6 +2556,24 @@ export default function CanvasArea({
       }
     }
 
+    // --- direct selection: the anchor marquee ---
+    const dsm = dsMarqueeRef.current;
+    if (dsm) {
+      const rx = p.x + Math.min(dsm.x0, dsm.x1) * s;
+      const ry = p.y + Math.min(dsm.y0, dsm.y1) * s;
+      const rw = Math.abs(dsm.x1 - dsm.x0) * s;
+      const rh = Math.abs(dsm.y1 - dsm.y0) * s;
+      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.lineDashOffset = 4;
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.lineDashOffset = 0;
+      ctx.setLineDash([]);
+    }
+
     // --- pen: the editable path skeleton + anchor / handle nodes ---
     const path = penPathRef.current;
     if (path && path.anchors.length) {
@@ -2598,12 +2640,15 @@ export default function CanvasArea({
         }
       }
       // Anchor circles: white with a blue outline matching the path skeleton; the
-      // first one is larger to show where clicking closes the path.
+      // first one is larger to show where clicking closes the path. Under Direct
+      // Selection the SELECTED points are filled instead of hollow, which is the
+      // only way to tell what a drag is about to move.
       a.forEach((an, i) => {
         const r = i === 0 && !path.closed && a.length >= 2 ? 6 : 5;
+        const picked = toolRef.current === "directselect" && dsSelRef.current.has(i);
         ctx.beginPath();
         ctx.arc(sx(an.x), sy(an.y), r, 0, Math.PI * 2);
-        ctx.fillStyle = "#fff";
+        ctx.fillStyle = picked ? shapeNodeColor() : "#fff";
         ctx.fill();
         ctx.lineWidth = 1.5;
         ctx.strokeStyle = shapeNodeColor();
@@ -3031,6 +3076,7 @@ export default function CanvasArea({
       liveBucketRef.current ||
       gradientRef.current ||
       penPathRef.current ||
+      dsMarqueeRef.current ||
       (toolRef.current === "crop" && cropBoxRef.current) ||
       ((toolRef.current === "brush" || toolRef.current === "pencil" || toolRef.current === "eraser") &&
         paintHoverRef.current) ||
@@ -3245,9 +3291,9 @@ export default function CanvasArea({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pen.width, pen.taper, pen.bend, color]);
 
-  // Commit the live pen path when leaving the pen tool.
+  // Commit the live pen path when leaving BOTH tools that edit it.
   useEffect(() => {
-    if (tool !== "pen" && penPathRef.current) finishPenPath();
+    if (tool !== "pen" && tool !== "directselect" && penPathRef.current) finishPenPath();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, engine]);
 
@@ -3294,11 +3340,27 @@ export default function CanvasArea({
 
   // Finish (commit) the pen path with Enter / Escape while the pen tool is active.
   useEffect(() => {
-    if (tool !== "pen") return;
+    if (tool !== "pen" && tool !== "directselect") return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.key === "Enter" || e.key === "Escape") && penPathRef.current) {
         e.preventDefault();
         finishPenPath();
+        return;
+      }
+      // Direct Selection: remove the selected points. Guarded on the tool so a
+      // Delete elsewhere still means "clear the selection".
+      if (
+        tool === "directselect" &&
+        (e.key === "Delete" || e.key === "Backspace") &&
+        penPathRef.current &&
+        dsSelRef.current.size
+      ) {
+        e.preventDefault();
+        const path = penPathRef.current;
+        path.anchors = deleteAnchors(path.anchors, dsSelRef.current);
+        dsSelRef.current = new Set();
+        renderPenLive();
+        ensureAnts();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -4975,9 +5037,17 @@ export default function CanvasArea({
   // Commit (bake) the live pen path and drop the editing state. Also clears a
   // single-anchor path, which never started an engine session to commit.
   const finishPenPath = () => {
-    // Hand the committed geometry up (Paths panel "Work Path") BEFORE clearing.
+    // Hand the committed geometry up BEFORE clearing. An edit of a STORED path
+    // goes back to that path; anything else becomes the Work Path.
     const p = penPathRef.current;
-    if (p && p.anchors.length >= 2) onPenPathCommit(p.anchors, p.closed);
+    if (p && p.anchors.length >= 2) {
+      if (dsSourceRef.current) onPathEdited?.(dsSourceRef.current, p.anchors, p.closed);
+      else onPenPathCommit(p.anchors, p.closed);
+    }
+    dsSourceRef.current = null;
+    dsSelRef.current = new Set();
+    dsDragRef.current = null;
+    dsMarqueeRef.current = null;
     engine.endPath();
     penPathRef.current = null;
     penDragRef.current = null;
@@ -5574,6 +5644,52 @@ export default function CanvasArea({
       };
       gradDragRef.current = "end";
       renderGradient();
+      ensureAnts();
+      return;
+    }
+    if (tool === "directselect") {
+      const path = penPathRef.current;
+      if (!path) return; // nothing loaded — pick a path in the Paths panel
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      const p = toDoc(e);
+      const tol = 8 / (zoomRef.current / 100);
+      const hit = hitTest(path.anchors, path.closed, p, tol, dsSelRef.current);
+      const sel = dsSelRef.current;
+
+      if (hit?.kind === "anchor") {
+        if (e.altKey) {
+          // Alt on a point flips it between corner and smooth — the one edit
+          // that changes the CURVE rather than moving something.
+          path.anchors = toggleSmooth(path.anchors, path.closed, hit.index);
+          sel.clear();
+          sel.add(hit.index);
+        } else if (e.shiftKey) {
+          if (sel.has(hit.index)) sel.delete(hit.index);
+          else sel.add(hit.index);
+        } else if (!sel.has(hit.index)) {
+          sel.clear();
+          sel.add(hit.index);
+        }
+        dsDragRef.current = { kind: "anchors", index: hit.index, px: p.x, py: p.y };
+      } else if (hit?.kind === "in" || hit?.kind === "out") {
+        dsDragRef.current = { kind: hit.kind, index: hit.index, px: p.x, py: p.y };
+      } else if (hit?.kind === "segment") {
+        if (e.altKey) {
+          // Alt on a segment inserts a point there, without moving the curve.
+          path.anchors = insertAnchor(path.anchors, path.closed, hit.index, hit.t);
+          sel.clear();
+          sel.add(hit.index + 1);
+        } else {
+          // Clicking the path itself selects the whole thing, as in Illustrator.
+          sel.clear();
+          for (let i = 0; i < path.anchors.length; i++) sel.add(i);
+        }
+      } else {
+        if (!e.shiftKey) sel.clear();
+        dsMarqueeRef.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      }
+      renderPenLive();
       ensureAnts();
       return;
     }
@@ -6274,6 +6390,28 @@ export default function CanvasArea({
       ensureAnts();
       return;
     }
+    if (dsMarqueeRef.current) {
+      const p = toDoc(e);
+      dsMarqueeRef.current.x1 = p.x;
+      dsMarqueeRef.current.y1 = p.y;
+      ensureAnts();
+      return;
+    }
+    if (dsDragRef.current && penPathRef.current) {
+      const p = toDoc(e);
+      const d = dsDragRef.current;
+      const path = penPathRef.current;
+      if (d.kind === "anchors") {
+        path.anchors = moveAnchors(path.anchors, dsSelRef.current, p.x - d.px, p.y - d.py);
+      } else {
+        path.anchors = dragHandle(path.anchors, d.index, d.kind, p, e.altKey);
+      }
+      d.px = p.x;
+      d.py = p.y;
+      renderPenLive();
+      ensureAnts();
+      return;
+    }
     if (penDragRef.current && penPathRef.current) {
       const p = toDoc(e);
       const d = penDragRef.current;
@@ -6765,6 +6903,26 @@ export default function CanvasArea({
       ensureAnts();
       return;
     }
+    if (dsMarqueeRef.current) {
+      const m = dsMarqueeRef.current;
+      const path = penPathRef.current;
+      if (path) {
+        for (const i of anchorsInRect(path.anchors, {
+          x: m.x0,
+          y: m.y0,
+          w: m.x1 - m.x0,
+          h: m.y1 - m.y0,
+        }))
+          dsSelRef.current.add(i);
+      }
+      dsMarqueeRef.current = null;
+      ensureAnts();
+    }
+    if (dsDragRef.current) {
+      dsDragRef.current = null;
+      renderPenLive();
+      ensureAnts();
+    }
     if (penDragRef.current) {
       // Finish this anchor/handle drag; the path stays live until committed.
       penDragRef.current = null;
@@ -6930,7 +7088,9 @@ export default function CanvasArea({
         if (!el || !textSessionRef.current) return false;
         return applyPatchToSelection(el, patch);
       },
-      loadPenPath: (anchors, closed) => {
+      loadPenPath: (anchors, closed, sourceId) => {
+        dsSourceRef.current = sourceId ?? null;
+        dsSelRef.current = new Set();
         if (anchors.length < 2) return;
         finishPenPath(); // commit any path already in progress first
         penPathRef.current = {

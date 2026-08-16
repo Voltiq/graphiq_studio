@@ -5724,9 +5724,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     edit: (id) => {
       const p = pathById(id);
       if (!p) return;
-      setTool("pen");
-      viewApiRef.current?.loadPenPath(cloneAnchors(p.anchors), p.closed);
+      // Direct Selection rather than the Pen: the pen's primary click means
+      // "add a point at the end", which is the wrong verb for editing an
+      // existing path. Committing writes back to THIS path (see `replace`)
+      // instead of spawning a fresh Work Path.
+      setTool("directselect");
+      viewApiRef.current?.loadPenPath(cloneAnchors(p.anchors), p.closed, id);
     },
+    replace: (id, anchors, closed) =>
+      patchPaths((list) =>
+        list.map((x) => (x.id === id ? { ...x, anchors: cloneAnchors(anchors), closed } : x)),
+      ),
     save: (id) => {
       const p = pathById(id);
       if (!p) return;
@@ -6641,6 +6649,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           filterAnchor={filterAnchorGuide}
           onFilterAnchorDrag={onFilterAnchorDrag}
           onPenPathCommit={storeWorkPath}
+          onPathEdited={(id, anchors, closed) => pathsApi.replace(id, anchors, closed)}
           recordStrokes={!!recordingId}
           onStrokeRecord={recordStrokeStep}
           pendingPaste={pendingPaste}
