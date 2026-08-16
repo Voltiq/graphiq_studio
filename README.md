@@ -77,6 +77,13 @@ npm run test:watch # on save
 npm run check      # typecheck + tests
 ```
 
+There is also a pixel-identity check that renders fixture documents twice — with the render cache on and off — and requires the results to be byte-identical. It drives a real browser, so it needs the dev server running:
+
+```bash
+npm run dev        # in one terminal
+npm run test:pixel # in another
+```
+
 ---
 
 ## A tour of the features

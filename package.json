@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "0.58.0",
+  "version": "0.59.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9,6 +9,7 @@
     "lint": "eslint",
     "perf": "node tools/perf-suite.js",
     "test": "vitest run",
+    "test:pixel": "node tools/pixel-identity.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && vitest run"
@@ -28,6 +29,7 @@
     "baseline-browser-mapping": "^2.10.37",
     "eslint": "^9",
     "eslint-config-next": "16.0.3",
+    "playwright-core": "^1.62.1",
     "typescript": "^5",
     "vitest": "^4.1.10"
   }
