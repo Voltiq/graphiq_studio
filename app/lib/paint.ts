@@ -1,5 +1,13 @@
 ﻿import { parseColor, toHex8 } from "./color";
 import {
+  DUAL_VARIANTS,
+  dualMask,
+  textureAlpha,
+  tipShapingActive,
+  type DualTipSettings,
+  type TextureSettings,
+} from "./brush-tip";
+import {
   afterStroke as mixerAfterStroke,
   averageColor,
   initialMixerState,
@@ -156,6 +164,11 @@ export interface BrushSettings {
   pressureFlow?: boolean;
   /** Floor at zero pressure, as a % of the full value (absent ⇒ 20). */
   pressureMin?: number;
+  /** Surface grain: modulates each dab's coverage by a pattern anchored to the
+   *  DOCUMENT, so overlapping dabs hit the same grain (see brush-tip.ts). */
+  texture?: TextureSettings;
+  /** A second, scattered tip that erodes the primary dab into bristles. */
+  dualTip?: DualTipSettings;
   /** ERASER ONLY: paint back from the history source instead of erasing to
    *  transparency — Photoshop's "Erase to History", the eraser behaving as the
    *  History brush. Ignored by the brush and pencil, and ignored while a mask
@@ -1279,6 +1292,18 @@ export class PaintEngine {
   // derived from; `pressFrom`/`pressTo` bracket the current segment so pressure
   // is interpolated between samples rather than stepping at each pointer event.
   private tipCache = new Map<number, HTMLCanvasElement>();
+  // Tip shaping (brush-tip.ts). The DUAL TIP is baked into the cached tips —
+  // one mask per variant, cycled per dab so the bristle pattern does not repeat
+  // identically down the stroke. TEXTURE is applied at stamp time instead,
+  // because it is anchored to the DOCUMENT: baking it into the tip would stamp
+  // the same swatch over and over.
+  private tipTexture: TextureSettings | null = null;
+  private tipDual: DualTipSettings | null = null;
+  /** Which bristle pattern this stroke is using (see DUAL_VARIANTS). */
+  private dualVariant = 0;
+  /** Scratch surfaces for the textured stamp path (allocated on first use). */
+  private texDab: Layer | null = null;
+  private texPatch: Layer | null = null;
   private tipSpec: { r: number; flow: number; hardness: number; cr: number; cg: number; cb: number } | null = null;
   private dyn: PressureDynamics = DEFAULT_DYNAMICS;
   private pressFrom = 1;
@@ -6470,6 +6495,13 @@ export class PaintEngine {
     this.tipHard = brush.hardness >= 100 || brush.size <= 1;
     this.tipSpec = { r, flow, hardness: brush.hardness, cr: c.r, cg: c.g, cb: c.b };
     this.dyn = brushDynamics(brush);
+    // Only pay for shaping when it would change something (see tipShapingActive).
+    const shaping = tipShapingActive(brush.texture, brush.dualTip);
+    this.tipTexture = shaping && brush.texture?.enabled ? { ...brush.texture } : null;
+    this.tipDual = shaping && brush.dualTip?.enabled ? { ...brush.dualTip } : null;
+    // One pattern for the whole stroke — see DUAL_VARIANTS for why per-dab
+    // cycling produced a stroke indistinguishable from an ordinary brush.
+    this.dualVariant = Math.floor(Math.random() * DUAL_VARIANTS);
     this.tipCache.clear();
     this.tip = this.tipFor(PRESSURE_BUCKETS); // full-pressure tip (what clone stamps use)
     this.pressFrom = clamp01(pressure);
@@ -6501,19 +6533,24 @@ export class PaintEngine {
   }
 
   /** The baked tip for one pressure bucket (built on first use, cached per stroke). */
-  private tipFor(bucket: number): HTMLCanvasElement | null {
+  private tipFor(bucket: number, variant = 0): HTMLCanvasElement | null {
     const spec = this.tipSpec;
     if (!spec) return null;
-    const hit = this.tipCache.get(bucket);
+    // One cache slot per (pressure bucket, bristle pattern). The pattern is
+    // fixed for the stroke, so in practice this is one slot per bucket.
+    const key = bucket * DUAL_VARIANTS + (this.tipDual ? variant % DUAL_VARIANTS : 0);
+    const hit = this.tipCache.get(key);
     if (hit) return hit;
     const p = bucketPressure(bucket);
     const min = this.dyn.min / 100;
     const r = this.dyn.size ? Math.max(0.5, spec.r * pressureScale(p, min)) : spec.r;
     const flow = this.dyn.flow ? spec.flow * pressureScale(p, min) : spec.flow;
+    const size = this.tipHard ? Math.max(1, Math.ceil(r * 2)) : Math.max(2, Math.ceil(r * 2) + 2);
+    const mask = this.tipDual ? dualMask(size, r, this.tipDual, variant % DUAL_VARIANTS) : null;
     const tip = this.tipHard
-      ? this.buildHardTip(r, spec.cr, spec.cg, spec.cb, flow)
-      : this.buildSoftTip(r, spec.cr, spec.cg, spec.cb, flow, spec.hardness);
-    this.tipCache.set(bucket, tip);
+      ? this.buildHardTip(r, spec.cr, spec.cg, spec.cb, flow, mask)
+      : this.buildSoftTip(r, spec.cr, spec.cg, spec.cb, flow, spec.hardness, mask);
+    this.tipCache.set(key, tip);
     return tip;
   }
 
@@ -6583,6 +6620,8 @@ export class PaintEngine {
     this.tip = null;
     this.tipSpec = null;
     this.tipCache.clear(); // per-stroke cache — the next stroke bakes fresh tips
+    this.tipTexture = null;
+    this.tipDual = null;
     this.dirty = null;
     if (this.cloneActive) {
       this.cloneActive = false;
@@ -6607,6 +6646,8 @@ export class PaintEngine {
     this.tip = null;
     this.tipSpec = null;
     this.tipCache.clear(); // per-stroke cache — the next stroke bakes fresh tips
+    this.tipTexture = null;
+    this.tipDual = null;
     this.dirty = null;
     if (this.cloneActive) {
       this.cloneActive = false;
@@ -9234,6 +9275,8 @@ export class PaintEngine {
     cg: number,
     cb: number,
     flow: number,
+    /** Dual-tip coverage, size×size, multiplied into the dab's alpha. */
+    mask: Float32Array | null = null,
   ): HTMLCanvasElement {
     const size = Math.max(1, Math.ceil(r * 2));
     const { c, ctx } = makeCanvas(size, size);
@@ -9247,11 +9290,13 @@ export class PaintEngine {
         const dx = px + 0.5 - center;
         const dy = py + 0.5 - center;
         if (dx * dx + dy * dy <= rr) {
+          const m = mask ? mask[py * size + px] : 1;
+          if (m <= 0) continue;
           const i = (py * size + px) * 4;
           data[i] = cr;
           data[i + 1] = cg;
           data[i + 2] = cb;
-          data[i + 3] = a;
+          data[i + 3] = Math.round(a * m);
         }
       }
     }
@@ -9272,6 +9317,8 @@ export class PaintEngine {
     cb: number,
     flow: number,
     hardness: number,
+    /** Dual-tip coverage, size×size, multiplied into the dab's alpha. */
+    mask: Float32Array | null = null,
   ): HTMLCanvasElement {
     const size = Math.max(2, Math.ceil(r * 2) + 2); // +1px each side for the rim
     const { c, ctx } = makeCanvas(size, size);
@@ -9289,6 +9336,7 @@ export class PaintEngine {
         if (dist <= inner) a = flow;
         else if (dist >= r) a = 0;
         else a = flow * (1 - (dist - inner) / span);
+        if (mask) a *= mask[py * size + px];
         if (a <= 0) continue;
         const i = (py * size + px) * 4;
         data[i] = cr;
@@ -9308,11 +9356,18 @@ export class PaintEngine {
     }
     // Pick the tip baked for this pressure; with dynamics off every dab lands on
     // the top bucket, i.e. the single tip the stroke started with.
-    const tip = this.dynActive() ? this.tipFor(pressureBucket(pressure)) : this.tip;
+    const tip =
+      this.dynActive() || this.tipDual
+        ? this.tipFor(pressureBucket(pressure), this.dualVariant)
+        : this.tip;
     if (!tip) return;
     const ctx = this.stroke!.ctx;
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
+    if (this.tipTexture) {
+      this.stampTextured(tip, x, y);
+      return;
+    }
     if (this.tipHard) {
       // Crisp hard brush: stamp the aliased tip on the integer pixel grid.
       ctx.imageSmoothingEnabled = false;
@@ -9328,6 +9383,58 @@ export class PaintEngine {
       ctx.drawImage(tip, dx, dy);
       this.expandDirty(Math.floor(dx), Math.floor(dy), Math.ceil(dx + tip.width), Math.ceil(dy + tip.height));
     }
+  }
+
+  /**
+   * Stamp a tip through the surface texture.
+   *
+   * The texture is evaluated at DOCUMENT coordinates for every pixel of the dab
+   * rather than baked into the tip or tiled into a pattern. Baking it into the
+   * tip would move the grain with the brush — the same swatch stamped over and
+   * over, which reads as a rubber stamp. Tiling a fixed-size pattern would work
+   * but seams wherever the (non-periodic) noise wraps. Evaluating per dab is
+   * exact, and the cost is only paid when the option is switched on.
+   *
+   * Two scratch surfaces: the dab itself, and an alpha-only patch of texture
+   * that is composited into it with `destination-in`. Building the patch by hand
+   * avoids a `getImageData` read-back per dab.
+   */
+  private stampTextured(tip: HTMLCanvasElement, x: number, y: number) {
+    const t = this.tipTexture!;
+    const w = tip.width;
+    const h = tip.height;
+    const left = this.tipHard ? Math.round(x - w / 2) : Math.floor(x - w / 2);
+    const top = this.tipHard ? Math.round(y - h / 2) : Math.floor(y - h / 2);
+    if (!this.texDab || this.texDab.c.width < w || this.texDab.c.height < h) {
+      this.texDab = this.mk(Math.max(w, 8), Math.max(h, 8), true);
+      this.texPatch = this.mk(Math.max(w, 8), Math.max(h, 8), true);
+    }
+    const dab = this.texDab!;
+    const patch = this.texPatch!;
+    const img = patch.ctx.createImageData(w, h);
+    const d = img.data;
+    for (let py = 0; py < h; py++) {
+      const gy = top + py;
+      for (let px = 0; px < w; px++) {
+        // Alpha-only: RGB is irrelevant under destination-in.
+        d[(py * w + px) * 4 + 3] = Math.round(255 * textureAlpha(t, left + px, gy));
+      }
+    }
+    patch.ctx.globalCompositeOperation = "copy";
+    patch.ctx.putImageData(img, 0, 0);
+    dab.ctx.globalCompositeOperation = "copy";
+    dab.ctx.clearRect(0, 0, dab.c.width, dab.c.height);
+    dab.ctx.globalCompositeOperation = "source-over";
+    dab.ctx.imageSmoothingEnabled = false;
+    dab.ctx.drawImage(tip, 0, 0);
+    dab.ctx.globalCompositeOperation = "destination-in";
+    dab.ctx.drawImage(patch.c, 0, 0, w, h, 0, 0, w, h);
+    dab.ctx.globalCompositeOperation = "source-over";
+
+    const ctx = this.stroke!.ctx;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(dab.c, 0, 0, w, h, left, top, w, h);
+    this.expandDirty(left, top, left + w, top + h);
   }
 
   private expandDirty(x0: number, y0: number, x1: number, y1: number) {

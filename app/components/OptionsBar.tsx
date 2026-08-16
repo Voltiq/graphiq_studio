@@ -9,6 +9,7 @@ import {
   Magnet,
   Palette,
   Sparkle,
+  Grip,
   PenLine,
   Waves,
   AlignCenter,
@@ -97,6 +98,15 @@ import {
 import GradientControl, { GradientEditor } from "./GradientControl";
 import FontPicker from "./FontPicker";
 import { brushDynamics, type BrushSettings } from "../lib/paint";
+import {
+  TEXTURE_LABELS,
+  TEXTURE_PATTERNS,
+  sanitizeDualTip,
+  sanitizeTexture,
+  tipShapingActive,
+  type DualTipSettings,
+  type TextureSettings,
+} from "../lib/brush-tip";
 import {
   MIXER_PRESETS,
   activeMixerPreset,
@@ -433,6 +443,153 @@ function PressureControl({
               <span className={styles.otHint}>
                 What the lightest touch still puts down. A mouse always paints at full strength;
                 the response curve and palm rejection live in Preferences ▸ Touch &amp; pen.
+              </span>
+            </div>
+          </>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+/**
+ * Tip shaping: surface texture + dual tip. One popover for both because they do
+ * the same job — eroding a dab's coverage so a stroke stops looking like a
+ * smooth disc — and because the options bar has no room for nine more sliders.
+ */
+function TipShapeControl({
+  brush,
+  onBrush,
+}: {
+  brush: BrushSettings;
+  onBrush: (b: BrushSettings) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ left: 0, top: 0 });
+  const tex = sanitizeTexture(brush.texture);
+  const dual = sanitizeDualTip(brush.dualTip);
+  const active = tipShapingActive(tex, dual);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation();
+        setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
+  const toggleOpen = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 320)), top: r.bottom + 6 });
+    }
+    setOpen((o) => !o);
+  };
+  const setTex = (patch: Partial<TextureSettings>) =>
+    onBrush({ ...brush, texture: { ...tex, ...patch } });
+  const setDual = (patch: Partial<DualTipSettings>) =>
+    onBrush({ ...brush, dualTip: { ...dual, ...patch } });
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={styles.iconBtn}
+        data-active={active || open}
+        title="Tip shape (texture / dual tip)"
+        aria-label="Tip shape"
+        onClick={toggleOpen}
+      >
+        <Grip size={15} />
+      </button>
+      {open &&
+        createPortal(
+          <>
+            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
+            <div
+              className={styles.otPopover}
+              style={{ left: pos.left, top: pos.top }}
+              role="dialog"
+              aria-label="Tip shape"
+            >
+              <span className={styles.otTitle}>Texture</span>
+              <Toggle label="Use texture" checked={tex.enabled} onChange={(v) => setTex({ enabled: v })} />
+              <Select
+                label="Pattern"
+                options={TEXTURE_PATTERNS.map((p) => TEXTURE_LABELS[p])}
+                value={TEXTURE_LABELS[tex.pattern]}
+                onChange={(name) => {
+                  const id = TEXTURE_PATTERNS.find((p) => TEXTURE_LABELS[p] === name);
+                  if (id) setTex({ pattern: id });
+                }}
+              />
+              <BaseSlider
+                inline
+                label="Scale"
+                unit="%"
+                min={10}
+                max={400}
+                value={tex.scale}
+                onChange={(n) => setTex({ scale: n })}
+              />
+              <BaseSlider
+                inline
+                label="Depth"
+                unit="%"
+                value={tex.depth}
+                onChange={(n) => setTex({ depth: n })}
+              />
+              <Toggle label="Invert" checked={tex.invert} onChange={(v) => setTex({ invert: v })} />
+              <span className={styles.otHint}>
+                The grain is fixed to the canvas, not to the brush — overlapping strokes hit the
+                same tooth, so paint builds up the way it would on a real surface.
+              </span>
+
+              <span className={styles.otTitle}>Dual tip</span>
+              <Toggle label="Use dual tip" checked={dual.enabled} onChange={(v) => setDual({ enabled: v })} />
+              <BaseSlider
+                inline
+                label="Size"
+                unit="%"
+                min={5}
+                max={200}
+                value={dual.size}
+                onChange={(n) => setDual({ size: n })}
+              />
+              <BaseSlider
+                inline
+                label="Hardness"
+                unit="%"
+                value={dual.hardness}
+                onChange={(n) => setDual({ hardness: n })}
+              />
+              <BaseSlider
+                inline
+                label="Scatter"
+                unit="%"
+                min={0}
+                max={200}
+                value={dual.scatter}
+                onChange={(n) => setDual({ scatter: n })}
+              />
+              <BaseSlider
+                inline
+                label="Count"
+                min={1}
+                max={32}
+                value={dual.count}
+                onChange={(n) => setDual({ count: n })}
+              />
+              <span className={styles.otHint}>
+                A second, scattered tip erodes the first into bristles. The pattern is fixed for
+                the whole stroke, so the gaps line up into streaks; each new stroke picks a
+                different one.
               </span>
             </div>
           </>,
@@ -1187,6 +1344,7 @@ function renderOptions(
           <Slider label="Opacity" unit="%" value={brush.opacity} onChange={(n) => set({ opacity: n })} />
           <Slider label="Flow" unit="%" value={brush.flow} onChange={(n) => set({ flow: n })} />
           <PressureControl brush={brush} onBrush={onBrush} showFlow />
+          <TipShapeControl brush={brush} onBrush={onBrush} />
           {tool !== "eraser" && (
             <>
               <Divider />
