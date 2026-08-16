@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "0.61.0",
+  "version": "0.62.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9,6 +9,7 @@
     "lint": "eslint",
     "perf": "node tools/perf-suite.js",
     "bench": "node tools/bench-track.js",
+    "smoke": "node tools/smoke.js",
     "test": "vitest run",
     "test:pixel": "node tools/pixel-identity.js",
     "test:fx": "node tools/golden-effects.js",

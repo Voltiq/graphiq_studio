@@ -84,6 +84,7 @@ npm run dev        # in one terminal
 npm run test:pixel # in another — cached vs uncached composites must match
 npm run test:fx    # golden images for the eight layer effects
 npm run perf       # interaction budgets
+npm run smoke      # end-to-end: boot, paint, undo, save/open, export
 npm run bench      # filter throughput + composite cost, tracked run to run
 ```
 
