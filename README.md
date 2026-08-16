@@ -69,6 +69,14 @@ npm run build
 npm start
 ```
 
+To run the unit tests (Vitest, over the dependency-free imaging libs — tone curves, filters, gradients, the render cache and the layer tree):
+
+```bash
+npm test          # once
+npm run test:watch # on save
+npm run check      # typecheck + tests
+```
+
 ---
 
 ## A tour of the features

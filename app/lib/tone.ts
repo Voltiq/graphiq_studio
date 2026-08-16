@@ -100,7 +100,10 @@ export function levelsLUT(p: ChannelParams): Uint8ClampedArray {
  * 256 integers. Extends linearly past the end points.
  */
 export function curveSampler(points: CurvePoint[]): (x: number) => number {
-  // Sort + dedupe by x (a later point at the same x replaces the earlier one).
+  // Sort + dedupe by x. The sort is stable and the filter keeps the head of each
+  // run, so where two points share an x the FIRST one given wins. (The dialog
+  // clamps a dragged point strictly between its neighbours, so duplicates only
+  // arise from a click landing on an existing point's column.)
   const pts = [...points]
     .map((p) => ({ x: clamp(Math.round(p.x), 0, 255), y: clamp(p.y, 0, 255) }))
     .sort((a, b) => a.x - b.x)
@@ -324,8 +327,13 @@ export function solveGrayPoint(sample: RGB): { r: ChannelParams; g: ChannelParam
   const target = clamp(0.299 * sample.r + 0.587 * sample.g + 0.114 * sample.b, 1, 254) / 255;
   const one = (v: number): ChannelParams => {
     const s = clamp(v, 1, 254) / 255;
-    // s^(1/gamma) = target → 1/gamma = ln(target)/ln(s)
-    const g = Math.log(s) !== 0 ? Math.log(target) / Math.log(s) : 1;
+    // levelsLUT raises the input to the power 1/gamma, so solving
+    // s^(1/gamma) = target gives 1/gamma = ln(target)/ln(s), i.e.
+    // gamma = ln(s)/ln(target). Assigning the reciprocal here pushed the cast
+    // the wrong way: sampling (200,150,100) produced a MORE orange pixel
+    // instead of that pixel's own grey.
+    const lt = Math.log(target);
+    const g = lt !== 0 ? Math.log(s) / lt : 1;
     return { ...IDENTITY_LEVELS, gamma: clamp(g, 0.1, 9.99) };
   };
   return { r: one(sample.r), g: one(sample.g), b: one(sample.b) };
