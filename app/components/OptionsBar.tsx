@@ -120,10 +120,16 @@ import {
   TEXTURE_LABELS,
   TEXTURE_PATTERNS,
   sanitizeDualTip,
+  sanitizeScatter,
   sanitizeTexture,
+  sanitizeTipShape,
+  scatterActive,
+  tipShapeActive,
   tipShapingActive,
   type DualTipSettings,
+  type ScatterSettings,
   type TextureSettings,
+  type TipShapeSettings,
 } from "../lib/brush-tip";
 import {
   MIXER_PRESETS,
@@ -487,7 +493,9 @@ function TipShapeControl({
   const [pos, setPos] = useState({ left: 0, top: 0 });
   const tex = sanitizeTexture(brush.texture);
   const dual = sanitizeDualTip(brush.dualTip);
-  const active = tipShapingActive(tex, dual);
+  const shape = sanitizeTipShape(brush.tipShape);
+  const scat = sanitizeScatter(brush.scatter);
+  const active = tipShapingActive(tex, dual) || tipShapeActive(shape) || scatterActive(scat);
 
   useEffect(() => {
     if (!open) return;
@@ -512,6 +520,10 @@ function TipShapeControl({
     onBrush({ ...brush, texture: { ...tex, ...patch } });
   const setDual = (patch: Partial<DualTipSettings>) =>
     onBrush({ ...brush, dualTip: { ...dual, ...patch } });
+  const setShape = (patch: Partial<TipShapeSettings>) =>
+    onBrush({ ...brush, tipShape: { ...shape, ...patch } });
+  const setScatter = (patch: Partial<ScatterSettings>) =>
+    onBrush({ ...brush, scatter: { ...scat, ...patch } });
 
   return (
     <>
@@ -520,7 +532,7 @@ function TipShapeControl({
         type="button"
         className={styles.iconBtn}
         data-active={active || open}
-        title="Tip shape (texture / dual tip)"
+        title="Tip shape (angle, roundness, scatter, texture, dual tip)"
         aria-label="Tip shape"
         onClick={toggleOpen}
       >
@@ -536,6 +548,55 @@ function TipShapeControl({
               role="dialog"
               aria-label="Tip shape"
             >
+              <span className={styles.otTitle}>Tip shape</span>
+              <BaseSlider
+                inline
+                label="Roundness"
+                unit="%"
+                min={1}
+                max={100}
+                value={shape.roundness}
+                onChange={(n) => setShape({ roundness: n })}
+              />
+              <BaseSlider
+                inline
+                label="Angle"
+                unit="°"
+                min={-180}
+                max={180}
+                value={shape.angle}
+                onChange={(n) => setShape({ angle: n })}
+              />
+
+              <span className={styles.otTitle}>Scatter</span>
+              <Toggle
+                label="Scatter dabs"
+                checked={scat.enabled}
+                onChange={(v) => setScatter({ enabled: v })}
+              />
+              <BaseSlider
+                inline
+                label="Amount"
+                unit="%"
+                min={0}
+                max={200}
+                value={scat.amount}
+                onChange={(n) => setScatter({ amount: n })}
+              />
+              <BaseSlider
+                inline
+                label="Count"
+                min={1}
+                max={16}
+                value={scat.count}
+                onChange={(n) => setScatter({ count: n })}
+              />
+              <Toggle
+                label="Both axes"
+                checked={scat.bothAxes}
+                onChange={(v) => setScatter({ bothAxes: v })}
+              />
+
               <span className={styles.otTitle}>Texture</span>
               <Toggle label="Use texture" checked={tex.enabled} onChange={(v) => setTex({ enabled: v })} />
               <Select

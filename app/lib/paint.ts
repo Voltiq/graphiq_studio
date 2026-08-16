@@ -6,6 +6,13 @@ import {
   tipShapingActive,
   type DualTipSettings,
   type TextureSettings,
+  makeRng,
+  scatterActive,
+  scatterOffsets,
+  tipRadius,
+  tipShapeActive,
+  type ScatterSettings,
+  type TipShapeSettings,
 } from "./brush-tip";
 import {
   afterStroke as mixerAfterStroke,
@@ -169,6 +176,10 @@ export interface BrushSettings {
   texture?: TextureSettings;
   /** A second, scattered tip that erodes the primary dab into bristles. */
   dualTip?: DualTipSettings;
+  /** Elliptical tip: long-axis angle + short/long ratio (absent ⇒ round). */
+  tipShape?: TipShapeSettings;
+  /** Dabs strewn off the stroke line instead of laid along it. */
+  scatter?: ScatterSettings;
   /** ERASER ONLY: paint back from the history source instead of erasing to
    *  transparency — Photoshop's "Erase to History", the eraser behaving as the
    *  History brush. Ignored by the brush and pencil, and ignored while a mask
@@ -1307,6 +1318,10 @@ export class PaintEngine {
   // the same swatch over and over.
   private tipTexture: TextureSettings | null = null;
   private tipDual: DualTipSettings | null = null;
+  private tipShape: TipShapeSettings | null = null;
+  private tipScatter: ScatterSettings | null = null;
+  /** Per-stroke generator, so a stroke's scatter is stable while it is drawn. */
+  private scatterRng: (() => number) | null = null;
   /** Which bristle pattern this stroke is using (see DUAL_VARIANTS). */
   private dualVariant = 0;
   /** Scratch surfaces for the textured stamp path (allocated on first use). */
@@ -6552,6 +6567,9 @@ export class PaintEngine {
     const shaping = tipShapingActive(brush.texture, brush.dualTip);
     this.tipTexture = shaping && brush.texture?.enabled ? { ...brush.texture } : null;
     this.tipDual = shaping && brush.dualTip?.enabled ? { ...brush.dualTip } : null;
+    this.tipShape = tipShapeActive(brush.tipShape) ? { ...brush.tipShape! } : null;
+    this.tipScatter = scatterActive(brush.scatter) ? { ...brush.scatter! } : null;
+    this.scatterRng = this.tipScatter ? makeRng((Math.random() * 0x7fffffff) | 0) : null;
     // One pattern for the whole stroke — see DUAL_VARIANTS for why per-dab
     // cycling produced a stroke indistinguishable from an ordinary brush.
     this.dualVariant = Math.floor(Math.random() * DUAL_VARIANTS);
@@ -6580,6 +6598,14 @@ export class PaintEngine {
    *  light passage breaks into a row of beads. With size dynamics off this is
    *  exactly the spacing the session set (which is how the clone tool keeps its
    *  own configurable spacing). */
+  /** The tip DIAMETER at this pressure — scatter is expressed as a % of it, so
+   *  a pressure-tapered stroke scatters proportionally rather than at a fixed
+   *  width. */
+  private tipDiameter(p: number): number {
+    const base = this.brush?.size ?? 1;
+    return this.dyn.size ? Math.max(1, base * pressureScale(p, this.dyn.min / 100)) : base;
+  }
+
   private stepFor(p: number): number {
     if (!this.dyn.size) return this.step;
     return Math.max(1, this.step * pressureScale(p, this.dyn.min / 100));
@@ -6632,7 +6658,20 @@ export class PaintEngine {
       // Pressure ramps across the segment, so a fast stroke between two widely
       // spaced samples still tapers smoothly instead of jumping a whole step.
       const p = p0 + dp * t;
-      this.stamp(this.last.x + dx * t, this.last.y + dy * t, p);
+      const bx = this.last.x + dx * t;
+      const by = this.last.y + dy * t;
+      if (this.tipScatter && this.scatterRng) {
+        // Offsets come back in the stroke's own frame (along/across), so they
+        // are rotated by the segment direction here: scatter is defined
+        // relative to the stroke, not to the screen.
+        const ux = dx / dist;
+        const uy = dy / dist;
+        for (const o of scatterOffsets(this.tipScatter, this.tipDiameter(p), this.scatterRng)) {
+          this.stamp(bx + ux * o.along - uy * o.across, by + uy * o.along + ux * o.across, p);
+        }
+      } else {
+        this.stamp(bx, by, p);
+      }
       d += this.stepFor(p);
     }
     this.residual = d - dist;
@@ -6675,6 +6714,9 @@ export class PaintEngine {
     this.tipCache.clear(); // per-stroke cache — the next stroke bakes fresh tips
     this.tipTexture = null;
     this.tipDual = null;
+    this.tipShape = null;
+    this.tipScatter = null;
+    this.scatterRng = null;
     this.dirty = null;
     if (this.cloneActive) {
       this.cloneActive = false;
@@ -9338,11 +9380,18 @@ export class PaintEngine {
     const center = size / 2;
     const rr = r * r;
     const a = Math.round(flow * 255);
+    // An angled/squashed tip is the same disc measured in elliptical units, so
+    // only the membership test changes — the long axis still spans r, which is
+    // what keeps a stroke's width the same when roundness is turned down.
+    const shape = this.tipShape;
     for (let py = 0; py < size; py++) {
       for (let px = 0; px < size; px++) {
         const dx = px + 0.5 - center;
         const dy = py + 0.5 - center;
-        if (dx * dx + dy * dy <= rr) {
+        const inside = shape
+          ? tipRadius(dx, dy, r, shape.angle, shape.roundness) <= 1
+          : dx * dx + dy * dy <= rr;
+        if (inside) {
           const m = mask ? mask[py * size + px] : 1;
           if (m <= 0) continue;
           const i = (py * size + px) * 4;
@@ -9380,11 +9429,15 @@ export class PaintEngine {
     const center = size / 2;
     const inner = Math.max(0, Math.min(0.999, hardness / 100)) * r; // solid core radius
     const span = Math.max(0.0001, r - inner);
+    const shape = this.tipShape;
     for (let py = 0; py < size; py++) {
       for (let px = 0; px < size; px++) {
         const dx = px + 0.5 - center;
         const dy = py + 0.5 - center;
-        const dist = Math.hypot(dx, dy);
+        // In elliptical units the rim sits at 1, so scaling back by r reuses the
+        // existing core/rim profile unchanged — the falloff squashes with the
+        // tip instead of needing an elliptical version of its own.
+        const dist = shape ? tipRadius(dx, dy, r, shape.angle, shape.roundness) * r : Math.hypot(dx, dy);
         let a: number;
         if (dist <= inner) a = flow;
         else if (dist >= r) a = 0;

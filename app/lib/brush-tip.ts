@@ -265,3 +265,137 @@ export function sanitizeDualTip(raw: unknown): DualTipSettings {
 /** True when either option would actually change a dab — the engine's fast path. */
 export const tipShapingActive = (t?: TextureSettings, d?: DualTipSettings): boolean =>
   !!(t?.enabled && t.depth > 0) || !!(d?.enabled && d.count >= 1);
+
+// ---------------------------------------------------------------------------
+// Tip shape: angle & roundness
+// ---------------------------------------------------------------------------
+
+export interface TipShapeSettings {
+  /** Long-axis direction in degrees, 0 = pointing right (screen +x). */
+  angle: number;
+  /** Short axis as a % of the long one. 100 = a circle, 10 = a flat chisel. */
+  roundness: number;
+}
+
+export const DEFAULT_TIP_SHAPE: TipShapeSettings = { angle: 0, roundness: 100 };
+
+/** A circle needs no elliptical maths, and the angle of a circle means nothing. */
+export const tipShapeActive = (t?: TipShapeSettings): boolean =>
+  !!t && t.roundness < 100 && t.roundness >= 1;
+
+/**
+ * Distance from the tip centre, measured in units where the ELLIPSE is the unit
+ * circle: 1 exactly on the edge, whatever the angle or roundness.
+ *
+ * Returning a normalized radius rather than a boolean lets the caller keep its
+ * existing falloff untouched — the soft tip's core/rim profile is expressed in
+ * the same units and so squashes with the tip instead of needing its own
+ * elliptical version.
+ *
+ * `dx`/`dy` are offsets from the centre in pixels; `r` is the LONG semi-axis, so
+ * a stroke's width is unchanged along the angle and only narrows across it.
+ */
+export function tipRadius(
+  dx: number,
+  dy: number,
+  r: number,
+  angleDeg: number,
+  roundness: number,
+): number {
+  if (r <= 0) return Infinity;
+  const rr = Math.max(0.01, Math.min(1, roundness / 100));
+  const a = (-angleDeg * Math.PI) / 180; // rotate the POINT into tip space
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  const ux = dx * cos - dy * sin;
+  const uy = dx * sin + dy * cos;
+  return Math.hypot(ux / r, uy / (r * rr));
+}
+
+// ---------------------------------------------------------------------------
+// Scatter
+// ---------------------------------------------------------------------------
+
+export interface ScatterSettings {
+  enabled: boolean;
+  /** How far dabs stray, as a % of the tip diameter. */
+  amount: number;
+  /** Dabs laid down per spacing step. */
+  count: number;
+  /** Scatter along the stroke as well as across it (Photoshop's "Both Axes"). */
+  bothAxes: boolean;
+}
+
+export const DEFAULT_SCATTER: ScatterSettings = {
+  enabled: false,
+  amount: 60,
+  count: 2,
+  bothAxes: false,
+};
+
+export const scatterActive = (s?: ScatterSettings): boolean =>
+  !!s && s.enabled && (s.amount > 0 || s.count > 1);
+
+/**
+ * Where one spacing step's dabs land.
+ *
+ * Offsets are returned in the stroke's own frame — `along` follows the
+ * direction of travel, `across` is perpendicular — because scatter is defined
+ * relative to the stroke, not to the screen. The caller rotates them into
+ * document space with the segment direction it already has.
+ *
+ * The first dab of a step is deliberately NOT scattered when `count` is 1 and
+ * the amount is 0, so a scatter of nothing is exactly an ordinary stroke.
+ */
+export function scatterOffsets(
+  s: ScatterSettings,
+  tipDiameter: number,
+  rand: () => number,
+): { along: number; across: number }[] {
+  const n = Math.max(1, Math.min(16, Math.round(s.count)));
+  const reach = (Math.max(0, s.amount) / 100) * tipDiameter;
+  const out: { along: number; across: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    if (reach <= 0) {
+      out.push({ along: 0, across: 0 });
+      continue;
+    }
+    out.push({
+      across: (rand() * 2 - 1) * reach,
+      along: s.bothAxes ? (rand() * 2 - 1) * reach : 0,
+    });
+  }
+  return out;
+}
+
+/** A small deterministic generator, so a stroke can be replayed exactly and a
+ *  test can assert positions rather than statistics. */
+export function makeRng(seed: number): () => number {
+  let s = (seed | 0) || 1;
+  return () => {
+    // xorshift32 — cheap, and good enough for scattering paint.
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    return ((s >>> 0) % 100000) / 100000;
+  };
+}
+
+export function sanitizeTipShape(raw: unknown): TipShapeSettings {
+  const o = (raw ?? {}) as Partial<TipShapeSettings>;
+  const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  // The angle wraps rather than clamps: -190° is a real direction, not an error.
+  const a = ((num(o.angle, 0) + 180) % 360 + 360) % 360 - 180;
+  return { angle: a, roundness: Math.max(1, Math.min(100, num(o.roundness, 100))) };
+}
+
+export function sanitizeScatter(raw: unknown): ScatterSettings {
+  const o = (raw ?? {}) as Partial<ScatterSettings>;
+  const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+  return {
+    enabled: !!o.enabled,
+    amount: Math.max(0, Math.min(200, num(o.amount, DEFAULT_SCATTER.amount))),
+    count: Math.max(1, Math.min(16, Math.round(num(o.count, DEFAULT_SCATTER.count)))),
+    bothAxes: !!o.bothAxes,
+  };
+}
