@@ -1,0 +1,165 @@
+/* The crash screen. It replaces the whole editor, so it must stand on its own:
+   no toolbar, no panels, nothing else painted behind it. */
+.screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-4);
+  background: var(--surface);
+  overflow: auto;
+}
+
+.card {
+  width: 560px;
+  max-width: 100%;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-bottom: 1px solid var(--border);
+
+  h1 {
+    font-size: 16px;
+    font-weight: var(--weight-bold);
+    color: var(--text);
+  }
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-lg);
+  color: #fff;
+  /* Not themed: a crash screen has to read the same in every palette. */
+  background: #c0392b;
+}
+
+.sub {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+}
+
+.recovery {
+  padding: 11px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+
+  strong {
+    color: var(--text);
+    font-weight: var(--weight-semibold);
+  }
+
+  &[data-state="live"] {
+    border-color: var(--accent);
+  }
+
+  &[data-state="none"] {
+    color: var(--text-3);
+  }
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 34px;
+  padding: 0 13px;
+  font-size: 14px;
+  font-weight: var(--weight-medium);
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+
+  &:hover:not(:disabled) {
+    background: var(--wash);
+    border-color: var(--border-strong);
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+.primary {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+
+  &:hover:not(:disabled) {
+    background: var(--accent-2);
+    border-color: transparent;
+  }
+}
+
+.privacy {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.disclosure {
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--text-3);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+
+  &:hover {
+    color: var(--text-2);
+  }
+}
+
+.details {
+  max-height: 260px;
+  overflow: auto;
+  padding: 10px 11px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}

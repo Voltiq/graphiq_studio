@@ -66,6 +66,7 @@ import {
   type AutosaveDoc,
   type AutosaveSnapshot,
 } from "../lib/autosave";
+import { registerRecovery } from "../lib/crash";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
 import {
   cleanChannelName,
@@ -3824,6 +3825,56 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     return () => window.removeEventListener("pagehide", onHide);
   }, []);
 
+  /** Every open document, serialized now, in tab order (active one refreshed
+   *  from the engine; inactive ones can't have changed since they were cached).
+   *  Shared by the autosave tick and by crash recovery. */
+  const collectOpenDocs = useCallback((): { entries: AutosaveDoc[]; activeIndex: number } => {
+    const docsNow = docsRef.current;
+    const active = activeDocRef.current;
+    docJsonCache.current.set(active.id, { json: serializeDocToJSON(active), name: active.name });
+    const openIds = new Set(docsNow.map((d) => d.id));
+    for (const k of [...docJsonCache.current.keys()]) if (!openIds.has(k)) docJsonCache.current.delete(k);
+    const entries: AutosaveDoc[] = [];
+    let activeIndex = 0;
+    for (const d of docsNow) {
+      let cached = docJsonCache.current.get(d.id);
+      // A tab that has never been left has no cache entry yet. Skipping it lost
+      // three of five open documents in a crash-recovery run — and the engine
+      // holds every materialized document's canvases, so it can simply be
+      // serialized here. The exception is a document whose pixels are still
+      // queued (pendingLoads): serializing THAT yields an empty document, which
+      // is worse than leaving it out, so it keeps the old behaviour.
+      if (!cached && !pendingLoadsRef.current.some((p) => p.docId === d.id)) {
+        try {
+          cached = { json: serializeDocToJSON(d), name: d.name };
+          docJsonCache.current.set(d.id, cached);
+        } catch {
+          /* one document failing must not cost the others */
+        }
+      }
+      if (!cached) continue;
+      if (d.id === active.id) activeIndex = entries.length;
+      entries.push(cached);
+    }
+    return { entries, activeIndex };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Hand the crash boundary a way to serialize the open documents. It is kept
+  // at module scope in crash.ts precisely so it outlives this component: when a
+  // render throws, React unmounts the editor, and this closure is the only
+  // thing left that knows how to reach the user's unsaved work.
+  //
+  // Deliberately NOT unregistered on unmount. React runs the unmounted subtree's
+  // effect cleanups BEFORE it calls the boundary's componentDidCatch, so a
+  // cleanup here would disarm recovery at precisely the moment it is needed —
+  // measured, not theorised: the crash screen offered "no recoverable work"
+  // while the pixels were sitting in the engine. A remount (a hot reload, a new
+  // editor) overwrites the entry with a live one.
+  useEffect(() => {
+    registerRecovery(() => collectOpenDocs().entries);
+  }, [collectOpenDocs]);
+
   // Periodic snapshot of ALL open documents (only when something changed since
   // the last write). Refreshes the active document from the engine, keeps the
   // cached JSON for the rest, prunes closed tabs, and writes them in tab order.
@@ -3833,19 +3884,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const id = window.setInterval(async () => {
       if (!autosaveDirtyRef.current) return;
       try {
-        const docsNow = docsRef.current;
-        const active = activeDocRef.current;
-        docJsonCache.current.set(active.id, { json: serializeDocToJSON(active), name: active.name });
-        const openIds = new Set(docsNow.map((d) => d.id));
-        for (const k of [...docJsonCache.current.keys()]) if (!openIds.has(k)) docJsonCache.current.delete(k);
-        const entries: AutosaveDoc[] = [];
-        let activeIndex = 0;
-        for (const d of docsNow) {
-          const cached = docJsonCache.current.get(d.id);
-          if (!cached) continue;
-          if (d.id === active.id) activeIndex = entries.length;
-          entries.push(cached);
-        }
+        const { entries, activeIndex } = collectOpenDocs();
         if (!entries.length) return;
         await writeAutosave({ docs: entries, activeIndex, savedAt: Date.now() });
         autosaveDirtyRef.current = false;

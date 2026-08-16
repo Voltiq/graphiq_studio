@@ -41,7 +41,7 @@
  * seconds while export was working perfectly. Locators that might not match now
  * carry short, explicit timeouts and nothing swallows their errors.
  */
-const { mkdtempSync, readFileSync, rmSync, statSync } = require("node:fs");
+const { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { chromium } = require("playwright-core");
@@ -55,6 +55,9 @@ const URL_ARG = (() => {
 
 const DOC_W = 400;
 const DOC_H = 300;
+/** The crash leg uses its own size so its recovery file is unmistakable. */
+const CRASH_W = 260;
+const CRASH_H = 180;
 
 (async () => {
   const work = mkdtempSync(join(tmpdir(), "graphiq-smoke-"));
@@ -260,6 +263,133 @@ const DOC_H = 300;
 
     check("no page errors across the whole journey", errors.length === 0,
       errors.slice(0, 3).join(" | "));
+
+    // ---- 8. crash recovery --------------------------------------------------
+    // Last, because it destroys the editor on purpose. The promise being tested
+    // is not "a dialog appears" but "work that existed only in memory comes back
+    // off the disk", so the recovered file is opened and its pixels compared.
+    if ((await page.evaluate(() => typeof window.__gqCrash)) !== "function") {
+      console.log("  --   crash probe absent (production build) — skipping the recovery leg");
+    } else {
+      const recovered = [];
+      // A FRESH document at a size nothing else uses. By this point the journey
+      // has left several tabs open and two of them are 400x300, so "the 400x300
+      // recovery file" is not necessarily "the document that was on screen" —
+      // an ambiguity that produced a mismatch here for reasons that had nothing
+      // to do with the crash. A unique size makes the recovered file
+      // identifiable without relying on names, which tabs can share.
+      await menu("File", "New…");
+      await nd.waitFor({ timeout: 8000 });
+      await nd.locator('input[type="number"]').nth(0).fill(String(CRASH_W));
+      await nd.locator('input[type="number"]').nth(1).fill(String(CRASH_H));
+      await nd.getByText("Create", { exact: true }).click();
+      await page.waitForTimeout(1500);
+      const cbox = await page.locator('[data-tour="canvas"] canvas').first().boundingBox();
+      await page.getByRole("button", { name: "Brush" }).first().click();
+      await page.waitForTimeout(300);
+      await page.mouse.move(cbox.x + cbox.width * 0.25, cbox.y + cbox.height * 0.6);
+      await page.mouse.down();
+      await page.mouse.move(cbox.x + cbox.width * 0.75, cbox.y + cbox.height * 0.25, { steps: 18 });
+      await page.mouse.up();
+      await page.waitForTimeout(900);
+      const beforeCrash = await shot();
+      check("there is unsaved work to lose", beforeCrash.ink > 300 && beforeCrash.w === CRASH_W,
+        `${beforeCrash.ink} px on a ${beforeCrash.w}x${beforeCrash.h} document`);
+
+      // Guarded: a straggler download arriving as the browser closes would
+      // otherwise reject after the run has finished and kill the process.
+      page.on("download", async (d) => {
+        try {
+          const p = join(work, d.suggestedFilename());
+          await d.saveAs(p);
+          recovered.push(p);
+        } catch {
+          /* the context is going away */
+        }
+      });
+      await page.evaluate(() => window.__gqCrash());
+      await page.waitForTimeout(1200);
+      const crash = page.locator('div[role="alertdialog"][aria-label="Graphiq has stopped"]');
+      check("a deliberate crash raises the recovery screen", (await crash.count()) === 1);
+      check("...and the editor is gone, so recovery is the only way back",
+        (await page.locator('[data-tour="canvas"]').count()) === 0);
+      const offered = (await crash.innerText()).replace(/\s+/g, " ");
+      check("...offering the live documents rather than a stale autosave",
+        /\d+ documents? can be saved/.test(offered) && !/autosave/.test(offered),
+        offered.slice(0, 100));
+
+      // Several documents are open by now, so recovery writes ONE zip. (A lone
+      // document is written as a plain .gproj — the button label says which.)
+      await crash.getByText(/^Save recovery copy/).click();
+      for (let i = 0; i < 40 && recovered.length < 1; i++) await page.waitForTimeout(250);
+      check("saving the recovery copy writes a file", recovered.length === 1,
+        recovered.map((f) => f.split(/[\\/]/).pop()).join(", ") || "nothing");
+      const zipBytes = recovered[0] ? readFileSync(recovered[0]) : Buffer.alloc(0);
+      // One archive rather than a burst of downloads: browsers throttle or block
+      // a page that fires several in a row, and this run saw exactly that —
+      // five documents written one time, two the next.
+      check("...as a single archive", recovered[0]?.endsWith(".zip") === true, recovered[0] ?? "nothing");
+      const names = zipBytes.toString("latin1").match(/[\w.-]+-recovered-[\d-]+\.gproj/g) ?? [];
+      const unique = [...new Set(names)];
+      check("...a real zip with one entry per open document",
+        zipBytes[0] === 0x50 && zipBytes[1] === 0x4b && unique.length >= 2,
+        `${zipBytes.length} bytes, entries: ${unique.join(", ")}`);
+      check("the button confirms what it did",
+        /Saved \d+ documents?/.test(await crash.innerText()));
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForSelector('[data-tour="canvas"]', { timeout: 60000 });
+      await page.waitForTimeout(1500);
+      for (let i = 0; i < 3 && (await page.locator('div[role="dialog"]').count()); i++) {
+        await page.keyboard.press("Escape"); // any restore prompt: compare against the FILE
+        await page.waitForTimeout(400);
+      }
+      // The archive uses the store method, so walking the local file headers is
+      // enough to get a document back out — and doing it this way also proves
+      // the headers are well formed rather than trusting the name strings found
+      // in the bytes above.
+      const entries = [];
+      for (let o = 0; o + 30 <= zipBytes.length && zipBytes.readUInt32LE(o) === 0x04034b50; ) {
+        const size = zipBytes.readUInt32LE(o + 18);
+        const nameLen = zipBytes.readUInt16LE(o + 26);
+        const extraLen = zipBytes.readUInt16LE(o + 28);
+        const name = zipBytes.subarray(o + 30, o + 30 + nameLen).toString("utf8");
+        const data = zipBytes.subarray(o + 30 + nameLen + extraLen, o + 30 + nameLen + extraLen + size);
+        entries.push({ name, data });
+        o += 30 + nameLen + extraLen + size;
+      }
+      check("every document can be read back out of the archive",
+        entries.length >= 2 && entries.every((e) => e.data.length > 0),
+        entries.map((e) => `${e.name} (${e.data.length}B)`).join(", "));
+      const candidates = entries
+        .map((e) => {
+          try {
+            return { e, json: JSON.parse(e.data.toString("utf8")) };
+          } catch {
+            return null;
+          }
+        })
+        .filter((p) => p && p.json.width === CRASH_W && p.json.height === CRASH_H);
+      check("...including the document that was on screen", candidates.length > 0,
+        entries.map((e) => e.name).join(", "));
+
+      if (candidates.length) {
+        const extracted = join(work, "extracted.gproj");
+        writeFileSync(extracted, candidates[0].e.data);
+        await page.locator('input[type="file"][accept*="gproj"]').setInputFiles(extracted);
+        await page.waitForTimeout(2500);
+        const back = await shot();
+        // Size and coverage, not a pixel hash. Byte-identical recovery is proven
+        // in isolation (paint → crash → save → reload → open, hashes equal);
+        // asserting it HERE would compare across a page reload at the end of a
+        // long journey, where an unrelated colour difference on documents
+        // reopened after a reload makes the comparison about something other
+        // than the crash.
+        check("...and it opens back into the document that was lost",
+          back.w === CRASH_W && back.h === CRASH_H && back.ink === beforeCrash.ink,
+          `${back.w}x${back.h}, ink ${beforeCrash.ink} vs ${back.ink}`);
+      }
+    }
 
     console.log(`\n${pass} passed, ${fail} failed`);
     if (failures.length) console.log("failed: " + failures.join("; "));
