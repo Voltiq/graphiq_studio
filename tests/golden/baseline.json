@@ -1,0 +1,1692 @@
+{
+ "adjust/all/alpha": {
+  "hash": "1sr6tzh.htb5fo",
+  "mean": [
+   255,
+   150.66,
+   240.27,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "adjust/blacks/-100": {
+  "hash": "1qgt5ct.1m6aph4",
+  "mean": [
+   103.13,
+   83.24,
+   80.81,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/blacks/100": {
+  "hash": "1r4gjya.12v1lx7",
+  "mean": [
+   165.6,
+   148.6,
+   146.2,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/clarity/-100": {
+  "hash": "1rm0atq.1aplqpn",
+  "mean": [
+   128.18,
+   116.87,
+   115.95,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/clarity/100": {
+  "hash": "d0n6xr.x4so7e",
+  "mean": [
+   132.68,
+   107.51,
+   106.65,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/contrast/-100": {
+  "hash": "zc24zp.aji49o",
+  "mean": [
+   128,
+   128,
+   128,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/contrast/100": {
+  "hash": "tpn5fw.12nmhu1",
+  "mean": [
+   132.88,
+   104.02,
+   106.39,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/exposure/-100": {
+  "hash": "z3031.1fp4yjk",
+  "mean": [
+   65.79,
+   55.56,
+   54.77,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/exposure/100": {
+  "hash": "3v71fi.8hhy5v",
+  "mean": [
+   185.42,
+   175.91,
+   166.89,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/highlights/-100": {
+  "hash": "tgehgf.mx2z72",
+  "mean": [
+   117.47,
+   96.89,
+   96.29,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/highlights/100": {
+  "hash": "vpjz40.1dm05l5",
+  "mean": [
+   142.07,
+   121.79,
+   121.64,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/noise/-100": {
+  "hash": "auhdtv.4fyouy",
+  "mean": [
+   131.58,
+   111.12,
+   109.54,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/noise/100": {
+  "hash": "p6bggo.11mcayx",
+  "mean": [
+   131.58,
+   111.09,
+   109.71,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/preset/Cool": {
+  "hash": "qe6flf.1sfjfci",
+  "mean": [
+   121.12,
+   113.44,
+   118.09,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/preset/Fade": {
+  "hash": "12kz1d2.1imolvr",
+  "mean": [
+   141.58,
+   127.02,
+   125.91,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/preset/Mono": {
+  "hash": "z7di5t.1ia8frk",
+  "mean": [
+   116.42,
+   116.42,
+   116.42,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/preset/Noir": {
+  "hash": "s8gtxe.rjf3f",
+  "mean": [
+   105.58,
+   105.58,
+   105.58,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/preset/Original": {
+  "hash": "auhdtv.4fyouy",
+  "mean": [
+   131.58,
+   111.12,
+   109.54,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/preset/Vintage": {
+  "hash": "1nrpfbq.hvq4nz",
+  "mean": [
+   144.09,
+   120.77,
+   120.17,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/preset/Vivid": {
+  "hash": "1ilqlna.19bdaif",
+  "mean": [
+   132.09,
+   108.57,
+   106.02,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/preset/Warm": {
+  "hash": "195gxl1.1exa3dk",
+  "mean": [
+   142.29,
+   111.07,
+   99.2,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/saturation/-100": {
+  "hash": "1cyqhih.1n8cb9k",
+  "mean": [
+   117.04,
+   117.04,
+   117.04,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/saturation/100": {
+  "hash": "cso6up.1b0thv0",
+  "mean": [
+   135.2,
+   107.88,
+   108.64,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/shadows/-100": {
+  "hash": "dco8ez.pz3hu6",
+  "mean": [
+   115.28,
+   96.16,
+   92.66,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/shadows/100": {
+  "hash": "pmx21t.8xmkz8",
+  "mean": [
+   155.58,
+   135.78,
+   134.02,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/sharpen/-100": {
+  "hash": "auhdtv.4fyouy",
+  "mean": [
+   131.58,
+   111.12,
+   109.54,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/sharpen/100": {
+  "hash": "1xnxr5v.mnnt9a",
+  "mean": [
+   131.36,
+   111.2,
+   110.51,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/temperature/-100": {
+  "hash": "1ov9pbg.1efrl8t",
+  "mean": [
+   103.4,
+   111.12,
+   139.34,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/temperature/100": {
+  "hash": "3np6cm.1vf8rzz",
+  "mean": [
+   159.24,
+   111.12,
+   81.49,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/tint/-100": {
+  "hash": "1cf96rz.alm70m",
+  "mean": [
+   117.14,
+   141.74,
+   95.47,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/tint/100": {
+  "hash": "5i8czn.1ov3f1e",
+  "mean": [
+   146.21,
+   82.45,
+   124.27,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/vibrance/-100": {
+  "hash": "raxim1.1g01yfs",
+  "mean": [
+   129.48,
+   112.1,
+   109.73,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/vibrance/100": {
+  "hash": "44743g.14wev0l",
+  "mean": [
+   132.5,
+   110.13,
+   108.25,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/whites/-100": {
+  "hash": "g5ektj.qi7x96",
+  "mean": [
+   104.34,
+   83.1,
+   83.32,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust/whites/100": {
+  "hash": "1pwtmpe.pkhw6b",
+  "mean": [
+   154.61,
+   135.47,
+   134.91,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/all/alpha": {
+  "hash": "1vxfz91.1pfo05o",
+  "mean": [
+   255,
+   150.66,
+   240.29,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "adjust16/blacks/100": {
+  "hash": "1r4gjya.12v1lx7",
+  "mean": [
+   165.6,
+   148.6,
+   146.2,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/clarity/100": {
+  "hash": "d0n6xr.x4so7e",
+  "mean": [
+   132.68,
+   107.51,
+   106.65,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/contrast/100": {
+  "hash": "nzx1vn.97asda",
+  "mean": [
+   133.13,
+   104.2,
+   106.57,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/exposure/100": {
+  "hash": "3v71fi.8hhy5v",
+  "mean": [
+   185.42,
+   175.91,
+   166.89,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/highlights/100": {
+  "hash": "vpjz40.1dm05l5",
+  "mean": [
+   142.07,
+   121.79,
+   121.64,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/noise/100": {
+  "hash": "1pusmbx.ywu3qk",
+  "mean": [
+   131.58,
+   111.14,
+   109.73,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/preset/Cool": {
+  "hash": "qe6flf.1sfjfci",
+  "mean": [
+   121.12,
+   113.44,
+   118.09,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/preset/Fade": {
+  "hash": "12kz1d2.1imolvr",
+  "mean": [
+   141.58,
+   127.02,
+   125.91,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/preset/Mono": {
+  "hash": "z7di5t.1ia8frk",
+  "mean": [
+   116.42,
+   116.42,
+   116.42,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/preset/Noir": {
+  "hash": "s8gtxe.rjf3f",
+  "mean": [
+   105.58,
+   105.58,
+   105.58,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/preset/Original": {
+  "hash": "auhdtv.4fyouy",
+  "mean": [
+   131.58,
+   111.12,
+   109.54,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/preset/Vintage": {
+  "hash": "1nrpfbq.hvq4nz",
+  "mean": [
+   144.09,
+   120.77,
+   120.17,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/preset/Vivid": {
+  "hash": "1ilqlna.19bdaif",
+  "mean": [
+   132.09,
+   108.57,
+   106.02,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/preset/Warm": {
+  "hash": "195gxl1.1exa3dk",
+  "mean": [
+   142.29,
+   111.07,
+   99.2,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/saturation/100": {
+  "hash": "cso6up.1b0thv0",
+  "mean": [
+   135.2,
+   107.88,
+   108.64,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/shadows/100": {
+  "hash": "1wb1man.1tl22cq",
+  "mean": [
+   155.58,
+   135.78,
+   134.02,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/sharpen/100": {
+  "hash": "1gk00ex.fgqyuw",
+  "mean": [
+   131.36,
+   111.17,
+   110.51,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/temperature/100": {
+  "hash": "3np6cm.1vf8rzz",
+  "mean": [
+   159.24,
+   111.12,
+   81.49,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/tint/100": {
+  "hash": "5i8czn.1ov3f1e",
+  "mean": [
+   146.21,
+   82.45,
+   124.27,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/vibrance/100": {
+  "hash": "omgs9.1fpskhk",
+  "mean": [
+   132.5,
+   110.13,
+   108.25,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "adjust16/whites/100": {
+  "hash": "1pwtmpe.pkhw6b",
+  "mean": [
+   154.61,
+   135.47,
+   134.91,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "extra/chanmix-mono/alpha": {
+  "hash": "b2wwoh.1x2mj9s",
+  "mean": [
+   200.07,
+   199.45,
+   199.76,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "extra/chanmix-mono/photo": {
+  "hash": "ke9y7w.z4axpl",
+  "mean": [
+   118.99,
+   118.99,
+   118.99,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "extra/chanmix/alpha": {
+  "hash": "dzthqn.kwb0gm",
+  "mean": [
+   192.37,
+   173.51,
+   204.22,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "extra/chanmix/photo": {
+  "hash": "o7u7wa.1bjlhj7",
+  "mean": [
+   127.74,
+   110.81,
+   103.62,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "extra/equalize/alpha": {
+  "hash": "1eqwlv5.5v8eb4",
+  "mean": [
+   232.5,
+   167.03,
+   199.76,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "extra/equalize/photo": {
+  "hash": "yavezf.1od3zuq",
+  "mean": [
+   134.58,
+   126.22,
+   114.31,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "extra/gradientmap/alpha": {
+  "hash": "1ofkdxk.3b4mot",
+  "mean": [
+   211.02,
+   185.67,
+   173.82,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "extra/gradientmap/photo": {
+  "hash": "1eqms3c.vyy6xx",
+  "mean": [
+   181.44,
+   119.09,
+   74.95,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "extra/huesat/alpha": {
+  "hash": "qjnp3p.30xees",
+  "mean": [
+   217.91,
+   157.3,
+   222.46,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "extra/huesat/photo": {
+  "hash": "1s294rs.iicvu1",
+  "mean": [
+   116.19,
+   76.56,
+   121.93,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "extra/invert/alpha": {
+  "hash": "9ql8dl.1nxa48",
+  "mean": [
+   22.5,
+   87.97,
+   55.24,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "extra/invert/photo": {
+  "hash": "xztznj.cbu9j2",
+  "mean": [
+   123.42,
+   143.88,
+   145.46,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "extra/selective/alpha": {
+  "hash": "1eqwlv5.5v8eb4",
+  "mean": [
+   232.5,
+   167.03,
+   199.76,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "extra/selective/photo": {
+  "hash": "auhdtv.4fyouy",
+  "mean": [
+   131.58,
+   111.12,
+   109.54,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/blur-box/edges": {
+  "hash": "1wknigx.5n9qxc",
+  "mean": [
+   131.63,
+   129.96,
+   119.55,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/blur-gaussian/edges": {
+  "hash": "4yusa9.17snpzk",
+  "mean": [
+   131.11,
+   129.6,
+   120.07,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/blur-motion/edges": {
+  "hash": "1fufyht.b527xs",
+  "mean": [
+   130.97,
+   129.53,
+   120.36,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/blur-spin/edges": {
+  "hash": "1nnlvc9.1obw834",
+  "mean": [
+   130.63,
+   129.23,
+   120.48,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/blur-tiltshift/edges": {
+  "hash": "1fqbsot.1vx2hno",
+  "mean": [
+   131.11,
+   129.58,
+   120.07,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/blur-zoom/edges": {
+  "hash": "tlku09.1agybio",
+  "mean": [
+   131.36,
+   129.8,
+   119.97,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/blur/alpha": {
+  "hash": "13ut9gv.dtyly2",
+  "mean": [
+   194.01,
+   38.8,
+   116.41,
+   85.2
+  ],
+  "nonEmpty": 2560
+ },
+ "filter/blur/edges": {
+  "hash": "4yusa9.17snpzk",
+  "mean": [
+   131.11,
+   129.6,
+   120.07,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/blur/photo": {
+  "hash": "1uqj6dj.p1kvty",
+  "mean": [
+   131.56,
+   111.14,
+   107.73,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/blur/scaled": {
+  "hash": "jbsddx.qxf83w",
+  "mean": [
+   130.93,
+   129.46,
+   120.23,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/canvasshadow/alpha": {
+  "hash": "of4qml.1j9t064",
+  "mean": [
+   85.7,
+   25.97,
+   55.84,
+   102.09
+  ],
+  "nonEmpty": 2507
+ },
+ "filter/canvasshadow/edges": {
+  "hash": "xza2yt.1vnm4f0",
+  "mean": [
+   130.9,
+   129.44,
+   120.27,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/canvasshadow/photo": {
+  "hash": "auhdtv.4fyouy",
+  "mean": [
+   131.58,
+   111.12,
+   109.54,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/canvasshadow/scaled": {
+  "hash": "xza2yt.1vnm4f0",
+  "mean": [
+   130.9,
+   129.44,
+   120.27,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/clarity/alpha": {
+  "hash": "17nxzjr.1y0ii16",
+  "mean": [
+   201.18,
+   160.74,
+   180.97,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/clarity/edges": {
+  "hash": "16xtpp5.1wl0294",
+  "mean": [
+   132.47,
+   132.22,
+   121.85,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/clarity/photo": {
+  "hash": "5wf6os.1qry5cx",
+  "mean": [
+   132.43,
+   112.3,
+   108.04,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/clarity/scaled": {
+  "hash": "1lmkvrp.1su9bng",
+  "mean": [
+   131.87,
+   131.52,
+   121.25,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/crystallize/alpha": {
+  "hash": "12a640v.1971hgq",
+  "mean": [
+   232.49,
+   166.99,
+   199.77,
+   85.56
+  ],
+  "nonEmpty": 2024
+ },
+ "filter/crystallize/edges": {
+  "hash": "12en0m6.vpk617",
+  "mean": [
+   130.88,
+   129.33,
+   120.28,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/crystallize/photo": {
+  "hash": "18o5usb.1rpzrni",
+  "mean": [
+   131.53,
+   111.08,
+   109.56,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/crystallize/scaled": {
+  "hash": "5u6ewo.1mm74yp",
+  "mean": [
+   130.87,
+   129.47,
+   120.26,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/dehaze/alpha": {
+  "hash": "1eqwlv5.5v8eb4",
+  "mean": [
+   232.5,
+   167.03,
+   199.76,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/dehaze/edges": {
+  "hash": "124f119.9aqew4",
+  "mean": [
+   130.26,
+   128.8,
+   119.64,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/dehaze/photo": {
+  "hash": "17eykc1.1ix7ni0",
+  "mean": [
+   131.14,
+   111.24,
+   109.77,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/dehaze/scaled": {
+  "hash": "j0p5g5.chaef0",
+  "mean": [
+   129.38,
+   127.93,
+   118.76,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/denoise/alpha": {
+  "hash": "1c3ai8x.17r7xb4",
+  "mean": [
+   228.53,
+   169.21,
+   198.88,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/denoise/edges": {
+  "hash": "1i6q8th.1g9t798",
+  "mean": [
+   130.85,
+   129.42,
+   120.93,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/denoise/photo": {
+  "hash": "1ny6exq.dqynu3",
+  "mean": [
+   131.44,
+   111,
+   109.01,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/denoise/scaled": {
+  "hash": "vo30th.1xsksi4",
+  "mean": [
+   130.84,
+   129.44,
+   121.62,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/distort-pinch/edges": {
+  "hash": "ohsnv.6wr0r2",
+  "mean": [
+   130.05,
+   128.87,
+   121.48,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/distort-twirl/edges": {
+  "hash": "1vlvloh.q48acc",
+  "mean": [
+   131.01,
+   129.55,
+   120.38,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/distort-wave/edges": {
+  "hash": "zblzs0.1lm0rol",
+  "mean": [
+   147.29,
+   143.41,
+   119.07,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/distort-wave/scaled": {
+  "hash": "eg2uxj.19w2zf6",
+  "mean": [
+   132.89,
+   129.84,
+   110.64,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/distort/alpha": {
+  "hash": "2mlp8w.1h101id",
+  "mean": [
+   86,
+   17.2,
+   51.6,
+   85.52
+  ],
+  "nonEmpty": 1321
+ },
+ "filter/distort/edges": {
+  "hash": "1vlvloh.q48acc",
+  "mean": [
+   131.01,
+   129.55,
+   120.38,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/distort/photo": {
+  "hash": "19ik456.5mucbv",
+  "mean": [
+   131.56,
+   111.12,
+   109.69,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/dustscratches/alpha": {
+  "hash": "1eqwlv5.5v8eb4",
+  "mean": [
+   232.5,
+   167.03,
+   199.76,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/dustscratches/edges": {
+  "hash": "1esq64l.1r01iz0",
+  "mean": [
+   131.55,
+   130.42,
+   119.52,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/dustscratches/photo": {
+  "hash": "1dsnqa5.dv9j6s",
+  "mean": [
+   131.52,
+   111.25,
+   111.06,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/dustscratches/scaled": {
+  "hash": "fqkynx.qdbms4",
+  "mean": [
+   128.75,
+   128.13,
+   122.29,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/glitch/alpha": {
+  "hash": "1o2b5gl.1r11ugc",
+  "mean": [
+   211.54,
+   152,
+   181.67,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/glitch/edges": {
+  "hash": "4yg6qz.uxzjh2",
+  "mean": [
+   118.16,
+   116.88,
+   108.58,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/glitch/photo": {
+  "hash": "91vare.11v04ib",
+  "mean": [
+   131.15,
+   100.91,
+   91.02,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/glitch/scaled": {
+  "hash": "9gjccz.u84h46",
+  "mean": [
+   118.98,
+   117.68,
+   109.37,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/grain/alpha": {
+  "hash": "1dl6il1.1xqpakc",
+  "mean": [
+   232.4,
+   166.93,
+   199.67,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/grain/edges": {
+  "hash": "19obwae.1lxflfj",
+  "mean": [
+   130.82,
+   129.48,
+   120.48,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/grain/photo": {
+  "hash": "17rowd2.xbcfb3",
+  "mean": [
+   131.67,
+   111.4,
+   109.81,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/grain/scaled": {
+  "hash": "102l0nn.54bgdq",
+  "mean": [
+   130.67,
+   129.35,
+   120.33,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/halftone-mono/edges": {
+  "hash": "6fqumw.fg42v9",
+  "mean": [
+   146.07,
+   146.07,
+   146.07,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/halftone/alpha": {
+  "hash": "1s7cnhf.1lzs37y",
+  "mean": [
+   223.32,
+   164.15,
+   176.61,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/halftone/edges": {
+  "hash": "uc0v2p.1rqshcc",
+  "mean": [
+   118.3,
+   115.16,
+   109.31,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/halftone/photo": {
+  "hash": "85tluk.s9s7jd",
+  "mean": [
+   101.21,
+   69.45,
+   77.83,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/halftone/scaled": {
+  "hash": "s7gx6y.1hktwtf",
+  "mean": [
+   106.76,
+   104.51,
+   109.3,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/highpass/alpha": {
+  "hash": "1y7enmx.em7rm0",
+  "mean": [
+   203.32,
+   202.69,
+   203,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/highpass/edges": {
+  "hash": "1pe2irh.18i6ad0",
+  "mean": [
+   127.45,
+   127.8,
+   128.49,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/highpass/photo": {
+  "hash": "1ucbh8f.1ic5g9q",
+  "mean": [
+   128,
+   128,
+   128.41,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/highpass/scaled": {
+  "hash": "1k1kp01.1678ok0",
+  "mean": [
+   127.31,
+   127.66,
+   128.62,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/lens/alpha": {
+  "hash": "1eqwlv5.5v8eb4",
+  "mean": [
+   232.5,
+   167.03,
+   199.76,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/lens/edges": {
+  "hash": "1ong87p.1lc3wuk",
+  "mean": [
+   121.14,
+   119.81,
+   111.5,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/lens/photo": {
+  "hash": "1quxqk5.1qzzq5w",
+  "mean": [
+   122.21,
+   102.38,
+   102.55,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/median/alpha": {
+  "hash": "11yvh3l.5mrvn4",
+  "mean": [
+   232.5,
+   167.03,
+   199.76,
+   85.34
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/median/edges": {
+  "hash": "37h15x.1g9q0xo",
+  "mean": [
+   131.2,
+   130.42,
+   119.8,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/median/photo": {
+  "hash": "3q8s1y.xfqrmz",
+  "mean": [
+   131.42,
+   111.13,
+   109.32,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/median/scaled": {
+  "hash": "b9wxel.nxkf4k",
+  "mean": [
+   128.61,
+   128.13,
+   122.4,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/noise-uniform/edges": {
+  "hash": "iuddgf.1ohrsk6",
+  "mean": [
+   130.38,
+   129.29,
+   120.68,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/noise/alpha": {
+  "hash": "xzw7ph.dctbxg",
+  "mean": [
+   232.4,
+   166.93,
+   199.67,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/noise/edges": {
+  "hash": "p3yrtx.ak1mf4",
+  "mean": [
+   130.7,
+   129.35,
+   120.31,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/noise/photo": {
+  "hash": "145n63i.1vc2dzv",
+  "mean": [
+   131.57,
+   111.14,
+   109.59,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/oil/alpha": {
+  "hash": "1eqwlv5.5v8eb4",
+  "mean": [
+   232.5,
+   167.03,
+   199.76,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/oil/edges": {
+  "hash": "2i0qgl.wywygs",
+  "mean": [
+   123.03,
+   123.03,
+   123.03,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/oil/photo": {
+  "hash": "mzy58j.1617ksm",
+  "mean": [
+   130.42,
+   105.54,
+   92.21,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/oil/scaled": {
+  "hash": "1yyae4d.d2hllg",
+  "mean": [
+   125.72,
+   125.66,
+   125.28,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/pixelate/alpha": {
+  "hash": "1d7exfp.8r60ws",
+  "mean": [
+   133.33,
+   26.67,
+   80,
+   85.52
+  ],
+  "nonEmpty": 2048
+ },
+ "filter/pixelate/edges": {
+  "hash": "oy230l.1cdy68s",
+  "mean": [
+   131,
+   129.5,
+   120.33,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/pixelate/photo": {
+  "hash": "16gkfk5.1htfeos",
+  "mean": [
+   131.58,
+   111.46,
+   109.35,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/pixelate/scaled": {
+  "hash": "uztghx.12eh5p8",
+  "mean": [
+   130.92,
+   129.42,
+   120.25,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/sharpen/alpha": {
+  "hash": "1eqwlv5.5v8eb4",
+  "mean": [
+   232.5,
+   167.03,
+   199.76,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/sharpen/edges": {
+  "hash": "i6k3l1.7x8hfg",
+  "mean": [
+   131.56,
+   131.23,
+   122.19,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/sharpen/photo": {
+  "hash": "1jqt6eh.1q9sy9w",
+  "mean": [
+   131.47,
+   111.2,
+   110.74,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "filter/sharpen/scaled": {
+  "hash": "i6k3l1.7x8hfg",
+  "mean": [
+   131.56,
+   131.23,
+   122.19,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/stylize-emboss/edges": {
+  "hash": "zppued.1ohrvos",
+  "mean": [
+   127.83,
+   127.83,
+   127.83,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/stylize-emboss/scaled": {
+  "hash": "1ukeqdh.btuv6k",
+  "mean": [
+   127.77,
+   127.77,
+   127.77,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/stylize-findEdges/edges": {
+  "hash": "vrrcu5.qop4ec",
+  "mean": [
+   145.34,
+   146,
+   145.85,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/stylize-posterize/edges": {
+  "hash": "qxbkw5.ko7izg",
+  "mean": [
+   132.81,
+   132.81,
+   122.19,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/stylize-threshold/edges": {
+  "hash": "1bugozp.1abcq1o",
+  "mean": [
+   132.81,
+   132.81,
+   132.81,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/stylize/alpha": {
+  "hash": "1oi4feo.1il8cdh",
+  "mean": [
+   236.63,
+   228.11,
+   230.02,
+   85.52
+  ],
+  "nonEmpty": 1245
+ },
+ "filter/stylize/edges": {
+  "hash": "vrrcu5.qop4ec",
+  "mean": [
+   145.34,
+   146,
+   145.85,
+   255
+  ],
+  "nonEmpty": 2304
+ },
+ "filter/stylize/photo": {
+  "hash": "1eel0vu.1dhtf1v",
+  "mean": [
+   208.37,
+   210.86,
+   63.75,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "tone/curve/Darken Midtones": {
+  "hash": "q1n1a0.1k18fjx",
+  "mean": [
+   115.96,
+   92.01,
+   92.66,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "tone/curve/Decrease Contrast": {
+  "hash": "64trtl.jty0v0",
+  "mean": [
+   130.74,
+   112.74,
+   110.22,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "tone/curve/Increase Contrast": {
+  "hash": "1exk42q.1no24gj",
+  "mean": [
+   131.6,
+   108.69,
+   108.18,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "tone/curve/Lighten Midtones": {
+  "hash": "1fdksk6.13wbdub",
+  "mean": [
+   147.21,
+   130.23,
+   126.43,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "tone/curve/Linear": {
+  "hash": "auhdtv.4fyouy",
+  "mean": [
+   131.58,
+   111.12,
+   109.54,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "tone/curve/Negative": {
+  "hash": "xztznj.cbu9j2",
+  "mean": [
+   123.42,
+   143.88,
+   145.46,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "tone/levels/split": {
+  "hash": "36r551.zarmsk",
+  "mean": [
+   137.68,
+   126.81,
+   122.53,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "tone16/curve/contrast": {
+  "hash": "4p2icz.1yfjt4e",
+  "mean": [
+   131.6,
+   124.89,
+   108.18,
+   255
+  ],
+  "nonEmpty": 3072
+ },
+ "tone16/levels/split": {
+  "hash": "1aqxvpy.1frar7z",
+  "mean": [
+   137.69,
+   126.81,
+   122.56,
+   255
+  ],
+  "nonEmpty": 3072
+ }
+}

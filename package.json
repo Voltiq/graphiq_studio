@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "0.59.0",
+  "version": "0.60.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,6 +10,7 @@
     "perf": "node tools/perf-suite.js",
     "test": "vitest run",
     "test:pixel": "node tools/pixel-identity.js",
+    "test:fx": "node tools/golden-effects.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && vitest run"

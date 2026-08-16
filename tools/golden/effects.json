@@ -1,0 +1,102 @@
+{
+ "fixture/bare": {
+  "hash": "1sze4l3.1f09is4",
+  "mean": [
+   16.31,
+   45,
+   71.72,
+   71.72
+  ],
+  "ink": 18000
+ },
+ "fx/Bevel & Emboss": {
+  "hash": "1rly7l6.1bgf7kz",
+  "mean": [
+   16.99,
+   44.67,
+   70.47,
+   71.72
+  ],
+  "ink": 18000
+ },
+ "fx/Color Overlay": {
+  "hash": "1yjfdzn.i7kf3y",
+  "mean": [
+   71.72,
+   16.59,
+   16.59,
+   71.72
+  ],
+  "ink": 18000
+ },
+ "fx/Drop Shadow": {
+  "hash": "1a8fn40.1n20qbj",
+  "mean": [
+   16.31,
+   45,
+   71.72,
+   76.57
+  ],
+  "ink": 29688
+ },
+ "fx/Gradient Overlay": {
+  "hash": "vtff7y.kulq91",
+  "mean": [
+   35.87,
+   35.87,
+   35.87,
+   71.72
+  ],
+  "ink": 18000
+ },
+ "fx/Inner Glow": {
+  "hash": "1tbux2f.1qds2ou",
+  "mean": [
+   19.89,
+   46.64,
+   71.72,
+   71.72
+  ],
+  "ink": 18000
+ },
+ "fx/Inner Shadow": {
+  "hash": "t7ouc6.u8z3oh",
+  "mean": [
+   15.48,
+   42.69,
+   68.01,
+   71.72
+  ],
+  "ink": 18000
+ },
+ "fx/Outer Glow": {
+  "hash": "1phrbwa.18x4ehn",
+  "mean": [
+   70.79,
+   94.68,
+   104.1,
+   76.44
+  ],
+  "ink": 31672
+ },
+ "fx/Stroke": {
+  "hash": "eeix9z.z6oub2",
+  "mean": [
+   19.28,
+   47.96,
+   74.68,
+   74.01
+  ],
+  "ink": 18744
+ },
+ "fx/all-eight": {
+  "hash": "17sze5m.1nkirb7",
+  "mean": [
+   73.05,
+   70.01,
+   58.81,
+   81.84
+  ],
+  "ink": 33280
+ }
+}

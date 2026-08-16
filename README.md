@@ -81,7 +81,8 @@ There is also a pixel-identity check that renders fixture documents twice — wi
 
 ```bash
 npm run dev        # in one terminal
-npm run test:pixel # in another
+npm run test:pixel # in another — cached vs uncached composites must match
+npm run test:fx    # golden images for the eight layer effects
 ```
 
 ---
