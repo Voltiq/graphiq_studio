@@ -76,6 +76,7 @@ export const MENUS: Menu[] = [
     items: [
       { label: "New layer", shortcut: "Ctrl+Shift+N", action: "layer-new" },
       { label: "New fill: solid color…", action: "fill-solid" },
+      { label: "Frame from layer", action: "frame-from-layer" },
       { label: "New fill: gradient…", action: "fill-gradient" },
       { label: "Duplicate layer", action: "layer-duplicate" },
       { label: "Delete layer", separatorAfter: true, action: "layer-delete" },

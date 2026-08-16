@@ -719,6 +719,8 @@ export default function CanvasArea({
   onFilterAnchorDrag,
   onPenPathCommit,
   onPathEdited,
+  onFrameDrawn,
+  frameShape,
   recordStrokes,
   onStrokeRecord,
   pendingPaste,
@@ -911,6 +913,10 @@ export default function CanvasArea({
   onPenPathCommit: (anchors: PenAnchor[], closed: boolean) => void;
   /** Direct Selection committing an edit of an existing stored path. */
   onPathEdited?: (id: string, anchors: PenAnchor[], closed: boolean) => void;
+  /** The Frame tool finished dragging out a new frame. */
+  onFrameDrawn?: (rect: { x: number; y: number; w: number; h: number }, shape: "rect" | "ellipse") => void;
+  /** Which shape the Frame tool draws. */
+  frameShape: "rect" | "ellipse";
   /** Actions recorder: capture brush/pencil/eraser strokes while armed. */
   recordStrokes: boolean;
   onStrokeRecord: (stroke: StrokeStep) => void;
@@ -1234,6 +1240,11 @@ export default function CanvasArea({
   // the live engine render are the ones the Pen already has. What it adds is a
   // SELECTION of anchors, a marquee, and the structural edits (insert, delete,
   // corner⇄smooth) the pen has no verb for.
+  /** Frame tool: the rubber band while dragging out a new frame, and which
+   *  shape the next one takes (the options bar drives it). */
+  const frameDragRef = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const frameShapeRef = useRef<"rect" | "ellipse">(frameShape);
+  frameShapeRef.current = frameShape;
   /** Stored path being edited; a commit writes back to it. */
   const dsSourceRef = useRef<string | null>(null);
   const dsSelRef = useRef<Set<number>>(new Set());
@@ -2554,6 +2565,61 @@ export default function CanvasArea({
         ctx.textBaseline = "middle";
         ctx.fillText(label, lx, ly - 2);
       }
+    }
+
+    // --- frames: chrome on the SELECTED frame layer ---
+    // Only the selected one. Testing every frame for emptiness would mean
+    // scanning its pixels on every overlay frame, and showing chrome on all of
+    // them at once would bury the artwork under boxes.
+    {
+      const sel = activeLayerId ? findNode(layersRef.current, activeLayerId) : null;
+      const fr = sel && sel.type === "layer" ? sel.frame : undefined;
+      if (fr) {
+        const rx = p.x + fr.x * s;
+        const ry = p.y + fr.y * s;
+        const rw = fr.w * s;
+        const rh = fr.h * s;
+        ctx.setLineDash([6, 4]);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "rgba(0,0,0,0.5)";
+        if (fr.shape === "ellipse") {
+          ctx.beginPath();
+          ctx.ellipse(rx + rw / 2, ry + rh / 2, rw / 2, rh / 2, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.strokeStyle = shapeNodeColor();
+          ctx.stroke();
+        } else {
+          ctx.strokeRect(rx, ry, rw, rh);
+          ctx.strokeStyle = shapeNodeColor();
+          ctx.strokeRect(rx, ry, rw, rh);
+        }
+        // The placeholder cross — how a frame says "something goes here".
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(rx, ry);
+        ctx.lineTo(rx + rw, ry + rh);
+        ctx.moveTo(rx + rw, ry);
+        ctx.lineTo(rx, ry + rh);
+        ctx.strokeStyle = "rgba(0,0,0,0.18)";
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+
+    // --- frame tool: the rubber band while dragging one out ---
+    const fd = frameDragRef.current;
+    if (fd) {
+      const rx = p.x + Math.min(fd.x0, fd.x1) * s;
+      const ry = p.y + Math.min(fd.y0, fd.y1) * s;
+      const rw = Math.abs(fd.x1 - fd.x0) * s;
+      const rh = Math.abs(fd.y1 - fd.y0) * s;
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.strokeStyle = shapeNodeColor();
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.setLineDash([]);
     }
 
     // --- direct selection: the anchor marquee ---
@@ -5647,6 +5713,15 @@ export default function CanvasArea({
       ensureAnts();
       return;
     }
+    if (tool === "frame") {
+      if (engine.isFloating) engine.commitFloat();
+      e.preventDefault();
+      viewRef.current?.setPointerCapture(e.pointerId);
+      const p = toDoc(e);
+      frameDragRef.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      ensureAnts();
+      return;
+    }
     if (tool === "directselect") {
       const path = penPathRef.current;
       if (!path) return; // nothing loaded — pick a path in the Paths panel
@@ -6390,6 +6465,13 @@ export default function CanvasArea({
       ensureAnts();
       return;
     }
+    if (frameDragRef.current) {
+      const p = toDoc(e);
+      frameDragRef.current.x1 = p.x;
+      frameDragRef.current.y1 = p.y;
+      ensureAnts();
+      return;
+    }
     if (dsMarqueeRef.current) {
       const p = toDoc(e);
       dsMarqueeRef.current.x1 = p.x;
@@ -6902,6 +6984,21 @@ export default function CanvasArea({
       setHoverCursor(gradientHandleAt(toDoc(e)) ? "grab" : null);
       ensureAnts();
       return;
+    }
+    if (frameDragRef.current) {
+      const f = frameDragRef.current;
+      frameDragRef.current = null;
+      const w = Math.abs(f.x1 - f.x0);
+      const h = Math.abs(f.y1 - f.y0);
+      // A click rather than a drag is not a frame; ignoring it beats creating a
+      // one-pixel placeholder nobody can see or grab.
+      if (w >= 4 && h >= 4) {
+        onFrameDrawn?.(
+          { x: Math.min(f.x0, f.x1), y: Math.min(f.y0, f.y1), w, h },
+          frameShapeRef.current,
+        );
+      }
+      ensureAnts();
     }
     if (dsMarqueeRef.current) {
       const m = dsMarqueeRef.current;

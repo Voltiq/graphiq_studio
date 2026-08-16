@@ -7,6 +7,7 @@ import type { GradientStop, GradientType, VectorData } from "./tools";
 /** Per-layer mask metadata. The mask *pixels* live in the paint engine (keyed by
  *  layer id, mirroring layer pixels); only this metadata lives on the tree. */
 import type { VectorMask } from "./vector-mask";
+import type { FrameSpec } from "./frame";
 import type { KnockoutMode } from "./knockout";
 
 export interface MaskMeta {
@@ -154,6 +155,11 @@ export interface LayerLeaf extends LayerBase {
   /** If set, the layer is a parametric Fill layer: it stores no pixels, the
    *  engine renders `fill` full-canvas each frame (confined by mask/clip). */
   fill?: FillSpec;
+  /** If set, the layer is a FRAME: a placeholder region that clips whatever is
+   *  inside it. The clipping is done by the layer's vector mask (which the
+   *  frame keeps in step with its box); this spec holds the box, the fit, and
+   *  the content's own offset and scale. See frame.ts. */
+  frame?: FrameSpec;
 }
 
 /** A layer whose content comes from a fill spec (no stored pixels). */

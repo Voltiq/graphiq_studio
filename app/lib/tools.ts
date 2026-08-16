@@ -20,6 +20,7 @@ import {
   Droplet,
   Droplets,
   Fingerprint,
+  Frame,
   Palette,
   History,
   SunMedium,
@@ -54,6 +55,7 @@ export type ToolId =
   | "smudge"
   | "mixer"
   | "directselect"
+  | "frame"
   | "dodge"
   | "sponge"
   | "text"
@@ -99,6 +101,7 @@ export const TOOL_GROUPS: Tool[][] = [
     { id: "smudge", name: "Smudge", icon: Fingerprint, shortcut: "F" },
     { id: "mixer", name: "Mixer brush", icon: Palette, shortcut: "B" },
     { id: "directselect", name: "Direct selection", icon: MousePointer2, shortcut: "A" },
+    { id: "frame", name: "Frame", icon: Frame, shortcut: "K" },
     { id: "dodge", name: "Dodge", icon: SunMedium, shortcut: "O" },
     { id: "sponge", name: "Sponge", icon: Droplets, shortcut: "A" },
   ],

@@ -32,6 +32,7 @@ import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/pr
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
 import { styleToPatch, type LayerStylePreset } from "../lib/styleio";
 import { DEFAULT_MIXER, sanitizeMixer, type MixerSettings } from "../lib/mixer";
+import { defaultFrame, framePath, type FrameRect, type FrameSpec } from "../lib/frame";
 import {
   mergeVisibleIsNoop,
   mergeVisiblePlan,
@@ -543,6 +544,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [quickSelect, setQuickSelect] = useState<QuickSelectSettings>(DEFAULT_QUICKSELECT);
   const [smudge, setSmudge] = useState<SmudgeSettings>(DEFAULT_SMUDGE);
   const [mixer, setMixer] = useState<MixerSettings>(DEFAULT_MIXER);
+  const [frameShape, setFrameShape] = useState<"rect" | "ellipse">("rect");
   const [sponge, setSponge] = useState<SpongeSettings>(DEFAULT_SPONGE);
   const [historyBrush, setHistoryBrush] = useState<BrushSettings>({
     size: 24,
@@ -2176,6 +2178,70 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       },
     );
     return id;
+  };
+
+  /**
+   * Create a frame: a layer carrying a FrameSpec and a vector mask in the
+   * frame's shape. The mask is what actually clips, so a frame needs no new
+   * compositing path — anything painted or pasted into the layer is confined to
+   * the frame from the moment it exists.
+   */
+  const addFrameLayer = (spec: FrameSpec): string | null => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    if (!eng) return null;
+    const docId = d.id;
+    const selBefore = selNow();
+    const before = d.layers;
+    const id = nextLeafId();
+    const node: Layer = {
+      id,
+      type: "layer",
+      name: "Frame",
+      visible: true,
+      opacity: 100,
+      blend: "Normal",
+      frame: spec,
+      vectorMask: defaultVectorMask(framePath(spec)),
+    };
+    const anchor = d.activeLayerId ? findNode(before, d.activeLayerId) : null;
+    let after: LayerNode[];
+    if (anchor && anchor.type === "group") after = insertInGroup(before, node, anchor.id);
+    else if (anchor) after = insertRelative(before, node, anchor.id, true);
+    else after = [node, ...before];
+    setDocSel(docId, after, single(id));
+    eng.pushStructural(
+      "New Frame",
+      () => setDocSel(docId, before, selBefore),
+      () => setDocSel(docId, after, single(id)),
+    );
+    return id;
+  };
+
+  /**
+   * Turn an existing layer into a frame around its own content.
+   *
+   * The counterpart to drawing an empty frame: you already have the picture and
+   * want a window onto it. The frame takes the layer's content bounds, so
+   * nothing is cropped at the moment of conversion — the crop starts when you
+   * resize the frame.
+   */
+  const frameFromLayerOp = (id: string) => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    const node = findNode(d.layers, id);
+    if (!eng || !node || node.type !== "layer") return;
+    const b = eng.layerContentBounds(id);
+    if (!b) {
+      showToast("That layer has no pixels to frame.");
+      return;
+    }
+    const spec = defaultFrame(b);
+    stylePatchStructural(
+      id,
+      { frame: spec, vectorMask: defaultVectorMask(framePath(spec)) },
+      "Frame from Layer",
+    );
   };
 
   // Create a fill layer of the given kind and open its editor immediately.
@@ -5838,6 +5904,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "layer-group") groupSelected();
     else if (actionId === "layer-ungroup") {
       if (al) ungroupLayerOp(al);
+    } else if (actionId === "frame-from-layer") {
+      if (al) frameFromLayerOp(al);
     } else if (actionId === "layer-isolate") {
       toggleIsolate();
     } else if (actionId === "layer-merge-visible") mergeVisibleOp();
@@ -6471,6 +6539,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onSmudge={(patch) => setSmudge((s) => ({ ...s, ...patch }))}
         mixer={mixer}
         onMixer={(patch) => setMixer((s) => ({ ...s, ...patch }))}
+        frameShape={frameShape}
+        onFrameShape={setFrameShape}
         onCleanMixer={() => {
           paintRef.current?.cleanMixer();
           showToast("Brush cleaned.");
@@ -6650,6 +6720,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onFilterAnchorDrag={onFilterAnchorDrag}
           onPenPathCommit={storeWorkPath}
           onPathEdited={(id, anchors, closed) => pathsApi.replace(id, anchors, closed)}
+          onFrameDrawn={(rect, shape) => addFrameLayer(defaultFrame(rect, shape))}
+          frameShape={frameShape}
           recordStrokes={!!recordingId}
           onStrokeRecord={recordStrokeStep}
           pendingPaste={pendingPaste}

@@ -950,6 +950,11 @@ interface MixerProps {
   onCleanMixer: () => void;
 }
 
+interface FrameProps {
+  frameShape: "rect" | "ellipse";
+  onFrameShape: (v: "rect" | "ellipse") => void;
+}
+
 interface SpongeProps {
   sponge: SpongeSettings;
   onSponge: (patch: Partial<SpongeSettings>) => void;
@@ -1217,6 +1222,8 @@ export default function OptionsBar({
   mixer,
   onMixer,
   onCleanMixer,
+  frameShape,
+  onFrameShape,
   sponge,
   onSponge,
   historyBrush,
@@ -1293,6 +1300,7 @@ export default function OptionsBar({
   BlurProps &
   SmudgeProps &
   MixerProps &
+  FrameProps &
   SpongeProps &
   HistoryBrushProps &
   HealProps &
@@ -1385,6 +1393,7 @@ export default function OptionsBar({
           { blur, onBlur },
           { smudge, onSmudge },
           { mixer, onMixer, onCleanMixer },
+          { frameShape, onFrameShape },
           { sponge, onSponge },
           { historyBrush, onHistoryBrush },
           { heal, onHeal },
@@ -1450,6 +1459,7 @@ function renderOptions(
   blurProps: BlurProps,
   smudgeProps: SmudgeProps,
   mixerProps: MixerProps,
+  frameProps: FrameProps,
   spongeProps: SpongeProps,
   historyBrushProps: HistoryBrushProps,
   healProps: HealProps,
@@ -1738,6 +1748,22 @@ function renderOptions(
               />
             </>
           )}
+        </>
+      );
+    }
+
+    case "frame": {
+      const { frameShape: fs, onFrameShape: setFs } = frameProps;
+      return (
+        <>
+          <Segmented
+            value={fs}
+            onChange={(v) => setFs(v as "rect" | "ellipse")}
+            options={[
+              { value: "rect", icon: <Square size={14} />, title: "Rectangular frame" },
+              { value: "ellipse", icon: <Circle size={14} />, title: "Elliptical frame" },
+            ]}
+          />
         </>
       );
     }

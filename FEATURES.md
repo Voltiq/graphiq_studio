@@ -289,6 +289,15 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Smooth blurs then re-thresholds**, so it rounds off corners and speckle while leaving the selection HARD. Feather is the control for softness; conflating the two would leave no way to tidy a jagged edge without also blurring it.
 - Because the morphology runs on a raster, the result comes back as axis-aligned rects with any selection rotation already baked in — so the new selection is committed at angle 0 rather than being rotated a second time. Pure math in [select-modify.ts](app/lib/select-modify.ts) (30 Node checks); the browser results agree with it to the pixel (expand 28248, contract 12144, border 8896, smooth 19132 in both).
 
+### Frames (placeholders)
+
+- A **Frame** tool (`K`) draws rectangular or elliptical placeholders that **clip their contents**: paint or paste inside and it lands, stray outside and it is simply not there. **Layer ▸ Frame from layer** does the converse — wraps a picture you already have in a frame at its own content bounds, so nothing is cropped until you resize the frame.
+- **A frame is not a new kind of clipping.** It is a layer carrying a `FrameSpec` plus a vector mask in the frame's shape, so the existing mask pipeline does the work — resolution-independent, already cached by path hash, already saved in the project file. The elliptical frame is four cubic anchors with the circle constant (measured mid-arc radius 50.0000 against a true 50).
+- **Resizing a frame does not drag its content.** The content's offset is measured from the frame's centre, so growing the box would otherwise pull the picture along with it; the offset compensates, which is what makes a frame a window rather than a container.
+- The fit model — **cover / contain / stretch / actual size**, plus the content's own offset and scale — is built and tested: cover always covers and contain always fits for every aspect ratio tried, scaling happens about the frame's centre so nudging then scaling does not also slide, and degenerate input (zero-size frame or image) returns finite numbers instead of spreading NaN.
+- 51 Node checks ([frame.ts](app/lib/frame.ts)), 9 in the browser: a stroke drawn straight across a frame's edges left 4320px inside it and **0 on either side**.
+- **Not yet**: placing an image *into* a frame through import or drag-drop — the fit maths above is what that will use, but `importAsLayers` still needs a branch for "the active layer is a frame". Until then a frame is filled by painting or pasting into it, which the clipping already handles.
+
 ### Direct selection (path editing)
 
 - A first-class **Direct selection** tool (`A`) for reshaping a path after it exists: click an anchor to grab it, **Shift-click** to add to the selection, **marquee-drag** to take several, then drag them together. Handles appear on selected anchors and pull the curve; **Alt** while dragging a handle breaks the symmetry. **Alt-click an anchor** flips it between corner and smooth, **Alt-click a segment** inserts a point there, **Delete** removes the selected ones.
