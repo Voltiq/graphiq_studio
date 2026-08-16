@@ -36,6 +36,10 @@ import {
   Minus,
   MousePointer2,
   Plus,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
   RotateCcw,
   Ruler,
   Square,
@@ -958,6 +962,12 @@ interface FrameProps {
   frameFit: FrameFit;
   onFrameFit: (f: FrameFit) => void;
   frameSelected: boolean;
+  /** A frame with a picture in it can be re-fitted, scaled and nudged. */
+  frameHasContent: boolean;
+  frameScale: number;
+  onFrameScale: (s: number) => void;
+  onFrameNudge: (dx: number, dy: number) => void;
+  onFrameReset: () => void;
 }
 
 interface SpongeProps {
@@ -1231,6 +1241,11 @@ export default function OptionsBar({
   frameFit,
   onFrameFit,
   frameSelected,
+  frameHasContent,
+  frameScale,
+  onFrameScale,
+  onFrameNudge,
+  onFrameReset,
   onFrameShape,
   sponge,
   onSponge,
@@ -1401,7 +1416,18 @@ export default function OptionsBar({
           { blur, onBlur },
           { smudge, onSmudge },
           { mixer, onMixer, onCleanMixer },
-          { frameShape, onFrameShape, frameFit, onFrameFit, frameSelected },
+          {
+            frameShape,
+            onFrameShape,
+            frameFit,
+            onFrameFit,
+            frameSelected,
+            frameHasContent,
+            frameScale,
+            onFrameScale,
+            onFrameNudge,
+            onFrameReset,
+          },
           { sponge, onSponge },
           { historyBrush, onHistoryBrush },
           { heal, onHeal },
@@ -1761,7 +1787,18 @@ function renderOptions(
     }
 
     case "frame": {
-      const { frameShape: fs, onFrameShape: setFs, frameFit, onFrameFit, frameSelected } = frameProps;
+      const {
+        frameShape: fs,
+        onFrameShape: setFs,
+        frameFit,
+        onFrameFit,
+        frameSelected,
+        frameHasContent,
+        frameScale,
+        onFrameScale,
+        onFrameNudge,
+        onFrameReset,
+      } = frameProps;
       return (
         <>
           <Segmented
@@ -1786,11 +1823,43 @@ function renderOptions(
               if (hit) onFrameFit(hit.id);
             }}
           />
-          <span className={styles.note}>
-            {frameSelected
-              ? "Drop an image on the canvas to place it in this frame"
-              : "Drag out a frame, then drop an image on it"}
-          </span>
+          {/* Only meaningful once there is a picture to move: an empty frame has
+              nothing to scale or nudge, and offering it would be a dead control. */}
+          {frameHasContent ? (
+            <>
+              <Divider />
+              <Slider
+                label="Scale"
+                unit="%"
+                min={10}
+                max={400}
+                value={Math.round(frameScale * 100)}
+                onChange={(n) => onFrameScale(n / 100)}
+              />
+              <Divider />
+              <button type="button" className={styles.iconBtn} title="Move content left" onClick={() => onFrameNudge(-8, 0)}>
+                <ChevronLeft size={14} />
+              </button>
+              <button type="button" className={styles.iconBtn} title="Move content right" onClick={() => onFrameNudge(8, 0)}>
+                <ChevronRight size={14} />
+              </button>
+              <button type="button" className={styles.iconBtn} title="Move content up" onClick={() => onFrameNudge(0, -8)}>
+                <ChevronUp size={14} />
+              </button>
+              <button type="button" className={styles.iconBtn} title="Move content down" onClick={() => onFrameNudge(0, 8)}>
+                <ChevronDown size={14} />
+              </button>
+              <button type="button" className={styles.iconBtn} title="Recentre the picture at its fitted size" onClick={onFrameReset}>
+                <RotateCcw size={14} />
+              </button>
+            </>
+          ) : (
+            <span className={styles.note}>
+              {frameSelected
+                ? "Drop an image on the canvas to place it in this frame"
+                : "Drag out a frame, then drop an image on it"}
+            </span>
+          )}
         </>
       );
     }

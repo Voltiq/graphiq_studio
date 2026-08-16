@@ -3914,6 +3914,11 @@ export default function CanvasArea({
       getLayerCanvas: (id) => engine.getLayerCanvas(id),
       setLayerImage: (id, src, x, y) => engine.setLayerImage(id, src, x, y),
       applyLayerImage: (id, src, label) => engine.applyLayerImage(id, src, label),
+      setFrameSource: (id, src, w, h) => engine.setFrameSource(id, src, w, h),
+      getFrameSource: (id) => engine.getFrameSource(id),
+      hasFrameSource: (id) => engine.hasFrameSource(id),
+      getFrameSourceImage: (id) => engine.getFrameSourceImage(id),
+      clearFrameSource: (id) => engine.clearFrameSource(id),
       getMaskImage: (id) => engine.getMaskImage(id),
       setMaskImage: (id, src) => engine.setMaskImage(id, src),
       exportComposite: (tree) => engine.exportComposite(tree),
@@ -4108,6 +4113,26 @@ export default function CanvasArea({
             return;
           }
           if (!cancelled) engine.setMaskImage(key, img);
+        }),
+        // Framed pictures, at their natural size — restored so the fit can still
+        // be changed after a reopen. These are NOT drawn: the frame layer's own
+        // pixels already carry the fitted result.
+        ...(entry.frameSources ?? []).map(async ({ id, data, source }) => {
+          if (source) {
+            const w = (source as HTMLImageElement).width;
+            const h = (source as HTMLImageElement).height;
+            if (!cancelled) engine.setFrameSource(id, source, w, h);
+            return;
+          }
+          if (!data) return;
+          const img = new Image();
+          img.src = data;
+          try {
+            await img.decode();
+          } catch {
+            return;
+          }
+          if (!cancelled) engine.setFrameSource(id, img, img.naturalWidth, img.naturalHeight);
         }),
       ]);
       if (!cancelled) {

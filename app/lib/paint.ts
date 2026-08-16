@@ -408,6 +408,12 @@ export interface EngineHandle {
   setLayerImage: (id: string, source: CanvasImageSource, x?: number, y?: number) => void;
   /** Replace a layer's pixels as one undoable history step (HDR re-tonemap…). */
   applyLayerImage: (id: string, source: CanvasImageSource, label: string) => void;
+  /** Frame content sources (natural size) — see PaintEngine.setFrameSource. */
+  setFrameSource: (id: string, source: CanvasImageSource, w: number, h: number) => void;
+  getFrameSource: (id: string) => HTMLCanvasElement | null;
+  hasFrameSource: (id: string) => boolean;
+  getFrameSourceImage: (id: string) => string | null;
+  clearFrameSource: (id: string) => void;
   exportComposite: (tree: LayerNode[]) => HTMLCanvasElement;
   /** Per-channel + luminosity tonal distribution of the composited canvas —
    *  scoped to the selection when one is passed. */
@@ -859,6 +865,8 @@ export class PaintEngine {
   // Grayscale mask per layer id (R=G=B=value); absent ⇒ no mask. Colour-agnostic
   // (always sRGB) — never gamut-converted — and editable by the brush pipeline.
   private masks = new Map<string, Layer>();
+  /** Natural-size sources for framed images (see setFrameSource). */
+  private frameSrc = new Map<string, HTMLCanvasElement>();
   // Derived alpha cache per id (RGB=0, A=coverage). Recomputed only on mask
   // mutation, scoped to the changed rect — never per composite frame. The mask's
   // own alpha is folded in (A = R × maskAlpha/255) so eraser strokes read right.
@@ -3314,6 +3322,10 @@ export class PaintEngine {
         this.freeMask(key);
       }
     }
+    // A duplicated frame keeps its source, or the copy could never be re-fitted.
+    const fsrc = this.frameSrc.get(srcId);
+    if (fsrc) this.setFrameSource(dstId, fsrc, fsrc.width, fsrc.height);
+    else this.frameSrc.delete(dstId);
     this.bumpPixel(dstId);
     this.emitChange();
   }
@@ -3549,6 +3561,7 @@ export class PaintEngine {
   /** Forget a layer's offscreen canvas + masks + cached render (after removal). */
   removeLayer(id: string) {
     this.layers.delete(id);
+    this.frameSrc.delete(id);
     this.freeMask(id);
     this.freeMask(filterMaskKey(id));
     this.dropCache(id);
@@ -3559,6 +3572,46 @@ export class PaintEngine {
     this.filteredCache.delete(id);
     this.filterPending.delete(id);
     this.adjMeta.delete(id);
+  }
+
+  // ---- Frame content sources ------------------------------------------------
+  // The image placed in a frame, kept at its NATURAL size so the frame can be
+  // re-fitted (cover -> contain, a different scale, a nudge) without going back
+  // to the file. The frame layer's own canvas holds the FITTED result at
+  // document resolution; re-fitting from that would resample an already
+  // resampled picture and lose whatever the frame had cropped away.
+  //
+  // Deliberately not the masks map: that allocates document-sized canvases and
+  // derives a mask alpha, both wrong for an arbitrary-size colour source.
+
+  /** Store (a copy of) the image placed in a frame, at its natural size. */
+  setFrameSource(id: string, source: CanvasImageSource, w: number, h: number) {
+    if (!(w > 0 && h > 0)) return;
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(source, 0, 0, w, h);
+    this.frameSrc.set(id, c);
+  }
+
+  getFrameSource(id: string): HTMLCanvasElement | null {
+    return this.frameSrc.get(id) ?? null;
+  }
+
+  hasFrameSource(id: string): boolean {
+    return this.frameSrc.has(id);
+  }
+
+  /** For the project file. */
+  getFrameSourceImage(id: string): string | null {
+    const c = this.frameSrc.get(id);
+    return c ? c.toDataURL("image/png") : null;
+  }
+
+  clearFrameSource(id: string) {
+    this.frameSrc.delete(id);
   }
 
   /** A leaf layer's pixels as a PNG data URL (null if it has no canvas yet). */

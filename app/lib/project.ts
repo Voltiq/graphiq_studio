@@ -16,6 +16,9 @@ export const LEGACY_PROJECT_EXT = "aproj";
 type SerializedLeaf = LayerLeaf & {
   data: string | null;
   maskImage?: string | null;
+  /** v23: the picture placed in a FRAME, at its natural size, so the fit can
+   *  still be changed after a reopen. Absent unless the layer is a filled frame. */
+  frameSource?: string | null;
   /** v8: the smart-filter mask grayscale (leaf/group with node.filterMask). */
   filterMaskImage?: string | null;
 };
@@ -80,6 +83,8 @@ export interface PendingLoad {
   /** Saved-selection rasters to restore, by CHANNEL id (v18). The loader turns
    *  each into its engine masks-map key once the document id is known. */
   channels?: { id: string; data?: string; source?: CanvasImageSource }[];
+  /** Natural-size sources for framed pictures, by layer id (v23). */
+  frameSources?: { id: string; data?: string; source?: CanvasImageSource }[];
 }
 
 export interface ProjectInput {
@@ -105,6 +110,7 @@ function serializeNode(
   node: LayerNode,
   getImage: (id: string) => string | null,
   getMask: (id: string) => string | null,
+  getFrameSource: (id: string) => string | null = () => null,
 ): SerializedNode {
   // A mask (when present) is serialized as a grayscale PNG data URL alongside the
   // node; node.mask metadata rides along through the spread. The filter mask
@@ -117,12 +123,15 @@ function serializeNode(
       ...node,
       maskImage,
       filterMaskImage,
-      children: node.children.map((c) => serializeNode(c, getImage, getMask)),
+      children: node.children.map((c) => serializeNode(c, getImage, getMask, getFrameSource)),
     };
   }
   // A Fill layer stores no pixels (its `fill` spec rides through the spread).
   const data = node.fill ? null : getImage(node.id);
-  return { ...node, data, maskImage, filterMaskImage };
+  // A frame keeps the picture placed in it at natural size (v23), so the fit can
+  // still be changed after the file is reopened. Frames without content have none.
+  const frameSource = node.frame ? getFrameSource(node.id) : null;
+  return { ...node, data, maskImage, filterMaskImage, frameSource };
 }
 
 /** Build the full, self-describing project document (layers + pixels + state). */
@@ -134,11 +143,13 @@ export function serializeProject(
   getMask: (id: string) => string | null,
   /** Grayscale PNG of a saved selection's raster, by channel id. */
   getChannel: (id: string) => string | null = () => null,
+  /** Natural-size PNG of the picture placed in a frame, by layer id (v23). */
+  getFrameSource: (id: string) => string | null = () => null,
 ): ProjectFile {
   const channels = doc.channels ?? [];
   return {
     format: "graphiq-project",
-    version: 22, // v22 adds Info-panel colour samplers (v21 layer comps, v20 global light)
+    version: 23, // v23 adds framed-picture sources (v22 colour samplers, v21 layer comps)
     name: doc.name,
     width: doc.width,
     height: doc.height,
@@ -149,7 +160,7 @@ export function serializeProject(
     activeLayerId: doc.activeLayerId,
     selectedLayerIds: doc.selectedLayerIds,
     selection: doc.selection,
-    layers: doc.layers.map((n) => serializeNode(n, getImage, getMask)),
+    layers: doc.layers.map((n) => serializeNode(n, getImage, getMask, getFrameSource)),
     history,
     metadata: doc.metadata ?? null,
     paths: doc.paths ?? [],

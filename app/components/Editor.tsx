@@ -36,6 +36,7 @@ import {
   defaultFrame,
   fitContent,
   framePath,
+  sanitizeFrame,
   type FrameFit,
   type FrameRect,
   type FrameSpec,
@@ -3810,6 +3811,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       (id) => paintRef.current?.getMaskImage(id) ?? null,
       // Channel rasters live in the same masks map, under the doc-scoped key.
       (chId) => paintRef.current?.getMaskImage(selectionChannelKey(d.id, chId)) ?? null,
+      (id) => paintRef.current?.getFrameSourceImage(id) ?? null,
     );
     return JSON.stringify(project);
   };
@@ -4052,6 +4054,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const idMap = new Map<string, string>();
     const images: { id: string; data: string }[] = [];
     const masks: { id: string; data: string }[] = [];
+    const frameSources: { id: string; data: string }[] = [];
     const remap = (list: SerializedNode[]): LayerNode[] =>
       list.map((n) => {
         const mask = n.mask ? { mask: { enabled: n.mask.enabled, linked: n.mask.linked } } : {};
@@ -4062,6 +4065,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         // into all three node branches made the union too complex to represent.
         const vmRaw = coerceVectorMask((n as { vectorMask?: unknown }).vectorMask);
         const vmask: { vectorMask?: VectorMask } = vmRaw ? { vectorMask: vmRaw } : {};
+        // A FRAME's spec (its box, shape, fit and content placement). Sanitized
+        // against nothing but itself — the box may legitimately sit outside a
+        // resized canvas, and the vector mask is what actually clips.
+        const frameRaw = sanitizeFrame((n as { frame?: unknown }).frame);
+        const frm: { frame?: FrameSpec } = frameRaw ? { frame: frameRaw } : {};
         // v19 also carries Blending Options (fill opacity + knockout).
         const blending: { fillOpacity?: number; knockout?: KnockoutMode } =
           coerceBlendingOptions(n as { fillOpacity?: unknown; knockout?: unknown });
@@ -4130,6 +4138,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         idMap.set(n.id, id);
         if (n.data) images.push({ id, data: n.data });
         if (n.maskImage) masks.push({ id, data: n.maskImage });
+        if (n.frameSource) frameSources.push({ id, data: n.frameSource });
         pushFm(id);
         return {
           id,
@@ -4140,6 +4149,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           blend: n.blend,
           ...(n.vector ? { vector: n.vector } : {}),
           ...(n.fill ? { fill: n.fill } : {}), // v14 fill layer (no pixel data)
+          ...frm,
           ...mask,
           ...vmask,
           ...blending,
@@ -4202,7 +4212,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const channelLoads = (p.channelImages ?? [])
       .filter((i) => doc.channels?.some((c) => c.id === i.id))
       .map((i) => ({ id: i.id, data: i.data }));
-    setPendingLoads((ls) => [...ls, { docId, images, masks, channels: channelLoads }]);
+    setPendingLoads((ls) => [...ls, { docId, images, masks, channels: channelLoads, frameSources }]);
     // Seed the autosave cache from the file JSON so a never-viewed restored tab
     // still snapshots correctly (refreshed from the engine once it goes active).
     docJsonCache.current.set(docId, { json: JSON.stringify(p), name: doc.name });
@@ -4873,7 +4883,27 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const d = activeDocRef.current;
     const node = findNode(d.layers, frameId);
     if (!eng || !node || node.type !== "layer" || !node.frame) return false;
-    const rect = fitContent(w, h, node.frame);
+    // Keep the source at its natural size so the frame can be re-fitted later
+    // without the file — re-fitting from the frame's own (already fitted,
+    // already cropped) pixels would resample a resample and could not bring
+    // back what the previous fit cut off.
+    eng.setFrameSource(frameId, bitmap, w, h);
+    return drawFrameContent(frameId, node.frame, "Place in Frame");
+  };
+
+  /**
+   * Render a frame's stored source into the frame layer at the given spec.
+   *
+   * One undoable pixel step; the frame's vector mask does the clipping. Used
+   * both by placement and by every later change to fit / scale / offset, so
+   * there is exactly one description of what a frame looks like.
+   */
+  const drawFrameContent = (frameId: string, spec: FrameSpec, label: string): boolean => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    const src = eng?.getFrameSource(frameId);
+    if (!eng || !src) return false;
+    const rect = fitContent(src.width, src.height, spec);
     const c = document.createElement("canvas");
     c.width = d.width;
     c.height = d.height;
@@ -4881,9 +4911,24 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (!ctx) return false;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(bitmap, rect.x, rect.y, rect.w, rect.h);
-    eng.applyLayerImage(frameId, c, "Place in Frame");
+    ctx.drawImage(src, rect.x, rect.y, rect.w, rect.h);
+    eng.applyLayerImage(frameId, c, label);
     return true;
+  };
+
+  /**
+   * Change a frame's spec and re-render its content to match.
+   *
+   * Two steps go on the undo stack for one gesture (the spec patch, then the
+   * pixels) — the alternative is a bespoke combined entry, and the pixel step
+   * has to exist anyway because the layer's canvas really did change.
+   */
+  const editFrameSpec = (frameId: string, patch: Partial<FrameSpec>, label: string) => {
+    const node = findNode(activeDocRef.current.layers, frameId);
+    if (!node || node.type !== "layer" || !node.frame) return;
+    const next = { ...node.frame, ...patch };
+    stylePatchStructural(frameId, { frame: next }, label);
+    drawFrameContent(frameId, next, label);
   };
 
   /**
@@ -4920,14 +4965,33 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         })()
       : null;
   const activeFrameFit: FrameFit = activeFrameNode?.frame?.fit ?? frameFit;
+  // Whether the selected frame has a source to re-fit. Read through the engine
+  // rather than from the tree: the source is a raster, and only the engine knows
+  // whether one survived (a frame saved before v23 restores without one).
+  const frameHasContent = !!activeFrameNode && !!paintRef.current?.hasFrameSource(activeFrameNode.id);
   const setActiveFrameFit = (fit: FrameFit) => {
     setFrameFit(fit); // remember it for the next new frame either way
     const node = activeFrameNode;
     if (!node?.frame || node.frame.fit === fit) return;
-    // Editing a frame's fit is a structural layer patch like any other. It
-    // governs the NEXT placement: pixels already in the frame were fitted when
-    // they were placed and are not re-fitted here (see FEATURES).
-    stylePatchStructural(node.id, { frame: { ...node.frame, fit } }, "Frame fit");
+    // With a source stored the content is re-fitted immediately; an empty frame
+    // just records the fit for whatever lands in it next.
+    editFrameSpec(node.id, { fit }, "Frame fit");
+  };
+
+  /** Scale / nudge the picture inside its frame (options bar). */
+  const setActiveFrameScale = (scale: number) => {
+    const node = activeFrameNode;
+    if (node?.frame) editFrameSpec(node.id, { scale }, "Frame scale");
+  };
+  const nudgeActiveFrameContent = (dx: number, dy: number) => {
+    const node = activeFrameNode;
+    if (!node?.frame) return;
+    const o = node.frame.offset;
+    editFrameSpec(node.id, { offset: { x: o.x + dx, y: o.y + dy } }, "Move frame content");
+  };
+  const resetActiveFrameContent = () => {
+    const node = activeFrameNode;
+    if (node?.frame) editFrameSpec(node.id, { scale: 1, offset: { x: 0, y: 0 } }, "Reset frame content");
   };
 
   /** The active layer, when it is a frame — the target for a placement. */
@@ -6765,6 +6829,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         frameFit={activeFrameFit}
         onFrameFit={setActiveFrameFit}
         frameSelected={!!activeFrameNode}
+        frameHasContent={frameHasContent}
+        frameScale={activeFrameNode?.frame?.scale ?? 1}
+        onFrameScale={setActiveFrameScale}
+        onFrameNudge={nudgeActiveFrameContent}
+        onFrameReset={resetActiveFrameContent}
         onFrameShape={setFrameShape}
         onCleanMixer={() => {
           paintRef.current?.cleanMixer();
