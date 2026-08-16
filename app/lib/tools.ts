@@ -212,13 +212,15 @@ export interface QuickSelectSettings {
 }
 
 /** Shape tool: the geometry being drawn. */
-export type ShapeKind = "rect" | "ellipse" | "tri" | "trapezoid";
+export type ShapeKind = "rect" | "ellipse" | "tri" | "trapezoid" | "custom";
 
 /** Shape tool settings (fill = primary colour, stroke = secondary colour). */
 export interface ShapeSettings {
   kind: ShapeKind;
   strokeWidth: number;
   radius: number;
+  /** Custom shapes: which library preset to draw (see shape-library.ts). */
+  customId?: string;
 }
 
 /** One anchor of a pen path: the point plus its two bezier control handles

@@ -1,4 +1,5 @@
 import type { ShapeKind } from "./tools";
+import { fitPathToBox, parsePath, pathToD } from "./svgpath";
 import type { Rect } from "./view";
 
 /** A 2D context that may have the (newer) roundRect method. */
@@ -18,6 +19,19 @@ function rectSubpath(ctx: ShapeCtx, x: number, y: number, w: number, h: number, 
  * Shared by the live preview (CanvasArea) and the rasterizer (PaintEngine) so
  * the drawn shape matches the preview exactly.
  */
+/**
+ * A custom shape's path, fitted into the box.
+ *
+ * Returns null rather than an empty path when there is nothing to draw, so the
+ * caller can skip painting entirely instead of filling a degenerate region.
+ */
+export function customPath(d: string | undefined, box: Rect): Path2D | null {
+  if (!d) return null;
+  const segs = fitPathToBox(parsePath(d), box);
+  if (!segs.length) return null;
+  return new Path2D(pathToD(segs));
+}
+
 export function shapePath(
   ctx: ShapeCtx,
   kind: ShapeKind,
@@ -26,8 +40,23 @@ export function shapePath(
   w: number,
   h: number,
   radius: number,
+  customD?: string,
 ) {
   ctx.beginPath();
+  if (kind === "custom") {
+    // Traced segment by segment rather than via Path2D: this variant exists so
+    // callers can keep adding to the same context path (hit-testing, clipping),
+    // and a Path2D cannot be merged into one.
+    if (customD) {
+      for (const sg of fitPathToBox(parsePath(customD), { x, y, w, h })) {
+        if (sg.c === "M") ctx.moveTo(sg.x, sg.y);
+        else if (sg.c === "L") ctx.lineTo(sg.x, sg.y);
+        else if (sg.c === "C") ctx.bezierCurveTo(sg.x1, sg.y1, sg.x2, sg.y2, sg.x, sg.y);
+        else ctx.closePath();
+      }
+    }
+    return;
+  }
   if (kind === "ellipse") {
     ctx.ellipse(x + w / 2, y + h / 2, Math.max(0, w / 2), Math.max(0, h / 2), 0, 0, Math.PI * 2);
   } else if (kind === "tri") {
@@ -53,6 +82,11 @@ export interface TrapInsets {
 
 /** Extra, node-adjustable geometry for shapes that have it. */
 export interface ShapeGeom {
+  /** Custom shapes: the preset's path, normalized to the unit square.
+   *  Carried here rather than looked up by id so the geometry travels WITH the
+   *  layer — a document keeps its shape after the preset is renamed or deleted,
+   *  and the rasterizer never has to reach into a library. */
+  customD?: string;
   /** Trapezoid: top-edge insets per side. */
   trap?: TrapInsets;
   /** Triangle: apex horizontal position, as a fraction (0..1) of the box width. */
@@ -161,6 +195,29 @@ export function renderShape(
   geom?: ShapeGeom,
 ) {
   const sw = Math.max(0, strokeWidth);
+
+  if (kind === "custom") {
+    const path = customPath(geom?.customD, box);
+    if (!path) return;
+    if (fill) {
+      ctx.fillStyle = fill;
+      ctx.fill(path, "evenodd");
+    }
+    if (sw > 0 && stroke) {
+      // An INSIDE stroke, matching the other shapes. The ring construction they
+      // use only works for rectangles and convex polygons; for an arbitrary
+      // path the equivalent is to clip to it and stroke at double width, so the
+      // outer half falls outside the clip and is discarded.
+      ctx.save();
+      ctx.clip(path, "evenodd");
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = sw * 2;
+      ctx.lineJoin = "round";
+      ctx.stroke(path);
+      ctx.restore();
+    }
+    return;
+  }
 
   if (kind === "rect") {
     const r = Math.max(0, Math.min(radius, Math.min(box.w, box.h) / 2));

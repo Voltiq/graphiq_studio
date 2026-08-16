@@ -298,3 +298,62 @@
     transform: scale(0.97);
   }
 }
+
+/* ------------------------------ Shape picker ------------------------------ */
+
+.shapeGrid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 5px;
+  max-height: 190px;
+  overflow-y: auto;
+}
+
+.shapeCell {
+  position: relative;
+}
+
+.shapeTile {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+
+  &:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+
+  &[data-on="true"] {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+}
+
+.shapeDel {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+.shapeCell:hover .shapeDel {
+  opacity: 1;
+}

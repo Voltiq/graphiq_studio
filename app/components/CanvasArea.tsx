@@ -99,6 +99,7 @@ import {
   type LayerNode,
 } from "../lib/layers";
 import type { MixerSettings } from "../lib/mixer";
+import { builtinShapes, loadSavedShapes } from "../lib/shape-library";
 import type { PendingLoad } from "../lib/project";
 import { effectiveSoftness } from "../lib/refine-edge";
 import PerfHud from "./PerfHud";
@@ -782,7 +783,15 @@ export default function CanvasArea({
   /** Pen tool stroke options (stroke colour = the active `color`). */
   pen: PenSettings;
   /** Shape-tool settings + colours (fill = primary, stroke = secondary). */
-  shape: { kind: ShapeKind; strokeWidth: number; radius: number; fill: string; stroke: string };
+  shape: {
+    kind: ShapeKind;
+    strokeWidth: number;
+    radius: number;
+    fill: string;
+    stroke: string;
+    /** Custom shapes: which library preset to draw. */
+    customId?: string;
+  };
   /** Blur (focus) brush settings. */
   blur: BlurSettings;
   /** Smudge brush settings. */
@@ -4893,12 +4902,20 @@ export default function CanvasArea({
 
   // The node-adjustable geometry for the current shape kind (trapezoid insets /
   // triangle apex), or undefined for kinds without nodes.
-  const shapeGeom = (kind: ShapeKind): ShapeGeom | undefined =>
-    kind === "trapezoid"
-      ? { trap: trapRef.current }
-      : kind === "tri"
-        ? { apex: triApexRef.current }
-        : undefined;
+  const shapeGeom = (kind: ShapeKind): ShapeGeom | undefined => {
+    if (kind === "trapezoid") return { trap: trapRef.current };
+    if (kind === "tri") return { apex: triApexRef.current };
+    if (kind === "custom") {
+      // Resolve the preset to its PATH here, so everything downstream — the
+      // preview, the rasterizer, the saved vector recipe — carries the geometry
+      // rather than an id that could later point at a deleted preset.
+      const id = shapeOptsRef.current.customId;
+      const all = [...builtinShapes(), ...loadSavedShapes()];
+      const p = all.find((x) => x.id === id) ?? all[0];
+      return p ? { customD: p.d } : undefined;
+    }
+    return undefined;
+  };
 
   // Re-render the live shape from its box + current settings (+ node geometry).
   const reRenderLiveShape = () => {

@@ -6567,6 +6567,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             kind: shape.kind,
             strokeWidth: shape.strokeWidth,
             radius: shape.radius,
+            customId: shape.customId,
             fill: foreground,
             stroke: background,
           }}

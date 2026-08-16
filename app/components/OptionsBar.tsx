@@ -11,6 +11,7 @@ import {
   Sparkle,
   Grip,
   PenLine,
+  Shapes,
   Waves,
   AlignCenter,
   AlignHorizontalDistributeCenter,
@@ -98,6 +99,18 @@ import {
 import GradientControl, { GradientEditor } from "./GradientControl";
 import FontPicker from "./FontPicker";
 import { brushDynamics, type BrushSettings } from "../lib/paint";
+import {
+  SHAPE_EXT,
+  SHAPE_PRESETS_KEY,
+  builtinShapes,
+  exportShapes,
+  importShapeFiles,
+  isBuiltinShape,
+  loadSavedShapes,
+  mergeShapes,
+  persistSavedShapes,
+  type ShapePreset,
+} from "../lib/shape-library";
 import {
   TEXTURE_LABELS,
   TEXTURE_PATTERNS,
@@ -590,6 +603,145 @@ function TipShapeControl({
                 A second, scattered tip erodes the first into bristles. The pattern is fixed for
                 the whole stroke, so the gaps line up into streaks; each new stroke picks a
                 different one.
+              </span>
+            </div>
+          </>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+/** A preset's outline, drawn straight from its normalized path data — the tile
+ *  is literally the geometry that will be drawn, so there is no second renderer
+ *  to drift. Declared at module scope: a component defined inside a render is
+ *  a new type every time and loses its state. */
+const ShapeTileArt = ({ p }: { p: ShapePreset }) => (
+  <svg viewBox="0 0 1 1" width={26} height={26} aria-hidden>
+    <path d={p.d} fill="currentColor" fillRule="evenodd" />
+  </svg>
+);
+
+/**
+ * Custom-shape picker: the shipped outlines plus whatever the user has imported.
+ *
+ * Tiles are drawn as inline SVG straight from the preset's normalized path data,
+ * so what the tile shows is literally the geometry that will be drawn — there is
+ * no second renderer to drift.
+ */
+function CustomShapePicker({
+  shape,
+  onShape,
+}: {
+  shape: ShapeSettings;
+  onShape: (patch: Partial<ShapeSettings>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [saved, setSaved] = useState<ShapePreset[]>(loadSavedShapes);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ left: 0, top: 0 });
+  const all = [...builtinShapes(), ...saved];
+  const current = all.find((s) => s.id === shape.customId) ?? all[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation();
+        setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
+  const persist = (list: ShapePreset[]) => {
+    setSaved(list);
+    persistSavedShapes(SHAPE_PRESETS_KEY, list);
+  };
+  const toggleOpen = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 320)), top: r.bottom + 6 });
+    }
+    setOpen((o) => !o);
+  };
+  const doImport = async () => {
+    const added = await importShapeFiles();
+    if (added.length) persist(mergeShapes(saved, added));
+  };
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className={styles.iconBtn}
+        data-active={open}
+        title={current ? `Shape: ${current.name}` : "Choose a shape"}
+        aria-label="Choose custom shape"
+        onClick={toggleOpen}
+      >
+        {current ? <ShapeTileArt p={current} /> : <Shapes size={15} />}
+      </button>
+      {open &&
+        createPortal(
+          <>
+            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
+            <div
+              className={styles.otPopover}
+              style={{ left: pos.left, top: pos.top, width: 300 }}
+              role="dialog"
+              aria-label="Custom shapes"
+            >
+              <span className={styles.otTitle}>Shapes</span>
+              <div className={styles.shapeGrid}>
+                {all.map((p) => (
+                  <div key={p.id} className={styles.shapeCell}>
+                    <button
+                      type="button"
+                      className={styles.shapeTile}
+                      data-on={p.id === current?.id}
+                      title={p.name}
+                      aria-label={`Use ${p.name}`}
+                      onClick={() => {
+                        onShape({ customId: p.id });
+                        setOpen(false);
+                      }}
+                    >
+                      <ShapeTileArt p={p} />
+                    </button>
+                    {!isBuiltinShape(p.id) && (
+                      <span
+                        className={styles.shapeDel}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Delete ${p.name}`}
+                        onClick={() => persist(saved.filter((x) => x.id !== p.id))}
+                      >
+                        <X size={9} />
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 6, paddingTop: 6 }}>
+                <button type="button" className={styles.preset} onClick={doImport}>
+                  Import SVG…
+                </button>
+                <button
+                  type="button"
+                  className={styles.preset}
+                  disabled={!saved.length}
+                  onClick={() => saved.length && void exportShapes(saved)}
+                >
+                  Export
+                </button>
+              </div>
+              <span className={styles.otHint}>
+                Importing takes the OUTLINES out of an SVG — paths, rectangles, circles, polygons —
+                and drops colour, text and effects. Your imported shapes live in this browser;
+                export them to a .{SHAPE_EXT} file to keep them.
               </span>
             </div>
           </>,
@@ -1556,8 +1708,10 @@ function renderOptions(
                 ),
                 title: "Trapezoid",
               },
+              { value: "custom", icon: <Shapes size={14} />, title: "Custom shape" },
             ]}
           />
+          {shape.kind === "custom" && <CustomShapePicker shape={shape} onShape={onShape} />}
           <Divider />
           <ColorChip color={fill} onChange={onFill} label="Fill" />
           <ColorChip color={stroke} onChange={onStroke} label="Stroke" />
