@@ -762,6 +762,7 @@ export default function CanvasArea({
   onAdjustEnd,
   onCursor,
   onGesture,
+  onFilesDropped,
   samplers,
   samplerOps,
 }: {
@@ -982,6 +983,8 @@ export default function CanvasArea({
   /** Live gesture readout: marquee size while dragging, offset while moving.
    *  Distinct from the Measure TOOL's `onMeasure` line. */
   onGesture: (m: GestureReadout) => void;
+  /** Image files dropped on the canvas. */
+  onFilesDropped: (files: File[]) => void | Promise<void>;
   /** Info-panel colour samplers for this document (drawn, placed and dragged here). */
   samplers: ColorSampler[];
   samplerOps: {
@@ -1028,6 +1031,7 @@ export default function CanvasArea({
   wandOptsRef.current = wand;
   const dragRectRef = useRef<Rect | null>(null);
   const samplersRef = useRef<ColorSampler[]>([]);
+  const [dropHover, setDropHover] = useState(false);
   const onGestureRef = useRef(onGesture);
   onGestureRef.current = onGesture;
   /** The sampler being dragged, plus the list as it was when the drag began
@@ -7464,6 +7468,28 @@ export default function CanvasArea({
           className={styles.viewport}
           ref={viewportRef}
           style={tool === "hand" ? { cursor: hoverCursor ?? "grab" } : undefined}
+          // Dropping image files on the canvas. `dragover` must preventDefault
+          // or the browser navigates away to the file, losing the document.
+          onDragOver={(e) => {
+            if (e.dataTransfer?.types?.includes("Files")) {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "copy";
+              if (!dropHover) setDropHover(true);
+            }
+          }}
+          onDragLeave={(e) => {
+            // Fires when crossing onto a child too; only clear when the pointer
+            // has actually left the viewport.
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropHover(false);
+          }}
+          onDrop={(e) => {
+            const files = Array.from(e.dataTransfer?.files ?? []);
+            if (!files.length) return;
+            e.preventDefault();
+            setDropHover(false);
+            void onFilesDropped(files);
+          }}
+          data-drop={dropHover || undefined}
           // Capture-phase multi-touch: a two-finger pinch anywhere in the canvas
           // area zooms/pans, pre-empting the tool (see gestureDown/Move/Up).
           onPointerDownCapture={gestureDown}

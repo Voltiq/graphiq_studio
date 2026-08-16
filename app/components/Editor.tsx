@@ -32,7 +32,14 @@ import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/pr
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
 import { styleToPatch, type LayerStylePreset } from "../lib/styleio";
 import { DEFAULT_MIXER, sanitizeMixer, type MixerSettings } from "../lib/mixer";
-import { defaultFrame, framePath, type FrameRect, type FrameSpec } from "../lib/frame";
+import {
+  defaultFrame,
+  fitContent,
+  framePath,
+  type FrameFit,
+  type FrameRect,
+  type FrameSpec,
+} from "../lib/frame";
 import {
   mergeVisibleIsNoop,
   mergeVisiblePlan,
@@ -557,6 +564,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [smudge, setSmudge] = useState<SmudgeSettings>(DEFAULT_SMUDGE);
   const [mixer, setMixer] = useState<MixerSettings>(DEFAULT_MIXER);
   const [frameShape, setFrameShape] = useState<"rect" | "ellipse">("rect");
+  // Fit for NEW frames. An existing frame carries its own in its spec, and the
+  // options bar edits that one when a frame layer is selected.
+  const [frameFit, setFrameFit] = useState<FrameFit>("cover");
   const [sponge, setSponge] = useState<SpongeSettings>(DEFAULT_SPONGE);
   const [historyBrush, setHistoryBrush] = useState<BrushSettings>({
     size: 24,
@@ -4763,6 +4773,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const onImportPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const allFiles = Array.from(e.target.files ?? []);
     e.target.value = "";
+    await importFiles(allFiles);
+  };
+
+  /**
+   * The whole file-import pipeline, from a list of files to either a new
+   * document (PSD / animation) or the import dialog. Extracted so the file
+   * picker and a drop on the canvas take exactly the same route — a dropped
+   * PSD has to open as a layered document just as a picked one does, and that
+   * only stays true if there is one path.
+   */
+  const importFiles = async (allFiles: File[]) => {
     if (!allFiles.length) return;
     // PSDs and animations open as their own layered documents; everything else
     // flows through the import dialog.
@@ -4838,8 +4859,98 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setImportItems(items);
   };
 
+  /**
+   * Draw an image INTO a frame layer, fitted by that frame's own `fit`.
+   *
+   * The frame's vector mask does the clipping, so this only has to place the
+   * pixels: `fitContent` gives the destination rect (cover / contain / stretch /
+   * actual size, plus the frame's offset and scale), and the whole thing lands
+   * as ONE undoable pixel step that replaces whatever the frame held before —
+   * which is what "place into a frame" means everywhere else it exists.
+   */
+  const placeInFrame = (frameId: string, bitmap: CanvasImageSource, w: number, h: number): boolean => {
+    const eng = paintRef.current;
+    const d = activeDocRef.current;
+    const node = findNode(d.layers, frameId);
+    if (!eng || !node || node.type !== "layer" || !node.frame) return false;
+    const rect = fitContent(w, h, node.frame);
+    const c = document.createElement("canvas");
+    c.width = d.width;
+    c.height = d.height;
+    const ctx = c.getContext("2d");
+    if (!ctx) return false;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bitmap, rect.x, rect.y, rect.w, rect.h);
+    eng.applyLayerImage(frameId, c, "Place in Frame");
+    return true;
+  };
+
+  /**
+   * Files dropped on the canvas.
+   *
+   * With a frame selected the image goes straight in — the import dialog's
+   * options (anchor, expand-canvas) describe placement the frame has already
+   * decided, so asking would be asking about nothing. Everything else takes the
+   * ordinary import route, dialog included, so a drop and File ▸ Import behave
+   * identically where they mean the same thing.
+   */
+  const onCanvasFilesDropped = async (files: File[]) => {
+    if (!files.length) return;
+    const frameId = activeFrameId();
+    if (frameId && files.length === 1 && !/\.psd$/i.test(files[0].name)) {
+      const bmp = await decodeImageFile(files[0]).catch(() => null);
+      if (bmp) {
+        placeInFrame(frameId, bmp, bmp.width, bmp.height);
+        bmp.close?.();
+        return;
+      }
+    }
+    await importFiles(files);
+  };
+
+  // The options bar shows the SELECTED frame's fit when there is one, and the
+  // tool default otherwise — so the control always describes the frame the next
+  // image will land in.
+  const activeFrameNode =
+    active.activeLayerId
+      ? (() => {
+          const n = findNode(active.layers, active.activeLayerId);
+          return n && n.type === "layer" && n.frame ? n : null;
+        })()
+      : null;
+  const activeFrameFit: FrameFit = activeFrameNode?.frame?.fit ?? frameFit;
+  const setActiveFrameFit = (fit: FrameFit) => {
+    setFrameFit(fit); // remember it for the next new frame either way
+    const node = activeFrameNode;
+    if (!node?.frame || node.frame.fit === fit) return;
+    // Editing a frame's fit is a structural layer patch like any other. It
+    // governs the NEXT placement: pixels already in the frame were fitted when
+    // they were placed and are not re-fitted here (see FEATURES).
+    stylePatchStructural(node.id, { frame: { ...node.frame, fit } }, "Frame fit");
+  };
+
+  /** The active layer, when it is a frame — the target for a placement. */
+  const activeFrameId = (): string | null => {
+    const d = activeDocRef.current;
+    const n = d.activeLayerId ? findNode(d.layers, d.activeLayerId) : null;
+    return n && n.type === "layer" && n.frame ? n.id : null;
+  };
+
   // Import images onto new layers of the current canvas (one undoable step).
-  const importAsLayers = (items: ImportItem[], opts: ImportOptions) => {
+  const importAsLayers = (itemsIn: ImportItem[], opts: ImportOptions) => {
+    // A frame is a placeholder waiting for a picture: with one selected, an
+    // import fills it rather than dropping a new layer over the top of it.
+    // Any extra images still arrive as ordinary layers, so nothing is lost.
+    let items = itemsIn;
+    const frameId = activeFrameId();
+    if (frameId && items.length) {
+      const first = items[0];
+      if (placeInFrame(frameId, first.bitmap, first.bitmap.width, first.bitmap.height)) {
+        items = items.slice(1);
+        if (!items.length) return;
+      }
+    }
     const d0 = activeDocRef.current;
     let maxW = 0;
     let maxH = 0;
@@ -6651,6 +6762,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         mixer={mixer}
         onMixer={(patch) => setMixer((s) => ({ ...s, ...patch }))}
         frameShape={frameShape}
+        frameFit={activeFrameFit}
+        onFrameFit={setActiveFrameFit}
+        frameSelected={!!activeFrameNode}
         onFrameShape={setFrameShape}
         onCleanMixer={() => {
           paintRef.current?.cleanMixer();
@@ -6883,6 +6997,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onAdjustEnd={onAdjustEnd}
           onCursor={emitCursor}
           onGesture={emitGesture}
+          onFilesDropped={onCanvasFilesDropped}
           samplers={active.samplers ?? []}
           samplerOps={samplerOps}
         />

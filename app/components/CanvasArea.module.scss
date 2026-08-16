@@ -242,6 +242,20 @@ $ruler: 22px;
   grid-area: 2 / 2;
   position: relative;
   overflow: hidden;
+
+  /* Dragging image files over the canvas. An inset ring rather than a
+     full-surface tint: it should say "this will take the drop" without
+     hiding the picture you are dropping onto. */
+  &[data-drop]::after {
+    content: "";
+    position: absolute;
+    inset: 6px;
+    pointer-events: none;
+    border: 2px dashed var(--accent);
+    border-radius: var(--r-lg);
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+    z-index: 5;
+  }
   /* The canvas owns every touch here — our own pinch/pan handlers drive
      zoom & pan, so the browser must never treat a touch as page pan/zoom
      (the .view canvas is already touch-action:none; this covers the padding

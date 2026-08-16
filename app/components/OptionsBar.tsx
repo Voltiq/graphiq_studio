@@ -82,6 +82,7 @@ import type { Rect } from "../lib/view";
 import type { ActiveSurface } from "../lib/layers";
 import type { AlignMode, DistributeMode } from "../lib/align";
 import type { TextAxes, TextGradient, TextOpenType } from "../lib/tools";
+import { FRAME_FITS, type FrameFit } from "../lib/frame";
 import { WARP_STYLES, warpActive, type TextWarp, type TextWarpStyle } from "../lib/textwarp";
 import {
   BUILTIN_BRUSHES,
@@ -953,6 +954,10 @@ interface MixerProps {
 interface FrameProps {
   frameShape: "rect" | "ellipse";
   onFrameShape: (v: "rect" | "ellipse") => void;
+  /** Fit for new frames, or for the selected one when there is a frame layer. */
+  frameFit: FrameFit;
+  onFrameFit: (f: FrameFit) => void;
+  frameSelected: boolean;
 }
 
 interface SpongeProps {
@@ -1223,6 +1228,9 @@ export default function OptionsBar({
   onMixer,
   onCleanMixer,
   frameShape,
+  frameFit,
+  onFrameFit,
+  frameSelected,
   onFrameShape,
   sponge,
   onSponge,
@@ -1393,7 +1401,7 @@ export default function OptionsBar({
           { blur, onBlur },
           { smudge, onSmudge },
           { mixer, onMixer, onCleanMixer },
-          { frameShape, onFrameShape },
+          { frameShape, onFrameShape, frameFit, onFrameFit, frameSelected },
           { sponge, onSponge },
           { historyBrush, onHistoryBrush },
           { heal, onHeal },
@@ -1753,7 +1761,7 @@ function renderOptions(
     }
 
     case "frame": {
-      const { frameShape: fs, onFrameShape: setFs } = frameProps;
+      const { frameShape: fs, onFrameShape: setFs, frameFit, onFrameFit, frameSelected } = frameProps;
       return (
         <>
           <Segmented
@@ -1764,6 +1772,25 @@ function renderOptions(
               { value: "ellipse", icon: <Circle size={14} />, title: "Elliptical frame" },
             ]}
           />
+          <Divider />
+          {/* How an image is sized when it lands in the frame. With a frame
+              selected this edits THAT frame — fit is a property of the frame,
+              not of the tool — otherwise it sets what new frames get. */}
+          <Select
+            label="Fit"
+            options={FRAME_FITS.map((f) => f.label)}
+            width={132}
+            value={FRAME_FITS.find((f) => f.id === frameFit)?.label ?? FRAME_FITS[0].label}
+            onChange={(lbl) => {
+              const hit = FRAME_FITS.find((f) => f.label === lbl);
+              if (hit) onFrameFit(hit.id);
+            }}
+          />
+          <span className={styles.note}>
+            {frameSelected
+              ? "Drop an image on the canvas to place it in this frame"
+              : "Drag out a frame, then drop an image on it"}
+          </span>
         </>
       );
     }
