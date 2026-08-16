@@ -2,6 +2,7 @@ import { filterMaskKey } from "./layers";
 import type { LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers";
 import type { ImageMetadata } from "./metadata";
 import type { Guide } from "./guides";
+import type { ColorSampler } from "./samplers";
 import type { SavedPath } from "./paths";
 import type { SavedChannel } from "./channels";
 import type { LayerComp } from "./comps";
@@ -53,6 +54,9 @@ export interface ProjectFile {
   paths?: SavedPath[];
   /** Ruler guides (v17). Absent in older files — an empty set, not an error. */
   guides?: Guide[];
+  /** Info-panel colour samplers (v22): pinned readout points, coordinates only.
+   *  Their colours are re-read from the composite, never stored. */
+  samplers?: ColorSampler[];
   /** Saved selections (v18): the named channels plus their grayscale rasters as
    *  PNG data URLs, keyed by channel id. Two fields rather than one so a file
    *  whose image failed to encode still restores the NAMES (and an empty
@@ -92,6 +96,7 @@ export interface ProjectInput {
   metadata?: ImageMetadata | null;
   paths?: SavedPath[];
   guides?: Guide[];
+  samplers?: ColorSampler[];
   channels?: SavedChannel[];
   comps?: LayerComp[];
 }
@@ -133,7 +138,7 @@ export function serializeProject(
   const channels = doc.channels ?? [];
   return {
     format: "graphiq-project",
-    version: 21, // v21 adds layer comps (v20 global light, v19 vector masks + blending options)
+    version: 22, // v22 adds Info-panel colour samplers (v21 layer comps, v20 global light)
     name: doc.name,
     width: doc.width,
     height: doc.height,
@@ -149,6 +154,7 @@ export function serializeProject(
     metadata: doc.metadata ?? null,
     paths: doc.paths ?? [],
     guides: doc.guides ?? [],
+    samplers: doc.samplers ?? [],
     comps: doc.comps ?? [],
     channels,
     channelImages: channels

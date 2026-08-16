@@ -212,6 +212,15 @@ import {
   type SerializedNode,
 } from "../lib/project";
 import { sanitizeGuides, type Guide } from "../lib/guides";
+import {
+  addSampler,
+  moveSampler,
+  removeSampler,
+  sanitizeSamplers,
+  samplerAt,
+  type ColorSampler,
+  type GestureReadout,
+} from "../lib/samplers";
 import { mergeLog, sanitizeLog } from "../lib/history-log";
 import {
   IMPORT_ACCEPT,
@@ -355,6 +364,8 @@ interface Doc {
   paths?: SavedPath[];
   /** Ruler guides (View ▸ Show guides). Per-document, saved in .gproj. */
   guides?: Guide[];
+  /** Info-panel colour samplers. Per-document, saved in .gproj. */
+  samplers?: ColorSampler[];
   /** Saved selections (named alpha channels; the rasters live in the engine
    *  under selectionChannelKey(docId, id)). Per-document, saved in .gproj. */
   channels?: SavedChannel[];
@@ -877,6 +888,18 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     cursorSubsRef.current.add(fn);
     return () => {
       cursorSubsRef.current.delete(fn);
+    };
+  }, []);
+  // The same arrangement for the live gesture readout (marquee size, move
+  // offset): imperative, so a drag updates one panel rather than the tree.
+  const gestureSubsRef = useRef(new Set<(m: GestureReadout) => void>());
+  const emitGesture = useCallback((m: GestureReadout) => {
+    gestureSubsRef.current.forEach((fn) => fn(m));
+  }, []);
+  const subscribeGesture = useCallback((fn: (m: GestureReadout) => void) => {
+    gestureSubsRef.current.add(fn);
+    return () => {
+      gestureSubsRef.current.delete(fn);
     };
   }, []);
   // Latest colours, reachable from the one-time keydown listener.
@@ -3753,6 +3776,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         metadata: d.metadata ?? null,
         paths: d.paths ?? [],
         guides: d.guides ?? [],
+        samplers: d.samplers ?? [],
         channels: d.channels ?? [],
         comps: d.comps ?? [],
       },
@@ -4143,6 +4167,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       // v17; older files have none, and a guide outside the document is dropped
       // rather than trusted (a hand-edited file shouldn't produce ghost lines).
       guides: sanitizeGuides(p.guides, p.width, p.height),
+      samplers: sanitizeSamplers(p.samplers, p.width, p.height),
       // v18; older files have none. Only channels whose RASTER is present are
       // kept — a name with no pixels would load as an empty selection and read
       // as a bug rather than as the missing data it is.
@@ -5401,6 +5426,53 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       () => setDocGuides(docId, next),
     );
   };
+
+  // Colour samplers ride the same rails as guides: per-document, structural (no
+  // pixels), captured by document id so an undo after a tab switch still edits
+  // the document the sampler belongs to.
+  const setDocSamplers = (docId: string, next: ColorSampler[]) =>
+    setDocs((ds) => ds.map((d) => (d.id === docId ? { ...d, samplers: next } : d)));
+  const commitSamplers = (label: string, next: ColorSampler[]) => {
+    const docId = activeIdRef.current;
+    const before = activeDocRef.current.samplers ?? [];
+    if (before === next) return; // the sampler ops return the same array for a no-op
+    setDocSamplers(docId, next);
+    paintRef.current?.pushStructural(
+      label,
+      () => setDocSamplers(docId, before),
+      () => setDocSamplers(docId, next),
+    );
+  };
+  /** Placement/removal from the canvas (Eyedropper: shift-click, alt-click). */
+  const samplerOps = useMemo(
+    () => ({
+      add: (x: number, y: number) => {
+        const d = activeDocRef.current;
+        commitSamplers("Add sampler", addSampler(d.samplers ?? [], x, y, d.width, d.height));
+      },
+      remove: (id: string) =>
+        commitSamplers("Remove sampler", removeSampler(activeDocRef.current.samplers ?? [], id)),
+      /** Live during a drag — no history until the gesture ends. */
+      moveLive: (id: string, x: number, y: number) => {
+        const d = activeDocRef.current;
+        setDocSamplers(d.id, moveSampler(d.samplers ?? [], id, x, y, d.width, d.height));
+      },
+      commitMove: (before: ColorSampler[]) => {
+        const docId = activeIdRef.current;
+        const after = activeDocRef.current.samplers ?? [];
+        if (before === after) return;
+        paintRef.current?.pushStructural(
+          "Move sampler",
+          () => setDocSamplers(docId, before),
+          () => setDocSamplers(docId, after),
+        );
+      },
+      hit: (x: number, y: number, tol: number) =>
+        samplerAt(activeDocRef.current.samplers ?? [], x, y, tol),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   // ---- View menu: rulers / grid / snap (persisted), zoom commands ----
   useEffect(() => {
@@ -6810,6 +6882,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onHistory={setHistory}
           onAdjustEnd={onAdjustEnd}
           onCursor={emitCursor}
+          onGesture={emitGesture}
+          samplers={active.samplers ?? []}
+          samplerOps={samplerOps}
         />
         {/* Floating-panel overlay — BEFORE RightDock so the dock stays the
             :last-child that the UI-scale zoom selector targets. */}
@@ -6835,6 +6910,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             paintRef.current?.setNonLinearHistory(on);
           }}
           subscribeCursor={subscribeCursor}
+          subscribeGesture={subscribeGesture}
+          samplers={active.samplers ?? []}
+          onRemoveSampler={(id) => samplerOps.remove(id)}
+          onClearSamplers={() => commitSamplers("Clear samplers", [])}
           docWidth={active.width}
           docHeight={active.height}
           unit={prefs.unit}

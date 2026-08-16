@@ -49,6 +49,8 @@ import {
   type CompareAxis,
 } from "../lib/compare";
 import { clampPan, normalizeRect, type Pan, type Rect } from "../lib/view";
+import type { ColorSampler } from "../lib/samplers";
+import type { GestureReadout } from "../lib/samplers";
 import type {
   BlurSettings,
   CloneSettings,
@@ -759,6 +761,9 @@ export default function CanvasArea({
   onHistory,
   onAdjustEnd,
   onCursor,
+  onGesture,
+  samplers,
+  samplerOps,
 }: {
   docs: DocTab[];
   activeId: string;
@@ -974,6 +979,18 @@ export default function CanvasArea({
   onAdjustEnd: () => void;
   /** Reports the doc-space cursor position (null when off the canvas). */
   onCursor: (p: { x: number; y: number } | null) => void;
+  /** Live gesture readout: marquee size while dragging, offset while moving.
+   *  Distinct from the Measure TOOL's `onMeasure` line. */
+  onGesture: (m: GestureReadout) => void;
+  /** Info-panel colour samplers for this document (drawn, placed and dragged here). */
+  samplers: ColorSampler[];
+  samplerOps: {
+    add: (x: number, y: number) => void;
+    remove: (id: string) => void;
+    moveLive: (id: string, x: number, y: number) => void;
+    commitMove: (before: ColorSampler[]) => void;
+    hit: (x: number, y: number, tol: number) => ColorSampler | null;
+  };
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLCanvasElement>(null);
@@ -1010,6 +1027,12 @@ export default function CanvasArea({
   const wandOptsRef = useRef(wand);
   wandOptsRef.current = wand;
   const dragRectRef = useRef<Rect | null>(null);
+  const samplersRef = useRef<ColorSampler[]>([]);
+  const onGestureRef = useRef(onGesture);
+  onGestureRef.current = onGesture;
+  /** The sampler being dragged, plus the list as it was when the drag began
+   *  (so the whole gesture is one undo step). */
+  const samplerDragRef = useRef<{ id: string; before: ColorSampler[] } | null>(null);
   const marqueeRef = useRef<{ x: number; y: number; mode: SelOp } | null>(null);
   // In-progress freeform/magnetic lasso path (doc-space points); closed on
   // pointer up. The polygonal variant collects CLICKED vertices in polyRef
@@ -3128,6 +3151,24 @@ export default function CanvasArea({
   const tickAnts = useCallback(() => {
     antsOffset.current = (antsOffset.current + 0.18) % 8;
     drawAnts();
+    // The Info panel's live gesture readout is emitted HERE rather than from
+    // the pointer handler: this runs once a frame, AFTER the handlers have
+    // updated `dragRectRef`/`moveDeltaRef`. Emitting from the handler read the
+    // previous event's rect and so reported a marquee 10% smaller than it was,
+    // and never cleared on release. Emitting from the frame loop also clears
+    // itself, because the tick that follows the gesture sees no drag.
+    const md = dragRectRef.current;
+    onGestureRef.current(
+      md
+        ? { kind: "size", w: Math.abs(Math.round(md.w)), h: Math.abs(Math.round(md.h)) }
+        : moveRef.current
+          ? {
+              kind: "delta",
+              dx: Math.round(moveDeltaRef.current.x),
+              dy: Math.round(moveDeltaRef.current.y),
+            }
+          : null,
+    );
     if (
       // The quick mask lives on the overlay canvas, which this loop owns and
       // clears when it stops — so the loop has to run for as long as the mode is
@@ -4214,8 +4255,61 @@ export default function CanvasArea({
       }
       ctx.stroke();
     }
+
+    // ---- colour samplers ----------------------------------------------------
+    // Drawn last so a marker is never buried under a guide, and in SCREEN space
+    // at a fixed size: a crosshair scaled with the zoom would be a hairline at
+    // 10% and cover half the picture at 3200%, when its whole job is to point
+    // at one pixel. Photoshop's target-with-a-number, near enough.
+    if (samplersRef.current.length) {
+      samplersRef.current.forEach((smp, i) => {
+        // Centre of the pixel, so the marker sits ON the sample, not at its corner.
+        const sx = Math.round(pan.x + (smp.x + 0.5) * s);
+        const sy = Math.round(pan.y + (smp.y + 0.5) * s);
+        if (sx < -20 || sy < -20 || sx > ov.width + 20 || sy > ov.height + 20) return;
+        const R = 7;
+        // White under black: the pair stays legible on any image, which one
+        // colour never does.
+        for (const [colour, width_] of [
+          ["rgba(255,255,255,0.9)", 3],
+          ["rgba(0,0,0,0.9)", 1],
+        ] as const) {
+          ctx.strokeStyle = colour;
+          ctx.lineWidth = width_;
+          ctx.beginPath();
+          ctx.arc(sx + 0.5, sy + 0.5, R, 0, Math.PI * 2);
+          ctx.moveTo(sx + 0.5 - R - 3, sy + 0.5);
+          ctx.lineTo(sx + 0.5 - 2, sy + 0.5);
+          ctx.moveTo(sx + 0.5 + 2, sy + 0.5);
+          ctx.lineTo(sx + 0.5 + R + 3, sy + 0.5);
+          ctx.moveTo(sx + 0.5, sy + 0.5 - R - 3);
+          ctx.lineTo(sx + 0.5, sy + 0.5 - 2);
+          ctx.moveTo(sx + 0.5, sy + 0.5 + 2);
+          ctx.lineTo(sx + 0.5, sy + 0.5 + R + 3);
+          ctx.stroke();
+        }
+        const label = String(i + 1);
+        ctx.font = "600 10px ui-sans-serif, system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        const tx = sx + R + 5;
+        const ty = sy - R - 1;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.strokeText(label, tx, ty);
+        ctx.fillStyle = "rgba(0,0,0,0.9)";
+        ctx.fillText(label, tx, ty);
+      });
+    }
   }, [showGrid, docGrid, pixelGridColor, width, height]);
   drawGuidesRef.current = drawGuidesOverlay;
+
+  // Markers are read from a ref inside the overlay painter (which is memoized on
+  // view state, not on the sampler list), so a change has to ask for a repaint.
+  useEffect(() => {
+    samplersRef.current = samplers;
+    drawGuidesRef.current();
+  }, [samplers]);
 
   // ---- Before/after compare -------------------------------------------------
   // Render the pre-adjustment composite into the stacked canvas whenever the
@@ -5404,6 +5498,26 @@ export default function CanvasArea({
     if (tool === "eyedropper") {
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
+      // Colour samplers live on the Eyedropper, as they do in Photoshop.
+      // Tolerance is in DOCUMENT units but wants to be a constant number of
+      // SCREEN pixels — at 800% zoom a 6-document-pixel grab radius would be
+      // half the viewport, and at 10% it would be unclickable.
+      const p = toDoc(e);
+      const tol = 8 / Math.max(0.05, zoomRef.current / 100);
+      const hit = samplerOps.hit(p.x, p.y, tol);
+      if (hit && (e.altKey || e.button === 2)) {
+        samplerOps.remove(hit.id);
+        return;
+      }
+      if (hit) {
+        // Grab it. The whole drag becomes one undo step, committed on release.
+        samplerDragRef.current = { id: hit.id, before: samplersRef.current };
+        return;
+      }
+      if (e.shiftKey) {
+        samplerOps.add(p.x, p.y);
+        return;
+      }
       pickingRef.current = true;
       pick(e);
       ensureAnts();
@@ -6357,6 +6471,12 @@ export default function CanvasArea({
       return;
     }
     if (tool === "eyedropper") {
+      const drag = samplerDragRef.current;
+      if (drag) {
+        const p = toDoc(e);
+        samplerOps.moveLive(drag.id, p.x, p.y);
+        return;
+      }
       if (pickingRef.current) {
         pick(e);
       } else {
@@ -6872,6 +6992,14 @@ export default function CanvasArea({
         else onSelectionChange(committed);
         engine.pushStructural("Resize", () => applySel(before), () => applySel(after));
       }
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      return;
+    }
+    if (samplerDragRef.current) {
+      // One undo step for the whole drag, not one per pointer move.
+      samplerOps.commitMove(samplerDragRef.current.before);
+      samplerDragRef.current = null;
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       return;

@@ -25,6 +25,7 @@ import ColorPanel from "./panels/ColorPanel";
 import ColorPanelMenu from "./panels/ColorPanelMenu";
 import SwatchesPanel from "./panels/SwatchesPanel";
 import InfoPanel from "./panels/InfoPanel";
+import type { ColorSampler, GestureReadout } from "../lib/samplers";
 import BrushesPanel from "./panels/BrushesPanel";
 import AdjustmentsPanel from "./panels/AdjustmentsPanel";
 import LayersPanel from "./panels/LayersPanel";
@@ -263,6 +264,10 @@ interface Props {
   docName: string;
   /** Info panel: live pointer readout + document metrics. */
   subscribeCursor: (fn: (p: { x: number; y: number } | null) => void) => () => void;
+  subscribeGesture: (fn: (m: GestureReadout) => void) => () => void;
+  samplers: ColorSampler[];
+  onRemoveSampler: (id: string) => void;
+  onClearSamplers: () => void;
   docWidth: number;
   docHeight: number;
   unit?: MeasureUnit;
@@ -348,6 +353,10 @@ export default function RightDock({
   channels,
   docName,
   subscribeCursor,
+  subscribeGesture,
+  samplers,
+  onRemoveSampler,
+  onClearSamplers,
   docWidth,
   docHeight,
   unit,
@@ -595,6 +604,10 @@ export default function RightDock({
           <Panel key="info" title="Info" icon={Info} {...dp}>
             <InfoPanel
               subscribeCursor={subscribeCursor}
+              subscribeGesture={subscribeGesture}
+              samplers={samplers}
+              onRemoveSampler={onRemoveSampler}
+              onClearSamplers={onClearSamplers}
               engineRef={engineRef}
               selection={selection}
               width={docWidth}

@@ -2392,6 +2392,104 @@ input.savedName {
   color: var(--text-3);
 }
 
+/* ---------------- Info panel: colour samplers ------------------------------ */
+.samplerHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.samplerClear {
+  font-size: 11px;
+  color: var(--text-3);
+  transition: color var(--t-fast) var(--ease);
+
+  &:hover {
+    color: var(--text);
+  }
+}
+
+.samplerList {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 4px;
+}
+
+.samplerRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: var(--r-sm);
+  transition: background var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+  }
+
+  /* The delete button only appears on hover/focus — ten rows of always-on
+     buttons is a wall of crosses over the numbers people came to read. */
+  .samplerDel {
+    opacity: 0;
+  }
+
+  &:hover .samplerDel,
+  .samplerDel:focus-visible {
+    opacity: 1;
+  }
+}
+
+.samplerNum {
+  width: 20px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.samplerVal {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.samplerPos {
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.samplerDel {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
+  transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    color: var(--text);
+  }
+}
+
+/* A sampler whose colour has not been read yet (or reads nothing) still shows
+   its slot, as the checkerboard, rather than collapsing the row. */
+.infoSwatch[data-empty] {
+  background-color: var(--checker-a);
+  background-image: repeating-conic-gradient(var(--checker-b) 0% 25%, var(--checker-a) 0% 50%);
+}
+
 /* ---------------- Brushes panel (preset management) ------------------------- */
 .brushes {
   display: flex;
