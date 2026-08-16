@@ -52,3 +52,6 @@ TODO.md
 
 # GitHub release description (local, regenerated per release)
 RELEASE.md
+
+# bench scratch (regenerated per run)
+tools/.tmp/

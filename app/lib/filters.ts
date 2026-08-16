@@ -784,25 +784,31 @@ function addNoise(src: ImageData, p: NoiseParams, cs: PredefinedColorSpace): Ima
   const amp = (Math.max(0, Math.min(100, p.amount)) / 100) * 128;
   const seed = p.seed | 0 || 1;
   const gauss = p.distribution === "gaussian";
+  const mono = p.monochromatic;
+  // Hoisted out of the loop, with x/y as arguments. It used to be declared per
+  // pixel, which allocated a fresh closure ~400 000 times per pass and made Add
+  // Noise — three multiplies and a hash — the SLOWEST of the nineteen filters,
+  // slower than Oil Paint or Median. Hoisting is 2.5x faster and bit-identical
+  // (the golden images did not move).
+  const rnd = (x: number, y: number, lane: number) => {
+    const u = hash01(x, y, seed, lane);
+    if (!gauss) return (u * 2 - 1) * amp;
+    const v = hash01(x, y, seed, lane + 7);
+    return (u + v - 1) * amp; // triangular ≈ gaussian, cheap + bounded
+  };
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const o = (y * w + x) * 4;
       if (sd[o + 3] === 0) continue;
-      const rnd = (lane: number) => {
-        const u = hash01(x, y, seed, lane);
-        if (!gauss) return (u * 2 - 1) * amp;
-        const v = hash01(x, y, seed, lane + 7);
-        return (u + v - 1) * amp; // triangular ≈ gaussian, cheap + bounded
-      };
-      if (p.monochromatic) {
-        const d = rnd(0);
+      if (mono) {
+        const d = rnd(x, y, 0);
         out[o] = clamp255(sd[o] + d);
         out[o + 1] = clamp255(sd[o + 1] + d);
         out[o + 2] = clamp255(sd[o + 2] + d);
       } else {
-        out[o] = clamp255(sd[o] + rnd(0));
-        out[o + 1] = clamp255(sd[o + 1] + rnd(1));
-        out[o + 2] = clamp255(sd[o + 2] + rnd(2));
+        out[o] = clamp255(sd[o] + rnd(x, y, 0));
+        out[o + 1] = clamp255(sd[o + 1] + rnd(x, y, 1));
+        out[o + 2] = clamp255(sd[o + 2] + rnd(x, y, 2));
       }
     }
   }

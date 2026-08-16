@@ -1,0 +1,154 @@
+[
+ {
+  "at": "2026-08-16T15:58:33.781Z",
+  "commit": "f8e375f",
+  "node": "v24.1.0",
+  "nodeCal": {
+   "copy": 0.21,
+   "math": 29.96
+  },
+  "filters": {
+   "blur": 8.6,
+   "sharpen": 9.33,
+   "noise": 53.21,
+   "pixelate": 141.65,
+   "distort": 15.69,
+   "stylize": 4.58,
+   "highpass": 8.9,
+   "median": 7.21,
+   "dustscratches": 7.26,
+   "denoise": 4.69,
+   "lens": 23.98,
+   "dehaze": 8.44,
+   "clarity": 14.59,
+   "grain": 18.57,
+   "oil": 5.16,
+   "halftone": 4.77,
+   "crystallize": 18.16,
+   "glitch": 93.41,
+   "canvasshadow": 20.07
+  },
+  "browserCal": {
+   "copy": 7,
+   "math": 67.1
+  },
+  "composite": {
+   "series": [
+    {
+     "layers": 1,
+     "ms": 0.1,
+     "coldMs": 89.5
+    },
+    {
+     "layers": 2,
+     "ms": 0.1,
+     "coldMs": 172.8
+    },
+    {
+     "layers": 4,
+     "ms": 0.1,
+     "coldMs": 343.8
+    },
+    {
+     "layers": 8,
+     "ms": 0.2,
+     "coldMs": 719.1
+    },
+    {
+     "layers": 16,
+     "ms": 0.3,
+     "coldMs": 1431.9
+    },
+    {
+     "layers": 32,
+     "ms": 0.3,
+     "coldMs": 2893.7
+    }
+   ],
+   "warm": {
+    "base": 0.11,
+    "perLayer": 0.007
+   },
+   "cold": {
+    "base": -9.52,
+    "perLayer": 90.602
+   }
+  }
+ },
+ {
+  "at": "2026-08-16T15:59:51.971Z",
+  "commit": "f8e375f",
+  "node": "v24.1.0",
+  "nodeCal": {
+   "copy": 0.24,
+   "math": 30.8
+  },
+  "filters": {
+   "blur": 8.68,
+   "sharpen": 9.34,
+   "noise": 56.61,
+   "pixelate": 137.74,
+   "distort": 15.86,
+   "stylize": 4.26,
+   "highpass": 9.18,
+   "median": 7.34,
+   "dustscratches": 7.09,
+   "denoise": 4.68,
+   "lens": 22.85,
+   "dehaze": 9.18,
+   "clarity": 14.36,
+   "grain": 18.55,
+   "oil": 5.14,
+   "halftone": 4.66,
+   "crystallize": 19.14,
+   "glitch": 96.01,
+   "canvasshadow": 21
+  },
+  "browserCal": {
+   "copy": 7.4,
+   "math": 68.2
+  },
+  "composite": {
+   "series": [
+    {
+     "layers": 1,
+     "ms": 0.1,
+     "coldMs": 88.5
+    },
+    {
+     "layers": 2,
+     "ms": 0.1,
+     "coldMs": 189.8
+    },
+    {
+     "layers": 4,
+     "ms": 0.15,
+     "coldMs": 351.5
+    },
+    {
+     "layers": 8,
+     "ms": 0.2,
+     "coldMs": 723.6
+    },
+    {
+     "layers": 16,
+     "ms": 0.2,
+     "coldMs": 1428.2
+    },
+    {
+     "layers": 32,
+     "ms": 0.4,
+     "coldMs": 2898.4
+    }
+   ],
+   "warm": {
+    "base": 0.1,
+    "perLayer": 0.009
+   },
+   "cold": {
+    "base": -2.93,
+    "perLayer": 90.438
+   }
+  }
+ }
+]
