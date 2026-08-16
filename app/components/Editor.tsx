@@ -6702,6 +6702,53 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const activeBrush = tool === "eraser" ? eraser : tool === "pencil" ? pencil : brush;
   const setActiveBrush = tool === "eraser" ? setEraser : tool === "pencil" ? setPencil : setBrush;
 
+  /** On-canvas brush HUD (Alt + right-drag on the canvas): write the dragged
+   *  size/hardness back to whichever tool is active. These are tool OPTIONS —
+   *  the same values the options-bar sliders hold — so this deliberately adds
+   *  no history step, exactly as dragging those sliders adds none. `hardness`
+   *  is null for the tools that have no soft edge (see brush-hud.ts). */
+  const setBrushHud = (size: number, hardness: number | null) => {
+    const patch = <T extends { size: number }>(s: T): T =>
+      hardness === null ? { ...s, size } : { ...s, size, hardness };
+    switch (tool) {
+      case "brush":
+      case "pencil":
+      case "eraser":
+        setActiveBrush(patch);
+        break;
+      case "heal":
+        setHeal(patch);
+        break;
+      case "clone":
+        setClone(patch);
+        break;
+      case "blur":
+        setBlur(patch);
+        break;
+      case "smudge":
+        setSmudge(patch);
+        break;
+      case "mixer":
+        setMixer(patch);
+        break;
+      case "dodge":
+        setDodge(patch);
+        break;
+      case "sponge":
+        setSponge(patch);
+        break;
+      case "history":
+        setHistoryBrush(patch);
+        break;
+      case "quickselect":
+        setQuickSelect((s) => ({ ...s, size }));
+        break;
+      case "redeye":
+        setRedEye((s) => ({ ...s, size }));
+        break;
+    }
+  };
+
   // ---- Scripting hook (§14): window.graphiq for the dev console ------------
   // The API object installs once; every call reads this ref, which re-points
   // at fresh render-scope functions/state each render — console snippets
@@ -7060,6 +7107,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             crosshair: prefs.brushCrosshair,
             ringColor: prefs.ringColor,
           }}
+          onBrushHud={setBrushHud}
           viewApiRef={viewApiRef}
           paintRef={paintRef}
           onHistory={setHistory}

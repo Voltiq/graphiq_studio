@@ -15,6 +15,15 @@ import {
   type TextStylePatch,
 } from "../lib/richtext-dom";
 import type { LassoMode } from "../lib/tools";
+import {
+  HUD_VEIL,
+  hudAlphaAt,
+  hudHardness,
+  hudHasHardness,
+  hudReadout,
+  hudSize,
+  hudSupports,
+} from "../lib/brush-hud";
 import { clamp, parseColor, toHex8 } from "../lib/color";
 import { selectionChannelKey } from "../lib/channels";
 import {
@@ -756,6 +765,7 @@ export default function CanvasArea({
   compareAxis,
   onCompareSplit,
   cursorPrefs,
+  onBrushHud,
   viewApiRef,
   paintRef,
   onHistory,
@@ -973,6 +983,9 @@ export default function CanvasArea({
   /** Paint-cursor prefs (Preferences ▸ Cursors): ring vs precise, centre
    *  crosshair, ring colour. */
   cursorPrefs: { mode: "ring" | "precise"; crosshair: boolean; ringColor: string };
+  /** On-canvas brush HUD (Alt + right-drag): the new size, and the new hardness
+   *  for the tools that have one. Editor routes it to the active tool. */
+  onBrushHud: (size: number, hardness: number | null) => void;
   viewApiRef: RefObject<ViewApi | null>;
   paintRef: RefObject<EngineHandle | null>;
   onHistory: (s: HistorySummary) => void;
@@ -1289,6 +1302,54 @@ export default function CanvasArea({
   // Cursor prefs (ring vs precise, crosshair, colour) for the deps-[] overlay draw.
   const cursorPrefsRef = useRef(cursorPrefs);
   cursorPrefsRef.current = cursorPrefs;
+  // On-canvas brush HUD (Alt + right-drag). The live session, or null. It is
+  // anchored at the press point rather than tracking the pointer: the whole
+  // point is to watch the tip change size, which you cannot do if it is running
+  // away from you. `size`/`hardness` are echoed back here so the preview draws
+  // the committed values rather than re-deriving them.
+  const hudRef = useRef<{
+    px: number;
+    py: number;
+    docX: number;
+    docY: number;
+    startSize: number;
+    startHardness: number;
+    size: number;
+    hardness: number | null;
+  } | null>(null);
+  const onBrushHudRef = useRef(onBrushHud);
+  onBrushHudRef.current = onBrushHud;
+  /** The active tool's current diameter + hardness, or null if it has no brush. */
+  const hudToolSettings = (t: string): { size: number; hardness: number } | null => {
+    switch (t) {
+      case "brush":
+      case "pencil":
+      case "eraser":
+        return paintBrushRef.current;
+      case "heal":
+        return healRef.current;
+      case "clone":
+        return cloneRef.current;
+      case "blur":
+        return blurRef.current;
+      case "smudge":
+        return smudgeRef.current;
+      case "mixer":
+        return mixerRef.current;
+      case "dodge":
+        return dodgeRef.current;
+      case "sponge":
+        return spongeRef.current;
+      case "history":
+        return historyBrushRef.current;
+      case "quickselect":
+        return { ...quickSelectRef.current, hardness: 100 };
+      case "redeye":
+        return { ...redEyeRef.current, hardness: 100 };
+      default:
+        return null;
+    }
+  };
   // Blur (focus) brush: latest settings + the hover point for the brush-ring
   // cursor that's drawn on the overlay (so it scales with zoom + shows hardness).
   const blurRef = useRef(blur);
@@ -3065,6 +3126,71 @@ export default function CanvasArea({
       } else {
         drawBrushCursor(hx, hy, r, c.hardness);
       }
+    }
+
+    // --- on-canvas brush HUD (Alt + right-drag) -------------------------------
+    // Anchored at the press point, not at the pointer: the tip has to hold still
+    // to be judged against the artwork under it. The disc is filled with the
+    // engine's own coverage profile (hudAlphaAt mirrors buildSoftTip), so what
+    // is on screen is the tip about to be painted rather than a stand-in.
+    const hudNow = hudRef.current;
+    if (hudNow) {
+      const hx = p.x + hudNow.docX * s;
+      const hy = p.y + hudNow.docY * s;
+      const rr = Math.max(0.5, (hudNow.size / 2) * s);
+      const hard = hudNow.hardness ?? 100;
+      ctx.save();
+      // The falloff, as a radial gradient sampled off the same profile. Nothing
+      // is laid UNDER it: the disc's alpha is the tip's coverage times one
+      // constant, which is what makes the preview readable as a measurement and
+      // not just a picture. A dark backing plate for contrast was the first
+      // attempt and it flattened the ramp — a hardness-40 edge came back
+      // reading like hardness 70 — so the contrast comes from the colour
+      // instead. Red carries over light and dark artwork alike, which is the
+      // same reason Photoshop's HUD is red.
+      const grad = ctx.createRadialGradient(hx, hy, 0, hx, hy, rr);
+      const STOPS = 24;
+      for (let i = 0; i <= STOPS; i++) {
+        const t = i / STOPS;
+        grad.addColorStop(t, `rgba(232,64,32,${(hudAlphaAt(t, hard) * HUD_VEIL).toFixed(4)})`);
+      }
+      ctx.globalCompositeOperation = "source-over";
+      ctx.beginPath();
+      ctx.arc(hx, hy, rr, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.restore();
+      drawRing(hx, hy, rr, hard);
+      drawCross(hx, hy, 4);
+
+      // The numbers, in a chip clear of the disc so a big brush cannot hide them.
+      const label = hudReadout(hudNow.size, hudNow.hardness);
+      ctx.save();
+      ctx.font = "12px ui-sans-serif, system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      const padX = 7;
+      const tw = ctx.measureText(label).width;
+      const bw = tw + padX * 2;
+      const bh = 21;
+      // Below the disc by preference; above it when that would go off-viewport.
+      // cw/ch are the viewport in CSS px — the overlay draws under a dpr
+      // transform, so these are the right bounds to clamp against.
+      let bx = hx - bw / 2;
+      let by = hy + rr + 10;
+      if (by + bh > ch - 4) by = hy - rr - 10 - bh;
+      bx = Math.max(4, Math.min(cw - bw - 4, bx));
+      by = Math.max(4, Math.min(ch - bh - 4, by));
+      ctx.fillStyle = "rgba(20,20,22,0.86)";
+      ctx.beginPath();
+      ctx.roundRect(bx, by, bw, bh, 5);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.22)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.fillText(label, bx + padX, by + bh / 2 + 0.5);
+      ctx.restore();
     }
 
     // --- text paragraph-box rubber-band (while dragging to define a box) ------
@@ -5458,6 +5584,30 @@ export default function CanvasArea({
     palmRef.current = palmDown(palmRef.current, e.pointerType);
     if (rejectsPointer(palmRef.current, e.pointerType, pointerPrefsRef.current.palm)) return;
     commitNudge(); // a pointer gesture finalizes any pending arrow-key nudge
+    // On-canvas brush HUD: Alt + right-drag sets size (horizontal) and hardness
+    // (vertical). Claimed before every tool branch below, because on the paint
+    // tools the right button already means "paint with the secondary colour" —
+    // this has to win, or the gesture would lay down a stroke while resizing.
+    if (e.button === 2 && e.altKey && hudSupports(tool)) {
+      const cur = hudToolSettings(tool);
+      if (cur) {
+        e.preventDefault();
+        viewRef.current?.setPointerCapture(e.pointerId);
+        const p = toDoc(e);
+        hudRef.current = {
+          px: e.clientX,
+          py: e.clientY,
+          docX: p.x,
+          docY: p.y,
+          startSize: cur.size,
+          startHardness: cur.hardness,
+          size: cur.size,
+          hardness: hudHasHardness(tool) ? cur.hardness : null,
+        };
+        ensureAnts();
+        return;
+      }
+    }
     // Bird's-eye takes precedence over every tool while H is held.
     if (hKeyRef.current && !birdRef.current) {
       e.preventDefault();
@@ -6252,6 +6402,23 @@ export default function CanvasArea({
         : null,
     );
 
+    // Brush HUD drag: horizontal → size, vertical → hardness, both live. The
+    // settings go up to Editor on every move (they are tool options, not
+    // document edits, so nothing lands in the history), which is what makes the
+    // preview show the tip you will actually paint with.
+    const hud = hudRef.current;
+    if (hud) {
+      const size = hudSize(hud.startSize, e.clientX - hud.px, scaleRef.current);
+      const hardness =
+        hud.hardness === null ? null : hudHardness(hud.startHardness, e.clientY - hud.py);
+      if (size !== hud.size || hardness !== hud.hardness) {
+        hudRef.current = { ...hud, size, hardness };
+        onBrushHudRef.current(size, hardness);
+        ensureAnts();
+      }
+      return;
+    }
+
     if (birdRef.current) {
       birdRef.current = { ...birdRef.current, x: e.clientX, y: e.clientY };
       ensureAnts();
@@ -6857,6 +7024,13 @@ export default function CanvasArea({
     if (wasRejected) return; // this contact never started anything
     // The aborted tool must not commit on lift while a gesture is winding down.
     if (e.pointerType !== "mouse" && (pinchRef.current || gestureSuppressRef.current)) return;
+    if (hudRef.current) {
+      hudRef.current = null;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      ensureAnts();
+      return;
+    }
     if (birdRef.current) {
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
@@ -7606,13 +7780,15 @@ export default function CanvasArea({
               }}
               onContextMenu={(e) => {
                 // Suppress the browser menu where right-click is a tool action:
-                // zoom-out, and right-button painting / filling (secondary colour).
+                // zoom-out, right-button painting / filling (secondary colour),
+                // and — on every ring-cursor tool — the Alt+right-drag brush HUD.
                 if (
                   tool === "zoom" ||
                   tool === "brush" ||
                   tool === "pencil" ||
                   tool === "eraser" ||
-                  tool === "bucket"
+                  tool === "bucket" ||
+                  (e.altKey && hudSupports(tool))
                 ) {
                   e.preventDefault();
                 }

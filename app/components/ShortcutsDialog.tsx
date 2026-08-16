@@ -49,6 +49,7 @@ const CANVAS_SHORTCUTS: Section[] = [
       { name: "Clone Stamp: set the source point", keys: "Alt+Click" },
       { name: "Commit a pen path", keys: "Enter / Double-click" },
       { name: "Brush-style tools: size / hardness / strength", keys: "[ ] / { } / 0–9" },
+      { name: "Set brush size & hardness on the canvas", keys: "Alt+Right-drag" },
       { name: "Curves: nudge the selected point (×10)", keys: "Arrows (Shift)" },
       { name: "Curves: remove a point", keys: "Right-click / ⌫" },
     ],
