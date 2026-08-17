@@ -3569,10 +3569,12 @@ export default function CanvasArea({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [triangleApex]);
 
-  // Drop queued apex work on unmount so it can't run against a dead engine.
+  // Drop queued apex / node-drag work on unmount so it can't run against a dead
+  // engine.
   useEffect(
     () => () => {
       if (apexRafRef.current) cancelAnimationFrame(apexRafRef.current);
+      if (nodeRafRef.current) cancelAnimationFrame(nodeRafRef.current);
       window.clearTimeout(apexCommitRef.current);
     },
     [],
@@ -5462,6 +5464,41 @@ export default function CanvasArea({
   };
 
   // Re-render the live shape from its box + current settings (+ node geometry).
+  /* Dragging a shape NODE (the trapezoid's two side nodes, the triangle's apex)
+   * rebuilds the whole live shape — `engine.liveShape` re-runs the geometry, the
+   * fill, the stroke and a composite. A high-rate mouse delivers several moves
+   * per displayed frame, so all but the last rebuild is thrown away before
+   * anything reaches the screen: a 60-event burst cost 37.2 ms of blocking, of
+   * which one frame's worth was ever seen.
+   *
+   * So schedule ONE rebuild per frame and let it read the node position at FRAME
+   * time — coalescing is only correct if the frame uses the newest input, which
+   * is why the handler writes trapRef/triApexRef and this reads them, rather
+   * than the value the callback closed over. The same treatment the triangle
+   * apex slider got, for the same reason.
+   *
+   * `ensureAnts` is deliberately NOT coalesced here: it is already a
+   * one-rAF-at-a-time scheduler, so calling it per event costs a null check and
+   * keeps the node dots and snap guides as responsive as they were.
+   *
+   * NO FLUSH ON RELEASE, deliberately. The obvious worry is that the last moves
+   * of a drag never get their frame — so a flush was written, and then could not
+   * be shown to do anything: releasing (and even committing) in the same task as
+   * the final move still bakes the right shape. Two reasons, both structural.
+   * Pointer-up does not cancel the pending frame, so it simply fires a moment
+   * later and renders the newest refs; and `engine.endShape()` is driven from a
+   * React effect, which runs after paint, i.e. after that frame. A guard that
+   * cannot be made to fail is worse than no guard, so it is gone — but the
+   * reasoning is here, because "shouldn't this flush?" is the obvious question. */
+  const nodeRafRef = useRef(0);
+  const scheduleLiveShape = () => {
+    if (nodeRafRef.current) return;
+    nodeRafRef.current = requestAnimationFrame(() => {
+      nodeRafRef.current = 0;
+      reRenderLiveShape();
+      ensureAnts();
+    });
+  };
   const reRenderLiveShape = () => {
     const live = liveShapeRef.current;
     if (!live) return;
@@ -7079,7 +7116,7 @@ export default function CanvasArea({
         trapRef.current = t;
       }
       nodeSnapRef.current = snapped;
-      reRenderLiveShape();
+      scheduleLiveShape();
       ensureAnts();
       return;
     }
