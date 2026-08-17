@@ -229,28 +229,59 @@ function mk(w: number, h: number, space: PredefinedColorSpace): Buf {
   const ctx = c.getContext("2d", { willReadFrequently: true, colorSpace: space })!;
   return { c, ctx };
 }
-/** A colour-agnostic (sRGB) RGB=0, A=`a` mask canvas (only its alpha is consumed). */
+/** The mask canvas + its ImageData, reused across calls — see alphaMask. */
+let maskScratch: {
+  c: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  id: ImageData;
+} | null = null;
+
+/** A colour-agnostic (sRGB) RGB=0, A=`a` mask canvas (only its alpha is consumed).
+ *
+ *  RETURNS SHARED SCRATCH. The canvas is reused between calls, so the result
+ *  must be consumed (drawn) before the next call — which every caller does, and
+ *  which is why the stroke's `ringMask` is built immediately before its
+ *  drawImage rather than at the top of its block. Allocating a fresh canvas +
+ *  ImageData per call is what this replaced, and at 12 MP that allocation — not
+ *  the fill and not the composite — was the cost: 41.6 ms -> 32.0 ms per
+ *  effect, byte-for-byte identical (tools/verify-tinted.js).
+ *
+ *  Only the alpha bytes are ever written, so the permanently-zero RGB of the
+ *  reused buffer stays correct, and every alpha byte is overwritten each call,
+ *  so nothing survives from the previous one.
+ *
+ *  Four tempting micro-optimisations here are all WRONG, measured:
+ *   - Dropping `willReadFrequently` makes put+draw 24 ms -> 14 ms at 4000x3000,
+ *     but the composite changes (445 of 21,788 non-empty pixels vanished in an
+ *     A/B): a GPU-backed store does not round-trip this mask unchanged.
+ *   - Writing whole pixels via a Uint32Array view (RGB is 0, so the pixel is
+ *     just alpha<<24) is ~25% faster but TRUNCATES, where the byte store below
+ *     rounds half-to-even. Blur output is fractional, so that disagreed on 498k
+ *     of 1M samples and would shift every soft edge. (Rounding half-UP instead
+ *     is 1.35x but still disagrees — 29 px, worst 7 — so it is not free either.)
+ *   - Folding the whole of `tinted` into one ImageData write — no fill, no
+ *     second canvas, no destination-in — is the obvious next step and is 0.73x,
+ *     i.e. SLOWER: it trades two cheap native passes for three extra byte
+ *     stores per pixel in JS. Writing the RGB in through a u32 view afterwards
+ *     lands back at exactly 1.00x.
+ *   - Reusing the tint OUTPUT canvas as well is 1.65x at 3 MP but 0.83x at
+ *     12 MP, so it is not a win where the time actually goes. */
 function alphaMask(a: Float32Array, w: number, h: number): HTMLCanvasElement {
-  const c = document.createElement("canvas");
-  c.width = w;
-  c.height = h;
-  // Two tempting micro-optimisations here are both WRONG, measured 2026-08-12:
-  //  - Dropping `willReadFrequently` makes put+draw 24 ms -> 14 ms at 4000x3000,
-  //    but the composite changes (445 of 21,788 non-empty pixels vanished in an
-  //    A/B): a GPU-backed store does not round-trip this mask unchanged.
-  //  - Writing whole pixels via a Uint32Array view (RGB is 0, so the pixel is
-  //    just alpha<<24) is ~25% faster but TRUNCATES, where the byte store below
-  //    rounds half-to-even. Blur output is fractional, so that disagreed on 498k
-  //    of 1M samples and would shift every soft edge.
-  const ctx = c.getContext("2d", { willReadFrequently: true })!;
-  const id = new ImageData(w, h);
-  const d = id.data;
+  if (!maskScratch || maskScratch.c.width !== w || maskScratch.c.height !== h) {
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext("2d", { willReadFrequently: true })!;
+    maskScratch = { c, ctx, id: ctx.createImageData(w, h) };
+  }
+  const d = maskScratch.id.data;
   for (let i = 0; i < a.length; i++) d[i * 4 + 3] = a[i] < 0 ? 0 : a[i] > 255 ? 255 : a[i];
-  ctx.putImageData(id, 0, 0);
-  return c;
+  maskScratch.ctx.putImageData(maskScratch.id, 0, 0);
+  return maskScratch.c;
 }
 /** Tint a silhouette: fill `color` (browser converts sRGB hex → `space`), then keep
- *  only where `a` is opaque. Returns a buffer whose colour is correct in `space`. */
+ *  only where `a` is opaque. Returns a buffer whose colour is correct in `space`.
+ *  The mask it draws is shared scratch, and is consumed on the next line. */
 function tinted(a: Float32Array, w: number, h: number, color: string, space: PredefinedColorSpace): HTMLCanvasElement {
   const t = mk(w, h, space);
   t.ctx.fillStyle = color;
@@ -465,7 +496,6 @@ export function renderStyled(
       ring = new Float32Array(n);
       for (let i = 0; i < n; i++) ring[i] = clamp(d[i] - e[i], 0, 255);
     }
-    const ringMask = alphaMask(ring, w, h);
     const sbuf = mk(w, h, space);
     if (st.fillType === "gradient" && st.gradient && st.gradient.length) {
       const stops = st.reverse
@@ -488,7 +518,9 @@ export function renderStyled(
     }
     sbuf.ctx.fillRect(0, 0, w, h);
     sbuf.ctx.globalCompositeOperation = "destination-in";
-    sbuf.ctx.drawImage(ringMask, 0, 0);
+    // Built HERE, not above with `ring`: alphaMask returns shared scratch, and
+    // the gradient setup between the two would be free to use it.
+    sbuf.ctx.drawImage(alphaMask(ring, w, h), 0, 0);
     sbuf.ctx.globalCompositeOperation = "source-over";
     drawWith(sbuf.c, st.blendMode, st.opacity);
   }

@@ -6,7 +6,14 @@
  * enough that the view canvas is 1:1, so nothing averages a difference away) and
  * prints an FNV-1a hash of the pixels. Change effects.ts, re-run, compare.
  *
- *   EXPECTED: nonEmptyPx 21788  HASH 5fae3d5
+ *   EXPECTED  600x400: nonEmptyPx 21788  HASH 5fae3d5
+ *             880x300: nonEmptyPx 27475  HASH c88c467c
+ *
+ * The second size is not decoration. effects.ts keeps ONE scratch mask canvas,
+ * reused across calls and keyed on document size; a version that forgot to
+ * re-key it passes a single-size rail perfectly and hands the second document a
+ * stretched mask (46887 non-empty px instead of 27475). Verified by making
+ * exactly that mutation.
  *
  * The five effects are exactly those that consumed the old `layerMask`: drop
  * shadow and outer glow through the knockout, gradient overlay / inner shadow /
@@ -41,12 +48,13 @@ const { chromium } = require("playwright-core");
     await page.getByText(b, { exact: true }).first().click();
     await page.waitForTimeout(700);
   };
+  const build = async (W, H) => {
   await menu("File", "New…");
   const dlg = page.locator('div[role="dialog"][aria-label="New document"]');
   await dlg.waitFor({ timeout: 8000 });
   const nums = dlg.locator('input[type="number"]');
-  await nums.nth(0).fill("600");
-  await nums.nth(1).fill("400");
+  await nums.nth(0).fill(String(W));
+  await nums.nth(1).fill(String(H));
   await dlg.getByText("Create", { exact: true }).click();
   await page.waitForTimeout(2000);
 
@@ -89,6 +97,16 @@ const { chromium } = require("playwright-core");
   });
   console.log(`effects enabled: ${on.join(", ")} (${on.length}/5)`);
   console.log(`view ${res.size}  nonEmptyPx ${res.nonEmpty}  HASH ${res.hash}`);
+  return res;
+  };
+
+  // TWO sizes, in this order, in ONE page session. The second is what makes the
+  // rail able to see a stale reusable buffer: effects.ts keeps one scratch mask
+  // canvas keyed on document size, and a version that forgot to re-key it would
+  // hand the second document a mask of the first document's dimensions —
+  // stretched by drawImage, and completely invisible to a single-size test.
+  await build(600, 400);
+  await build(880, 300);
   if (errors.length) console.log("ERRORS: " + errors.join("; "));
   await browser.close();
 })().catch((e) => { console.error("FAIL:", e.message); process.exit(1); });
