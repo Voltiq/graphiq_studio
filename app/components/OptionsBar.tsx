@@ -1225,6 +1225,10 @@ interface MoveProps {
   onAutoSelect: (v: boolean) => void;
   autoSelectScope: "layer" | "group";
   onAutoSelectScope: (s: "layer" | "group") => void;
+  /** Photoshop's "Show Transform Controls": a live box + handles on the active
+   *  layer, so it can be scaled or rotated without entering Free Transform. */
+  showTransform: boolean;
+  onShowTransform: (v: boolean) => void;
   /** Align against the canvas/selection rather than the layers' own union. */
   alignToCanvas: boolean;
   onAlignToCanvas: (v: boolean) => void;
@@ -1261,6 +1265,8 @@ export default function OptionsBar({
   onAutoSelect,
   autoSelectScope,
   onAutoSelectScope,
+  showTransform,
+  onShowTransform,
   alignToCanvas,
   onAlignToCanvas,
   onAlign,
@@ -1503,6 +1509,8 @@ export default function OptionsBar({
             onAutoSelect,
             autoSelectScope,
             onAutoSelectScope,
+            showTransform,
+            onShowTransform,
             alignToCanvas,
             onAlignToCanvas,
             onAlign,
@@ -2981,6 +2989,11 @@ function renderOptions(
             />
           )}
           <Toggle label="Snap" checked={moveProps.snap} onChange={moveProps.onSnap} />
+          <Toggle
+            label="Transform controls"
+            checked={moveProps.showTransform}
+            onChange={moveProps.onShowTransform}
+          />
           <Divider />
           {/* Align against the layers' own union, or against the canvas (or the
               selection, when there is one) — which is the only way a SINGLE

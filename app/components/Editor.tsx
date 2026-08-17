@@ -681,6 +681,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   /** Move ▸ Auto-select: a canvas click picks the layer (or group) under it. */
   const [autoSelect, setAutoSelect] = useState(true);
   const [autoSelectScope, setAutoSelectScope] = useState<"layer" | "group">("layer");
+  /** Move ▸ Transform controls (Photoshop's "Show Transform Controls"): a live
+   *  box with handles on the active layer, so it can be scaled or rotated
+   *  without first entering Free Transform. */
+  const [showTransform, setShowTransform] = useState(false);
   const viewApiRef = useRef<ViewApi | null>(null);
   const [showDocGrid, setShowDocGrid] = useState(false);
   // Guides (TODO §11). Visibility doubles as the snap switch — Photoshop's rule:
@@ -785,6 +789,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (p.moveMode) setMoveMode(p.moveMode);
     if (typeof p.autoSelect === "boolean") setAutoSelect(p.autoSelect);
     if (p.autoSelectScope) setAutoSelectScope(p.autoSelectScope);
+    if (typeof p.showTransform === "boolean") setShowTransform(p.showTransform);
     if (typeof p.alignToCanvas === "boolean") setAlignToCanvas(p.alignToCanvas);
     if (p.resizeMode) setResizeMode(p.resizeMode);
     if (typeof p.resizeSmooth === "boolean") setResizeSmooth(p.resizeSmooth);
@@ -828,6 +833,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           moveMode,
           autoSelect,
           autoSelectScope,
+          showTransform,
           alignToCanvas,
           resizeMode,
           resizeSmooth,
@@ -866,6 +872,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     moveMode,
     autoSelect,
     autoSelectScope,
+    showTransform,
     alignToCanvas,
     resizeMode,
     resizeSmooth,
@@ -6904,6 +6911,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onAutoSelect={setAutoSelect}
         autoSelectScope={autoSelectScope}
         onAutoSelectScope={setAutoSelectScope}
+        showTransform={showTransform}
+        onShowTransform={setShowTransform}
         alignToCanvas={alignToCanvas}
         onAlignToCanvas={setAlignToCanvas}
         onAlign={(mode) => alignLayersOp(mode, alignToCanvas)}
@@ -6999,6 +7008,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           redEye={redEye}
           clone={clone}
           dodge={dodge}
+          showTransform={showTransform}
           autoSelect={autoSelect}
           autoSelectScope={autoSelectScope}
           onPickLayer={(id) => layersApi.select(id, "replace")}

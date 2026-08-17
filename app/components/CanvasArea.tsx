@@ -24,6 +24,12 @@ import {
   hudSize,
   hudSupports,
 } from "../lib/brush-hud";
+import {
+  MOVE_ROTATE_REACH,
+  inRotateZone,
+  resizeBox,
+  transformBlock,
+} from "../lib/transform-box";
 import { clamp, parseColor, toHex8 } from "../lib/color";
 import { selectionChannelKey } from "../lib/channels";
 import {
@@ -677,6 +683,7 @@ export default function CanvasArea({
   redEye,
   clone,
   dodge,
+  showTransform,
   autoSelect,
   autoSelectScope,
   onPickLayer,
@@ -838,6 +845,9 @@ export default function CanvasArea({
   clone: CloneSettings;
   /** Dodge/Burn brush settings. */
   dodge: DodgeSettings;
+  /** Move ▸ Transform controls: draw the active layer's box + handles, and let
+   *  a handle drag scale or rotate it through the ordinary transform session. */
+  showTransform: boolean;
   /** Move tool: clicking the canvas picks the layer under the pointer. */
   autoSelect: boolean;
   /** Auto-select target: the layer itself, or the group it lives in. */
@@ -1302,6 +1312,30 @@ export default function CanvasArea({
   // Cursor prefs (ring vs precise, crosshair, colour) for the deps-[] overlay draw.
   const cursorPrefsRef = useRef(cursorPrefs);
   cursorPrefsRef.current = cursorPrefs;
+  // Move ▸ Transform controls. The box is the ACTIVE layer's content bounds —
+  // the same single layer the transform session can actually lift, so the
+  // outline never promises more than a drag will deliver.
+  const showTransformRef = useRef(showTransform);
+  showTransformRef.current = showTransform;
+  /** The active layer's transform box, or null when the handles must not show.
+   *  `layerContentBounds` is memoized in the engine on the layer's pixel version,
+   *  so calling this once per overlay frame is a map lookup, not a 48 MB read. */
+  /** The box a Move-tool transform drag started from. Its presence is what tells
+   *  the shared resize/rotate commit paths to bake the pixels WITHOUT leaving a
+   *  selection behind — the Move tool never had one to restore. */
+  const tfDragRef = useRef<{ box: Rect } | null>(null);
+  const transformBox = (): Rect | null => {
+    if (!showTransformRef.current || toolRef.current !== "move") return null;
+    const id = activeLayerIdRef.current;
+    const node = id ? findNode(layersRef.current, id) : null;
+    if (!node || node.type !== "layer") return null;
+    // The PURE predicates, not lockBlocks — that one reports the block to the
+    // user as a side effect, which from a per-frame overlay draw would fire a
+    // "layer is locked" notice sixty times a second.
+    const blocked = isFillLayer(node) || isPositionLocked(node);
+    const b = blocked ? null : engine.layerContentBounds(id!);
+    return transformBlock(id, blocked, b) === null ? b : null;
+  };
   // On-canvas brush HUD (Alt + right-drag). The live session, or null. It is
   // anchored at the press point rather than tracking the pointer: the whole
   // point is to watch the tip change size, which you cannot do if it is running
@@ -1657,6 +1691,8 @@ export default function CanvasArea({
     angle: number;
     pivot: { x: number; y: number };
     before: SelState;
+    /** Move-tool transform box: bake the pixels, leave no selection behind. */
+    layerBox?: boolean;
   } | null>(null);
   const resizePreviewRef = useRef<Rect[] | null>(null);
   // Rotate drag (grab the ring): pivot (doc), pointer's start angle, the angle at
@@ -1670,6 +1706,8 @@ export default function CanvasArea({
     bbox: Rect;
     content: boolean;
     before: SelState;
+    /** Move-tool transform box: bake the pixels, leave no selection behind. */
+    layerBox?: boolean;
   } | null>(null);
   const rotatePreviewRef = useRef<number | null>(null);
   // Dragging the rotation anchor (pivot) around.
@@ -2179,9 +2217,14 @@ export default function CanvasArea({
     }
 
     // --- selection marching ants ---
+    // A Move-tool transform borrows the same resize/rotate refs, but its box is
+    // a LAYER's bounds, not a selection. Hidden from the ants here, or a marquee
+    // that happened to be up would be redrawn at the layer's box and spun with
+    // it — an outline claiming pixels it has nothing to do with.
+    const tfLive = !!resizeRef.current?.layerBox || !!rotateRef.current?.layerBox;
     const m = marqueeRef.current;
     const mv = moveRef.current || nudgeActiveRef.current;
-    const rz = resizePreviewRef.current;
+    const rz = tfLive ? null : resizePreviewRef.current;
     let rects: Rect[];
     if (apexPreviewRef.current) {
       // Live preview while the Apex slider is moving — drawn straight from the
@@ -2211,7 +2254,7 @@ export default function CanvasArea({
     }
     // Selection rotation (persisted, or live while dragging the ring): spin the
     // outline + handles about the pivot (anchor), in screen space.
-    const ang = rotatePreviewRef.current ?? selAngleRef.current;
+    const ang = (tfLive ? null : rotatePreviewRef.current) ?? selAngleRef.current;
     const cosA = Math.cos(ang);
     const sinA = Math.sin(ang);
     let scx = 0;
@@ -2219,7 +2262,7 @@ export default function CanvasArea({
     if (rects.length) {
       // While resizing, rotate about the locked grab pivot so the preview lines
       // up with the committed result; otherwise use the selection's pivot/centre.
-      const pv = resizeRef.current ? resizeRef.current.pivot : selPivotRef.current;
+      const pv = resizeRef.current && !tfLive ? resizeRef.current.pivot : selPivotRef.current;
       if (pv) {
         // While moving, the pivot travels with the content so a rotated selection
         // translates as a whole instead of swinging about a fixed point (which
@@ -3128,6 +3171,61 @@ export default function CanvasArea({
       }
     }
 
+    // --- Move ▸ transform controls: the active layer's box + handles ---------
+    // Drawn from the same primitives as the marquee's, because they ARE the same
+    // handles driving the same session — only the box they bound is different
+    // (one layer's content, rather than a selection outline).
+    if (toolRef.current === "move") {
+      const tb = tfDragRef.current ? tfDragRef.current.box : transformBox();
+      if (tb) {
+        // A live drag previews through the shared resize/rotate refs.
+        const live = resizeRef.current && resizePreviewRef.current ? bboxOf(resizePreviewRef.current) : tb;
+        const tAng = rotatePreviewRef.current ?? 0;
+        const tcx = p.x + (tb.x + tb.w / 2) * s;
+        const tcy = p.y + (tb.y + tb.h / 2) * s;
+        const trot = (x: number, y: number): [number, number] =>
+          tAng === 0
+            ? [x, y]
+            : [
+                tcx + (x - tcx) * Math.cos(tAng) - (y - tcy) * Math.sin(tAng),
+                tcy + (x - tcx) * Math.sin(tAng) + (y - tcy) * Math.cos(tAng),
+              ];
+        ctx.save();
+        ctx.setLineDash([]);
+        // The outline: a dark under-stroke then a light one, so it reads on any
+        // artwork without a drop shadow.
+        const corners: [number, number][] = [
+          [live.x, live.y],
+          [live.x + live.w, live.y],
+          [live.x + live.w, live.y + live.h],
+          [live.x, live.y + live.h],
+        ].map(([x, y]) => trot(p.x + x * s, p.y + y * s));
+        for (const [lw, col] of [
+          [3, "rgba(0,0,0,0.45)"],
+          [1, "rgba(255,255,255,0.95)"],
+        ] as const) {
+          ctx.lineWidth = lw;
+          ctx.strokeStyle = col;
+          ctx.beginPath();
+          ctx.moveTo(corners[0][0], corners[0][1]);
+          for (let i = 1; i < 4; i++) ctx.lineTo(corners[i][0], corners[i][1]);
+          ctx.closePath();
+          ctx.stroke();
+        }
+        for (const h of rectHandles(live)) {
+          const [hx, hy] = trot(p.x + h.x * s, p.y + h.y * s);
+          ctx.beginPath();
+          ctx.arc(Math.round(hx), Math.round(hy), 4, 0, Math.PI * 2);
+          ctx.fillStyle = "#fff";
+          ctx.fill();
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = "rgba(0,0,0,0.85)";
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
     // --- on-canvas brush HUD (Alt + right-drag) -------------------------------
     // Anchored at the press point, not at the pointer: the tip has to hold still
     // to be judged against the artwork under it. The disc is filled with the
@@ -3326,6 +3424,10 @@ export default function CanvasArea({
       (toolRef.current === "dodge" && dodgeHoverRef.current) ||
       (toolRef.current === "sponge" && spongeHoverRef.current) ||
       (toolRef.current === "clone" && cloneHoverRef.current) ||
+      // Move ▸ transform controls: the box is a standing overlay like the ants,
+      // so the loop has to stay alive for it — this branch clears the overlay
+      // when it stops, which would wipe the box a frame after it appeared.
+      (toolRef.current === "move" && showTransformRef.current && !!transformBox()) ||
       (toolRef.current === "text" && textDragRef.current) ||
       (toolRef.current === "eyedropper" && hoverRef.current) ||
       (toolRef.current === "measure" && measureRef.current) ||
@@ -3358,6 +3460,13 @@ export default function CanvasArea({
   useEffect(() => {
     ensureAnts();
   }, [cursorPrefs, ensureAnts]);
+
+  // Move ▸ transform controls: restart the overlay loop when the box appears,
+  // moves to another layer, or is switched off — none of which involve a
+  // pointer event, so nothing else would wake the loop.
+  useEffect(() => {
+    ensureAnts();
+  }, [tool, showTransform, activeLayerId, layers, ensureAnts]);
 
   // Keep the overlay loop alive while a crop box is present so it stays drawn and
   // reflects live edits (drag, W/H fields, ratio, straighten).
@@ -5076,6 +5185,64 @@ export default function CanvasArea({
     return false;
   };
 
+  /**
+   * Move ▸ Transform controls: a press on the box's handle or rotation ring
+   * starts a transform of the ACTIVE LAYER.
+   *
+   * This is the ordinary transform session, not a parallel one: the pixels are
+   * lifted with `beginFloatFromSelection` over the layer's own bounds and the
+   * existing resize/rotate refs drive it from there, so scaling, rotation,
+   * smoothing, the live preview and the undo entry are all the code that
+   * already ran for the marquee. The only differences are the box it starts
+   * from and `layerBox`, which tells the commit paths not to leave a selection
+   * behind — the Move tool never had one.
+   */
+  const tryStartLayerTransform = (e: React.PointerEvent, p: { x: number; y: number }, sc: number) => {
+    const box = transformBox();
+    if (!box) return false;
+    const zone = selectZone(p.x, p.y, [box], 0, { x: box.x + box.w / 2, y: box.y + box.h / 2 }, sc);
+    // selectZone's ring is a 44 px band round the WHOLE outline — right for a
+    // marquee, a trap here (see inRotateZone). Resize handles are taken as it
+    // reports them; rotation only just outside a CORNER.
+    const edges = zone.kind === "resize" ? zone.edges : null;
+    const rotating = !edges && inRotateZone(box, p.x, p.y, MOVE_ROTATE_REACH / sc);
+    if (!edges && !rotating) return false;
+    const id = activeLayerIdRef.current;
+    if (!id || !engine.beginFloatFromSelection(id, [box], 0, null, 0)) return false;
+    e.preventDefault();
+    viewRef.current?.setPointerCapture(e.pointerId);
+    const pivot = { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+    tfDragRef.current = { box };
+    if (edges) {
+      resizeRef.current = {
+        rects: [box],
+        bbox: box,
+        edges,
+        content: true,
+        angle: 0,
+        pivot,
+        before: snapshotSel(),
+        layerBox: true,
+      };
+      resizePreviewRef.current = [box];
+    } else {
+      rotateRef.current = {
+        cx: pivot.x,
+        cy: pivot.y,
+        start: Math.atan2(p.y - pivot.y, p.x - pivot.x),
+        base: 0,
+        bbox: box,
+        content: true,
+        before: snapshotSel(),
+        layerBox: true,
+      };
+      rotatePreviewRef.current = 0;
+      setHoverCursor(rotateCursorToward(p.x, p.y, pivot));
+    }
+    ensureAnts();
+    return true;
+  };
+
   // Modifier → selection combine mode: Ctrl/Cmd adds, Alt subtracts, else new.
   const selectOp = (e: React.PointerEvent): SelOp =>
     e.ctrlKey || e.metaKey ? "add" : e.altKey ? "subtract" : "new";
@@ -5750,6 +5917,12 @@ export default function CanvasArea({
     }
     if (tool === "move") {
       const p = toDoc(e);
+      // Transform controls take the press before anything else: a handle sits
+      // ON the layer, so auto-select would otherwise re-target (or a plain move
+      // would start) on the very click meant to scale it. Only when the press
+      // is really on a handle or the ring — inside the box it falls through to
+      // the ordinary move drag, exactly as Photoshop behaves.
+      if (tryStartLayerTransform(e, p, zoom / 100)) return;
       // Auto-select: clicking a pixel picks the layer that owns it, so you can
       // grab things on the canvas instead of hunting the Layers panel. Only
       // without a selection — with a marquee up, a click starts moving THAT,
@@ -6575,9 +6748,29 @@ export default function CanvasArea({
     // Hover feedback (Move): a resize cursor over a guide the pointer can grab,
     // so guides are discoverable without a click. Suppressed while a real move
     // is under way (the move cursor must not flicker as it crosses a guide).
-    if (toolRef.current === "move" && !moveRef.current && !guideDragRef.current) {
+    if (
+      toolRef.current === "move" &&
+      !moveRef.current &&
+      !guideDragRef.current &&
+      !resizeRef.current &&
+      !rotateRef.current
+    ) {
       const gi = guideAtClient(e.clientX, e.clientY);
-      const next = gi >= 0 ? (guidesRef.current[gi].axis === "v" ? "col-resize" : "row-resize") : null;
+      let next = gi >= 0 ? (guidesRef.current[gi].axis === "v" ? "col-resize" : "row-resize") : null;
+      // Transform controls: the same directional resize / rotate cursors the
+      // marquee shows, so a handle looks draggable before it is dragged. A guide
+      // still wins — it sits on top and is the harder thing to grab.
+      if (next === null) {
+        const tb = transformBox();
+        if (tb) {
+          const p = toDoc(e);
+          const pivot = { x: tb.x + tb.w / 2, y: tb.y + tb.h / 2 };
+          const zone = selectZone(p.x, p.y, [tb], 0, pivot, zoom / 100);
+          if (zone.kind === "resize") next = resizeCursor(zone.edges, 0);
+          else if (inRotateZone(tb, p.x, p.y, MOVE_ROTATE_REACH / (zoom / 100)))
+            next = rotateCursorToward(p.x, p.y, pivot);
+        }
+      }
       setHoverCursor((c) => (c === next ? c : next));
     }
     // Hover feedback (Gradient): grab over a handle / midpoint, grabbing while dragging.
@@ -6620,29 +6813,17 @@ export default function CanvasArea({
       // For a rotated selection, work in its own (un-rotated) frame so the
       // dragged edge tracks the cursor and the opposite edge stays put.
       const [cxp, cyp] = angle ? rotatePt(p.x, p.y, pivot.x, pivot.y, -angle) : [p.x, p.y];
-      // Move the dragged edges of the bounding box; keep it non-degenerate
-      // (no flipping) and, when upright, clamped to the canvas.
-      let x0 = o.x;
-      let y0 = o.y;
-      let x1 = o.x + o.w;
-      let y1 = o.y + o.h;
-      if (edges.left) x0 = Math.min(cxp, x1 - 1);
-      if (edges.right) x1 = Math.max(cxp, x0 + 1);
-      if (edges.top) y0 = Math.min(cyp, y1 - 1);
-      if (edges.bottom) y1 = Math.max(cyp, y0 + 1);
-      if (!angle) {
-        x0 = clamp(x0, 0, width);
-        x1 = clamp(x1, 0, width);
-        y0 = clamp(y0, 0, height);
-        y1 = clamp(y1, 0, height);
-      }
-      // Snap the box to whole pixels live, so the outline (and the scaled pixels)
-      // land on the grid during the drag — matching the result on release.
-      x0 = Math.round(x0);
-      y0 = Math.round(y0);
-      x1 = Math.round(x1);
-      y1 = Math.round(y1);
-      const nb = { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
+      // Move the dragged edges of the bounding box: Shift holds the aspect, Alt
+      // works about the centre, the box never flips, and — upright and
+      // unconstrained — it stays on the canvas. Snapped to whole pixels live, so
+      // the outline (and the scaled pixels) match the committed result.
+      // A rotated box's frame is not the canvas's, hence no clamp there.
+      const nb = resizeBox(o, edges, cxp, cyp, {
+        constrain: e.shiftKey,
+        fromCentre: e.altKey,
+        clamp: angle ? null : { w: width, h: height },
+        round: true,
+      });
       // Scale every selection rect proportionally within the new bounding box.
       // Round each rect by its EDGES (not origin + size): an irregular lasso/wand
       // selection is made of many vertically-stacked scanline rects, and rounding
@@ -7113,6 +7294,16 @@ export default function CanvasArea({
         engine.pushStructural("Rotate", () => applySel(before), () => applySel(after));
         return;
       }
+      if (r.layerBox) {
+        // Move ▸ transform controls: bake the rotated pixels, leave no
+        // selection. "Did it rotate?" is measured against the GRAB angle, not
+        // against `before.angle` — that one belongs to whatever selection
+        // happened to be up, which this gesture neither used nor touched.
+        tfDragRef.current = null;
+        if (a === r.base) engine.discardFloat();
+        else engine.commitFloat();
+        return;
+      }
       if (a === before.angle) {
         engine.discardFloat(); // no rotation → put the lifted pixels back
         return;
@@ -7131,7 +7322,7 @@ export default function CanvasArea({
       return;
     }
     if (resizeRef.current) {
-      const { content, bbox: o, angle, before } = resizeRef.current;
+      const { content, bbox: o, angle, before, layerBox } = resizeRef.current;
       const wandCache = wandSegsRef.current;
       const wasWand = !!wandCache && wandCache.key === selectionRef.current;
       const preview = resizePreviewRef.current;
@@ -7175,7 +7366,14 @@ export default function CanvasArea({
         pivot: selPivotRef.current,
         segs: wasWand ? wandSegsRef.current?.segs ?? null : null,
       });
-      if (content) {
+      if (layerBox) {
+        // Move ▸ transform controls: bake the scaled pixels and stop there. No
+        // selection is committed, because the gesture never made one — the box
+        // simply re-measures from the layer's new content bounds next frame.
+        tfDragRef.current = null;
+        if (changed) engine.commitFloat();
+        else engine.discardFloat();
+      } else if (content) {
         // Bake the scaled pixels (or restore them untouched if nothing changed).
         if (changed) {
           recacheWand(committed);

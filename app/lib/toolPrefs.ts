@@ -65,6 +65,8 @@ export interface ToolPrefs {
   /** Move tool: pick the layer under the pointer on click, and at what scope. */
   autoSelect: boolean;
   autoSelectScope: "layer" | "group";
+  /** Move: show the active layer's transform box + handles. */
+  showTransform: boolean;
   /** Align against the canvas/selection rather than the layers' own union. */
   alignToCanvas: boolean;
   resizeMode: SelectResizeMode;

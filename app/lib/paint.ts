@@ -945,6 +945,8 @@ export class PaintEngine {
   // per-id mask version (bumped on any mask mutation), and a document epoch
   // (bumped on resize/crop/transform/colour-space) — the key ingredients.
   private pixelVersion = new Map<string, number>();
+  // Memoized layerContentBounds, keyed by `pixelVersion:docEpoch` (see below).
+  private contentBoundsCache = new Map<string, { key: string; box: Rect | null }>();
   private maskVersion = new Map<string, number>();
   private docEpoch = 0;
   // Compiled Curves/Levels LUTs per adjustment-node id, keyed by the spec JSON.
@@ -3581,6 +3583,7 @@ export class PaintEngine {
     this.freeMask(filterMaskKey(id));
     this.dropCache(id);
     this.pixelVersion.delete(id);
+    this.contentBoundsCache.delete(id);
     this.maskVersion.delete(id);
     this.maskVersion.delete(filterMaskKey(id));
     this.toneCache.delete(id);
@@ -7255,10 +7258,22 @@ export class PaintEngine {
   /** Bounding box of a LAYER's non-transparent pixels (null when empty/absent).
    *  Compared against what a vector recipe renders, this reveals how far the
    *  layer's pixels have been moved since the recipe was last written. */
+  /** A layer's content (non-transparent) bounds, or null when it is empty.
+   *
+   *  Memoized on the layer's pixel version + the document epoch, because this
+   *  reads the WHOLE layer — 48 MB on a 12 MP document — and the Move tool's
+   *  transform box asks for it on every overlay frame. The key is the same pair
+   *  the render cache uses, so a committed pixel write or a canvas resize
+   *  invalidates it exactly. */
   layerContentBounds(id: string): Rect | null {
     const l = this.layers.get(id);
     if (!l) return null;
-    return PaintEngine.alphaBounds(l.ctx.getImageData(0, 0, this.w, this.h), this.w, this.h);
+    const key = `${this.pixelVersion.get(id) ?? 0}:${this.docEpoch}`;
+    const hit = this.contentBoundsCache.get(id);
+    if (hit && hit.key === key) return hit.box;
+    const box = PaintEngine.alphaBounds(l.ctx.getImageData(0, 0, this.w, this.h), this.w, this.h);
+    this.contentBoundsCache.set(id, { key, box });
+    return box;
   }
 
   /** Alpha (0–255) of a layer's own pixel at (x, y) — the Move tool's
