@@ -12,6 +12,7 @@ import {
   Grip,
   PenLine,
   Shapes,
+  Star,
   Waves,
   AlignCenter,
   AlignHorizontalDistributeCenter,
@@ -103,6 +104,7 @@ import {
 } from "../lib/richtext";
 import GradientControl, { GradientEditor } from "./GradientControl";
 import FontPicker from "./FontPicker";
+import { STAR_DEFAULT, STAR_MAX_POINTS, STAR_MIN_POINTS } from "../lib/shapes";
 import { brushDynamics, type BrushSettings } from "../lib/paint";
 import {
   SHAPE_EXT,
@@ -1821,10 +1823,20 @@ function renderOptions(
                 ),
                 title: "Trapezoid",
               },
+              { value: "star", icon: <Star size={14} />, title: "Star" },
               { value: "custom", icon: <Shapes size={14} />, title: "Custom shape" },
             ]}
           />
           {shape.kind === "custom" && <CustomShapePicker shape={shape} onShape={onShape} />}
+          {shape.kind === "star" && (
+            <Slider
+              label="Points"
+              min={STAR_MIN_POINTS}
+              max={STAR_MAX_POINTS}
+              value={shape.starPoints ?? STAR_DEFAULT.points}
+              onChange={(n) => onShape({ starPoints: n })}
+            />
+          )}
           <Divider />
           <ColorChip color={fill} onChange={onFill} label="Fill" />
           <ColorChip color={stroke} onChange={onStroke} label="Stroke" />

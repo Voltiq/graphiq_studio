@@ -95,7 +95,16 @@ import type {
 } from "../lib/tools";
 import { measureInfo } from "../lib/tools";
 import { warpActive } from "../lib/textwarp";
-import { renderShape, type ShapeGeom, type TrapInsets } from "../lib/shapes";
+import {
+  STAR_DEFAULT,
+  renderShape,
+  sanitizeStar,
+  starCollinearInner,
+  starPoints,
+  type ShapeGeom,
+  type StarGeom,
+  type TrapInsets,
+} from "../lib/shapes";
 import { resolveStops } from "../lib/gradient";
 import {
   PaintEngine,
@@ -264,6 +273,9 @@ function resizeCursor(edges: HandleEdges, angle: number): string {
   if (deg < 112.5) return "ns-resize";
   return "nesw-resize";
 }
+
+/** The draggable geometry nodes a live shape can offer. */
+type ShapeNode = "l" | "r" | "apex" | "starOuter" | "starInner" | "radius";
 
 type SelZone =
   | { kind: "anchor" }
@@ -674,6 +686,7 @@ export default function CanvasArea({
   gradient,
   pen,
   shape,
+  onShapeRadius,
   blur,
   smudge,
   mixer,
@@ -828,7 +841,12 @@ export default function CanvasArea({
     stroke: string;
     /** Custom shapes: which library preset to draw. */
     customId?: string;
+    /** Star: how many points. */
+    starPoints?: number;
   };
+  /** The rect corner-radius node writes back to the options-bar Radius value —
+   *  the node and the slider are the same number reached two ways. */
+  onShapeRadius: (r: number) => void;
   /** Blur (focus) brush settings. */
   blur: BlurSettings;
   /** Smudge brush settings. */
@@ -1235,7 +1253,14 @@ export default function CanvasArea({
   // dragged; `nodeSnapRef` is true while snapped to centre (draws guide lines).
   const trapRef = useRef<TrapInsets>({ ...TRAP_DEFAULT });
   const triApexRef = useRef(0.5);
-  const nodeDragRef = useRef<"l" | "r" | "apex" | null>(null);
+  // Star: waist + rotation live here (the POINT COUNT is an options-bar
+  // setting, because a count is a number you pick, not a distance you drag).
+  const starRef = useRef<StarGeom>({ ...STAR_DEFAULT });
+  const onShapeRadiusRef = useRef(onShapeRadius);
+  onShapeRadiusRef.current = onShapeRadius;
+  /** Which node a drag has hold of: a trapezoid side, the triangle apex, a
+   *  star's outer (rotate) or inner (waist) vertex, or a rect corner radius. */
+  const nodeDragRef = useRef<ShapeNode | null>(null);
   const nodeSnapRef = useRef(false);
   // Paint-bucket drag: the seed point + the previewed fill region (committed on
   // release). The preview follows the cursor; recomputes are throttled.
@@ -2929,20 +2954,17 @@ export default function CanvasArea({
         // shape's own frame) shown while snapped.
         const liveN = liveShapeRef.current;
         const nodeKind = shapeOptsRef.current.kind;
-        if (toolRef.current === "shape" && liveN && (nodeKind === "trapezoid" || nodeKind === "tri")) {
+        // Every node comes from shapeNodes(), the same list the hit test and the
+        // drag read — so a node can never be drawn somewhere it cannot be grabbed.
+        const nodes = toolRef.current === "shape" && liveN ? shapeNodes() : [];
+        if (liveN && nodes.length) {
           const nb = liveN.box;
-          const nodeXs =
-            nodeKind === "trapezoid"
-              ? [nb.x + trapRef.current.l * nb.w, nb.x + nb.w - trapRef.current.r * nb.w]
-              : [nb.x + triApexRef.current * nb.w];
-          // Guide lines while snapped: trapezoid → the two node verticals; triangle
-          // → the centre vertical it snapped to.
+          // Guide lines while snapped. Which guide depends on what the node
+          // snapped TO: a vertical for the edge-riding nodes, and for a star the
+          // spoke it is aligned along (rotation) or the ring it has reached (waist).
           if (nodeSnapRef.current) {
             const ext = 14 / s; // extend a touch past the box, in doc units
-            const guideXs = nodeKind === "trapezoid" ? nodeXs : [nb.x + nb.w / 2];
-            for (const gx of guideXs) {
-              const [x1, y1] = rot(p.x + gx * s, p.y + (nb.y - ext) * s);
-              const [x2, y2] = rot(p.x + gx * s, p.y + (nb.y + nb.h + ext) * s);
+            const dual = (draw: () => void) => {
               for (const [w, col] of [
                 [3, "rgba(0,0,0,0.35)"],
                 [1, shapeNodeColor()],
@@ -2950,14 +2972,38 @@ export default function CanvasArea({
                 ctx.lineWidth = w;
                 ctx.strokeStyle = col;
                 ctx.beginPath();
-                ctx.moveTo(x1, y1);
-                ctx.lineTo(x2, y2);
+                draw();
                 ctx.stroke();
+              }
+            };
+            if (nodeKind === "star") {
+              const cx = nb.x + nb.w / 2;
+              const cy = nb.y + nb.h / 2;
+              const [mx, my] = rot(p.x + cx * s, p.y + cy * s);
+              for (const n of nodes) {
+                const [hx, hy] = rot(p.x + n.x * s, p.y + n.y * s);
+                dual(() => {
+                  ctx.moveTo(mx, my);
+                  ctx.lineTo(hx, hy);
+                });
+              }
+            } else {
+              const guideXs =
+                nodeKind === "tri" || nodeKind === "rect"
+                  ? [nb.x + nb.w / 2]
+                  : nodes.map((n) => n.x);
+              for (const gx of guideXs) {
+                const [x1, y1] = rot(p.x + gx * s, p.y + (nb.y - ext) * s);
+                const [x2, y2] = rot(p.x + gx * s, p.y + (nb.y + nb.h + ext) * s);
+                dual(() => {
+                  ctx.moveTo(x1, y1);
+                  ctx.lineTo(x2, y2);
+                });
               }
             }
           }
-          for (const gx of nodeXs) {
-            const [hx, hy] = rot(p.x + gx * s, p.y + nb.y * s);
+          for (const n of nodes) {
+            const [hx, hy] = rot(p.x + n.x * s, p.y + n.y * s);
             ctx.beginPath();
             ctx.arc(Math.round(hx), Math.round(hy), 5, 0, Math.PI * 2);
             ctx.fillStyle = shapeNodeColor();
@@ -3605,11 +3651,11 @@ export default function CanvasArea({
   }, [selection, ensureAnts]);
 
   // Re-render the live shape whenever its settings change (colour / stroke /
-  // radius / kind) — it stays editable while its selection is up.
+  // radius / kind / star points) — it stays editable while its selection is up.
   useEffect(() => {
     reRenderLiveShape();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shape.kind, shape.fill, shape.stroke, shape.strokeWidth, shape.radius]);
+  }, [shape.kind, shape.fill, shape.stroke, shape.strokeWidth, shape.radius, shape.starPoints]);
 
   // Finalize the live shape when its selection goes away (deselect / reselect).
   useEffect(() => {
@@ -5451,6 +5497,8 @@ export default function CanvasArea({
   const shapeGeom = (kind: ShapeKind): ShapeGeom | undefined => {
     if (kind === "trapezoid") return { trap: trapRef.current };
     if (kind === "tri") return { apex: triApexRef.current };
+    if (kind === "star")
+      return { star: { ...starRef.current, points: shapeOptsRef.current.starPoints ?? STAR_DEFAULT.points } };
     if (kind === "custom") {
       // Resolve the preset to its PATH here, so everything downstream — the
       // preview, the rasterizer, the saved vector recipe — carries the geometry
@@ -5516,13 +5564,53 @@ export default function CanvasArea({
     );
   };
 
-  // Which shape node (if any) a doc-space point is over: the trapezoid's two side
-  // nodes or the triangle's apex. Works in the shape's local (un-rotated) frame.
-  const shapeNodeAt = (pt: { x: number; y: number }): "l" | "r" | "apex" | null => {
+  /** Where each draggable node sits, in the shape's own (un-rotated) frame.
+   *
+   *  ONE source of truth for the whole node system: the hit test, the overlay
+   *  dots and the drag all read this, so a node can never be drawn somewhere it
+   *  cannot be grabbed. Ellipse has none — it is entirely determined by its box,
+   *  so there is nothing a node could say. Custom presets have none either:
+   *  they are fixed path data with no notion of which vertex means what, which
+   *  is exactly why the star had to become a real parametric kind rather than
+   *  stay one of them. */
+  const shapeNodes = (): { id: ShapeNode; x: number; y: number }[] => {
     const live = liveShapeRef.current;
-    if (!live) return null;
-    const kind = shapeOptsRef.current.kind;
-    if (kind !== "trapezoid" && kind !== "tri") return null;
+    if (!live) return [];
+    const box = live.box;
+    const o = shapeOptsRef.current;
+    if (o.kind === "tri") return [{ id: "apex", x: box.x + triApexRef.current * box.w, y: box.y }];
+    if (o.kind === "trapezoid") {
+      const t = trapRef.current;
+      return [
+        { id: "l", x: box.x + t.l * box.w, y: box.y },
+        { id: "r", x: box.x + box.w - t.r * box.w, y: box.y },
+      ];
+    }
+    if (o.kind === "star") {
+      const pts = starPoints(box, { ...starRef.current, points: o.starPoints ?? STAR_DEFAULT.points });
+      // Vertex 0 is the first OUTER point, vertex 1 the first INNER one.
+      return [
+        { id: "starOuter", x: pts[0].x, y: pts[0].y },
+        { id: "starInner", x: pts[1].x, y: pts[1].y },
+      ];
+    }
+    if (o.kind === "rect") {
+      // The corner-radius node rides the top edge, inset by the current radius —
+      // the same place Figma and Illustrator put it, so it reads as "drag the
+      // corner in". Pinned a little off the corner at radius 0 so it is still
+      // grabbable when there is no rounding yet.
+      const maxR = Math.min(box.w, box.h) / 2;
+      const r = Math.max(0, Math.min(o.radius, maxR));
+      return [{ id: "radius", x: box.x + Math.max(10 / (zoomRef.current / 100), r), y: box.y }];
+    }
+    return [];
+  };
+
+  /** Which shape node (if any) a doc-space point is over. */
+  const shapeNodeAt = (pt: { x: number; y: number }): ShapeNode | null => {
+    const nodes = shapeNodes();
+    if (!nodes.length) return null;
+    const live = liveShapeRef.current!;
     const box = live.box;
     const ang = selAngleRef.current;
     const piv = selPivotRef.current ?? { x: box.x + box.w / 2, y: box.y + box.h / 2 };
@@ -5535,14 +5623,7 @@ export default function CanvasArea({
       ly = piv.y + (pt.x - piv.x) * sn + (pt.y - piv.y) * c;
     }
     const hit = 9 / (zoomRef.current / 100);
-    if (kind === "tri") {
-      return Math.hypot(lx - (box.x + triApexRef.current * box.w), ly - box.y) <= hit
-        ? "apex"
-        : null;
-    }
-    const t = trapRef.current;
-    if (Math.hypot(lx - (box.x + t.l * box.w), ly - box.y) <= hit) return "l";
-    if (Math.hypot(lx - (box.x + box.w - t.r * box.w), ly - box.y) <= hit) return "r";
+    for (const n of nodes) if (Math.hypot(lx - n.x, ly - n.y) <= hit) return n.id;
     return null;
   };
 
@@ -6149,6 +6230,7 @@ export default function CanvasArea({
       viewRef.current?.setPointerCapture(e.pointerId);
       trapRef.current = { ...TRAP_DEFAULT }; // a fresh trapezoid starts symmetric
       triApexRef.current = 0.5; // a fresh triangle starts centred
+      starRef.current = { ...STAR_DEFAULT }; // ...and a fresh star upright, at the proper waist
       shapeRef.current = { x: p.x, y: p.y };
       shapeRectRef.current = { x: p.x, y: p.y, w: 0, h: 0 };
       ensureAnts();
@@ -7088,7 +7170,63 @@ export default function CanvasArea({
       const SNAP_PX = snapDistance; // Preferences ▸ Guides & grid
 
       let snapped = false;
-      if (nodeDragRef.current === "apex") {
+      const node = nodeDragRef.current;
+      if (node === "starOuter" || node === "starInner") {
+        // Both star nodes are POLAR drags about the box centre, which is what
+        // makes them feel like the same widget: the outer one carries the
+        // angle, the inner one the radius. Local frame throughout, so a rotated
+        // selection behaves identically.
+        let ly = p.y;
+        if (ang) {
+          const c = Math.cos(-ang);
+          const sn = Math.sin(-ang);
+          ly = piv.y + (p.x - piv.x) * sn + (p.y - piv.y) * c;
+        }
+        const cx = box.x + box.w / 2;
+        const cy = box.y + box.h / 2;
+        const st = { ...starRef.current, points: shapeOptsRef.current.starPoints ?? STAR_DEFAULT.points };
+        if (node === "starOuter") {
+          // Rotation: the angle from the centre, with 0 = straight up. Snapped
+          // to 15° so the common orientations are easy to hit exactly.
+          let deg = (Math.atan2(ly - cy, lx - cx) * 180) / Math.PI + 90;
+          const step = 15;
+          const nearest = Math.round(deg / step) * step;
+          if (Math.abs(deg - nearest) < 4) {
+            deg = nearest;
+            snapped = true;
+          }
+          starRef.current = sanitizeStar({ ...st, angle: deg });
+        } else {
+          // Waist: the pointer's distance from the centre as a fraction of the
+          // outer radius — measured in the box's ELLIPTICAL units, so a wide
+          // box's waist tracks the pointer just as a square one's does.
+          const rx = Math.max(1e-6, box.w / 2);
+          const ry = Math.max(1e-6, box.h / 2);
+          let frac = Math.hypot((lx - cx) / rx, (ly - cy) / ry);
+          // Snap to the proper-star ratio (a pentagram at 5 points) and to half.
+          const targets = [starCollinearInner(st.points), 0.5].filter((t): t is number => t !== null);
+          for (const t of targets) {
+            if (Math.abs(frac - t) * Math.min(rx, ry) * sc < SNAP_PX) {
+              frac = t;
+              snapped = true;
+              break;
+            }
+          }
+          starRef.current = sanitizeStar({ ...st, inner: frac });
+        }
+      } else if (node === "radius") {
+        // Corner radius: how far along the top edge the node has been pulled.
+        const maxR = Math.min(box.w, box.h) / 2;
+        let r = clamp(lx - box.x, 0, maxR);
+        if (r * sc < SNAP_PX) {
+          r = 0; // square corners are a value worth being able to hit exactly
+          snapped = true;
+        } else if ((maxR - r) * sc < SNAP_PX) {
+          r = maxR; // ...and so is fully round
+          snapped = true;
+        }
+        onShapeRadiusRef.current(Math.round(r));
+      } else if (node === "apex") {
         // Triangle apex: slide along the top edge, snapping to centre (isosceles).
         let a = clamp((lx - box.x) / box.w, 0, 1);
         if (Math.abs(a - 0.5) * box.w * sc < SNAP_PX) {
@@ -7098,7 +7236,7 @@ export default function CanvasArea({
         triApexRef.current = a;
       } else {
         const t = { ...trapRef.current };
-        if (nodeDragRef.current === "l") {
+        if (node === "l") {
           let l = clamp((lx - box.x) / box.w, 0, 0.5);
           if (Math.abs(l - t.r) * box.w * sc < SNAP_PX) {
             l = t.r; // snap to symmetry

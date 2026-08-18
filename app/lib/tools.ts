@@ -217,7 +217,7 @@ export interface QuickSelectSettings {
 }
 
 /** Shape tool: the geometry being drawn. */
-export type ShapeKind = "rect" | "ellipse" | "tri" | "trapezoid" | "custom";
+export type ShapeKind = "rect" | "ellipse" | "tri" | "trapezoid" | "star" | "custom";
 
 /** Shape tool settings (fill = primary colour, stroke = secondary colour). */
 export interface ShapeSettings {
@@ -226,6 +226,9 @@ export interface ShapeSettings {
   radius: number;
   /** Custom shapes: which library preset to draw (see shape-library.ts). */
   customId?: string;
+  /** Star: how many points. The waist and rotation are dragged on the canvas
+   *  (see shapes.ts StarGeom) rather than typed, so they live on the session. */
+  starPoints?: number;
 }
 
 /** One anchor of a pen path: the point plus its two bezier control handles

@@ -6996,9 +6996,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             strokeWidth: shape.strokeWidth,
             radius: shape.radius,
             customId: shape.customId,
+            starPoints: shape.starPoints,
             fill: foreground,
             stroke: background,
           }}
+          onShapeRadius={(r) => setShape((v) => ({ ...v, radius: r }))}
           blur={blur}
           smudge={smudge}
           mixer={mixer}

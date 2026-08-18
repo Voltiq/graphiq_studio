@@ -80,8 +80,24 @@ export interface TrapInsets {
   r: number;
 }
 
+/** Star geometry: how many points, how deep the waist, and its rotation. */
+export interface StarGeom {
+  /** Number of points (spikes). */
+  points: number;
+  /** Inner radius as a fraction (0..1) of the outer. 1 = a regular polygon. */
+  inner: number;
+  /** Rotation in degrees, clockwise; 0 puts a point straight up. */
+  angle: number;
+}
+
+export const STAR_MIN_POINTS = 3;
+export const STAR_MAX_POINTS = 24;
+export const STAR_DEFAULT: StarGeom = { points: 5, inner: 0.382, angle: 0 };
+
 /** Extra, node-adjustable geometry for shapes that have it. */
 export interface ShapeGeom {
+  /** Star: point count, waist and rotation. */
+  star?: StarGeom;
   /** Custom shapes: the preset's path, normalized to the unit square.
    *  Carried here rather than looked up by id so the geometry travels WITH the
    *  layer — a document keeps its shape after the preset is renamed or deleted,
@@ -113,6 +129,67 @@ export function trapPoints(box: Rect, trap: TrapInsets): Pt[] {
     { x: box.x + box.w, y: box.y + box.h }, // bottom-right
     { x: box.x, y: box.y + box.h }, // bottom-left
   ];
+}
+
+/** Clamp a star's parameters into the range the UI and renderer both assume. */
+export function sanitizeStar(s?: Partial<StarGeom> | null): StarGeom {
+  const n = Math.round(Number(s?.points));
+  const inner = Number(s?.inner);
+  const angle = Number(s?.angle);
+  return {
+    points: Number.isFinite(n) ? Math.max(STAR_MIN_POINTS, Math.min(STAR_MAX_POINTS, n)) : STAR_DEFAULT.points,
+    // Never 0: a zero waist collapses every spike to the centre, which is not a
+    // shape so much as a set of lines.
+    inner: Number.isFinite(inner) ? Math.max(0.05, Math.min(1, inner)) : STAR_DEFAULT.inner,
+    // Rotation WRAPS rather than clamping — it is a direction, not a limit.
+    angle: Number.isFinite(angle) ? ((((angle + 180) % 360) + 360) % 360) - 180 : 0,
+  };
+}
+
+/**
+ * The 2·n vertices of a star inscribed in `box`, alternating outer and inner,
+ * starting at the outer point at the top (before rotation).
+ *
+ * Inscribed in the box's ELLIPSE, not its circle: a wide box gives a wide star,
+ * the same way the triangle and trapezoid fill whatever box they are given
+ * rather than staying regular inside it.
+ */
+export function starPoints(box: Rect, star: StarGeom): Pt[] {
+  const { points, inner, angle } = sanitizeStar(star);
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+  const rx = box.w / 2;
+  const ry = box.h / 2;
+  const start = -Math.PI / 2 + (angle * Math.PI) / 180; // 0° = a point straight up
+  const step = Math.PI / points; // alternating vertices are half a point apart
+  const out: Pt[] = [];
+  for (let i = 0; i < points * 2; i++) {
+    const t = start + i * step;
+    const r = i % 2 === 0 ? 1 : inner;
+    out.push({ x: cx + rx * r * Math.cos(t), y: cy + ry * r * Math.sin(t) });
+  }
+  return out;
+}
+
+/**
+ * The waist ratio at which a star's spike edges run straight through — the
+ * classic "proper" star (a pentagram at 5 points, r/R = 0.382).
+ *
+ * Only defined once there are enough points for the geometry to close: below 5
+ * the value leaves (0,1) — at 3 points it is exactly −1 — so the caller gets
+ * null and simply has one fewer snap target rather than a nonsense one.
+ *
+ * That is left to the RANGE check rather than an `n < 5` guard in front of it.
+ * The guard was written first and turned out to be unreachable — every n it
+ * rejected, the range check rejected too — so it went, on the same principle as
+ * any other branch that cannot be made to fail. The n = 2, 3 and 4 cases are
+ * pinned by tests, which now exercise the check that actually does the work.
+ */
+export function starCollinearInner(points: number): number | null {
+  const n = Math.round(points);
+  if (!Number.isFinite(n)) return null; // Math.round(NaN) is NaN; stop here
+  const v = Math.cos((2 * Math.PI) / n) / Math.cos(Math.PI / n);
+  return v > 0.02 && v < 0.999 ? v : null;
 }
 
 /** Inradius of a polygon (max inward offset before it collapses). */
@@ -243,6 +320,40 @@ export function renderShape(
       rectSubpath(ctx, box.x, box.y, box.w, box.h, r);
       ctx.fillStyle = fill;
       ctx.fill();
+    }
+    return;
+  }
+
+  if (kind === "star") {
+    const pts = starPoints(box, sanitizeStar(geom?.star));
+    // Radius is bounded by the SHORTEST edge, not by polyInradius: that measure
+    // is 2·area/perimeter, which for a spiky star is far larger than any corner
+    // can actually take, and over-rounding turns the spikes into blobs.
+    let shortest = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % pts.length];
+      shortest = Math.min(shortest, Math.hypot(b.x - a.x, b.y - a.y));
+    }
+    const r = Math.max(0, Math.min(radius, shortest / 2));
+    ctx.beginPath();
+    roundedPolyInto(ctx, pts, r);
+    if (fill) {
+      ctx.fillStyle = fill;
+      ctx.fill();
+    }
+    if (sw > 0 && stroke) {
+      // An INSIDE stroke via clip + double width, exactly as the custom-shape
+      // branch does. The inset-ring construction the triangle and trapezoid use
+      // is only valid for CONVEX polygons — a star's inner vertices are reflex,
+      // and offsetting them along their bisectors turns the waist inside out.
+      ctx.save();
+      ctx.clip();
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = sw * 2;
+      ctx.lineJoin = "round";
+      ctx.stroke();
+      ctx.restore();
     }
     return;
   }
