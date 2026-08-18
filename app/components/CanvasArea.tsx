@@ -529,6 +529,27 @@ const EYEDROPPER_SVG =
 // Hotspot (4, 30): down-left of the drawn tip (~9, 25), so the tip aims at it.
 const EYEDROPPER_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(EYEDROPPER_SVG)}") 4 30, crosshair`;
 
+/* The Frame tool's pointer: a crosshair with a small frame glyph tucked into
+   the lower-right quadrant, so it reads as "drag out a frame" rather than as
+   another selection. Same construction as the eyedropper above — a dark wide
+   stroke under a thin white one, so it stays visible on any artwork — and the
+   same `, crosshair` fallback if the data URL is ever refused. The corner marks
+   are drawn as four brackets rather than a closed rectangle: at 32px a full
+   outline turns into a grey smudge. */
+const FRAME_CURSOR_PATHS =
+  // crosshair
+  '<path d="M11 1v8M11 13v8M1 11h8M13 11h8"/>' +
+  // frame brackets, lower right
+  '<path d="M17 15h6v6M31 21v6h-6M17 27h2M29 15h2"/>';
+const FRAME_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="34" height="30" viewBox="0 0 34 30">' +
+  '<g fill="none" stroke-linecap="round" stroke-linejoin="round">' +
+  `<g stroke="#000" stroke-opacity="0.55" stroke-width="3.2">${FRAME_CURSOR_PATHS}</g>` +
+  `<g stroke="#fff" stroke-width="1.5">${FRAME_CURSOR_PATHS}</g>` +
+  "</g></svg>";
+// Hotspot (11, 11): the centre of the crosshair, which is where the drag starts.
+const FRAME_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(FRAME_SVG)}") 11 11, crosshair`;
+
 /** Strip a text vector down to a render spec (used to restore it on re-edit cancel). */
 function textSpecOf(v: VectorText) {
   return {
@@ -3431,10 +3452,20 @@ export default function CanvasArea({
     // previous event's rect and so reported a marquee 10% smaller than it was,
     // and never cleared on release. Emitting from the frame loop also clears
     // itself, because the tick that follows the gesture sees no drag.
+    // Size readout: whichever rubber band is being dragged out. The Frame tool
+    // keeps its drag in its own ref rather than `dragRectRef`, which is why it
+    // reported nothing at all until it was named here.
     const md = dragRectRef.current;
+    const fdr = frameDragRef.current;
     onGestureRef.current(
       md
         ? { kind: "size", w: Math.abs(Math.round(md.w)), h: Math.abs(Math.round(md.h)) }
+        : fdr
+        ? {
+            kind: "size",
+            w: Math.abs(Math.round(fdr.x1 - fdr.x0)),
+            h: Math.abs(Math.round(fdr.y1 - fdr.y0)),
+          }
         : moveRef.current
           ? {
               kind: "delta",
@@ -3458,6 +3489,7 @@ export default function CanvasArea({
       gradientRef.current ||
       penPathRef.current ||
       dsMarqueeRef.current ||
+      frameDragRef.current ||
       (toolRef.current === "crop" && cropBoxRef.current) ||
       ((toolRef.current === "brush" || toolRef.current === "pencil" || toolRef.current === "eraser") &&
         paintHoverRef.current) ||
@@ -8130,6 +8162,8 @@ export default function CanvasArea({
                             ? "text"
                             : tool === "eyedropper"
                             ? EYEDROPPER_CURSOR
+                            : tool === "frame"
+                            ? FRAME_CURSOR
                             : tool === "select" ||
                                 tool === "lasso" ||
                                 tool === "wand" ||
