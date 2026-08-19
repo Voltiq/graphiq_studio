@@ -18,6 +18,10 @@
  * full pass, so an early version passed while proving nothing. The padding is
  * therefore proved on an UNDO PATCH (a rect-bounded change with no live session,
  * hence no draft), where a region blit is still expected.
+ *
+ * Sections 1-6 cover the SETTLED product (a cached render repaired a rect at a
+ * time). Section 7 covers the LIVE frame, which is a separate mechanism sharing
+ * the same two-rect construction, and needs its own oracle — see the note there.
  */
 const { chromium } = require("playwright-core");
 
@@ -100,6 +104,11 @@ const skipTour = async (page) => {
     await page.waitForTimeout(200);
     return diff;
   };
+  /* NOTE: `]` does not reach the engine from Playwright — the Size control reads
+     24 before and 24 after 26 presses — so this is inert and sections 1-6 run on
+     the default 24 px brush. They do not care: their oracle is "cached composite
+     == full recompute", which only needs the stroke to change the INPUTS, not to
+     be visible. Section 7 does care, and sets Size directly. */
   const bigBrush = async () => {
     for (let i = 0; i < 26; i++) await page.keyboard.press("]");
     await page.waitForTimeout(200);
@@ -326,6 +335,217 @@ const skipTour = async (page) => {
   const dm = await diffAgainstFullRecompute();
   check("…and its region-scoped render is byte-identical", dm.differing === 0,
     `${dm.differing} of ${dm.total} bytes differ (worst Δ ${dm.worst})`);
+
+  // ---------- 7. the LIVE filter frame ----------
+  /* Everything above is the SETTLED product. The live half is a different
+     mechanism with the same two rects: a per-stroke copy of the settled product,
+     with the stroke's dirty rect re-filtered into it at full resolution, in place
+     of a quarter-resolution pass over the whole document.
+   *
+   * The oracle has to be chosen carefully. Region-on vs region-off on a large
+   * document compares a full-res region against a QUARTER-RES draft: those differ
+   * by design, so nothing is proved. On a document at or under DRAFT_MAX_PIXELS
+   * (500k) draftScale() is 1 and the off arm is a real full-document,
+   * full-resolution renderFiltered — precisely what the region path claims to
+   * reproduce. Hence the small document below; a big one is benched, not verified
+   * (tools/bench-livefilter.js). */
+  const LW = 800;
+  const LH = 600;
+  await menu("File", "New…");
+  const ndlg = page.locator('div[role="dialog"][aria-label="New document"]');
+  await ndlg.waitFor({ timeout: 8000 });
+  await ndlg.locator('input[type="number"]').nth(0).fill(String(LW));
+  await ndlg.locator('input[type="number"]').nth(1).fill(String(LH));
+  await ndlg.getByText("Create", { exact: true }).click();
+  await page.waitForTimeout(1600);
+  const lbox = await page.locator('[data-tour="canvas"] canvas').first().boundingBox();
+
+  await menu("Layer", "New layer");
+  await page.mouse.move(lbox.x + 30, lbox.y + 30);
+  await page.keyboard.press("g");
+  await page.waitForTimeout(250);
+  await page.mouse.click(lbox.x + lbox.width / 2, lbox.y + lbox.height / 2);
+  await page.waitForTimeout(1000);
+  await page.keyboard.press("b");
+  await page.waitForTimeout(250);
+
+  /* THE STROKE HAS TO BE VISIBLE, and neither half of that is automatic here.
+   *
+   * Colour: the gradient fills the layer with the FOREGROUND colour, so a brush
+   * straight afterwards paints that same colour onto itself and changes nothing
+   * but a few antialiased edge bytes — which a blur then smooths below one LSB.
+   * The first version of this section duly reported "byte-identical" for a
+   * stroke that was invisible, i.e. proved nothing at all. Swapping foreground
+   * and background gives the brush something to contrast against.
+   *
+   * Size: the `]` shortcut does NOT reach the engine from Playwright (measured:
+   * 24 before and 24 after 22 presses), so bigBrush() above is inert too. Set
+   * the options-bar Size directly instead, through the native value setter so
+   * React's onChange actually fires. */
+  await page.locator('button[aria-label="Swap foreground and background colors"]').first().click();
+  await page.waitForTimeout(400);
+  await page
+    .locator('[data-tour="options"] input[aria-label="Size"]')
+    .first()
+    .evaluate((el) => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      setter.call(el, "160");
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  await page.waitForTimeout(500);
+  const liveBrush = await page.locator('[data-tour="options"] input[aria-label="Size"]').first().inputValue();
+  check("the live section paints with a brush big enough to see", Number(liveBrush) >= 100, `size=${liveBrush}`);
+
+  const grabLive = () =>
+    page.evaluate((w) => {
+      const cv = document.querySelector(`canvas[width="${w}"]`);
+      if (!cv) return null;
+      const g = cv.getContext("2d", { willReadFrequently: true });
+      return Array.from(g.getImageData(0, 0, cv.width, cv.height).data);
+    }, LW);
+  const liveStats = () => page.evaluate(() => window.__gqRenderCache.stats());
+  /* One MID-STROKE frame, captured without releasing the button (the live path
+     only exists while the button is down), then undone so the next arm starts
+     from identical pixels. */
+  const liveArm = async (on, fy) => {
+    await page.evaluate(
+      (o) => (o ? window.__gqRenderCache.regionOn() : window.__gqRenderCache.regionOff()),
+      on,
+    );
+    await page.waitForTimeout(400);
+    const s0 = await liveStats();
+    const pre = await grabLive(); // for the band's non-vacuity check
+    await page.mouse.move(lbox.x + lbox.width * 0.25, lbox.y + lbox.height * fy);
+    await page.mouse.down();
+    for (let i = 1; i <= 8; i++)
+      await page.mouse.move(lbox.x + lbox.width * (0.25 + 0.05 * i), lbox.y + lbox.height * fy, { steps: 2 });
+    await page.waitForTimeout(700);
+    const px = await grabLive();
+    const s1 = await liveStats();
+    await page.mouse.up();
+    await page.waitForTimeout(900);
+    await page.keyboard.press("Control+z");
+    await page.waitForTimeout(1400);
+    return { px, pre, hits: s1.liveRegionHits - s0.liveRegionHits, rpx: s1.liveRegionPx - s0.liveRegionPx };
+  };
+  const liveLeg = async (name, fy, expectRegion = true) => {
+    const on = await liveArm(true, fy);
+    const off = await liveArm(false, fy);
+    if (!on.px || !off.px) {
+      check(`${name}: the document canvas was found`, false, `canvas[width="${LW}"] missing`);
+      return;
+    }
+    /* Two numbers, because they answer two different questions.
+     *
+     * PATCHED — a band along the stroke's centreline, inside the dirty rect and
+     * therefore inside OUT: pixels the region path itself rendered. That is the
+     * region maths, and it must be exactly zero.
+     *
+     * SEEDED — everywhere else, copied verbatim from the settled product in
+     * filteredCache. That product comes from the smart-filter WORKER, and the
+     * worker's blend disagrees with the inline one by 1 on the red channel
+     * whenever a filter carries a blend mode or a partial opacity. Measured with
+     * NO live session in play at all — 480,000 of 1,920,000 bytes, every one of
+     * them −1 — so it is a pre-existing defect this rail inherits rather than
+     * anything the region path did. Reported separately and bounded at 1: folding
+     * it into the check above would either mask a real region bug or fail for
+     * something the region path never touched. */
+    const bx0 = Math.round(LW * 0.32);
+    const bx1 = Math.round(LW * 0.58);
+    const by0 = Math.round(LH * fy) - 4;
+    const by1 = Math.round(LH * fy) + 4;
+    let inN = 0;
+    let inWorst = 0;
+    let outN = 0;
+    let outWorst = 0;
+    let painted = 0; // band bytes the stroke actually changed (non-vacuity)
+    for (let i = 0; i < on.px.length; i++) {
+      const pix = i >> 2;
+      const x = pix % LW;
+      const y = (pix - x) / LW;
+      const band = x >= bx0 && x < bx1 && y >= by0 && y < by1;
+      if (band && on.pre && on.pre[i] !== on.px[i]) painted++;
+      const d = Math.abs(on.px[i] - off.px[i]);
+      if (!d) continue;
+      if (band) {
+        inN++;
+        if (d > inWorst) inWorst = d;
+      } else {
+        outN++;
+        if (d > outWorst) outWorst = d;
+      }
+    }
+    check(`${name}: the PATCHED pixels are byte-identical to the full-res frame`, inN === 0,
+      `${inN} bytes differ inside the stroke band (worst Δ ${inWorst})`);
+    // "Identical" over a band the stroke never reached would prove nothing.
+    check(`…and that band is pixels the stroke actually repainted`, painted > 500,
+      `${painted} band bytes changed during the stroke`);
+    check(`${name}: the SEEDED pixels carry only the worker's known Δ1`, outWorst <= 1,
+      `${outN} bytes differ outside it (worst Δ ${outWorst})`);
+    if (expectRegion)
+      check(`…and the live region path ran for ${name}`, on.hits > 0 && on.rpx > 0 && off.hits === 0,
+        `on +${on.hits} frames / ${on.rpx.toLocaleString()} px, off +${off.hits}`);
+    else
+      check(`…and ${name} DECLINED the live region path`, on.hits === 0, `on +${on.hits} frames`);
+  };
+
+  await menu("Effects", "Blur (smart filter)");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(1600);
+  await liveLeg("blur", 0.3);
+
+  /* A filter at partial opacity takes filterStack's BLEND branch, which needs a
+     second scratch buffer — the one place a reused, deliberately oversized canvas
+     could read the wrong rect back. */
+  await menu("Effects", "Smart filters…");
+  const sfd = page.locator('div[role="dialog"]').filter({ hasText: "Filter Mask" }).first();
+  await sfd.waitFor({ timeout: 8000 });
+  const fop = sfd.locator('input[aria-label="Opacity"]').first();
+  check("the smart-filter dialog exposes a per-filter Opacity slider", (await fop.count()) > 0);
+  await fop.focus();
+  for (let i = 0; i < 30; i++) {
+    await page.keyboard.press("ArrowLeft");
+    await page.waitForTimeout(35);
+  }
+  const fopVal = await fop.inputValue();
+  check("…and the sweep actually moved it off 100 (or the blend branch never runs)",
+    Number(fopVal) < 100, `opacity=${fopVal}`);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(1600);
+  await liveLeg("blur at partial opacity", 0.45);
+
+  /* A PAINTED filter mask, so the premultiplied interpolation runs over a sub-rect
+     with a mask that is not uniformly white (a reveal-all mask short-circuits on
+     `t >= 1` for every pixel and would prove nothing). */
+  await menu("Effects", "Smart filters…");
+  await sfd.waitFor({ timeout: 8000 });
+  const addMask = sfd.locator("button", { hasText: "Add Mask" }).first();
+  check("the smart-filter dialog offers Add Mask", (await addMask.count()) > 0);
+  await addMask.click();
+  await page.waitForTimeout(900);
+  const paintMask = sfd.locator("button", { hasText: "Paint" }).first();
+  check("…and a Paint button once the mask exists", (await paintMask.count()) > 0);
+  await paintMask.click();
+  await page.waitForTimeout(1200);
+  await page.mouse.move(lbox.x + lbox.width * 0.2, lbox.y + lbox.height * 0.62);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++)
+    await page.mouse.move(lbox.x + lbox.width * (0.2 + 0.05 * i), lbox.y + lbox.height * 0.62, { steps: 2 });
+  await page.mouse.up();
+  await page.waitForTimeout(1400);
+  const liveThumb = page.locator('li[class*="layerItem"] span[class*="layerThumb"]').first();
+  check("the layer list exposes an image thumbnail to switch back to pixels",
+    (await liveThumb.count()) > 0, `${await liveThumb.count()} found`);
+  await liveThumb.click();
+  await page.waitForTimeout(1200);
+  await liveLeg("blur through a painted filter mask", 0.62);
+
+  // An unsafe filter must decline the live path exactly as it declines the settled one.
+  await menu("Effects", "Noise…");
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(1600);
+  await liveLeg("noise (position-dependent)", 0.78, false);
 
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);

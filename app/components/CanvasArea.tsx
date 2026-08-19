@@ -1913,6 +1913,10 @@ export default function CanvasArea({
       enable: () => engine.setRenderCacheEnabled(true),
       disable: () => engine.setRenderCacheEnabled(false),
       stats: () => engine.renderCacheStats(),
+      // Region-scoped LIVE filter frames vs the full-document draft, so a bench
+      // can measure both arms in one sitting.
+      regionOn: () => engine.setLiveRegionEnabled(true),
+      regionOff: () => engine.setLiveRegionEnabled(false),
     };
     w.__gqGPU = {
       enable: () => engine.setGpuEnabled(true),
@@ -4327,6 +4331,7 @@ export default function CanvasArea({
         engine.redEye(layerId, x, y, size, darken, sel, selAngle, selPivot),
       resizeCanvasAnchored: (w, h, dx, dy, ids) => engine.resizeCanvasAnchored(w, h, dx, dy, ids),
       setRenderCacheEnabled: (on) => engine.setRenderCacheEnabled(on),
+      setLiveRegionEnabled: (on) => engine.setLiveRegionEnabled(on),
       renderCacheStats: () => engine.renderCacheStats(),
       setRenderCacheBudget: (mb) => engine.setRenderCacheBudget(mb),
       setHistoryLimit: (n) => engine.setHistoryLimit(n),

@@ -578,6 +578,8 @@ export interface EngineHandle {
   ) => boolean;
   /** Spec 06 debug: toggle the render cache for A/B pixel-identity checks. */
   setRenderCacheEnabled: (on: boolean) => void;
+  /** Spec 06 debug: toggle region-scoped LIVE filter frames (off = draft). */
+  setLiveRegionEnabled: (on: boolean) => void;
   renderCacheStats: () => {
     enabled: boolean;
     entries: number;
@@ -844,6 +846,22 @@ export class PaintEngine {
   // it never activates and everything quietly takes the full pass.
   private regionHits = 0;
   private regionPx = 0;
+  // The same two questions for the LIVE half: how many draft frames the region
+  // path took over, how many pixels it filtered, and how many FILTER frames still
+  // fell through to a full-document draft (the effects draft is separate and not
+  // counted here). A stroke that reports 0 region frames proves the path never
+  // ran, whatever the pixels look like.
+  private liveRegionHits = 0;
+  private liveRegionPx = 0;
+  private liveDraftFrames = 0;
+  private liveRegionOn = true; // dev A/B (window.__gqRenderCache.regionOff())
+  /** Per-stroke full-resolution filter product: a copy of the settled one, with
+   *  the stroke's own region re-filtered into it each frame. */
+  private liveProduct: (Layer & { id: string; key: string }) | null = null;
+  /** Reusable region-sized scratch (source / filter mask / blend temp). They
+   *  grow with the stroke every frame, so allocating per frame would cost more
+   *  than the filter does — the lesson from alphaMask. */
+  private regionBufs: (Layer | undefined)[] = [];
   private renderTick = 0; // LRU clock
   private renderBytes = 0; // owned bytes currently cached
   private renderBudget = 256 * 1024 * 1024; // LRU eviction beyond this (Preferences ▸ Performance)
@@ -1148,6 +1166,14 @@ export class PaintEngine {
     this.emitChange();
   }
 
+  /** Debug A/B toggle: off sends every live filter frame back through the
+   *  full-document draft, so the two arms can be measured in one sitting
+   *  (absolute wall-clock does not travel between runs on this machine). */
+  setLiveRegionEnabled(on: boolean) {
+    this.liveRegionOn = on;
+    this.liveProduct = null;
+  }
+
   /** Cache occupancy (dev overlay / console). */
   renderCacheStats(): {
     enabled: boolean;
@@ -1159,12 +1185,18 @@ export class PaintEngine {
     tiles: number;
     regionHits: number;
     regionPx: number;
+    liveRegionHits: number;
+    liveRegionPx: number;
+    liveDraftFrames: number;
   } {
     let tiles = 0;
     for (const t of this.tiledAdj.values()) for (const tile of t.tiles) if (tile) tiles++;
     return {
       regionHits: this.regionHits,
       regionPx: this.regionPx,
+      liveRegionHits: this.liveRegionHits,
+      liveRegionPx: this.liveRegionPx,
+      liveDraftFrames: this.liveDraftFrames,
       enabled: this.renderCacheOn,
       entries: this.renderCache.size + this.tiledAdj.size,
       bytes: this.renderBytes,
@@ -4686,8 +4718,42 @@ export class PaintEngine {
   ): HTMLCanvasElement {
     const out = this.mk(this.w, this.h, true);
     out.ctx.drawImage(src, 0, 0);
-    let cur = out.ctx.getImageData(0, 0, this.w, this.h);
-    const base = fmAlpha ? cur : null; // pristine pixels; never mutated by the loop below
+    const cur = this.filterStack(
+      out,
+      filters,
+      fmAlpha ? () => fmAlpha.getContext("2d")!.getImageData(0, 0, this.w, this.h).data : null,
+      () => this.mk(this.w, this.h),
+      this.w,
+      this.h,
+    );
+    out.ctx.putImageData(cur, 0, 0);
+    return out.c;
+  }
+
+  /**
+   * Run an enabled filter stack over the top-left `w`×`h` of `buf`, which already
+   * holds the source pixels, and return the result. The caller decides where it
+   * lands, which is what lets the same code serve a whole document and a single
+   * region of one.
+   *
+   * `fm` is called LAZILY so a stack that turns out to be a no-op never pays for
+   * a filter-mask readback it will not use, and `mkTmp` supplies a second buffer
+   * only if some filter carries a blend mode or a partial opacity.
+   *
+   * Both the full-canvas path and the live region path route through here on
+   * purpose: the premultiplied mask interpolation at the bottom is subtle enough
+   * that two copies of it would eventually disagree.
+   */
+  private filterStack(
+    buf: Layer,
+    filters: SmartFilter[],
+    fm: (() => Uint8ClampedArray) | null,
+    mkTmp: () => Layer,
+    w: number,
+    h: number,
+  ): ImageData {
+    let cur = buf.ctx.getImageData(0, 0, w, h);
+    const base = fm ? cur : null; // pristine pixels; never mutated by the loop below
     for (const f of filters) {
       if (!f.enabled) continue;
       const applied = applyFilter(cur, f, this.cs);
@@ -4698,21 +4764,23 @@ export class PaintEngine {
         continue;
       }
       // Blend the filtered result back over the pre-filter pixels.
-      out.ctx.putImageData(cur, 0, 0);
-      const tmp = this.mk(this.w, this.h);
+      buf.ctx.putImageData(cur, 0, 0);
+      const tmp = mkTmp();
       tmp.ctx.putImageData(applied, 0, 0);
-      out.ctx.globalAlpha = alpha;
-      out.ctx.globalCompositeOperation = op;
-      out.ctx.drawImage(tmp.c, 0, 0);
-      out.ctx.globalAlpha = 1;
-      out.ctx.globalCompositeOperation = "source-over";
-      cur = out.ctx.getImageData(0, 0, this.w, this.h);
+      buf.ctx.globalAlpha = alpha;
+      buf.ctx.globalCompositeOperation = op;
+      // Explicit source rect: the buffers may be scratch canvases LARGER than
+      // w×h (the region path grows them to fit and reuses them).
+      buf.ctx.drawImage(tmp.c, 0, 0, w, h, 0, 0, w, h);
+      buf.ctx.globalAlpha = 1;
+      buf.ctx.globalCompositeOperation = "source-over";
+      cur = buf.ctx.getImageData(0, 0, w, h);
     }
     // Filter mask: confine the WHOLE stack — result = orig + (filtered − orig) ×
     // mask, interpolated premultiplied so partially-covered edge pixels don't
-    // tint. The mask alpha lives in fmAlpha's A channel (the derived cache).
+    // tint. The mask alpha lives in the fm buffer's A channel (the derived cache).
     if (base && cur !== base) {
-      const m = fmAlpha!.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
+      const m = fm!();
       const a = base.data;
       const b = cur.data;
       for (let i = 0; i < b.length; i += 4) {
@@ -4728,8 +4796,7 @@ export class PaintEngine {
         b[i + 3] = na;
       }
     }
-    out.ctx.putImageData(cur, 0, 0);
-    return out.c;
+    return cur;
   }
 
   /** Borrow a reusable doc-sized buffer (lazily (re)allocated on size change). */
@@ -6827,6 +6894,7 @@ export class PaintEngine {
     this.tipScatter = null;
     this.scatterRng = null;
     this.dirty = null;
+    this.liveProduct = null; // a document-sized buffer; the next stroke reseeds
     if (this.cloneActive) {
       this.cloneActive = false;
       this.cloneSample = null;
@@ -6853,6 +6921,7 @@ export class PaintEngine {
     this.tipTexture = null;
     this.tipDual = null;
     this.dirty = null;
+    this.liveProduct = null;
     if (this.cloneActive) {
       this.cloneActive = false;
       this.cloneSample = null;
@@ -9155,10 +9224,139 @@ export class PaintEngine {
     // scaled to match, upscaled to document size. The moment the session ends
     // the normal path resumes and recomputes at full resolution.
     if (this.liveBypass.has(node.id) && !this.exporting) {
+      // Better than a draft when it applies: the same kernel over the stroke's
+      // own rect, at FULL resolution, patched into the settled product.
+      const region = this.liveFilterRegion(node, src);
+      if (region) return region;
       const draft = this.draftScale();
-      if (draft < 1) return this.renderFilteredDraft(src, node, draft);
+      if (draft < 1) {
+        this.liveDraftFrames++;
+        return this.renderFilteredDraft(src, node, draft);
+      }
     }
     return this.renderFiltered(src, node.filters!, this.filterMaskAlpha(node));
+  }
+
+  /**
+   * A live filter frame that re-filters only the stroke's dirty rect at FULL
+   * resolution, patched into a per-session copy of the settled product.
+   *
+   * WHAT IT REPLACES. renderFilteredDraft runs the stack over the whole document
+   * at quarter resolution. Measured on a 12 MP document carrying one gaussian
+   * blur, that is 58.6 ms a frame — 52.5 ms of it inside applyFilter over 750k
+   * draft pixels — and it accounted for 100% of the ~1.2 s a five-stroke session
+   * blocked. A stroke touches a few hundred pixels square, so filtering the dirty
+   * rect instead is both far cheaper AND full quality: the draft's downscale /
+   * upscale softness disappears from the preview.
+   *
+   * THE TWO RECTS, exactly as repaintRegion:
+   *   OUT — the dirty rect grown by the stack's reach. Nothing further out can
+   *     have changed, so the seeded product is still right there.
+   *   IN  — OUT grown by the reach again: every input pixel that can influence
+   *     OUT. The IN border is computed without ITS neighbours and is discarded.
+   *
+   * THE SEED. There is no cache to patch into during a live session (liveBypass
+   * deliberately holds none), so the session copies the settled product out of
+   * filteredCache once per stroke. That is only sound because the product's key
+   * still describes the layer: pixelVersion does not move until endStroke bakes
+   * the stroke, so the pre-stroke key IS the current key. Anything else — a
+   * half-res product, a stale key, a resized document — declines.
+   *
+   * Returns null rather than guessing whenever it cannot prove the frame would
+   * match a full pass; the caller then takes the draft, as before.
+   */
+  private liveFilterRegion(node: LayerNode, src: HTMLCanvasElement): HTMLCanvasElement | null {
+    if (!this.liveRegionOn) return null;
+    // The render-cache A/B toggle promises that "off" uses no cached product at
+    // all. This path seeds from one, so it has to honour that too — otherwise
+    // the always-correct reference the rails diff against would quietly stop
+    // being always-correct.
+    if (!this.renderCacheOn) return null;
+    // A brush stroke is the only live session that tracks a dirty rect, and only
+    // a PIXEL stroke changes what the filters read — a mask stroke leaves the
+    // layer's pixels alone and previews through maskDisplay instead.
+    if (!this.painting || this.strokeOnMask || this.strokeLayer !== node.id) return null;
+    const dirty = this.dirtyRect();
+    if (!dirty) return null;
+    const reach = stackReach(node.filters);
+    if (reach === null) return null; // unbounded or position-dependent
+    const out = padRect(dirty, reach, this.w, this.h);
+    const inn = padRect(out, reach, this.w, this.h);
+    if (out.w <= 0 || out.h <= 0 || inn.w <= 0 || inn.h <= 0) return null;
+    // The alternative here is the DRAFT, not a full pass, so the test is against
+    // the draft's pixel count — regionWorthIt's "share of the document" would
+    // happily accept a region twelve times the draft's size. Ties go to the
+    // region: same pixels, better picture.
+    const draft = this.draftScale();
+    const draftPx =
+      Math.max(1, Math.round(this.w * draft)) * Math.max(1, Math.round(this.h * draft));
+    if (inn.w * inn.h > draftPx) return null;
+
+    const key = this.nodeKey(node);
+    let prod = this.liveProduct;
+    if (!prod || prod.c.width !== this.w || prod.c.height !== this.h) {
+      prod = this.liveProduct = { ...this.mk(this.w, this.h), id: "", key: "" };
+    }
+    if (prod.id !== node.id || prod.key !== key) {
+      const ent = this.filteredCache.get(node.id);
+      // "full" only: patching sharp full-res pixels into an upscaled half-res
+      // product would leave a visible seam around the stroke.
+      if (!ent || ent.key !== key || ent.quality !== "full") return null;
+      if (ent.canvas.width !== this.w || ent.canvas.height !== this.h) return null;
+      prod.ctx.globalAlpha = 1;
+      prod.ctx.globalCompositeOperation = "source-over";
+      prod.ctx.clearRect(0, 0, this.w, this.h);
+      prod.ctx.drawImage(ent.canvas, 0, 0);
+      prod.id = node.id;
+      prod.key = key;
+    }
+
+    const sub = this.regionBuf(0, inn.w, inn.h, true);
+    sub.ctx.drawImage(src, inn.x, inn.y, inn.w, inn.h, 0, 0, inn.w, inn.h);
+    const fmFull = this.filterMaskAlpha(node);
+    let fmBuf: Layer | null = null;
+    if (fmFull) {
+      fmBuf = this.regionBuf(1, inn.w, inn.h, true);
+      fmBuf.ctx.drawImage(fmFull, inn.x, inn.y, inn.w, inn.h, 0, 0, inn.w, inn.h);
+    }
+    const cur = this.filterStack(
+      sub,
+      node.filters!,
+      fmBuf ? () => fmBuf!.ctx.getImageData(0, 0, inn.w, inn.h).data : null,
+      () => this.regionBuf(2, inn.w, inn.h, false),
+      inn.w,
+      inn.h,
+    );
+    sub.ctx.putImageData(cur, 0, 0);
+
+    // REPLACE, never blend: the region carries its own alpha.
+    prod.ctx.globalAlpha = 1;
+    prod.ctx.globalCompositeOperation = "source-over";
+    prod.ctx.clearRect(out.x, out.y, out.w, out.h);
+    prod.ctx.drawImage(sub.c, out.x - inn.x, out.y - inn.y, out.w, out.h, out.x, out.y, out.w, out.h);
+    this.liveRegionHits++;
+    this.liveRegionPx += inn.w * inn.h;
+    return prod.c;
+  }
+
+  /** A reusable scratch canvas at least `w`×`h`, cleared over that rect. Only
+   *  the top-left `w`×`h` is ever read, so growing it in place is safe. */
+  private regionBuf(slot: number, w: number, h: number, readFreq: boolean): Layer {
+    let b = this.regionBufs[slot];
+    if (!b || b.c.width < w || b.c.height < h) {
+      // Round the allocation up in blocks. The region grows a little on EVERY
+      // frame of a stroke, so an exact fit would reallocate every frame — the
+      // per-frame allocation this pool exists to avoid. Blocks make it O(log n)
+      // reallocations per stroke instead, at the cost of some slack that is
+      // never read (only the top-left w×h ever is).
+      const blk = (v: number) => Math.ceil(v / 256) * 256;
+      b = this.mk(blk(Math.max(w, b?.c.width ?? 0)), blk(Math.max(h, b?.c.height ?? 0)), readFreq);
+      this.regionBufs[slot] = b;
+    }
+    b.ctx.globalAlpha = 1;
+    b.ctx.globalCompositeOperation = "source-over";
+    b.ctx.clearRect(0, 0, w, h);
+    return b;
   }
 
   /** Working scale for live filter frames: enough of a reduction to keep the
