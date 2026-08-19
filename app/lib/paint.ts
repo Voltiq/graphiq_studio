@@ -936,7 +936,9 @@ export class PaintEngine {
   private regionPatchable(id: string): boolean {
     const node = this.curTree ? findNode(this.curTree, id) : null;
     if (!node || node.type !== "layer") return false;
-    if (node.fill || node.mask?.enabled || vectorMaskActive(node.vectorMask)) return false;
+    // A MASK is fine: both kinds multiply the styled render per-pixel, so they
+    // reach nothing and can simply be re-applied over the repainted rect.
+    if (node.fill) return false;
     if (hasEnabledFilters(node.filters)) return false;
     if (!hasEnabledFx(node.effects)) return false;
     if (effectsPositionDependent(node.effects)) return false;
@@ -4605,6 +4607,20 @@ export class PaintEngine {
     dctx.globalCompositeOperation = "source-over";
     dctx.clearRect(out.x, out.y, out.w, out.h);
     dctx.drawImage(styled, out.x - inn.x, out.y - inn.y, out.w, out.h, out.x, out.y, out.w, out.h);
+    // Masks multiply the styled render, so re-apply them over exactly the rect
+    // just repainted — the same two multiplied alphas maskedSource uses, clipped
+    // to OUT so nothing outside it is touched.
+    const rasterAlpha = node.mask?.enabled ? this.maskDisplay(node.id) : null;
+    const vecAlpha = this.vectorMaskAlpha(node);
+    if (rasterAlpha || vecAlpha) {
+      dctx.beginPath();
+      dctx.rect(out.x, out.y, out.w, out.h);
+      dctx.clip();
+      dctx.globalCompositeOperation = "destination-in";
+      if (rasterAlpha) dctx.drawImage(rasterAlpha, 0, 0);
+      if (vecAlpha) dctx.drawImage(vecAlpha, 0, 0);
+      dctx.globalCompositeOperation = "source-over";
+    }
     dctx.restore();
     this.regionPx += out.w * out.h;
     return true;

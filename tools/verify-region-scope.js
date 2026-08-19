@@ -299,6 +299,34 @@ const skipTour = async (page) => {
   check("…and its full pass is still byte-identical", dg.differing === 0,
     `${dg.differing} of ${dg.total} bytes differ (worst Δ ${dg.worst})`);
 
+  // ---------- 6. a MASKED layer ----------
+  /* Both mask kinds multiply the styled render per-pixel, so they reach nothing
+     and are simply re-applied over the repainted rect. Worth its own leg because
+     the cached product for a masked node is styled-THEN-masked: repainting the
+     styled pixels without re-masking would punch the mask's hole open again
+     inside the rect, and only a byte diff would notice. */
+  await fxToggle("Gradient Overlay", false);
+  await fxToggle("Drop Shadow", true);
+  await menu("Layer", "Add layer mask");
+  await page.waitForTimeout(1300);
+  // Adding a mask selects it for painting — click the image thumbnail so the
+  // stroke lands on the PIXELS (a mask paint is a different, unpatched path).
+  const imgThumb = page.locator('li[class*="layerItem"] span[class*="layerThumb"]').first();
+  check("the masked layer exposes an image thumbnail to paint through",
+    (await imgThumb.count()) > 0, `${await imgThumb.count()} found`);
+  await imgThumb.click();
+  await page.waitForTimeout(900);
+  await stroke(0.8); // warm-up: no cached product to repair yet
+  await page.waitForTimeout(1200);
+  const hm = await regionHits();
+  await stroke(0.86);
+  await page.waitForTimeout(1200);
+  check("a masked + shadowed layer takes the region path", (await regionHits()) > hm,
+    `regionHits moved: ${(await regionHits()) > hm}`);
+  const dm = await diffAgainstFullRecompute();
+  check("…and its region-scoped render is byte-identical", dm.differing === 0,
+    `${dm.differing} of ${dm.total} bytes differ (worst Δ ${dm.worst})`);
+
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
   await browser.close();
