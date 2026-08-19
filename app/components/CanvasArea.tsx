@@ -1917,6 +1917,8 @@ export default function CanvasArea({
       // can measure both arms in one sitting.
       regionOn: () => engine.setLiveRegionEnabled(true),
       regionOff: () => engine.setLiveRegionEnabled(false),
+      // Cached (worker) filter product vs the same stack computed inline.
+      filterAB: (id?: string) => engine.compareFilterProduct(id),
     };
     w.__gqGPU = {
       enable: () => engine.setGpuEnabled(true),

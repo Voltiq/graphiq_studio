@@ -440,17 +440,16 @@ const skipTour = async (page) => {
      *
      * PATCHED — a band along the stroke's centreline, inside the dirty rect and
      * therefore inside OUT: pixels the region path itself rendered. That is the
-     * region maths, and it must be exactly zero.
+     * region maths.
      *
      * SEEDED — everywhere else, copied verbatim from the settled product in
-     * filteredCache. That product comes from the smart-filter WORKER, and the
-     * worker's blend disagrees with the inline one by 1 on the red channel
-     * whenever a filter carries a blend mode or a partial opacity. Measured with
-     * NO live session in play at all — 480,000 of 1,920,000 bytes, every one of
-     * them −1 — so it is a pre-existing defect this rail inherits rather than
-     * anything the region path did. Reported separately and bounded at 1: folding
-     * it into the check above would either mask a real region bug or fail for
-     * something the region path never touched. */
+     * filteredCache. Kept as its own number because the two can fail for entirely
+     * different reasons, and once did: this leg used to report 464,649 differing
+     * bytes at a partial filter opacity while the patched band was clean, because
+     * the settled product came from the WORKER and the worker's canvas blend
+     * disagreed with the inline one by 1. Both now compute the blend in exact
+     * arithmetic (app/lib/blend.ts, tools/verify-worker-blend.js), so both numbers
+     * are zero and neither needs a tolerance. */
     const bx0 = Math.round(LW * 0.32);
     const bx1 = Math.round(LW * 0.58);
     const by0 = Math.round(LH * fy) - 4;
@@ -481,7 +480,7 @@ const skipTour = async (page) => {
     // "Identical" over a band the stroke never reached would prove nothing.
     check(`…and that band is pixels the stroke actually repainted`, painted > 500,
       `${painted} band bytes changed during the stroke`);
-    check(`${name}: the SEEDED pixels carry only the worker's known Δ1`, outWorst <= 1,
+    check(`${name}: the SEEDED pixels are byte-identical too`, outN === 0,
       `${outN} bytes differ outside it (worst Δ ${outWorst})`);
     if (expectRegion)
       check(`…and the live region path ran for ${name}`, on.hits > 0 && on.rpx > 0 && off.hits === 0,

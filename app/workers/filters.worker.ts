@@ -11,6 +11,7 @@
 //     filters: SmartFilter[] }                        (buffers transferred)
 //   → { id, nodeId, key, w, h, data: ArrayBuffer }    (transferred back)
 
+import { blendInto } from "../lib/blend";
 import { applyFilter, type SmartFilter } from "../lib/filters";
 import { blendOp } from "../lib/layers";
 
@@ -47,13 +48,6 @@ self.onmessage = (e: MessageEvent<FilterJobMsg>) => {
   let cur = makeImage(new Uint8ClampedArray(m.src), w, h, cs);
   const base = m.fm ? cur : null; // pristine pixels; never mutated below
 
-  // Blend buffers are created lazily — the common case (Normal @ 100%) never
-  // touches a canvas at all.
-  let canvas: OffscreenCanvas | null = null;
-  let ctx: OffscreenCanvasRenderingContext2D | null = null;
-  let tmp: OffscreenCanvas | null = null;
-  let tctx: OffscreenCanvasRenderingContext2D | null = null;
-
   for (const f of m.filters) {
     if (!f.enabled) continue;
     const applied = applyFilter(cur, f, cs);
@@ -63,23 +57,14 @@ self.onmessage = (e: MessageEvent<FilterJobMsg>) => {
       cur = applied;
       continue;
     }
-    // Blend the filtered result back over the pre-filter pixels.
-    if (!canvas) {
-      canvas = new OffscreenCanvas(w, h);
-      ctx = canvas.getContext("2d", { willReadFrequently: true })!;
-      tmp = new OffscreenCanvas(w, h);
-      tctx = tmp.getContext("2d")!;
-    }
-    ctx!.globalAlpha = 1;
-    ctx!.globalCompositeOperation = "source-over";
-    ctx!.putImageData(cur, 0, 0);
-    tctx!.putImageData(applied, 0, 0);
-    ctx!.globalAlpha = alpha;
-    ctx!.globalCompositeOperation = op;
-    ctx!.drawImage(tmp!, 0, 0);
-    ctx!.globalAlpha = 1;
-    ctx!.globalCompositeOperation = "source-over";
-    cur = ctx!.getImageData(0, 0, w, h);
+    // Blend the filtered result back over the pre-filter pixels. This used to go
+    // through an OffscreenCanvas at globalAlpha, which is exactly what made the
+    // worker's output differ from the engine's by 1: the two canvas kinds round
+    // the composite differently, and neither rounds it correctly. See
+    // app/lib/blend.ts. `applied` is a fresh buffer, so blending into it is safe
+    // (`cur` is not — `base` aliases it).
+    blendInto(applied.data, cur.data, applied.data, op, alpha);
+    cur = applied;
   }
 
   // Filter mask: result = orig + (filtered − orig) × mask, premultiplied

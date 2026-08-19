@@ -25,6 +25,7 @@ import {
   type Rgba,
 } from "./mixer";
 import type { Rect } from "./view";
+import { blendInto } from "./blend";
 import { blendOp, clipGroupsOf, filterMaskKey, findNode, type ClipGroup } from "./layers";
 import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers";
 import { applyAdjustments, applyAdjustments16, isDefaultAdjust, type Adjustments } from "./adjust";
@@ -858,9 +859,9 @@ export class PaintEngine {
   /** Per-stroke full-resolution filter product: a copy of the settled one, with
    *  the stroke's own region re-filtered into it each frame. */
   private liveProduct: (Layer & { id: string; key: string }) | null = null;
-  /** Reusable region-sized scratch (source / filter mask / blend temp). They
-   *  grow with the stroke every frame, so allocating per frame would cost more
-   *  than the filter does — the lesson from alphaMask. */
+  /** Reusable region-sized scratch (source, filter mask). They grow with the
+   *  stroke every frame, so allocating per frame would cost more than the filter
+   *  does — the lesson from alphaMask. */
   private regionBufs: (Layer | undefined)[] = [];
   private renderTick = 0; // LRU clock
   private renderBytes = 0; // owned bytes currently cached
@@ -1172,6 +1173,105 @@ export class PaintEngine {
   setLiveRegionEnabled(on: boolean) {
     this.liveRegionOn = on;
     this.liveProduct = null;
+  }
+
+  /**
+   * Debug: compare a node's CACHED filter product (computed by the worker)
+   * against the same stack computed inline by `renderFiltered`, pixel for pixel.
+   *
+   * The two are supposed to be interchangeable — that is the entire premise of
+   * handing the settled pass to a worker — but nothing checked it until a live
+   * region frame seeded from a cached product and inherited a discrepancy. Diffing
+   * whole composites cannot localise that: it drags in every group merge,
+   * adjustment and blend on the way to the canvas. This compares the products
+   * themselves and nothing else.
+   *
+   * Returns null when there is no cached product to compare against.
+   */
+  compareFilterProduct(id?: string): {
+    differing: number;
+    worst: number;
+    channels: [number, number, number, number];
+    total: number;
+    quality: "preview" | "full";
+    /** Checksum of the inline product, so a caller can prove a configuration
+     *  change actually reached the pixels rather than comparing two identical
+     *  renders and calling the agreement meaningful. */
+    digest: number;
+    sample: {
+      at: number;
+      cached: number[];
+      inline: number[];
+      preFilter: number[];
+      postFilter: number[];
+      opacity: number;
+      blendMode: string;
+    } | null;
+  } | null {
+    const pick = (nodes: LayerNode[]): LayerNode | null => {
+      for (const n of nodes) {
+        if (n.type === "group") {
+          const hit = pick(n.children);
+          if (hit) return hit;
+        } else if (n.type === "layer" && hasEnabledFilters(n.filters)) return n;
+      }
+      return null;
+    };
+    const node = !this.curTree ? null : id ? findNode(this.curTree, id) : pick(this.curTree);
+    if (!node || node.type !== "layer" || !hasEnabledFilters(node.filters)) return null;
+    id = node.id;
+    const ent = this.filteredCache.get(id);
+    if (!ent || ent.canvas.width !== this.w || ent.canvas.height !== this.h) return null;
+    // A product whose key has moved on is simply STALE — a worker job is still in
+    // flight. Comparing it would report a huge difference that says nothing about
+    // whether the two paths agree, so say "not ready" and let the caller wait.
+    if (ent.key !== this.nodeKey(node)) return null;
+    const src = node.fill ? this.renderFill(node) : this.leafDisplay(id);
+    if (!src) return null;
+    // The stack's INPUT and its post-filter pixels, so a caller can do the blend
+    // arithmetic by hand and say which of the two paths rounded it differently.
+    const pre = this.mk(this.w, this.h, true);
+    pre.ctx.drawImage(src, 0, 0);
+    const preData = pre.ctx.getImageData(0, 0, this.w, this.h);
+    const first = node.filters!.find((f) => f.enabled)!;
+    const postData = applyFilter(preData, first, this.cs);
+    const inline = this.renderFiltered(src, node.filters!, this.filterMaskAlpha(node));
+    const a = ent.canvas.getContext("2d", { willReadFrequently: true })!.getImageData(0, 0, this.w, this.h).data;
+    const b = inline.getContext("2d", { willReadFrequently: true })!.getImageData(0, 0, this.w, this.h).data;
+    const channels: [number, number, number, number] = [0, 0, 0, 0];
+    let differing = 0;
+    let worst = 0;
+    let sample: {
+      at: number;
+      cached: number[];
+      inline: number[];
+      preFilter: number[];
+      postFilter: number[];
+      opacity: number;
+      blendMode: string;
+    } | null = null;
+    for (let i = 0; i < a.length; i++) {
+      const d = Math.abs(a[i] - b[i]);
+      if (!d) continue;
+      differing++;
+      channels[i & 3]++;
+      if (d > worst) worst = d;
+      if (!sample) {
+        const px = (i >> 2) * 4;
+        sample = {
+          at: i >> 2,
+          cached: [a[px], a[px + 1], a[px + 2], a[px + 3]],
+          inline: [b[px], b[px + 1], b[px + 2], b[px + 3]],
+          preFilter: [preData.data[px], preData.data[px + 1], preData.data[px + 2], preData.data[px + 3]],
+          postFilter: [postData.data[px], postData.data[px + 1], postData.data[px + 2], postData.data[px + 3]],
+          opacity: first.opacity,
+          blendMode: first.blendMode,
+        };
+      }
+    }
+    let digest = 0;
+    for (let i = 0; i < b.length; i += 4) digest = (digest * 31 + b[i] * 7 + b[i + 1] * 5 + b[i + 2] * 3 + b[i + 3]) >>> 0;
+    return { differing, worst, channels, total: a.length, quality: ent.quality, digest, sample };
   }
 
   /** Cache occupancy (dev overlay / console). */
@@ -4722,7 +4822,6 @@ export class PaintEngine {
       out,
       filters,
       fmAlpha ? () => fmAlpha.getContext("2d")!.getImageData(0, 0, this.w, this.h).data : null,
-      () => this.mk(this.w, this.h),
       this.w,
       this.h,
     );
@@ -4737,8 +4836,7 @@ export class PaintEngine {
    * region of one.
    *
    * `fm` is called LAZILY so a stack that turns out to be a no-op never pays for
-   * a filter-mask readback it will not use, and `mkTmp` supplies a second buffer
-   * only if some filter carries a blend mode or a partial opacity.
+   * a filter-mask readback it will not use.
    *
    * Both the full-canvas path and the live region path route through here on
    * purpose: the premultiplied mask interpolation at the bottom is subtle enough
@@ -4748,7 +4846,6 @@ export class PaintEngine {
     buf: Layer,
     filters: SmartFilter[],
     fm: (() => Uint8ClampedArray) | null,
-    mkTmp: () => Layer,
     w: number,
     h: number,
   ): ImageData {
@@ -4763,18 +4860,13 @@ export class PaintEngine {
         cur = applied; // the common case: full replace
         continue;
       }
-      // Blend the filtered result back over the pre-filter pixels.
-      buf.ctx.putImageData(cur, 0, 0);
-      const tmp = mkTmp();
-      tmp.ctx.putImageData(applied, 0, 0);
-      buf.ctx.globalAlpha = alpha;
-      buf.ctx.globalCompositeOperation = op;
-      // Explicit source rect: the buffers may be scratch canvases LARGER than
-      // w×h (the region path grows them to fit and reuses them).
-      buf.ctx.drawImage(tmp.c, 0, 0, w, h, 0, 0, w, h);
-      buf.ctx.globalAlpha = 1;
-      buf.ctx.globalCompositeOperation = "source-over";
-      cur = buf.ctx.getImageData(0, 0, w, h);
+      // Blend the filtered result back over the pre-filter pixels, in exact
+      // arithmetic rather than through a canvas — see app/lib/blend.ts for why
+      // the canvas is not trustworthy here. `applied` is always a fresh buffer
+      // out of applyFilter, so it is safe to blend into (`cur` is not: `base`
+      // aliases it).
+      blendInto(applied.data, cur.data, applied.data, op, alpha);
+      cur = applied;
     }
     // Filter mask: confine the WHOLE stack — result = orig + (filtered − orig) ×
     // mask, interpolated premultiplied so partially-covered edge pixels don't
@@ -9323,7 +9415,6 @@ export class PaintEngine {
       sub,
       node.filters!,
       fmBuf ? () => fmBuf!.ctx.getImageData(0, 0, inn.w, inn.h).data : null,
-      () => this.regionBuf(2, inn.w, inn.h, false),
       inn.w,
       inn.h,
     );
