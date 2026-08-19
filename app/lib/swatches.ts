@@ -377,7 +377,7 @@ export function decodeASE(buf: Uint8Array): SwatchGroup[] | null {
   const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   const groups: SwatchGroup[] = [];
   let current: SwatchGroup | null = null;
-  let loose: string[] = [];
+  const loose: string[] = [];
   let o = 12;
   while (o + 6 <= buf.length) {
     const type = dv.getUint16(o);

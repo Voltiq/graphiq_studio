@@ -4366,20 +4366,29 @@ export class PaintEngine {
    *  (`<id>${TILE_ID_SEP}<index>`), so a large product sheds exactly the
    *  overage instead of vanishing whole — the surviving tiles stay valid and a
    *  freed tile is recomputed alone on next use. */
-  private evictOverBudget() {
-    if (this.renderBytes <= this.renderBudget) return;
-    const self = this;
-    function* candidates(): Generator<[string, { bytes: number; tick: number }]> {
-      yield* self.renderCache;
-      for (const [id, t] of self.tiledAdj) {
-        if (self.frameProtect.has(id)) continue; // whole product in use this frame
-        for (let i = 0; i < t.tiles.length; i++) {
-          const tile = t.tiles[i];
-          if (tile) yield [id + TILE_ID_SEP + i, tile];
-        }
+  /** Every entry the evictor may consider, lazily: whole products first, then
+   *  each resident tile of a tiled product as its own candidate. A generator
+   *  METHOD rather than a nested `function*` — a generator declaration binds its
+   *  own `this`, which is what forced the `const self = this` this replaces. */
+  private *evictionCandidates(): Generator<[string, { bytes: number; tick: number }]> {
+    yield* this.renderCache;
+    for (const [id, t] of this.tiledAdj) {
+      if (this.frameProtect.has(id)) continue; // whole product in use this frame
+      for (let i = 0; i < t.tiles.length; i++) {
+        const tile = t.tiles[i];
+        if (tile) yield [id + TILE_ID_SEP + i, tile];
       }
     }
-    for (const id of selectEvictions(candidates(), this.renderBytes, this.renderBudget, this.frameProtect)) {
+  }
+
+  private evictOverBudget() {
+    if (this.renderBytes <= this.renderBudget) return;
+    for (const id of selectEvictions(
+      this.evictionCandidates(),
+      this.renderBytes,
+      this.renderBudget,
+      this.frameProtect,
+    )) {
       const sep = id.lastIndexOf(TILE_ID_SEP);
       if (sep >= 0) {
         const base = id.slice(0, sep);

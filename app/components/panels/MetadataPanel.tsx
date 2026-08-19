@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { WorkingSpace } from "../../lib/colorspace";
 import { ExternalLink } from "lucide-react";
 import styles from "../RightDock.module.scss";
@@ -20,7 +20,14 @@ function EditRow({
   onCommit: (v: string) => void;
 }) {
   const [draft, setDraft] = useState(value ?? "");
-  useEffect(() => setDraft(value ?? ""), [value]);
+  // Re-sync the draft when the incoming value changes — adjusted DURING render
+  // rather than in an effect, which is React's documented pattern for it: the
+  // effect version paints the stale draft first and only then corrects it.
+  const [seen, setSeen] = useState(value);
+  if (seen !== value) {
+    setSeen(value);
+    setDraft(value ?? "");
+  }
   const commit = () => {
     const v = draft.trim();
     if (v !== (value ?? "")) onCommit(v);

@@ -63,8 +63,8 @@ function samplePath(anchors: PenAnchor[], closed: boolean): Sample[] {
   for (let i = 0; i < n; i++) {
     const prev = pts[closed ? (i - 1 + n) % n : Math.max(0, i - 1)];
     const next = pts[closed ? (i + 1) % n : Math.min(n - 1, i + 1)];
-    let tx = next.x - prev.x;
-    let ty = next.y - prev.y;
+    const tx = next.x - prev.x;
+    const ty = next.y - prev.y;
     const len = Math.hypot(tx, ty) || 1e-6;
     out.push({
       x: pts[i].x,

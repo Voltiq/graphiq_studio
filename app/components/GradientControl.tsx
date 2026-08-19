@@ -71,6 +71,10 @@ export function GradientEditor({
   const barRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<number | null>(null);
 
+  // Same hydration reason as the dock's layout load: loadSavedGradients returns
+  // [] on the server, so reading it during render would make the first client
+  // render disagree with the server HTML.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
   useEffect(() => setSaved(loadSavedGradients(storageKey)), [storageKey]);
 
   const persist = (list: GradientPreset[]) => {
@@ -407,18 +411,29 @@ export default function GradientControl({
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
 
+  // Drop the anchor position as the popover closes, DURING render — otherwise
+  // reopening paints one frame at the old coordinates. The measurement itself
+  // stays in the effect below: getBoundingClientRect needs a laid-out element.
+  const [seenOpen, setSeenOpen] = useState(open);
+  if (seenOpen !== open) {
+    setSeenOpen(open);
+    if (!open) setPos(null);
+  }
+
   // Anchor the (portaled) popover under the swatch, clamped to the viewport.
   useEffect(() => {
-    if (!open) {
-      setPos(null);
-      return;
-    }
+    if (!open) return;
     const r = swatchRef.current?.getBoundingClientRect();
     if (!r) return;
     // Zoomed popup: clamp in viewport px (its 252 local px render ×z), then
     // ÷z because style offsets on a zoomed element render ×z.
     const z = uiZoom();
     const W = 252 * z;
+    /* Measure-then-position: the popover's coordinates depend on a laid-out
+       element, so this genuinely cannot happen during render. Tooltip.tsx does
+       the same thing and the rule does not flag it there; suppressed rather than
+       contorted into a shape the linter prefers but a reader does not. */
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     setPos({
       left: Math.max(8, Math.min(r.left, window.innerWidth - W - 8)) / z,
       top: (r.bottom + 8) / z,

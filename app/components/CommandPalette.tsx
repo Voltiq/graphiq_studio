@@ -91,8 +91,14 @@ export default function CommandPalette({
     return scored.slice(0, MAX_RESULTS).map((s) => s.row);
   }, [q, commands, recents]);
 
-  // Keep the highlighted row valid + visible as results change.
-  useEffect(() => setHi(0), [q]);
+  // Keep the highlighted row valid + visible as results change. The reset is
+  // adjusted DURING render (React's pattern for state derived from props), so
+  // the list never paints the old highlight against new results.
+  const [seenQ, setSeenQ] = useState(q);
+  if (seenQ !== q) {
+    setSeenQ(q);
+    setHi(0);
+  }
   useEffect(() => {
     const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${hi}"]`);
     el?.scrollIntoView({ block: "nearest" });

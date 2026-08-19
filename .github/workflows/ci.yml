@@ -29,10 +29,11 @@
 # baseline, and on a runner it always would be. Performance is tracked locally,
 # in one sitting, with interleaved arms.
 #
-# ALSO NOT RUN HERE: `npm run lint`. It reports 16 pre-existing errors, so adding
-# it would make CI red from the first run and stay red. Clearing them is its own
-# task (see TODO); wiring it in before that would only teach everyone to ignore a
-# failing build.
+# LINT gates on ERRORS, not warnings. The 16 errors that used to make this
+# impossible are gone; 13 warnings remain (unused vars, two exhaustive-deps, two
+# a11y attributes) and `eslint` exits 0 on warnings, so they stay visible in the
+# log without blocking. Tightening to `--max-warnings 0` is a separate decision
+# once those are cleared.
 
 name: CI
 
@@ -60,6 +61,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Lint
+        run: npm run lint
       - name: Typecheck and unit tests
         run: npm run check
       - name: Production build
@@ -120,6 +123,10 @@ jobs:
           GQ_CHANNEL: chrome
       - name: Smart-filter worker agrees with the inline path
         run: npm run test:blend -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+      - name: React state sync (render-time adjusts, dock handle)
+        run: npm run test:react -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 

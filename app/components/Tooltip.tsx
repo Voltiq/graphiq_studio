@@ -113,13 +113,20 @@ export default function TooltipHost() {
     };
   }, []);
 
+  // Drop the measured position the moment the anchor goes away, DURING render:
+  // keeping it would flash the next tip at the previous one's coordinates for a
+  // frame. The MEASUREMENT below cannot move out of an effect — it reads
+  // offsetWidth/offsetHeight, which only mean anything after layout.
+  const [seenAnchor, setSeenAnchor] = useState(anchor);
+  if (seenAnchor !== anchor) {
+    setSeenAnchor(anchor);
+    if (!anchor) setPos(null);
+  }
+
   // Position once measured: centre on the trigger, flip above if there's no room
   // below, and clamp within the viewport.
   useEffect(() => {
-    if (!anchor) {
-      setPos(null);
-      return;
-    }
+    if (!anchor) return;
     const el = tipRef.current;
     if (!el) return;
     // The tip is UI-scale-zoomed: offset sizes are local px (×z to compare

@@ -403,7 +403,7 @@ export function parsePSDUnsafe(buf: ArrayBuffer): PsdDocument | null {
   // Layer & mask information.
   const lmiLen = r.u32();
   const lmiEnd = r.pos + lmiLen;
-  let records: RawRecord[] = [];
+  const records: RawRecord[] = [];
   if (lmiLen >= 6) {
     const layerInfoLen = r.u32();
     const layerInfoEnd = r.pos + layerInfoLen;

@@ -109,7 +109,11 @@ export default function AdjustmentsPanel({
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
   // Load after mount (avoids an SSR/hydration mismatch); custom presets are global.
+  /* Reading localStorage during render would produce one thing on the server
+     (where there is none) and another on the client — a hydration mismatch. An
+     effect after mount is the fix for that, not a symptom of one. */
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     setPresets(loadPresets());
   }, []);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   CornerDownRight,
   Contrast,
@@ -37,9 +37,16 @@ export default function PropertiesPanel({ api }: { api: LayersApi }) {
   // Inline rename mirrors the Layers panel: draft while focused, commit on blur.
   const [draft, setDraft] = useState(node?.name ?? "");
   const [editingName, setEditingName] = useState(false);
-  useEffect(() => {
-    if (!editingName) setDraft(node?.name ?? "");
-  }, [node?.name, node?.id, editingName]);
+  // Re-sync the draft when the selected layer or its name changes, but never
+  // while the field is being edited. Adjusted DURING render rather than in an
+  // effect — React's documented pattern for state derived from props, and it
+  // avoids painting the previous layer's name for a frame first.
+  const nameKey = `${node?.id ?? ""}|${node?.name ?? ""}`;
+  const [seenName, setSeenName] = useState(nameKey);
+  if (!editingName && seenName !== nameKey) {
+    setSeenName(nameKey);
+    setDraft(node?.name ?? "");
+  }
 
   if (!node) {
     return <p className={styles.propsEmpty}>Select a layer to see its properties.</p>;

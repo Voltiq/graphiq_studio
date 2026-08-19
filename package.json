@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "0.74.0",
+  "version": "0.74.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -15,6 +15,7 @@
     "test:fx": "node tools/golden-effects.js",
     "test:region": "node tools/verify-region-scope.js",
     "test:blend": "node tools/verify-worker-blend.js",
+    "test:react": "node tools/verify-react-state.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && vitest run"

@@ -111,9 +111,13 @@ export default function LevelsDialog({
   }, [onCancel]);
 
   // The sampled-point highlight only lasts while the canvas is in pick mode.
-  useEffect(() => {
+  // Cleared DURING render rather than in an effect, so the highlight cannot
+  // survive a frame past the mode ending.
+  const [seenPicking, setSeenPicking] = useState(picking);
+  if (seenPicking !== picking) {
+    setSeenPicking(picking);
     if (!picking) setPickKind(null);
-  }, [picking]);
+  }
 
   // Histogram backdrop: channel distribution + the clipped ranges (outside the
   // black/white input points) veiled, with accent markers on the boundaries.

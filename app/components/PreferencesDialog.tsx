@@ -571,7 +571,6 @@ export default function PreferencesDialog({
   };
   useEffect(() => {
     if (tab === "storage") void loadStore();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
   return (

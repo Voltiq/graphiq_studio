@@ -376,7 +376,7 @@ export async function decodeTiff(buffer: ArrayBuffer): Promise<TiffDecodeResult 
       gg = g;
       bb = g;
     }
-    let a = alphaIdx >= 0 ? val(s + alphaIdx) : 255;
+    const a = alphaIdx >= 0 ? val(s + alphaIdx) : 255;
     if (associated && a > 0 && a < 255) {
       // Associated (premultiplied) alpha → straight for the canvas.
       rr = Math.min(255, Math.round((rr * 255) / a));

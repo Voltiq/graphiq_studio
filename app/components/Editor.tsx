@@ -1341,7 +1341,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setCropQuad(
       cropSettingsRef.current.perspective ? fullCanvasQuad(d.width, d.height) : null,
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, activeId]);
   // Toggling Perspective while in the crop tool seeds the quad from the current
   // box (or the full canvas), and leaving the mode drops it.
@@ -1716,7 +1715,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   useEffect(() => {
     const id = active.activeLayerId;
     setPaintSurface(id ? (paintRef.current?.getActiveSurface(id) ?? "pixels") : "pixels");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active.activeLayerId, activeId]);
 
   // Mask VIEW (Alt-click a mask chip / Channels panel): the canvas shows the
@@ -2594,7 +2592,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setCurveTarget(false);
     curveDragRef.current = null;
     curveChannelRef.current = "rgb";
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toneKey]);
 
   // ---- Layer effects (styles) ----------------------------------------------
@@ -3900,7 +3897,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       entries.push(cached);
     }
     return { entries, activeIndex };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Hand the crash boundary a way to serialize the open documents. It is kept

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import styles from "./Controls.module.scss";
 import ColorPopover from "./ColorPopover";
@@ -198,10 +198,14 @@ export function NumberField({
 }) {
   const [draft, setDraft] = useState(String(value ?? defaultValue));
   const [editing, setEditing] = useState(false);
-  // Reflect external changes while the user isn't actively typing.
-  useEffect(() => {
-    if (!editing && value !== undefined) setDraft(String(value));
-  }, [value, editing]);
+  // Reflect external changes while the user isn't actively typing. Adjusted
+  // DURING render rather than in an effect: an effect would paint the stale
+  // number for a frame before correcting it.
+  const [seenValue, setSeenValue] = useState(value);
+  if (!editing && seenValue !== value) {
+    setSeenValue(value);
+    if (value !== undefined) setDraft(String(value));
+  }
 
   const commit = () => {
     setEditing(false);

@@ -3767,7 +3767,6 @@ export default function CanvasArea({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, engine]);
 
   // Finish (commit) the pen path with Enter / Escape while the pen tool is active.
@@ -4052,7 +4051,6 @@ export default function CanvasArea({
 
     vp.addEventListener("wheel", onWheel, { passive: false });
     return () => vp.removeEventListener("wheel", onWheel);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Per-document view: each tab keeps its own zoom/pan. The outgoing doc's
@@ -4114,7 +4112,6 @@ export default function CanvasArea({
       const docY = (ay - prev.y) / prevScale;
       return clampHere(ax - docX * newScale, ay - docY * newScale, newScale, vp);
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoom]);
 
   // Re-centre when the canvas is resized (Image/Canvas Size, crop, rotate) —
@@ -4133,7 +4130,6 @@ export default function CanvasArea({
     if (!vp) return;
     const s = zoomRef.current / 100;
     setPanRef.current(clampHere((vp.clientWidth - width * s) / 2, (vp.clientHeight - height * s) / 2, s, vp));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [width, height, activeId]);
 
   // Report the viewport size up, and re-clamp the pan, on resize.

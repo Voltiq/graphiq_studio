@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useImperativeHandle, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { uiZoom } from "../lib/ui-scale";
 import { WORKING_SPACE_LABELS, type WorkingSpace } from "../lib/colorspace";
@@ -381,6 +381,11 @@ export default function RightDock({
   const [dragId, setDragId] = useState<PanelId | null>(null);
 
   // Load the saved order + open state after mount (avoids a hydration mismatch).
+  /* Reading localStorage during render would produce one thing on the server
+     (where there is none) and another on the client — a hydration mismatch. An
+     effect after mount is the fix for that, not a symptom of one, so the
+     cascading-render rule is suppressed across this block deliberately. */
+  /* eslint-disable react-hooks/set-state-in-effect -- see above */
   useEffect(() => {
     setOrder(loadOrder());
     setOpenMap(loadOpen());
@@ -388,6 +393,7 @@ export default function RightDock({
     setLeft(l.left);
     setFloats(l.floats);
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
   // Persist whenever they change.
   useEffect(() => {
     try {
@@ -412,10 +418,16 @@ export default function RightDock({
   }, [left, floats]);
 
   // Workspaces + Reset Workspace drive the whole layout through this handle.
-  if (dockRef) {
-    dockRef.current = {
+  // Published with useImperativeHandle rather than assigned during render: a ref
+  // written mid-render is not safe under concurrent rendering, and this one is
+  // only ever CALLED from menu handlers, never read while rendering (every call
+  // site in Editor.tsx goes through `dockRef.current?.`), so publishing it in the
+  // commit phase changes nothing about when it is available.
+  useImperativeHandle(
+    dockRef,
+    () => ({
       capture: () => ({ order, left, floats, open: openMap }),
-      apply: (l) => {
+      apply: (l: DockLayout | null) => {
         if (!l) {
           setOrder(DEFAULT_ORDER);
           setOpenMap(DEFAULT_OPEN);
@@ -430,8 +442,9 @@ export default function RightDock({
         setFloats(c.floats);
         setOpenMap({ ...DEFAULT_OPEN, ...(l.open ?? {}) });
       },
-    };
-  }
+    }),
+    [order, left, floats, openMap],
+  );
 
   const toggleOpen = (id: PanelId) => setOpenMap((cur) => ({ ...cur, [id]: !cur[id] }));
 
