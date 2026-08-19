@@ -23,13 +23,13 @@
  * blob must not select the background. If two rows ever print the same count the
  * fixture has collapsed and the rail is comparing nothing.
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 
 const DOC_W = 1920;
 const DOC_H = 1080;
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const page = await (await browser.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));

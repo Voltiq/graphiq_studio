@@ -25,7 +25,7 @@
  * transparent and how many distinct alpha values the field carried. A field
  * that collapsed to all-zero would match perfectly and prove nothing.
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 
 const RUN = ([w, h]) => {
   // ---- the two implementations, side by side in the page ------------------
@@ -176,7 +176,7 @@ const RUN = ([w, h]) => {
 };
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const page = await (await browser.newContext({ viewport: { width: 1200, height: 800 } })).newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));

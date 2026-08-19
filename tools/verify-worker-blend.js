@@ -29,7 +29,7 @@
  * that the product's digest MOVED when the blend mode changed — if setting the
  * mode did nothing, the run fails rather than passing quietly.
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser, urlArg } = require("./lib/launch");
 
 const DOC_W = 800;
 const DOC_H = 600;
@@ -50,12 +50,12 @@ const MODES = [
 ];
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const page = await (await browser.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
-  await page.goto("http://localhost:3000", { waitUntil: "domcontentloaded" });
+  await page.goto(urlArg(), { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-tour="canvas"]', { timeout: 90000 });
   const t = await page.waitForSelector('div[aria-label="Interactive tour"]', { timeout: 8000 }).catch(() => null);
   if (t) {

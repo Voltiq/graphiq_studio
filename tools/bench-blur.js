@@ -20,7 +20,7 @@
  *   C. drop shadow (default)   1390 ms           64 ms
  *   D. drop shadow (size 250)  1450 ms           67 ms
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 
 const INSTRUMENT = () => {
   const w = window;
@@ -37,7 +37,7 @@ const INSTRUMENT = () => {
 };
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const ctx = await browser.newContext({ viewport: { width: 1500, height: 950 } });
   const page = await ctx.newPage();
   await page.addInitScript(INSTRUMENT);

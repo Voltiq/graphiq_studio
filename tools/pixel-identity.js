@@ -52,7 +52,7 @@
  *
  * Exit code 0 = every stage identical and conclusive.
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 
 const argv = process.argv.slice(2);
 const arg = (name, fallback) => {
@@ -68,7 +68,7 @@ const DOC_W = 600;
 const DOC_H = 400;
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const page = await (await browser.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));

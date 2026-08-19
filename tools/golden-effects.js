@@ -38,7 +38,7 @@
  */
 const { readFileSync, writeFileSync, mkdirSync, existsSync } = require("node:fs");
 const { join, dirname } = require("node:path");
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 
 const argv = process.argv.slice(2);
 const UPDATE = argv.includes("--update");
@@ -63,7 +63,7 @@ const EFFECTS = [
 ];
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const page = await (await browser.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));

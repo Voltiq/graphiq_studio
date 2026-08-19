@@ -44,7 +44,7 @@
 const { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 
 const argv = process.argv.slice(2);
 const KEEP = argv.includes("--keep");
@@ -61,7 +61,7 @@ const CRASH_H = 180;
 
 (async () => {
   const work = mkdtempSync(join(tmpdir(), "graphiq-smoke-"));
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   let pass = 0;
   let fail = 0;
   const failures = [];

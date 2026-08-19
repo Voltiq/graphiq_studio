@@ -4,7 +4,7 @@
  *   npm run dev                       (the harness drives http://localhost:3000)
  *   node tools/profile-perf.js
  *
- * Uses the installed Edge via `channel: "msedge"`, so it needs no browser download.
+ * Drives an INSTALLED browser (see tools/lib/launch.js), so it needs no download.
  *
  * Scripts the two gestures that block worst and reports MAIN-THREAD BLOCKING via
  * PerformanceObserver('longtask') — the thing that actually makes a UI feel
@@ -26,7 +26,7 @@
  *   move, one blur       2011 ms wall,  1 long task  /   69 ms blocking
  *   apex sweep (30)      1231 ms wall,  0 long tasks
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 
 const skipTour = async (page) => {
   const t = await page.waitForSelector('div[aria-label="Interactive tour"]', { timeout: 8000 }).catch(() => null);
@@ -72,7 +72,7 @@ const INSTRUMENT = () => {
 };
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const ctx = await browser.newContext({ viewport: { width: 1500, height: 950 } });
   const page = await ctx.newPage();
   await page.addInitScript(INSTRUMENT);

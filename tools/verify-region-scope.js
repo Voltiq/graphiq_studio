@@ -23,7 +23,7 @@
  * time). Section 7 covers the LIVE frame, which is a separate mechanism sharing
  * the same two-rect construction, and needs its own oracle — see the note there.
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser, urlArg } = require("./lib/launch");
 
 const skipTour = async (page) => {
   const t = await page.waitForSelector('div[aria-label="Interactive tour"]', { timeout: 8000 }).catch(() => null);
@@ -34,13 +34,13 @@ const skipTour = async (page) => {
 };
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const ctx = await browser.newContext({ viewport: { width: 1500, height: 950 } });
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
-  await page.goto("http://localhost:3000", { waitUntil: "domcontentloaded" });
+  await page.goto(urlArg(), { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-tour="canvas"]', { timeout: 60000 });
   await skipTour(page);
   await page.addStyleTag({ content: "nextjs-portal{display:none!important}" });

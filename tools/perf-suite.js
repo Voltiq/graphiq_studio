@@ -41,7 +41,7 @@
  *   tools/bench-selection.js  wand flood+trace vs combineSelection (C0 vs C)
  *   tools/verify-region-scope.js  byte-identity rail for region-scoped renders
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 
 const INSTRUMENT = () => {
   const w = window;
@@ -61,7 +61,7 @@ const INSTRUMENT = () => {
 };
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const ctx = await browser.newContext({ viewport: { width: 1500, height: 950 } });
   const page = await ctx.newPage();
   await page.addInitScript(INSTRUMENT);

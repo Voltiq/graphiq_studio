@@ -1,0 +1,128 @@
+# Continuous integration for Graphiq Studio.
+#
+# Two jobs, split by what they need rather than by what they check: `check` needs
+# nothing but Node and finishes in under a minute, so a type error or a broken
+# unit test reports almost immediately; `browser` has to build, boot and drive the
+# real app, and takes minutes.
+#
+# WHY A DEV SERVER AND NOT A PRODUCTION BUILD. The instinct is to test what ships.
+# It cannot work here: the harnesses drive the app through dev-only console hooks
+# — `__gqRenderCache` (pixel-identity toggles the render cache to force the
+# always-correct uncached path; the region and blend rails use it too) and
+# `__gqCrash` (smoke simulates a crash to test recovery) — and CanvasArea returns
+# early from installing them when NODE_ENV is production. Against `next start`
+# every browser harness would fail on a missing hook. A production build is still
+# compiled, by the `build` step in `check`, so a build-only break is caught.
+#
+# WHY `chrome` AND NOT `msedge`. playwright-core ships no browsers; it drives an
+# installed one. GitHub's ubuntu runners carry Chrome and Edge, so either avoids a
+# download — Chrome is the more reliably present of the two. The harnesses default
+# to msedge locally and take the channel from $GQ_CHANNEL (tools/lib/launch.js).
+# Verified before writing this: golden-effects produces IDENTICAL hashes on Chrome
+# and Edge, so pinning a different channel here does not invalidate the baselines.
+# If a runner image ever drops Chrome, `npx playwright install chromium` plus
+# GQ_CHANNEL=chromium is the fallback.
+#
+# NOT RUN HERE: tools/perf-suite.js and the benches. They measure wall-clock, and
+# a shared CI runner's speed varies by more than the thing being measured — the
+# perf suite already prints a calibration warning when the machine is off
+# baseline, and on a runner it always would be. Performance is tracked locally,
+# in one sitting, with interleaved arms.
+#
+# ALSO NOT RUN HERE: `npm run lint`. It reports 16 pre-existing errors, so adding
+# it would make CI red from the first run and stay red. Clearing them is its own
+# task (see TODO); wiring it in before that would only teach everyone to ignore a
+# failing build.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A newer push supersedes an in-flight run on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: types, unit tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 24 rather than the older LTS on purpose: it is the version every
+          # harness and the whole unit suite are actually verified on here.
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Typecheck and unit tests
+        run: npm run check
+      - name: Production build
+        run: npm run build
+
+  browser:
+    name: browser harnesses
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 24 rather than the older LTS on purpose: it is the version every
+          # harness and the whole unit suite are actually verified on here.
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      # Fail here, loudly and early, rather than inside a harness timeout.
+      - name: Check the browser this runner provides
+        run: |
+          which google-chrome-stable google-chrome || true
+          google-chrome-stable --version || google-chrome --version
+
+      - name: Start the dev server
+        run: |
+          npm run dev > dev-server.log 2>&1 &
+          echo "waiting for the dev server..."
+          for i in $(seq 1 90); do
+            if curl -sSf -o /dev/null http://localhost:3000; then
+              echo "up after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "dev server never came up"
+          cat dev-server.log
+          exit 1
+
+      # Each harness exits non-zero on failure and prints its own PASS/FAIL lines.
+      # They are separate steps so the summary names which one broke.
+      - name: Smoke (31 checks)
+        run: npm run smoke -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+      - name: Pixel identity — cached render == uncached render
+        run: npm run test:pixel -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+      - name: Golden layer effects
+        run: npm run test:fx -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+      - name: Region-scoped rendering is byte-identical
+        run: npm run test:region -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+      - name: Smart-filter worker agrees with the inline path
+        run: npm run test:blend -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
+      - name: Dev server log
+        if: failure()
+        run: cat dev-server.log

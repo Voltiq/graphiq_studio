@@ -27,7 +27,7 @@
  * The add-click case gains most because combineSelection traces the union box
  * on every call, and that trace is now O(runs) rather than O(area).
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 
 const INSTRUMENT = () => {
   const w = window;
@@ -44,7 +44,7 @@ const INSTRUMENT = () => {
 };
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const ctx = await browser.newContext({ viewport: { width: 1500, height: 950 } });
   const page = await ctx.newPage();
   await page.addInitScript(INSTRUMENT);

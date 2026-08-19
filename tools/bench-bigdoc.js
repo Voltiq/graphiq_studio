@@ -26,7 +26,7 @@
  * pass repaints only the dirty rect grown by the effects' reach — measured at
  * 1.39% of a 12 MP document for a default drop shadow.
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 const INSTRUMENT = () => {
   const w = window;
   w.__perf = { long: [], on: false };
@@ -41,7 +41,7 @@ const INSTRUMENT = () => {
   };
 };
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const page = await (await browser.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
   await page.addInitScript(INSTRUMENT);
   const errors = [];

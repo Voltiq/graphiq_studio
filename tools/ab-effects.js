@@ -30,9 +30,9 @@
  * to enable, and the non-empty pixel count. If either collapses, the hash is
  * comparing the wrong thing.
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const page = await (await browser.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));

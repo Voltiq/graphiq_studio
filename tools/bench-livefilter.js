@@ -33,7 +33,7 @@
  * these milliseconds against another run's — the RATIO is what travels, which is
  * why the arms are interleaved rather than measured separately.
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 
 const DOC_W = 4000;
 const DOC_H = 3000;
@@ -65,7 +65,7 @@ const INSTRUMENT = () => {
 };
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const page = await (await browser.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
   await page.addInitScript(INSTRUMENT);
   const errors = [];

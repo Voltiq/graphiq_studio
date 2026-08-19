@@ -18,7 +18,7 @@
  * ENUMERATION for the picker UI, not rendering, so it does not block a move —
  * the picker stays on the main thread and passes family names to the worker.
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 
 const WORKER_SRC = `
 self.onmessage = async () => {
@@ -102,7 +102,7 @@ self.onmessage = async () => {
 `;
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const page = await (await browser.newContext()).newPage();
   await page.goto("http://localhost:3000", { waitUntil: "domcontentloaded" });
   const rows = await page.evaluate(async (src) => {

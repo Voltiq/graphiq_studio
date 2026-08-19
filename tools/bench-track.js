@@ -179,8 +179,8 @@ async function filterThroughput() {
 // ---------------------------------------------------------------------------
 
 async function compositeSeries() {
-  const { chromium } = require("playwright-core");
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const { launchBrowser } = require("./lib/launch");
+  const browser = await launchBrowser();
   try {
     const page = await (await browser.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
     await page.goto(URL_ARG, { waitUntil: "domcontentloaded", timeout: 20000 });

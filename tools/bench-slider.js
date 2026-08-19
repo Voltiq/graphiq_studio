@@ -37,7 +37,7 @@
  * sweep must move the slider's value — both are asserted. If the slider never
  * moved, every "0" below is measuring nothing.
  */
-const { chromium } = require("playwright-core");
+const { launchBrowser } = require("./lib/launch");
 
 const DOC_W = 900;
 const DOC_H = 650;
@@ -95,7 +95,7 @@ const INSTRUMENT = () => {
 };
 
 (async () => {
-  const browser = await chromium.launch({ channel: "msedge", headless: true });
+  const browser = await launchBrowser();
   const page = await (await browser.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
   await page.addInitScript(INSTRUMENT);
   const errors = [];
