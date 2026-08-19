@@ -25,7 +25,7 @@ import {
   type Rgba,
 } from "./mixer";
 import type { Rect } from "./view";
-import { blendOp, clipGroupsOf, filterMaskKey, type ClipGroup } from "./layers";
+import { blendOp, clipGroupsOf, filterMaskKey, findNode, type ClipGroup } from "./layers";
 import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers";
 import { applyAdjustments, applyAdjustments16, isDefaultAdjust, type Adjustments } from "./adjust";
 import { applyExtraAdjustment, extraIsDefault, isExtraSpec, type ExtraAdjustment } from "./adjust-extra";
@@ -131,7 +131,16 @@ import {
 } from "./tone";
 import { renderPenStroke } from "./pen";
 import { isChannelKey } from "./channels";
-import { addReach, nodeReach, padRect, stackReach, type Reach } from "./reach";
+import {
+  addReach,
+  effectsPositionDependent,
+  effectsReach,
+  nodeReach,
+  padRect,
+  regionWorthIt,
+  stackReach,
+  type Reach,
+} from "./reach";
 import {
   baseRunStyle,
   cssFontString,
@@ -829,6 +838,12 @@ export class PaintEngine {
   // Caches are an optimization, never truth — dropping any entry only costs time.
   private renderCache = new Map<string, RenderNodeCache>();
   private renderCacheOn = true; // debug A/B toggle (disabled ⇒ full recompute)
+  // Region-scoped repaints: how many misses were repaired in place, and how
+  // many pixels those repaints touched. Surfaced through renderCacheStats so a
+  // harness can prove the region path RAN — byte-identity alone also holds when
+  // it never activates and everything quietly takes the full pass.
+  private regionHits = 0;
+  private regionPx = 0;
   private renderTick = 0; // LRU clock
   private renderBytes = 0; // owned bytes currently cached
   private renderBudget = 256 * 1024 * 1024; // LRU eviction beyond this (Preferences ▸ Performance)
@@ -895,11 +910,68 @@ export class PaintEngine {
    *  is local (see changeReaches: effects/filters spread pixels past the rect). */
   private bumpPixel(id: string, rect?: Rect) {
     this.pixelVersion.set(id, (this.pixelVersion.get(id) ?? 0) + 1);
-    this.dropCache(id);
     const bounded = this.boundChange(id, "pixel", rect);
+    // A bounded change to a node whose own render can be repainted per-region
+    // KEEPS its cached product and just records what went stale; the miss path
+    // then repaints that rect instead of the whole document. Everything else
+    // drops the entry exactly as before.
+    if (bounded && this.regionPatchable(id)) this.markStale(id, bounded);
+    else this.dropCache(id);
     this.pendingDirty = unionRect(this.pendingDirty, bounded);
     if (!bounded) this.lastTree = null; // unbounded change → next blit is full
     this.noteBelowChange(bounded);
+  }
+
+  /**
+   * Can this node's cached product be repainted a region at a time?
+   *
+   * Deliberately narrow — the first slice covers exactly the shape the bench
+   * measures (a leaf carrying effects, painted on): no group (its key folds in
+   * every child, so a child edit is not a local edit of the group's own
+   * product), no fill layer (its pixels come from a spec, not the canvas), no
+   * mask (applied after the fact, in renderNode), no smart filters (the stack
+   * has its own product cache and its own position rules), effects that do not
+   * read absolute coordinates, and a bounded reach.
+   */
+  private regionPatchable(id: string): boolean {
+    const node = this.curTree ? findNode(this.curTree, id) : null;
+    if (!node || node.type !== "layer") return false;
+    if (node.fill || node.mask?.enabled || vectorMaskActive(node.vectorMask)) return false;
+    if (hasEnabledFilters(node.filters)) return false;
+    if (!hasEnabledFx(node.effects)) return false;
+    if (effectsPositionDependent(node.effects)) return false;
+    return effectsReach(node.effects) !== null;
+  }
+
+  /** Record that `rect` of a cached product went stale, keeping the rest. */
+  private markStale(id: string, rect: Rect) {
+    const e = this.renderCache.get(id);
+    if (!e) {
+      this.dropCache(id);
+      return;
+    }
+    e.dirty = e.dirty ? unionRect(e.dirty, rect)! : rect;
+    // The clip-group product built from this node is NOT region-tracked; it has
+    // to go, or it would keep serving pixels from before the change.
+    const clip = this.renderCache.get(`clip:${id}`);
+    if (clip) {
+      this.renderBytes -= clip.bytes;
+      this.renderCache.delete(`clip:${id}`);
+    }
+    this.dropTiled(id);
+  }
+
+  /** Does the new key differ from the cached one ONLY in the leaf pixel version?
+   *  Anything else (effects, colour space, mask, doc epoch) changes the whole
+   *  product and must take the full pass. */
+  private onlyPixelsChanged(oldKey: string, newKey: string): boolean {
+    const a = oldKey.split("|");
+    const b = newKey.split("|");
+    if (a.length !== b.length || a.length < 2) return false;
+    if (!a[0].startsWith("L") || !b[0].startsWith("L")) return false;
+    if (a[0] === b[0]) return false; // the pixel version must be what moved
+    for (let i = 1; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
   }
 
   /** A change rect grown by everything downstream of it spreads, or null when
@@ -1083,10 +1155,14 @@ export class PaintEngine {
     hits: number;
     misses: number;
     tiles: number;
+    regionHits: number;
+    regionPx: number;
   } {
     let tiles = 0;
     for (const t of this.tiledAdj.values()) for (const tile of t.tiles) if (tile) tiles++;
     return {
+      regionHits: this.regionHits,
+      regionPx: this.regionPx,
       enabled: this.renderCacheOn,
       entries: this.renderCache.size + this.tiledAdj.size,
       bytes: this.renderBytes,
@@ -4250,9 +4326,19 @@ export class PaintEngine {
     const key = bypass ? "" : this.nodeKey(node);
     if (!bypass) {
       const hit = this.renderCache.get(node.id);
-      if (hit && hit.key === key) {
+      if (hit && hit.key === key && !hit.dirty) {
         this.cacheHits++;
         hit.tick = ++this.renderTick;
+        this.frameProtect.add(node.id);
+        return hit.c;
+      }
+      // A stale entry whose ONLY change is a bounded pixel edit can be repaired
+      // in place: repaint the padded rect and keep the rest of the product.
+      if (hit && hit.dirty && this.onlyPixelsChanged(hit.key, key) && this.repaintRegion(node, hit)) {
+        hit.key = key;
+        hit.dirty = null;
+        hit.tick = ++this.renderTick;
+        this.regionHits++;
         this.frameProtect.add(node.id);
         return hit.c;
       }
@@ -4474,6 +4560,56 @@ export class PaintEngine {
   /** The styled buffer for a leaf with effects. Only reached on a render-cache
    *  miss (renderNode caches the product, keyed by pixelVersion/fxHash/space/
    *  epoch — the old standalone effectsCache is folded into that node cache). */
+  /**
+   * Repaint just the stale rect of a cached styled product, in place.
+   *
+   * Two rects, and the difference between them is the whole correctness story:
+   *   OUT — the dirty rect grown by the effects' reach. Output can only have
+   *     changed this far from the pixels that changed, so everything outside it
+   *     in the cached product is still correct and is kept.
+   *   IN  — OUT grown by the reach AGAIN. To compute OUT correctly the renderer
+   *     needs every input pixel that can influence it, which extends one reach
+   *     beyond OUT. The border of the IN render is therefore wrong (it was
+   *     computed without ITS neighbours) and is discarded — only OUT is kept.
+   *
+   * Returns false when it declines, in which case the caller takes the full
+   * pass; it must never return true having written something a full render
+   * would not have produced.
+   */
+  private repaintRegion(node: LayerNode, entry: RenderNodeCache): boolean {
+    const dirty = entry.dirty;
+    if (!dirty || !this.regionPatchable(node.id)) return false;
+    const reach = effectsReach(node.effects);
+    if (reach === null) return false;
+    const out = padRect(dirty, reach, this.w, this.h);
+    const inn = padRect(out, reach, this.w, this.h);
+    if (out.w <= 0 || out.h <= 0 || inn.w <= 0 || inn.h <= 0) return false;
+    // Past this share the region render costs more than the full pass it saves.
+    if (!regionWorthIt(inn, this.w, this.h)) return false;
+    // The product must be a buffer we own and can draw into at document size.
+    if (entry.c.width !== this.w || entry.c.height !== this.h || entry.bytes === 0) return false;
+    const src = this.leafDisplay(node.id);
+    if (!src) return false;
+
+    const sub = this.mk(inn.w, inn.h);
+    sub.ctx.drawImage(src, -inn.x, -inn.y);
+    const litFx = resolveGlobalLight(node.effects, this.globalLight)!;
+    const styled = renderStyled(sub.c, litFx, this.cs, fillAlpha(node.fillOpacity)).canvas;
+
+    const dctx = entry.c.getContext("2d");
+    if (!dctx) return false;
+    dctx.save();
+    dctx.globalAlpha = 1;
+    // REPLACE, never blend: the region carries its own alpha and compositing it
+    // over the stale pixels would double the shadow everywhere they overlap.
+    dctx.globalCompositeOperation = "source-over";
+    dctx.clearRect(out.x, out.y, out.w, out.h);
+    dctx.drawImage(styled, out.x - inn.x, out.y - inn.y, out.w, out.h, out.x, out.y, out.w, out.h);
+    dctx.restore();
+    this.regionPx += out.w * out.h;
+    return true;
+  }
+
   private styledLeaf(node: LayerNode, src: HTMLCanvasElement): HTMLCanvasElement {
     // Effects have no worker and no product cache of their own, so a live
     // gesture re-renders them in full on every frame. Measured at ~1390 ms of

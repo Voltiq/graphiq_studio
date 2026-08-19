@@ -16,6 +16,13 @@ export interface RenderNodeCache {
   bytes: number;
   /** LRU clock value at last use. */
   tick: number;
+  /** Region-scoped recompute: the area of `c` that a bounded change has made
+   *  stale since `key` was current, or null when `c` matches `key` exactly.
+   *  A non-null value means "everything outside this rect is still correct",
+   *  which is what lets a miss repaint the rect instead of the document. */
+  dirty?: { x: number; y: number; w: number; h: number } | null;
+  /** The key `c` would have once `dirty` is repainted. Only set alongside it. */
+  pendingKey?: string;
 }
 
 // ---- Tiled products (very large documents) ----------------------------------

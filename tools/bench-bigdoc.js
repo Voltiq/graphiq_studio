@@ -18,6 +18,13 @@
  * The remaining ~323 ms is NOT the kernel — it is renderStyled's fixed setup
  * (full-canvas getImageData + a 48 MB Float32Array alpha buffer at this size).
  * That, not a faster blur, is where the next win is.
+ *
+ * 2026-08-19, region-scoped effects recompute:
+ *   MEDIAN blocking 289 ms -> 0 ms (no task over the 50 ms long-task threshold).
+ * Stroke 1 still costs ~116 ms: it has no cached product to repair yet, so it
+ * takes the full pass and carries the JIT warm-up. From stroke 2 on, the settled
+ * pass repaints only the dirty rect grown by the effects' reach — measured at
+ * 1.39% of a 12 MP document for a default drop shadow.
  */
 const { chromium } = require("playwright-core");
 const INSTRUMENT = () => {

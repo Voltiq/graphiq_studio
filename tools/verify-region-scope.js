@@ -228,6 +228,77 @@ const skipTour = async (page) => {
   );
 
   console.log(errors.length ? "\nCONSOLE ERRORS:\n" + errors.join("\n") : "\nno console errors");
+  // ---------- 4. every effect's REACH, proved empirically ----------
+  /* The region recompute trusts effectsReach() for how far each effect spreads.
+     An UNDER-estimate is a correctness bug that shows up as a seam at the edge
+     of the repainted rect — invisible in a screenshot, obvious to a byte diff.
+     So turn each effect on alone, paint, and demand byte-identity; and demand
+     that the region recompute actually RAN, because identity also holds when it
+     quietly declines and takes the full pass. */
+  const fxToggle = async (name, on) => {
+    await menu("Layer", "Layer style…");
+    await page.waitForTimeout(900);
+    const b = page.locator(`button[aria-label="${name} ${on ? "off" : "on"}"]`).first();
+    if (await b.count()) { await b.click(); await page.waitForTimeout(700); }
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(1100);
+  };
+  const regionHits = async () => {
+    const st = await page.evaluate(() => window.__gqRenderCache && window.__gqRenderCache.stats());
+    return st ? st.regionHits : -1;
+  };
+
+  /* A FRESH layer for this section. The layer used above still carries the blur
+     and noise smart filters from sections 2-3, and regionPatchable() refuses any
+     node with filters — so measuring on it would report "never ran" for every
+     effect while the product was behaving correctly. (It did, until this line.) */
+  await menu("Layer", "New layer");
+  await page.waitForTimeout(800);
+  await page.mouse.move(box.x + 30, box.y + 30);
+  await page.keyboard.press("g");
+  await page.waitForTimeout(250);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.waitForTimeout(800);
+  await page.mouse.move(box.x + 30, box.y + 30);
+  await page.keyboard.press("b");
+  await page.waitForTimeout(250);
+  await bigBrush();
+  let yy = 0.3;
+  for (const name of ["Outer Glow", "Inner Shadow", "Inner Glow", "Bevel & Emboss", "Stroke"]) {
+    await fxToggle(name, true);
+    /* TWO strokes. Toggling the effect changes the node's key, so the first
+       stroke after it has no cached product to repair and must take the full
+       pass — the region path only has something to patch from the second
+       stroke on. Measuring across the first is what made this check fail while
+       the product was working correctly. */
+    await stroke((yy += 0.06));
+    await page.waitForTimeout(1200);
+    const h0 = await regionHits();
+    await stroke((yy += 0.06));
+    await page.waitForTimeout(1200);
+    const ran = (await regionHits()) > h0;
+    const d = await diffAgainstFullRecompute();
+    check(`${name}: region-scoped render is byte-identical`, d.differing === 0,
+      `${d.differing} of ${d.total} bytes differ (worst Δ ${d.worst})`);
+    check(`…and the region path actually ran for ${name}`, ran, `regionHits moved: ${ran}`);
+    await fxToggle(name, false);
+  }
+
+  // ---------- 5. a POSITION-DEPENDENT effect must decline ----------
+  /* A gradient overlay takes its geometry from the canvas it is handed, so a
+     sub-canvas would silently rescale it. effectsPositionDependent() keeps it on
+     the full pass — proved by the counter NOT moving while the pixels match. */
+  await fxToggle("Gradient Overlay", true);
+  const hg = await regionHits();
+  await stroke(0.72);
+  await page.waitForTimeout(1200);
+  const stayed = (await regionHits()) === hg;
+  check("a gradient overlay does NOT take the region recompute (position-dependent)",
+    stayed, `regionHits unchanged: ${stayed}`);
+  const dg = await diffAgainstFullRecompute();
+  check("…and its full pass is still byte-identical", dg.differing === 0,
+    `${dg.differing} of ${dg.total} bytes differ (worst Δ ${dg.worst})`);
+
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
   await browser.close();
