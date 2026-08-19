@@ -31,6 +31,8 @@ import { applyAdjustments, applyAdjustments16, isDefaultAdjust, type Adjustments
 import { applyExtraAdjustment, extraIsDefault, isExtraSpec, type ExtraAdjustment } from "./adjust-extra";
 import { removeRedEyeInPlace } from "./redeye";
 import { renderShape, type ShapeGeom } from "./shapes";
+import { maskToRects, maskToSegments } from "./mask-trace";
+
 import { boxBlurPass, clampi } from "./blur";
 import {
   blendIfActive,
@@ -223,93 +225,8 @@ interface Bounds {
 const nowMs = (): number =>
   typeof performance !== "undefined" ? performance.now() : Date.now();
 
-/**
- * Decompose a boolean mask into rectangles: per-row runs greedily extended
- * downward while the run directly below is identical (cuts the rect count for
- * solid regions). Non-overlapping; covers exactly the masked pixels. Scans only
- * the region's bounding box.
- */
-function maskToRects(mask: Uint8Array, w: number, b: Bounds): Rect[] {
-  const rects: Rect[] = [];
-  let open: Rect[] = [];
-  for (let y = b.y0; y < b.y1; y++) {
-    const next: Rect[] = [];
-    const used = new Uint8Array(open.length);
-    let x = b.x0;
-    const row = y * w;
-    while (x < b.x1) {
-      if (!mask[row + x]) {
-        x++;
-        continue;
-      }
-      const start = x;
-      while (x < b.x1 && mask[row + x]) x++;
-      const rw = x - start;
-      // Continue an open rect with the same x/width directly above.
-      let matched = -1;
-      for (let k = 0; k < open.length; k++) {
-        if (!used[k] && open[k].x === start && open[k].w === rw) {
-          matched = k;
-          break;
-        }
-      }
-      if (matched >= 0) {
-        open[matched].h++;
-        used[matched] = 1;
-        next.push(open[matched]);
-      } else {
-        next.push({ x: start, y, w: rw, h: 1 });
-      }
-    }
-    for (let k = 0; k < open.length; k++) if (!used[k]) rects.push(open[k]);
-    open = next;
-  }
-  for (const o of open) rects.push(o);
-  return rects;
-}
-
-/**
- * Trace the boundary of a boolean mask into merged collinear ants segments.
- * Scans only the region's bounding box, with the mask indexed inline (no
- * per-pixel closure) — this is the hot path during live tolerance updates.
- */
-function maskToSegments(mask: Uint8Array, w: number, h: number, b: Bounds): Seg[] {
-  const segs: Seg[] = [];
-  // Horizontal edges: grid line y in [y0,y1], columns [x0,x1).
-  for (let y = b.y0; y <= b.y1; y++) {
-    const above = y > 0 ? (y - 1) * w : -1;
-    const cur = y < h ? y * w : -1;
-    let run = -1;
-    for (let x = b.x0; x <= b.x1; x++) {
-      const a = above >= 0 && x < b.x1 && mask[above + x] === 1;
-      const c = cur >= 0 && x < b.x1 && mask[cur + x] === 1;
-      const edge = x < b.x1 && a !== c;
-      if (edge && run < 0) run = x;
-      else if (!edge && run >= 0) {
-        segs.push({ x1: run, y1: y, x2: x, y2: y });
-        run = -1;
-      }
-    }
-  }
-  // Vertical edges: grid line x in [x0,x1], rows [y0,y1).
-  for (let x = b.x0; x <= b.x1; x++) {
-    const left = x > 0 ? x - 1 : -1;
-    const cur = x < w ? x : -1;
-    let run = -1;
-    for (let y = b.y0; y <= b.y1; y++) {
-      const row = y < b.y1 ? y * w : -1;
-      const a = row >= 0 && left >= 0 && mask[row + left] === 1;
-      const c = row >= 0 && cur >= 0 && mask[row + cur] === 1;
-      const edge = y < b.y1 && a !== c;
-      if (edge && run < 0) run = y;
-      else if (!edge && run >= 0) {
-        segs.push({ x1: x, y1: run, x2: x, y2: y });
-        run = -1;
-      }
-    }
-  }
-  return segs;
-}
+// maskToRects / maskToSegments now live in mask-trace.ts — see the note there
+// on why they are run-based rather than per-cell.
 
 export interface HistorySummary {
   /** Every state in CREATION order. `onPath` marks the ones on the chain from
@@ -1528,7 +1445,7 @@ export class PaintEngine {
     sampleAll: boolean;
   } | null = null;
   // Reused magic-wand scratch buffers (mask / flood-fill stack / visited).
-  private wandBuf: { mask: Uint8Array; stack: Int32Array; seen: Uint8Array; n: number } | null = null;
+  private wandBuf: { mask: Uint8Array; stack: Int32Array; n: number } | null = null;
   // Quick-select session: source pixels + edge field snapshotted at stroke start,
   // an accumulating selection mask, per-dab visit stamps, the running brushed-colour
   // mean, and the selection's growing bounds. Grows incrementally per brush dab.
@@ -6009,7 +5926,14 @@ export class PaintEngine {
     const n = w * h;
     let buf = this.wandBuf;
     if (!buf || buf.n !== n) {
-      buf = { mask: new Uint8Array(n), stack: new Int32Array(n), seen: new Uint8Array(n), n };
+      // The scanline flood uses `mask` itself as the visited marker, so the old
+      // `seen` byte-map is gone, and it packs each seed into ONE int (x in the
+      // low 16 bits, y in the high) so the stack stays n ints rather than 2n.
+      // Worst case is a checkerboard: n/2 spans, each seedable from the row
+      // above and below, so n seeds — exactly what this holds. Packing is safe
+      // because both axes are capped well under 65536 (the New Document dialog
+      // allows 8192, and no canvas this app can allocate comes close).
+      buf = { mask: new Uint8Array(n), stack: new Int32Array(n), n };
       this.wandBuf = buf;
     }
     const mask = buf.mask;
@@ -6039,35 +5963,65 @@ export class PaintEngine {
       }
     }
     if (opts.contiguous) {
+      /* SCANLINE flood. The per-pixel version walked one cell at a time with a
+         parallel `seen` map, and paid a modulo AND a divide per pixel just to
+         recover (x, y) from the packed index. This fills a whole horizontal RUN
+         per pop and seeds only the runs above and below it, so the index maths
+         disappears, the visited map is `mask` itself, and the stack carries
+         spans rather than pixels. */
       const stack = buf.stack;
-      const seen = buf.seen;
-      seen.fill(0);
       let sp = 0;
-      const seed = py * w + px;
-      stack[sp++] = seed;
-      seen[seed] = 1;
-      while (sp > 0) {
-        const p = stack[--sp];
-        const i = p * 4; // match test inlined (hot loop, no closure)
-        const a3 = data[i + 3];
-        if (
-          Math.abs(data[i] * a3 - spr) > tScaled ||
-          Math.abs(data[i + 1] * a3 - spg) > tScaled ||
-          Math.abs(data[i + 2] * a3 - spb) > tScaled ||
-          Math.abs(a3 - sa) > t
-        )
-          continue;
-        mask[p] = 1;
-        const cx = p % w;
-        const cy = (p - cx) / w;
-        if (cx < minX) minX = cx;
-        if (cx > maxX) maxX = cx;
-        if (cy < minY) minY = cy;
-        if (cy > maxY) maxY = cy;
-        if (cx > 0 && !seen[p - 1]) (seen[p - 1] = 1), (stack[sp++] = p - 1);
-        if (cx < w - 1 && !seen[p + 1]) (seen[p + 1] = 1), (stack[sp++] = p + 1);
-        if (cy > 0 && !seen[p - w]) (seen[p - w] = 1), (stack[sp++] = p - w);
-        if (cy < h - 1 && !seen[p + w]) (seen[p + w] = 1), (stack[sp++] = p + w);
+      const match = (q: number): boolean => {
+        const i2 = q * 4;
+        const a3 = data[i2 + 3];
+        return (
+          Math.abs(data[i2] * a3 - spr) <= tScaled &&
+          Math.abs(data[i2 + 1] * a3 - spg) <= tScaled &&
+          Math.abs(data[i2 + 2] * a3 - spb) <= tScaled &&
+          Math.abs(a3 - sa) <= t
+        );
+      };
+      if (match(py * w + px)) {
+        stack[sp++] = px | (py << 16);
+        while (sp > 0) {
+          const seed = stack[--sp];
+          const cx = seed & 0xffff;
+          const cy = seed >>> 16;
+          const row = cy * w;
+          if (mask[row + cx]) continue; // a later span already covered this seed
+          let xl = cx;
+          while (xl > 0 && !mask[row + xl - 1] && match(row + xl - 1)) xl--;
+          let xr = cx;
+          while (xr < w - 1 && !mask[row + xr + 1] && match(row + xr + 1)) xr++;
+          for (let x = xl; x <= xr; x++) mask[row + x] = 1;
+          if (xl < minX) minX = xl;
+          if (xr > maxX) maxX = xr;
+          if (cy < minY) minY = cy;
+          if (cy > maxY) maxY = cy;
+          // One seed per contiguous sub-run in the neighbouring rows.
+          if (cy > 0) {
+            const up = row - w;
+            let inRun = false;
+            for (let x = xl; x <= xr; x++) {
+              const ok = !mask[up + x] && match(up + x);
+              if (ok && !inRun) {
+                stack[sp++] = x | ((cy - 1) << 16);
+                inRun = true;
+              } else if (!ok) inRun = false;
+            }
+          }
+          if (cy < h - 1) {
+            const dn = row + w;
+            let inRun = false;
+            for (let x = xl; x <= xr; x++) {
+              const ok = !mask[dn + x] && match(dn + x);
+              if (ok && !inRun) {
+                stack[sp++] = x | ((cy + 1) << 16);
+                inRun = true;
+              } else if (!ok) inRun = false;
+            }
+          }
+        }
       }
     } else {
       let p = 0;

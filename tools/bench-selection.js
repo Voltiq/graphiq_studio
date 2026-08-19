@@ -13,6 +13,19 @@
  *   B. 12 add/subtract marquees        0 ms
  *   C0. 10 plain wand clicks         564 ms  (≈56 ms each: flood + trace)
  *   C.  10 wand add-clicks           637 ms  (≈64 ms each: + ~7 ms combine)
+ *
+ * ABSOLUTE NUMBERS HERE DO NOT TRAVEL. They are wall-clock on one machine with
+ * no calibration reference (unlike tools/bench-track.js), and the same build
+ * measured 167 ms and 835 ms for C0 within an hour of each other as this box
+ * warmed up. Compare A/B in one sitting, never against a number from a previous
+ * session.
+ *
+ * 2026-08-19, run-based boundary trace + scanline flood, measured back-to-back
+ * against the previous build on a loaded machine:
+ *   C0. 10 plain wand clicks   1032-1067 ms -> 832-840 ms  (worst 125 -> 109)
+ *   C.  10 wand add-clicks     1142-1194 ms -> 555-614 ms  (worst 144 -> 88)
+ * The add-click case gains most because combineSelection traces the union box
+ * on every call, and that trace is now O(runs) rather than O(area).
  */
 const { chromium } = require("playwright-core");
 
