@@ -94,6 +94,39 @@
   --dock-w: 320px;
   --mobilebar-h: 56px; /* bottom tool/panel bar (mobile only) */
 
+  /* ---- Safe area ----------------------------------------------------------
+     The display's unusable edges: notch, home indicator, rounded corners.
+     Named once here so nothing hand-rolls `env()` again — before this they
+     were written out at five separate call sites, all of them `-bottom`, so
+     the top and side insets simply did not exist anywhere in the app.
+
+     The `0px` fallback is load-bearing rather than tidiness: an `env()` naming
+     an inset the browser does not know is invalid at computed-value time
+     WITHOUT one, and takes its whole declaration down with it. These read as
+     0px on a desktop browser, which is why the derived values below can be
+     used unconditionally.
+
+     They are only ever non-zero because layout.tsx sets `viewport-fit: cover`;
+     without that the browser insets the layout viewport itself and reports 0. */
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+
+  /* ---- Where the app's own chrome ends ------------------------------------
+     Anything that fills the space between the bars positions against these
+     rather than re-adding the parts. Desktop: options bar under the top bar,
+     status bar at the foot. The mobile block overrides the bottom, where the
+     status bar is replaced by the MobileBar.
+
+     NOTE: --safe-t is deliberately NOT folded into --chrome-top yet. The top
+     bar does not reserve it, so its own box still ends at --topbar-h; adding
+     the inset here would push everything below it down and leave a strip of
+     bare canvas under the options bar. Insetting the top bar is a separate
+     step, and it folds --safe-t in here, in this one place. */
+  --chrome-top: calc(var(--topbar-h) + var(--optionsbar-h));
+  --chrome-bottom: calc(var(--statusbar-h) + var(--safe-b));
+
   /* ------------------------- Accent: Blue (default) -----------------------
      Each accent provides a light-theme and a dark-theme pair (hex + rgb);
      the theme blocks below pick the right one via --accent-l/--accent-d. */
@@ -526,7 +559,11 @@ input[type="range"]:focus-visible {
    behind a scrim. Open state is `html[data-drawer="tools" | "panels"]`.
    ========================================================================== */
 html[data-mobile="true"] {
-  /* The desktop status bar is replaced by the bottom mobile bar. */
+  /* The desktop status bar is replaced by the bottom mobile bar, so the foot
+     of the chrome is a different height here — one override, and everything
+     anchored to --chrome-bottom follows. */
+  --chrome-bottom: calc(var(--mobilebar-h) + var(--safe-b));
+
   [data-tour="status"] {
     display: none;
   }
@@ -540,9 +577,9 @@ html[data-mobile="true"] {
   /* ---- Toolbar → left drawer ---- */
   [data-tour="toolbar"] {
     position: fixed;
-    top: calc(var(--topbar-h) + var(--optionsbar-h));
+    top: var(--chrome-top);
     left: 0;
-    bottom: calc(var(--mobilebar-h) + env(safe-area-inset-bottom, 0px));
+    bottom: var(--chrome-bottom);
     width: 76px;
     transform: translateX(-100%);
     transition: transform var(--t-med) var(--ease-pop);
@@ -554,9 +591,9 @@ html[data-mobile="true"] {
   /* ---- Panels dock → right drawer ---- */
   [data-tour="dock"] {
     position: fixed;
-    top: calc(var(--topbar-h) + var(--optionsbar-h));
+    top: var(--chrome-top);
     right: 0;
-    bottom: calc(var(--mobilebar-h) + env(safe-area-inset-bottom, 0px));
+    bottom: var(--chrome-bottom);
     width: min(var(--dock-w), 86vw);
     transform: translateX(100%);
     transition: transform var(--t-med) var(--ease-pop);
@@ -660,8 +697,8 @@ html[data-mobile="true"][data-drawer="panels"] [data-tour="dock"] {
    closed. Sit above the canvas, below the drawers. */
 .gq-m-edge {
   position: fixed;
-  top: calc(var(--topbar-h) + var(--optionsbar-h));
-  bottom: calc(var(--mobilebar-h) + env(safe-area-inset-bottom, 0px));
+  top: var(--chrome-top);
+  bottom: var(--chrome-bottom);
   width: 20px;
   z-index: 115;
   touch-action: none;

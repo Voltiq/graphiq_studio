@@ -1,13 +1,16 @@
 /* Fixed bottom bar (mobile only). Sits above the drawers so its toggles stay
-   reachable while a drawer is open; honours the iOS home-indicator inset. */
+   reachable while a drawer is open. This bar IS the bottom chrome on mobile,
+   so its box is --chrome-bottom rather than a second copy of the same sum —
+   the home-indicator inset is padding, so the row of buttons stays clear of
+   it while the bar's background still reaches the bottom of the display. */
 .bar {
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
   z-index: 130;
-  height: calc(var(--mobilebar-h) + env(safe-area-inset-bottom, 0px));
-  padding: 0 var(--sp-2) env(safe-area-inset-bottom, 0px);
+  height: var(--chrome-bottom);
+  padding: 0 var(--sp-2) var(--safe-b);
   display: flex;
   align-items: center;
   gap: var(--sp-2);

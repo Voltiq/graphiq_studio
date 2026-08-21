@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -19,6 +19,7 @@
     "test:colorspace": "node tools/verify-colorspace-roundtrip.js",
     "test:panels": "node tools/verify-panel-groups.js",
     "test:print": "node tools/verify-print.js",
+    "test:safearea": "node tools/verify-safe-area.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && vitest run"
