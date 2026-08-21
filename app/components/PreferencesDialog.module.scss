@@ -1,6 +1,7 @@
 .overlay {
   position: fixed;
-  inset: 0;
+  /* Ends above a keyboard, so the dialog centres in what is visible. */
+  inset: 0 0 var(--kb-inset, 0px);
   z-index: 200;
   display: grid;
   place-items: center;
@@ -20,7 +21,7 @@
 .dialog {
   width: 400px;
   max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 64px);
+  max-height: calc(100dvh - 64px - var(--kb-inset, 0px));
   display: flex;
   flex-direction: column;
   background: var(--surface-3);
@@ -86,7 +87,7 @@
 /* --------------------- Preferences: sidebar-tabbed layout ------------------ */
 .prefsDialog {
   width: 720px;
-  height: min(580px, calc(100vh - 64px));
+  height: min(580px, calc(100dvh - 64px - var(--kb-inset, 0px)));
 }
 
 .prefsLayout {
@@ -536,7 +537,8 @@
    Preferences dialog's own overlay. */
 .confirmOverlay {
   position: fixed;
-  inset: 0;
+  /* Ends above a keyboard, so the dialog centres in what is visible. */
+  inset: 0 0 var(--kb-inset, 0px);
   z-index: 260;
   display: grid;
   place-items: center;

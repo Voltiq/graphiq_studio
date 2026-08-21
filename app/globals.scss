@@ -126,6 +126,15 @@
      to --topbar-h, which is only the part below the inset. */
   --topbar-total: calc(var(--topbar-h) + var(--safe-t));
   --chrome-top: calc(var(--topbar-total) + var(--optionsbar-h));
+
+  /* How much of the layout viewport is hidden at the FOOT by something the
+     page cannot see through CSS — a virtual keyboard, or a browser toolbar
+     drawn over it. Set from `visualViewport` by useVisualViewport(); the 0px
+     here is what applies during SSR and before that mounts, which is also the
+     right answer on a desktop browser. `--vv-h` is the visible height itself,
+     for anything that would rather size to it than subtract from it. */
+  --kb-inset: 0px;
+  --vv-h: 100dvh;
   --chrome-bottom: calc(var(--statusbar-h) + var(--safe-b));
 
   /* ------------------------- Accent: Blue (default) -----------------------

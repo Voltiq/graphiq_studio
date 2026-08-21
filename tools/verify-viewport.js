@@ -130,7 +130,141 @@ const DESKTOP = { width: 1500, height: 950 };
     await context.close();
   }
 
-  // ---------- 3. the source, which is the half the geometry cannot see ----------
+  // ---------- 3. when the visible area shrinks under the layout viewport ----------
+  /* A virtual keyboard cannot be emulated. Page scale can, and it produces the
+     SAME condition and the same reading: visualViewport.height drops below
+     innerHeight while the layout viewport is unchanged, which is exactly what a
+     keyboard does and exactly what the overlays now subtract. Driven with DOM
+     clicks rather than the mouse, so nothing depends on how input coordinates
+     map while the page is scaled. */
+  {
+    const { context, page } = await open(DESKTOP);
+    const cdp = await context.newCDPSession(page);
+
+    const band = () =>
+      page.evaluate(() => {
+        const vv = window.visualViewport;
+        const cs = getComputedStyle(document.documentElement);
+        const dialog = document.querySelector('[role="dialog"]');
+        const listbox = document.querySelector('[role="listbox"]');
+        const box = (el) => {
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { top: Math.round(r.top), bottom: Math.round(r.bottom), height: Math.round(r.height) };
+        };
+        /* Is the dialog's last button actually pressable where it now sits? */
+        const btns = dialog ? [...dialog.querySelectorAll("button")] : [];
+        const primary = btns.length ? btns[btns.length - 1] : null;
+        let reachable = null;
+        if (primary) {
+          const r = primary.getBoundingClientRect();
+          const hit = document.elementFromPoint(
+            Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+          reachable = !!hit && (hit === primary || primary.contains(hit));
+        }
+        return {
+          anchor: window.__anchor ?? null,
+          inner: window.innerHeight,
+          vvH: Math.round(vv.height),
+          vvTop: Math.round(vv.offsetTop),
+          bandBottom: Math.round(vv.offsetTop + vv.height),
+          kbInset: cs.getPropertyValue("--kb-inset").trim(),
+          vvVar: cs.getPropertyValue("--vv-h").trim(),
+          dialog: box(dialog),
+          listbox: box(listbox),
+          primaryReachable: reachable,
+        };
+      });
+
+    const rest = await band();
+    check("at rest nothing is hidden below the fold", rest.kbInset === "0px",
+      `--kb-inset ${rest.kbInset}, --vv-h ${rest.vvVar}`);
+
+    // Open a real dialog: the command palette, then Preferences from it.
+    await page.click('button[aria-label="Open the command palette"]');
+    await page.waitForTimeout(400);
+    await page.keyboard.type("preferences");
+    await page.waitForTimeout(500);
+    await page.keyboard.press("Enter");
+    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
+    await page.waitForTimeout(500);
+    const opened = await band();
+    check("a dialog opens inside the viewport", !!opened.dialog && opened.dialog.bottom <= opened.bandBottom,
+      opened.dialog ? `dialog ends at ${opened.dialog.bottom}, visible to ${opened.bandBottom}` : "no dialog");
+
+    // Now shrink what is visible, as a keyboard would.
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 2 });
+    await page.waitForTimeout(500);
+    const shrunk = await band();
+    const expected = shrunk.inner - shrunk.vvH - shrunk.vvTop;
+    check("the hook reports what the keyboard would be covering",
+      shrunk.kbInset === `${expected}px` && expected > 0,
+      `--kb-inset ${shrunk.kbInset}, expected ${expected}px (innerHeight ${shrunk.inner} - visible ${shrunk.vvH})`);
+    check("…and the dialog shrinks back inside what is visible",
+      !!shrunk.dialog && shrunk.dialog.bottom <= shrunk.bandBottom && shrunk.dialog.top >= shrunk.vvTop,
+      shrunk.dialog
+        ? `dialog ${shrunk.dialog.top}…${shrunk.dialog.bottom} (was ${opened.dialog.height}px tall, now ` +
+          `${shrunk.dialog.height}px), visible band ends at ${shrunk.bandBottom}`
+        : "no dialog");
+    check("…and its last button can still be pressed", shrunk.primaryReachable === true,
+      `elementFromPoint at the button's centre ${shrunk.primaryReachable ? "returns it" : "returns something else"}`);
+
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
+    await page.waitForTimeout(500);
+    const back = await band();
+    check("restoring the viewport puts it all back",
+      back.kbInset === "0px" && back.dialog.height === opened.dialog.height,
+      `--kb-inset ${back.kbInset}, dialog ${back.dialog.height}px (was ${opened.dialog.height}px)`);
+
+    /* The item's own case, in the dialog that actually matches it: Canvas Size
+       focuses a text field on open — the thing that raises a keyboard — and
+       carries a dropdown. Opened AFTER the shrink, since what is being checked
+       is where a menu is placed while the area is already short. */
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    await page.click('button[aria-label="Open the command palette"]');
+    await page.waitForTimeout(400);
+    await page.keyboard.type("canvas size");
+    await page.waitForTimeout(500);
+    await page.keyboard.press("Enter");
+    await page.waitForSelector('[role="dialog"]', { timeout: 5000 });
+    await page.waitForTimeout(500);
+    /* Squeezed harder than the dialog checks above: the point here is a menu
+       that CANNOT fit below its trigger inside the visible band, so placement
+       has to react. At a gentler scale it fits either way and the check passes
+       whatever the code does — which a mutation proved, staying green with the
+       menu placed against the layout viewport. */
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 3 });
+    await page.waitForTimeout(500);
+    const opens = await page.evaluate(() => {
+      const t = [...document.querySelectorAll('[role="dialog"] button[aria-haspopup="listbox"]')]
+        .find((b) => b.getBoundingClientRect().width > 0);
+      if (!t) return false;
+      const r = t.getBoundingClientRect();
+      window.__anchor = { top: Math.round(r.top), bottom: Math.round(r.bottom) };
+      t.click();
+      return true;
+    });
+    await page.waitForTimeout(450);
+    const withMenu = await band();
+    check("a dropdown opened while it is short stays inside it",
+      opens && !!withMenu.listbox && withMenu.listbox.bottom <= withMenu.bandBottom &&
+        withMenu.listbox.top >= withMenu.vvTop,
+      withMenu.listbox
+        ? `trigger ends at ${withMenu.anchor?.bottom}, a ${withMenu.listbox.height}px menu below it would ` +
+          `reach ${(withMenu.anchor?.bottom ?? 0) + 4 + withMenu.listbox.height}; it lands at ` +
+          `${withMenu.listbox.top}…${withMenu.listbox.bottom}, band ${withMenu.vvTop}…${withMenu.bandBottom}`
+        : opens ? "no menu opened" : "no dropdown inside the dialog");
+    await cdp.send("Emulation.setPageScaleFactor", { pageScaleFactor: 1 });
+    await page.waitForTimeout(300);
+    console.log(
+      "  NOTE  a virtual keyboard cannot be emulated; page scale stands in for it, " +
+        "producing the same visualViewport reading the overlays react to.",
+    );
+    await context.close();
+  }
+
+  // ---------- 4. the source, which is the half the geometry cannot see ----------
   const shellCss = fs.readFileSync(
     path.join(process.cwd(), "app", "components", "Editor.module.scss"), "utf8");
   const rule = shellCss.slice(shellCss.indexOf(".app {"), shellCss.indexOf("}", shellCss.indexOf(".app {")));

@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
 import styles from "./Controls.module.scss";
 import { uiZoom } from "../lib/ui-scale";
-import { clampX } from "../lib/safeArea";
+import { clampX, clampY, visibleBand } from "../lib/safeArea";
 
 /**
  * Custom dropdown — a styled trigger + a portalled, frosted-glass popup that
@@ -54,8 +54,15 @@ export function Select({
       const r = btn.getBoundingClientRect();
       const ph = (popRef.current?.offsetHeight ?? 0) * z;
       const margin = 8;
+      /* Flip above the trigger against the VISIBLE band, not the layout
+         viewport: with a keyboard open the bottom third of the page is covered
+         and innerHeight says nothing about it, so a menu that "fits" would open
+         straight behind the keyboard. The clamp then catches a menu too tall to
+         fit either way. */
+      const band = visibleBand();
       let top = r.bottom + 4;
-      if (top + ph > window.innerHeight - margin) top = Math.max(margin, r.top - 4 - ph);
+      if (top + ph > band.bottom - margin) top = Math.max(band.top + margin, r.top - 4 - ph);
+      top = clampY(top, ph, margin);
       /* The menu's own width, the same way the height is read above. The
          trigger's width is only its MINIMUM (`minWidth` below), so clamping by
          the trigger let a menu with longer options overhang the edge it was

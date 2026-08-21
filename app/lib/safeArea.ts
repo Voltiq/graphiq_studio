@@ -49,3 +49,36 @@ export function clampX(left: number, width: number, margin = 8): number {
   const max = window.innerWidth - safeR - width - margin;
   return Math.min(Math.max(min, left), Math.max(min, max));
 }
+
+/**
+ * The band of the layout viewport that is actually VISIBLE, in client px —
+ * the coordinate space `getBoundingClientRect()` reports in.
+ *
+ * `window.innerHeight` is the layout viewport, which is not what the user can
+ * see the moment anything overlays it: a virtual keyboard takes the bottom
+ * third and the page is not told through `innerHeight` at all. `visualViewport`
+ * is, and it also covers pinch-zoom, where the visible band is both smaller and
+ * offset. Safe-area insets are folded in for the same reason `clampX` does it.
+ */
+export function visibleBand(): { top: number; bottom: number } {
+  if (typeof window === "undefined") return { top: 0, bottom: 0 };
+  const vv = window.visualViewport;
+  const { top: safeT, bottom: safeB } = safeInsets();
+  const offset = vv?.offsetTop ?? 0;
+  return {
+    top: offset + safeT,
+    bottom: offset + (vv?.height ?? window.innerHeight) - safeB,
+  };
+}
+
+/**
+ * Clamp a popup's TOP edge so the popup sits inside the visible band, keeping
+ * `margin` clear of both ends. Pins to the top when it cannot fit, which is
+ * what the hand-rolled versions did when their bounds crossed.
+ */
+export function clampY(top: number, height: number, margin = 8): number {
+  const band = visibleBand();
+  const min = band.top + margin;
+  const max = band.bottom - height - margin;
+  return Math.min(Math.max(min, top), Math.max(min, max));
+}

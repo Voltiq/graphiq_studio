@@ -1,6 +1,7 @@
 .overlay {
   position: fixed;
-  inset: 0;
+  /* Ends above a keyboard, so the dialog centres in what is visible. */
+  inset: 0 0 var(--kb-inset, 0px);
   z-index: 200;
   display: grid;
   place-items: center;

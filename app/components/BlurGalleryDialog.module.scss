@@ -2,7 +2,8 @@
    draggable geometry guides), organised controls on the right. */
 .overlay {
   position: fixed;
-  inset: 0;
+  /* Ends above a keyboard, so the dialog centres in what is visible. */
+  inset: 0 0 var(--kb-inset, 0px);
   z-index: 200;
   display: grid;
   place-items: center;
@@ -21,7 +22,7 @@
 
 .dialog {
   width: min(860px, calc(100vw - 48px));
-  max-height: calc(100vh - 64px);
+  max-height: calc(100dvh - 64px - var(--kb-inset, 0px));
   display: flex;
   flex-direction: column;
   background: var(--surface-3);

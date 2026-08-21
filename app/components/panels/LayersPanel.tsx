@@ -65,7 +65,7 @@ import {
 import { resolveIsolation } from "../../lib/isolate";
 import { hasEnabledFx } from "../../lib/effects";
 import { hasEnabledFilters } from "../../lib/filters";
-import { clampX } from "../../lib/safeArea";
+import { clampX, clampY } from "../../lib/safeArea";
 
 type ClipRole = "none" | "base" | "member";
 interface Row {
@@ -161,7 +161,7 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
     const z = uiZoom();
     const { width, height } = el.getBoundingClientRect();
     const left = clampX(menu.x, width, margin);
-    const top = Math.max(margin, Math.min(menu.y, window.innerHeight - height - margin));
+    const top = clampY(menu.y, height, margin);
     el.style.left = `${left / z}px`;
     el.style.top = `${top / z}px`;
   }, [menu]);

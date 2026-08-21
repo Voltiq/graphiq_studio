@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import styles from "./Tooltip.module.scss";
 import { uiZoom } from "../lib/ui-scale";
-import { clampX } from "../lib/safeArea";
+import { clampX, visibleBand } from "../lib/safeArea";
 
 const TIP_ATTR = "data-tip";
 
@@ -137,8 +137,9 @@ export default function TooltipHost() {
     const th = el.offsetHeight * z;
     const gap = 8;
     const margin = 6;
+    const band = visibleBand();
     const place: "top" | "bottom" =
-      anchor.bottom + gap + th + margin > window.innerHeight && anchor.top - gap - th - margin > 0
+      anchor.bottom + gap + th + margin > band.bottom && anchor.top - gap - th - margin > band.top
         ? "top"
         : "bottom";
     const left = clampX(anchor.cx - tw / 2, tw, margin) / z;
