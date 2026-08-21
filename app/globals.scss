@@ -454,14 +454,30 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  /* Scroll containers keep their overscroll to themselves: reaching the end of
+     a panel list must not hand the gesture to whatever is behind it. Inert on
+     anything that does not scroll, which is why it can go here rather than
+     being chased around every `overflow: auto` in the app. */
+  overscroll-behavior: contain;
 }
 
 html,
 body {
   height: 100%;
+  /* `none`, not `contain`, at the root: this is the one that switches off the
+     browser's own overscroll affordances. On Android a pull-down at the top of
+     a scroller reloads the page — and takes an unsaved document with it. */
+  overscroll-behavior: none;
 }
 
 body {
+  /* The page must never zoom: this app owns the pinch, and a zoomed PAGE fights
+     the canvas's own zoom rather than adding to it. `pan-x pan-y` keeps panels
+     scrollable while disallowing pinch-zoom AND double-tap zoom; `manipulation`
+     would not — it only drops the double tap and still permits a pinch, which a
+     synthesized pinch over the top bar proved by zooming the page to 2.5x.
+     The canvas sets `touch-action: none` and drives zoom itself. */
+  touch-action: pan-x pan-y;
   font-family: var(--font-sans);
   background: var(--bg-grad);
   color: var(--text);

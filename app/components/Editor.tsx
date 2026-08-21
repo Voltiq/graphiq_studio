@@ -205,6 +205,7 @@ import SelectionChannelDialog from "./SelectionChannelDialog";
 import LiquifyDialog from "./LiquifyDialog";
 import MobileBar, { type MobileDrawer } from "./MobileBar";
 import { useVisualViewport } from "../lib/useVisualViewport";
+import { useGestureGuard } from "../lib/useGestureGuard";
 import { useIsMobile } from "../lib/useMediaQuery";
 import TrimDialog, { type TrimMode, type TrimSides } from "./TrimDialog";
 import SelectModifyDialog from "./SelectModifyDialog";
@@ -469,6 +470,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const mobile = useIsMobile();
   // Publishes --kb-inset / --vv-h for every overlay; see useVisualViewport.
   useVisualViewport();
+  // Keeps the browser's own pinch/pull-to-refresh off the editor's gestures.
+  useGestureGuard();
   const [mobileDrawer, setMobileDrawer] = useState<MobileDrawer>(null);
   // Mirror the mobile state onto <html> so the global mobile CSS (keyed off
   // data-mobile / data-drawer, since module classes are hashed) can drive the

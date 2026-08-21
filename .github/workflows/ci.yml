@@ -152,6 +152,10 @@ jobs:
         run: npm run test:breakpoint -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
+      - name: The browser's own gestures stay out of the way
+        run: npm run test:gestures -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
 
       - name: Dev server log
         if: failure()
