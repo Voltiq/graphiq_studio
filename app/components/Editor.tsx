@@ -15,7 +15,16 @@ import PreferencesDialog, { type PrefsTab } from "./PreferencesDialog";
 import HelpDialog, { type HelpStart } from "./HelpDialog";
 import AboutDialog from "./AboutDialog";
 import TooltipHost from "./Tooltip";
-import { WORKING_SPACE_LABELS, canvasSpaceOf, type ProofTarget, type WorkingSpace } from "../lib/colorspace";
+import {
+  PROOF_TARGET_LABELS,
+  WORKING_SPACE_LABELS,
+  canvasSpaceOf,
+  proofIsIdentity,
+  proofTransformInPlace,
+  type ProofTarget,
+  type WorkingSpace,
+} from "../lib/colorspace";
+import { layoutPage, type PdfLayoutOptions } from "../lib/pdf";
 import { NO_REFINE, decontaminate, type RefineEdge } from "../lib/refine-edge";
 import { boxOf, pivotOf, sanitizeBox, transformRects } from "../lib/selection-transform";
 import {
@@ -309,6 +318,7 @@ import NewGuideDialog from "./NewGuideDialog";
 import ExportLutDialog from "./ExportLutDialog";
 import ExportTiffDialog from "./ExportTiffDialog";
 import ExportPdfDialog from "./ExportPdfDialog";
+import PrintDialog from "./PrintDialog";
 import HdrMergeDialog from "./HdrMergeDialog";
 import BatchDialog from "./BatchDialog";
 import { buildScriptingApi, type ScriptingDeps } from "../lib/scripting";
@@ -721,6 +731,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const colorSpaceRef = useRef(colorSpace);
   colorSpaceRef.current = colorSpace;
   // Soft proofing (view-only): Ctrl+Alt+Y simulate, Ctrl+Alt+Shift+Y gamut warn.
+  const [printOpen, setPrintOpen] = useState(false);
   const [proofColors, setProofColors] = useState(false);
   const [gamutWarn, setGamutWarn] = useState(false);
   // Dev Perf HUD overlay (View ▸ Performance HUD / window.__gqPerf).
@@ -4412,10 +4423,41 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // ---- Print (flatten → browser print dialog) ----
   // Render the active document's composite, then print it from a hidden iframe
   // (avoids popup blockers and prints only the artwork, not the whole app UI).
-  const printCanvas = () => {
+  const printCanvas = () => setPrintOpen(true);
+
+  /**
+   * Render the composite onto a sheet laid out by `layoutPage` and hand it to
+   * the browser's print dialog.
+   *
+   * The geometry is the PDF export's model, not a second one: `@page size` is
+   * set to the computed sheet so the browser's dialog defaults to the paper the
+   * user just chose, and the image is placed absolutely at the computed rect
+   * with `margin: 0`, so nothing is scaled twice. `layoutPage` works in PDF
+   * coordinates (origin bottom-left), hence the flip on the way to CSS.
+   */
+  const doPrint = (opts: PdfLayoutOptions, applyProof: boolean) => {
+    setPrintOpen(false);
     const composite = paintRef.current?.exportComposite(activeDocRef.current.layers);
     if (!composite) return;
-    const url = composite.toDataURL("image/png");
+    const layout = layoutPage(composite.width, composite.height, opts);
+    let source: HTMLCanvasElement = composite;
+    if (applyProof) {
+      /* The soft proof is a VIEW transform, so it never reaches a printer on its
+         own — the pixels have to carry it. Done here rather than in the engine
+         because only this path wants it baked in. */
+      const c = document.createElement("canvas");
+      c.width = composite.width;
+      c.height = composite.height;
+      const g = c.getContext("2d", { willReadFrequently: true });
+      if (g) {
+        g.drawImage(composite, 0, 0);
+        const img = g.getImageData(0, 0, c.width, c.height);
+        proofTransformInPlace(img.data, canvasSpaceOf(colorSpaceRef.current), proofTarget, true, gamutWarn);
+        g.putImageData(img, 0, 0);
+        source = c;
+      }
+    }
+    const url = source.toDataURL("image/png");
     const iframe = document.createElement("iframe");
     iframe.setAttribute("aria-hidden", "true");
     iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
@@ -4427,17 +4469,18 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       return;
     }
     cd.open();
-    // Physical size from the document's PPI (true-size print); still fits the
-    // page when larger than the printable area.
-    const d0 = activeDocRef.current;
-    const printW = (d0.width / (d0.dpi ?? 300)).toFixed(4);
+    const pt = (v: number) => `${v.toFixed(3)}pt`;
     cd.write(
       '<!doctype html><html><head><meta charset="utf-8"><style>' +
-        "@page{margin:10mm;}" +
+        // The sheet the user chose, and no page margin: the placement below is
+        // already margin-aware, so letting the browser add its own would inset
+        // an image that has been positioned to the millimetre.
+        `@page{size:${pt(layout.pageW)} ${pt(layout.pageH)};margin:0;}` +
         "*{margin:0;padding:0;box-sizing:border-box;}" +
-        ".wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;}" +
-        `.wrap img{width:${printW}in;max-width:100%;max-height:100%;object-fit:contain;}` +
-        '</style></head><body><div class="wrap"><img alt=""></div></body></html>',
+        "html,body{width:100%;height:100%;}" +
+        `img{position:absolute;left:${pt(layout.x)};top:${pt(layout.pageH - layout.y - layout.h)};` +
+        `width:${pt(layout.w)};height:${pt(layout.h)};}` +
+        '</style></head><body><img alt=""></body></html>',
     );
     cd.close();
     cd.title = activeDocRef.current.name;
@@ -7695,6 +7738,24 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
       {recentsOpen && (
         <RecentsDialog onOpenText={loadProjectText} onClose={() => setRecentsOpen(false)} />
+      )}
+
+      {printOpen && (
+        <PrintDialog
+          docDpi={active.dpi ?? 300}
+          width={active.width}
+          height={active.height}
+          /* Offered only when a proof is actually configured AND would change
+             something — proofing sRGB against sRGB is the identity, and a toggle
+             that does nothing is worse than no toggle. */
+          proofLabel={
+            (proofColors || gamutWarn) && !proofIsIdentity(canvasSpaceOf(colorSpace), proofTarget)
+              ? PROOF_TARGET_LABELS[proofTarget]
+              : null
+          }
+          onPrint={doPrint}
+          onClose={() => setPrintOpen(false)}
+        />
       )}
 
       {colorDialogOpen && (
