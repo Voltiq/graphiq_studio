@@ -1,6 +1,19 @@
 .app {
-  height: 100vh;
-  width: 100vw;
+  /* The SMALL viewport, not `100vh`. On a phone `vh` is the LARGE viewport —
+     the height the page would have if the URL bar were retracted — so with the
+     bar showing, the shell was taller than the area you can actually see, so
+     the canvas it sizes ran on below the fold. (The bottom bar is `position:
+     fixed` and is anchored by the browser to the layout viewport, not by this
+     rule — keeping IT in the visible area needs visualViewport, separately.)
+     The shell never scrolls, so there
+     is nothing to retract the bar in the first place: the small viewport is the
+     one it is always laid out in. `dvh` would track the live value instead, at
+     the cost of relaying the whole editor whenever it changed.
+
+     `100%` rather than `100vw` for the width, because `100vw` is measured
+     including a classic scrollbar and would overflow by its width. */
+  height: 100svh;
+  width: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;

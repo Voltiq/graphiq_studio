@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -20,6 +20,7 @@
     "test:panels": "node tools/verify-panel-groups.js",
     "test:print": "node tools/verify-print.js",
     "test:safearea": "node tools/verify-safe-area.js",
+    "test:viewport": "node tools/verify-viewport.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && vitest run"
