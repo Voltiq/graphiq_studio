@@ -90,6 +90,9 @@ const MOBILE = { width: 390, height: 844 };
         dock: box('[data-tour="dock"]'),
         edge: box(".gq-m-edge"),
         bar: box('[data-tour="mobilebar"]'),
+        topbar: box('[data-tour="topbar"]'),
+        hamburger: box('button[aria-label="Menu"]'),
+        sheet: box('[data-menubar][data-sheet="true"]'),
         barPadBottom: bar ? Math.round(parseFloat(getComputedStyle(bar).paddingBottom)) : null,
         /* The lowest edge of anything the user has to be able to press. */
         barContentBottom: bar
@@ -162,13 +165,106 @@ const MOBILE = { width: 390, height: 844 };
     flat.dock.bottom - notched.dock.bottom === NOTCH.bottom,
     `toolbar ${flat.toolbar.bottom} -> ${notched.toolbar.bottom}, dock ${flat.dock.bottom} -> ${notched.dock.bottom}`);
 
-  /* A SEAM, deliberately: --chrome-top does not include --safe-t yet, because
-     the top bar does not reserve it either. Folding it in before that happens
-     would leave a strip of bare canvas under the options bar. When the top bar
-     is inset, this check is the one that should fail and be updated. */
-  check("the top offset is deliberately NOT inset yet (the top bar isn't either)",
-    notched.chromeTop === flat.chromeTop && notched.toolbar.top === flat.toolbar.top,
-    `--chrome-top still ${notched.chromeTop}px — folding --safe-t in belongs with insetting the top bar`);
+  /* The top bar now reserves the inset, so --chrome-top includes it. (This
+     check previously asserted the opposite, on purpose: the seam was left open
+     until the bar's own box grew, so that closing it had to be deliberate.) */
+  check("the top bar's box grows by exactly the notch",
+    notched.topbar.height - flat.topbar.height === NOTCH.top && notched.topbar.top === 0,
+    `${flat.topbar.height} -> ${notched.topbar.height}px, still flush at y=${notched.topbar.top}`);
+  check("the hamburger sits below the notch, not under it",
+    notched.hamburger.top >= NOTCH.top,
+    `button top at ${notched.hamburger.top}, inset is ${NOTCH.top}`);
+  check("the top offset follows the bar",
+    notched.chromeTop - flat.chromeTop === NOTCH.top,
+    `--chrome-top ${flat.chromeTop} -> ${notched.chromeTop}`);
+  /* The reason --safe-t was NOT folded in before the bar reserved it: the two
+     have to move together or a strip of bare canvas opens under the chrome. */
+  check("…leaving no gap between the chrome and the drawers",
+    notched.toolbar.top === notched.topbar.bottom + 48 && notched.dock.top === notched.toolbar.top,
+    `bar ends at ${notched.topbar.bottom}, +48px options bar, drawers start at ${notched.toolbar.top}`);
+
+  // ---------- 3b. the mobile menu sheet, still under the notch and the bar ----------
+  /* The sheet is the collapsed menubar behind the hamburger. It ran from the
+     top bar to `bottom: 0`, so its scroll container continued underneath the
+     MobileBar and the last rows of a long menu could not be reached at all —
+     scrolling to the end simply parked them behind the bar. */
+  const sheetSel = '[data-menubar][data-sheet="true"]';
+  await page.click('button[aria-label="Menu"]');
+  await page.waitForSelector(sheetSel, { timeout: 5000 });
+  await page.waitForTimeout(300);
+
+  /* Use the LONGEST menu, since that is the one that overflows. Which one that
+     is should not be hard-coded — it changes as menus gain items. */
+  const roots = page.locator(`${sheetSel} > div > button`);
+  const rootCount = await roots.count();
+  let longest = { index: 0, items: 0, name: "?" };
+  for (let i = 0; i < rootCount; i++) {
+    await roots.nth(i).click();
+    await page.waitForTimeout(160);
+    const items = await page.locator(`${sheetSel} [role="menu"] button`).count();
+    if (items > longest.items)
+      longest = { index: i, items, name: (await roots.nth(i).textContent())?.trim() ?? "?" };
+    await roots.nth(i).click(); // toggle shut so the next count is its own
+    await page.waitForTimeout(120);
+  }
+  await roots.nth(longest.index).click();
+  await page.waitForTimeout(300);
+  await page.evaluate((sel) => {
+    const s = document.querySelector(sel);
+    s.scrollTop = s.scrollHeight; // all the way to the last row
+  }, sheetSel);
+  await page.waitForTimeout(250);
+
+  const sheetProbe = await page.evaluate((sel) => {
+    const sheet = document.querySelector(sel);
+    /* The LOWEST row on screen once scrolled to the end — not the expanded
+       menu's last item, which is followed by the remaining root buttons and so
+       sits comfortably mid-sheet. The bottom row is the one the MobileBar used
+       to cover, and the only one that can tell the two layouts apart. */
+    const rows = [...sheet.querySelectorAll("button")];
+    const el = rows.reduce((lowest, b) =>
+      b.getBoundingClientRect().bottom > lowest.getBoundingClientRect().bottom ? b : lowest);
+    const r = el.getBoundingClientRect();
+    const cx = Math.round(r.left + r.width / 2);
+    const cy = Math.round(r.top + r.height / 2);
+    const hit = document.elementFromPoint(cx, cy);
+    const sr = sheet.getBoundingClientRect();
+    return {
+      label: el.textContent.trim().slice(0, 28),
+      centre: cy,
+      reachable: !!hit && (hit === el || el.contains(hit) || hit.contains(el)),
+      blockedBy: !hit
+        ? "nothing"
+        : hit.closest('[data-tour="mobilebar"]')
+          ? "the MobileBar"
+          : hit.closest('[data-tour="topbar"]')
+            ? "the top bar"
+            : hit.tagName.toLowerCase(),
+      top: Math.round(sr.top),
+      bottom: Math.round(sr.bottom),
+      /* Non-vacuity: the sheet has to be scrolled to its end AND the row has to
+         be down at the sheet's foot, or this proves nothing about occlusion. */
+      atEnd: Math.abs(sheet.scrollTop - (sheet.scrollHeight - sheet.clientHeight)) <= 2,
+      gapToFoot: Math.round(sr.bottom - r.bottom),
+    };
+  }, sheetSel);
+
+  check(`the sheet starts below the whole top bar, notch included`,
+    sheetProbe.top === notched.topbar.bottom,
+    `sheet top ${sheetProbe.top}, bar ends at ${notched.topbar.bottom}`);
+  check("…and ends above the MobileBar rather than behind it",
+    sheetProbe.bottom === MOBILE.height - notched.chromeBottom,
+    `sheet bottom ${sheetProbe.bottom}, bar starts at ${MOBILE.height - notched.chromeBottom}`);
+  check("the sheet really is scrolled to its last row",
+    sheetProbe.atEnd && sheetProbe.gapToFoot <= 24,
+    `scrolled to end: ${sheetProbe.atEnd}, bottom row ends ${sheetProbe.gapToFoot}px above the sheet's foot`);
+  check("…and that bottom row can actually be pressed",
+    sheetProbe.reachable,
+    `"${longest.name}" was the longest menu (${longest.items} items); bottom row "${sheetProbe.label}" at y=${sheetProbe.centre}` +
+      (sheetProbe.reachable ? "" : ` — blocked by ${sheetProbe.blockedBy}`));
+
+  await page.click('button[aria-label="Menu"]'); // close it again
+  await page.waitForTimeout(250);
 
   // ---------- 4. rotated: the side insets exist, ready for the item that uses them ----------
   await cdp.send("Emulation.setSafeAreaInsetsOverride", { insets: LANDSCAPE });

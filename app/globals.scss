@@ -119,12 +119,13 @@
      status bar at the foot. The mobile block overrides the bottom, where the
      status bar is replaced by the MobileBar.
 
-     NOTE: --safe-t is deliberately NOT folded into --chrome-top yet. The top
-     bar does not reserve it, so its own box still ends at --topbar-h; adding
-     the inset here would push everything below it down and leave a strip of
-     bare canvas under the options bar. Insetting the top bar is a separate
-     step, and it folds --safe-t in here, in this one place. */
-  --chrome-top: calc(var(--topbar-h) + var(--optionsbar-h));
+     --topbar-total is the top bar's whole box: its own height plus the top
+     inset it now reserves, so its content clears a notch while its background
+     still reaches the top of the display. Anything that sits directly under
+     the bar — the mobile menu sheet, its scrim — anchors to that rather than
+     to --topbar-h, which is only the part below the inset. */
+  --topbar-total: calc(var(--topbar-h) + var(--safe-t));
+  --chrome-top: calc(var(--topbar-total) + var(--optionsbar-h));
   --chrome-bottom: calc(var(--statusbar-h) + var(--safe-b));
 
   /* ------------------------- Accent: Blue (default) -----------------------
@@ -627,10 +628,13 @@ html[data-mobile="true"] {
     flex-direction: column;
     align-items: stretch;
     position: fixed;
-    top: var(--topbar-h);
+    top: var(--topbar-total);
     left: 0;
     right: 0;
-    bottom: 0;
+    /* Ends ABOVE the MobileBar. At bottom: 0 the scroll container ran on
+       underneath it, so the last rows of a long menu could never be reached —
+       scrolling to the end just parked them behind the bar. */
+    bottom: var(--chrome-bottom);
     z-index: 80;
     padding: var(--sp-2);
     gap: 2px;

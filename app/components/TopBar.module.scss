@@ -1,10 +1,15 @@
 .topbar {
-  height: var(--topbar-h);
+  /* The bar reserves the top inset as PADDING inside a taller box: its
+     background still reaches the top of the display, but nothing pressable
+     sits under a notch or an opaque status bar. Padding alone would not do —
+     box-sizing is border-box globally, so a 47px inset would squash the 48px
+     row to 1px of content. */
+  height: var(--topbar-total);
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--sp-1);
-  padding: 0 var(--sp-3);
+  padding: var(--safe-t) var(--sp-3) 0;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   z-index: 60;
@@ -81,7 +86,7 @@
 
 .sheetScrim {
   position: fixed;
-  inset: var(--topbar-h) 0 0;
+  inset: var(--topbar-total) 0 0;
   /* Same header stacking context (z 60) as the menubar sheet (globals: 80),
      so it sits just under it and above the canvas. */
   z-index: 79;
