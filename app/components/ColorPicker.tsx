@@ -79,17 +79,39 @@ function buildDraft(hsva: Hsva, fmt: Format): Draft {
   }
 }
 
-/** Pointer-draggable surface; reports a normalised position (0–1) on x and y. */
+/**
+ * Pointer-draggable surface; reports a normalised position (0–1) on x and y.
+ *
+ * It carries `role="slider"`, which obliges it to state its value and to be
+ * operable from the keyboard — it was doing neither, while still being reachable
+ * by Tab, so a keyboard user could focus it and then find nothing worked. The
+ * value is supplied by the caller rather than derived here because each surface
+ * has its own scale (hue 0–360, opacity and the saturation/brightness square
+ * 0–100), and `onStep` lets the caller apply an arrow key on its own terms — the
+ * square moves on both axes, the strips only on one.
+ */
 function DragArea({
   className,
   onChange,
   children,
   ariaLabel,
+  valueNow,
+  valueMin,
+  valueMax,
+  valueText,
+  onStep,
 }: {
   className: string;
   onChange: (nx: number, ny: number) => void;
   children?: ReactNode;
   ariaLabel: string;
+  valueNow: number;
+  valueMin: number;
+  valueMax: number;
+  /** Spoken instead of the bare number — the square needs to say both axes. */
+  valueText?: string;
+  /** dx / dy are ±1 (±10 with Shift); the caller decides what a step means. */
+  onStep?: (dx: number, dy: number) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
@@ -107,7 +129,20 @@ function DragArea({
       className={className}
       role="slider"
       aria-label={ariaLabel}
+      aria-valuenow={valueNow}
+      aria-valuemin={valueMin}
+      aria-valuemax={valueMax}
+      aria-valuetext={valueText}
       tabIndex={0}
+      onKeyDown={(e) => {
+        if (!onStep) return;
+        const d = e.shiftKey ? 10 : 1;
+        const dx = e.key === "ArrowLeft" ? -d : e.key === "ArrowRight" ? d : 0;
+        const dy = e.key === "ArrowUp" ? -d : e.key === "ArrowDown" ? d : 0;
+        if (!dx && !dy) return;
+        e.preventDefault();
+        onStep(dx, dy);
+      }}
       onPointerDown={(e) => {
         dragging.current = true;
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -300,6 +335,18 @@ export default function ColorPicker({
         className={styles.sv}
         ariaLabel="Saturation and brightness"
         onChange={(nx, ny) => commit({ ...hsva, s: nx * 100, v: (1 - ny) * 100 })}
+        valueNow={Math.round(hsva.s)}
+        valueMin={0}
+        valueMax={100}
+        valueText={`Saturation ${Math.round(hsva.s)}%, brightness ${Math.round(hsva.v)}%`}
+        onStep={(dx, dy) =>
+          commit({
+            ...hsva,
+            s: clamp(hsva.s + dx, 0, 100),
+            // Down arrow darkens: the surface maps y downwards to less brightness.
+            v: clamp(hsva.v - dy, 0, 100),
+          })
+        }
       >
         <div className={styles.svHue} style={{ background: hueColor }} />
         <div className={styles.svWhite} />
@@ -317,6 +364,12 @@ export default function ColorPicker({
             className={styles.hue}
             ariaLabel="Hue"
             onChange={(nx) => commit({ ...hsva, h: nx * 360 })}
+            valueNow={Math.round(hsva.h)}
+            valueMin={0}
+            valueMax={360}
+            valueText={`${Math.round(hsva.h)}°`}
+            // Hue is a wheel, so stepping off either end wraps rather than clamps.
+            onStep={(dx) => commit({ ...hsva, h: (((hsva.h + dx) % 360) + 360) % 360 })}
           >
             <span className={styles.stripHandle} style={{ left: `${(hsva.h / 360) * 100}%` }} />
           </DragArea>
@@ -325,6 +378,11 @@ export default function ColorPicker({
             className={styles.alpha}
             ariaLabel="Opacity"
             onChange={(nx) => commit({ ...hsva, a: nx })}
+            valueNow={Math.round(hsva.a * 100)}
+            valueMin={0}
+            valueMax={100}
+            valueText={`${Math.round(hsva.a * 100)}%`}
+            onStep={(dx) => commit({ ...hsva, a: clamp(hsva.a * 100 + dx, 0, 100) / 100 })}
           >
             <div
               className={styles.alphaTrack}

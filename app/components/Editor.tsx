@@ -38,7 +38,6 @@ import {
   framePath,
   sanitizeFrame,
   type FrameFit,
-  type FrameRect,
   type FrameSpec,
 } from "../lib/frame";
 import {
@@ -283,11 +282,10 @@ import {
 import {
   DEFAULT_ADJUST,
   filterToAdjust,
-  isDefaultAdjust,
   type AdjustmentSpec,
   type Adjustments,
 } from "../lib/adjust";
-import { ADJUSTMENT_TYPES, specFromPreset, specFromType, specLabel } from "../lib/adjustment-types";
+import { specFromPreset, specFromType, specLabel } from "../lib/adjustment-types";
 import {
   defaultExtra,
   isExtraSpec,

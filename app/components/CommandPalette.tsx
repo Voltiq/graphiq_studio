@@ -20,6 +20,11 @@ export interface PaletteCommand {
 const RECENTS_KEY = "graphiq:palette-recents";
 const MAX_RECENTS = 7;
 const MAX_RESULTS = 14;
+/* Stable ids so the combobox can point `aria-controls` at its listbox and
+   `aria-activedescendant` at the highlighted row. Only one palette is ever
+   mounted (it is modal), so fixed ids cannot collide. */
+const LIST_ID = "command-palette-list";
+const optionId = (i: number) => `command-palette-option-${i}`;
 
 function loadRecents(): string[] {
   try {
@@ -141,6 +146,13 @@ export default function CommandPalette({
             aria-label="Search commands"
             role="combobox"
             aria-expanded={rows.length > 0}
+            /* The combobox has to NAME the list it drives and say which option is
+               current, or arrowing through the results announces nothing at all:
+               focus stays in the input, so a screen reader has no other way to
+               know the highlight moved. */
+            aria-controls={LIST_ID}
+            aria-autocomplete="list"
+            aria-activedescendant={rows.length ? optionId(Math.min(hi, rows.length - 1)) : undefined}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "ArrowDown") {
@@ -159,7 +171,7 @@ export default function CommandPalette({
           <kbd className={styles.kbd}>Esc</kbd>
         </div>
 
-        <div className={styles.list} ref={listRef} role="listbox" aria-label="Commands">
+        <div className={styles.list} id={LIST_ID} ref={listRef} role="listbox" aria-label="Commands">
           {!q && rows.length > 0 && <span className={styles.groupLabel}>Recently used</span>}
           {rows.map((r, i) => {
             const Icon = r.cmd.icon;
@@ -170,6 +182,7 @@ export default function CommandPalette({
                 key={r.cmd.key}
                 type="button"
                 className={styles.item}
+                id={optionId(i)}
                 data-active={i === hi}
                 data-idx={i}
                 role="option"

@@ -1,12 +1,12 @@
 {
   "name": "graphiq_studio",
-  "version": "0.74.1",
+  "version": "0.75.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint --max-warnings 0",
     "perf": "node tools/perf-suite.js",
     "bench": "node tools/bench-track.js",
     "smoke": "node tools/smoke.js",

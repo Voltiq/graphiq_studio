@@ -3,7 +3,7 @@
 import { useEffect, useImperativeHandle, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { uiZoom } from "../lib/ui-scale";
-import { WORKING_SPACE_LABELS, type WorkingSpace } from "../lib/colorspace";
+import { type WorkingSpace } from "../lib/colorspace";
 import {
   BarChart3,
   Compass,

@@ -18,6 +18,28 @@ const eslintConfig = defineConfig([
     // unconditionally from the commit that introduced tools/.
     "tools/**",
   ]),
+  {
+    rules: {
+      /* Restore the conventional "deliberately unused" escapes, which the Next
+         preset leaves off. Both matter here and neither weakens the rule:
+
+         ignoreRestSiblings — `const { maxSize: _unused, ...rest } = line` is the
+           idiomatic way to STRIP a key, and the named sibling is unused by
+           construction. It is typescript-eslint's own default.
+         the ^_ patterns — a leading underscore is the long-standing signal for
+           "required by a signature, not used by the body". Without it the only
+           way to satisfy the rule is to delete a parameter that has to be there. */
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          ignoreRestSiblings: true,
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;

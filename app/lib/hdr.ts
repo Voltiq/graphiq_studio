@@ -227,7 +227,7 @@ export function tonemap(hdr: HdrImage, opts: TonemapOptions): Uint8ClampedArray<
   const W = opts.white && opts.white > 1 ? opts.white : method === "filmic" ? 11.2 : 8;
   const invHW = method === "filmic" ? 1 / hable(W) : 0;
   const invW2 = 1 / (W * W);
-  for (let p = 0, o3 = 0, o4 = 0; o3 < data.length; p++, o3 += 3, o4 += 4) {
+  for (let o3 = 0, o4 = 0; o3 < data.length; o3 += 3, o4 += 4) {
     let r = data[o3] * m;
     let g = data[o3 + 1] * m;
     let b = data[o3 + 2] * m;

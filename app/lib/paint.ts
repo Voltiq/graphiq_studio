@@ -34,7 +34,7 @@ import { removeRedEyeInPlace } from "./redeye";
 import { renderShape, type ShapeGeom } from "./shapes";
 import { maskToRects, maskToSegments } from "./mask-trace";
 
-import { boxBlurPass, clampi } from "./blur";
+import { boxBlurPass } from "./blur";
 import {
   blendIfActive,
   buildLut,
@@ -98,7 +98,7 @@ import { healPadding, healRegion } from "./heal";
 import { NO_REFINE, applyRefine, refineActive, type RefineEdge } from "./refine-edge";
 import { modifyMask, type ModifyOp } from "./select-modify";
 import { vectorMaskActive, vectorMaskHash } from "./vector-mask";
-import { fillAlpha, fillOpacityActive, knockoutActive, knockoutOf } from "./knockout";
+import { fillAlpha, fillOpacityActive, knockoutOf } from "./knockout";
 import {
   DEFAULT_GLOBAL_LIGHT,
   globalLightKey,

@@ -1,6 +1,8 @@
-/* Correctness rail for the components whose prop→state sync was moved out of an
- * effect and into a render-time adjust (React's "adjusting state when a prop
- * changes" pattern), plus the dock handle that moved to useImperativeHandle.
+/* Correctness rail for the React-closure work: the components whose prop→state
+ * sync was moved out of an effect and into a render-time adjust (React's
+ * "adjusting state when a prop changes" pattern), the dock handle that moved to
+ * useImperativeHandle, and the overlay's per-frame draw, which was reading a PROP
+ * from inside a useCallback with no dependencies.
  *
  *   npm i -D playwright-core && npm run dev
  *   node tools/verify-react-state.js
@@ -200,7 +202,54 @@ const { launchBrowser, urlArg } = require("./lib/launch");
     check("the gradient tool exposes a swatch", false, "no swatch button");
   }
 
-  // ---------- 7. the assertion that matters most ----------
+  // ---------- 7. the overlay draws chrome for the CURRENT selection ----------
+  /* `drawAnts` is useCallback(..., []) — deliberately, it is the per-frame
+     overlay draw — and it was reading the `activeLayerId` PROP, so it captured
+     whatever was selected when the canvas mounted and never updated. The frame
+     chrome was therefore drawn for the wrong layer, in practice never: a frame
+     drawn after mount got none. Now it reads activeLayerIdRef.
+     The overlay loop STOPS and clears itself when nothing needs it, so the
+     pointer is parked over the canvas with the eyedropper — one of the loop's
+     keep-alive branches, and one that draws almost nothing itself. Without that
+     the overlay is blank either way and the measurement proves nothing. */
+  const overlayInk = () =>
+    page.evaluate(() => {
+      const cs = [...document.querySelectorAll("canvas")];
+      const el = cs[cs.length - 1];
+      const d = el.getContext("2d").getImageData(0, 0, el.width, el.height).data;
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 8) n++;
+      return n;
+    });
+  const canvasBox = await page.locator('[data-tour="canvas"] canvas').first().boundingBox();
+  const hoverCanvas = async () => {
+    await page.getByRole("button", { name: /^Eyedropper/ }).first().click();
+    await page.waitForTimeout(400);
+    await page.mouse.move(canvasBox.x + canvasBox.width * 0.8, canvasBox.y + canvasBox.height * 0.85);
+    await page.waitForTimeout(250);
+    await page.mouse.move(canvasBox.x + canvasBox.width * 0.8 + 3, canvasBox.y + canvasBox.height * 0.85 + 3);
+    await page.waitForTimeout(900);
+  };
+  await page.getByRole("button", { name: /^Frame/ }).first().click();
+  await page.waitForTimeout(500);
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.25, canvasBox.y + canvasBox.height * 0.25);
+  await page.mouse.down();
+  await page.mouse.move(canvasBox.x + canvasBox.width * 0.65, canvasBox.y + canvasBox.height * 0.7, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForTimeout(1200);
+  await hoverCanvas();
+  const inkFrame = await overlayInk();
+  const layerRows = page.locator('li[class*="layerItem"]');
+  const rowCount = await layerRows.count();
+  await layerRows.nth(rowCount - 1).click(); // a non-frame layer
+  await page.waitForTimeout(800);
+  await hoverCanvas();
+  const inkPlain = await overlayInk();
+  check("the overlay draws frame chrome for the CURRENTLY selected layer",
+    inkFrame > inkPlain + 200,
+    `overlay ink ${inkFrame} with the frame selected vs ${inkPlain} with a plain layer`);
+
+  // ---------- 8. the assertion that matters most ----------
   check("no React error reached the console at any point", errors.length === 0,
     errors.slice(0, 3).join(" | ") || "clean");
 

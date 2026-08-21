@@ -29,11 +29,10 @@
 # baseline, and on a runner it always would be. Performance is tracked locally,
 # in one sitting, with interleaved arms.
 #
-# LINT gates on ERRORS, not warnings. The 16 errors that used to make this
-# impossible are gone; 13 warnings remain (unused vars, two exhaustive-deps, two
-# a11y attributes) and `eslint` exits 0 on warnings, so they stay visible in the
-# log without blocking. Tightening to `--max-warnings 0` is a separate decision
-# once those are cleared.
+# LINT gates on warnings too: `npm run lint` is `eslint --max-warnings 0`, and the
+# tree is clean of both. That is only worth doing once the count is zero — a gate
+# that is red on arrival teaches everyone to ignore it — which is why it arrived
+# one step after the errors were cleared rather than with them.
 
 name: CI
 

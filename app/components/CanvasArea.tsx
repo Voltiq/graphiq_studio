@@ -90,7 +90,6 @@ import type {
   TextRun,
   ToolId,
   VectorData,
-  VectorShape,
   VectorText,
 } from "../lib/tools";
 import { measureInfo } from "../lib/tools";
@@ -1370,7 +1369,15 @@ export default function CanvasArea({
    *  the shared resize/rotate commit paths to bake the pixels WITHOUT leaving a
    *  selection behind — the Move tool never had one to restore. */
   const tfDragRef = useRef<{ box: Rect } | null>(null);
-  const transformBox = (): Rect | null => {
+  /* STABLE by construction: it reads only refs, so `useCallback` with no
+     dependencies is honest rather than a shortcut — and it has to be stable,
+     because the overlay's per-frame `drawAnts` lists it as a dependency. A plain
+     function here would be a new value every render and would rebuild the whole
+     overlay draw (and the rAF loop chained off it) sixty times a second.
+     `engineRef.current` rather than `engine`: the engine const is declared much
+     further down the component, so naming it in a dependency array up here would
+     be a temporal-dead-zone reference. */
+  const transformBox = useCallback((): Rect | null => {
     if (!showTransformRef.current || toolRef.current !== "move") return null;
     const id = activeLayerIdRef.current;
     const node = id ? findNode(layersRef.current, id) : null;
@@ -1379,9 +1386,9 @@ export default function CanvasArea({
     // user as a side effect, which from a per-frame overlay draw would fire a
     // "layer is locked" notice sixty times a second.
     const blocked = isFillLayer(node) || isPositionLocked(node);
-    const b = blocked ? null : engine.layerContentBounds(id!);
+    const b = blocked ? null : engineRef.current!.layerContentBounds(id!);
     return transformBlock(id, blocked, b) === null ? b : null;
-  };
+  }, []);
   // On-canvas brush HUD (Alt + right-drag). The live session, or null. It is
   // anchored at the press point rather than tracking the pointer: the whole
   // point is to watch the tip change size, which you cannot do if it is running
@@ -2755,7 +2762,14 @@ export default function CanvasArea({
     // scanning its pixels on every overlay frame, and showing chrome on all of
     // them at once would bury the artwork under boxes.
     {
-      const sel = activeLayerId ? findNode(layersRef.current, activeLayerId) : null;
+      /* Through the REF, not the prop. drawAnts is useCallback(..., []) on
+         purpose — it is the overlay's per-frame draw and must not be rebuilt — so
+         a prop read here is captured at mount and never changes: the chrome was
+         being drawn for whatever layer was selected when the canvas mounted,
+         which is why a frame drawn afterwards never got any. Every other
+         changing value in this function already goes through a ref. */
+      const activeId = activeLayerIdRef.current;
+      const sel = activeId ? findNode(layersRef.current, activeId) : null;
       const fr = sel && sel.type === "layer" ? sel.frame : undefined;
       if (fr) {
         const rx = p.x + fr.x * s;
@@ -3447,7 +3461,12 @@ export default function CanvasArea({
         });
       }
     }
-  }, []);
+    /* Both dependencies are stable for the component's lifetime — `engine` comes
+       from a ref initialised once, `transformBox` is a no-dependency useCallback
+       — so listing them costs nothing and this is still built exactly once. An
+       empty list here was not merely untruthful: it is what let a PROP be read
+       inside and captured at mount (see the frame-chrome note above). */
+  }, [engine, transformBox]);
 
   const tickAnts = useCallback(() => {
     antsOffset.current = (antsOffset.current + 0.18) % 8;
@@ -3526,7 +3545,7 @@ export default function CanvasArea({
       const ctx = overlayRef.current?.getContext("2d");
       if (ctx && overlayRef.current) ctx.clearRect(0, 0, overlayRef.current.width, overlayRef.current.height);
     }
-  }, [drawAnts]);
+  }, [drawAnts, engine, transformBox]);
 
   const ensureAnts = useCallback(() => {
     if (!antsRaf.current) antsRaf.current = requestAnimationFrame(tickAnts);
