@@ -7,6 +7,7 @@ import type { SavedPath } from "./paths";
 import type { SavedChannel } from "./channels";
 import type { LayerComp } from "./comps";
 import type { Rect } from "./view";
+import type { WorkingSpace } from "./colorspace";
 
 /** Graphiq project file extension (keeps layers, groups & settings; lossless). */
 export const PROJECT_EXT = "gproj";
@@ -41,6 +42,19 @@ export interface ProjectFile {
   dpi?: number;
   /** Document lighting angle shared by effects that follow it (v20). */
   globalLight?: { angle: number; altitude: number };
+  /**
+   * Working colour space the document was AUTHORED in (v24).
+   *
+   * Layer pixels are stored as PNG data URLs, and a canvas in a wide-gamut space
+   * writes them with that profile attached. Reopening in a different space makes
+   * the browser colour-manage them on decode, which changes every RGB value and
+   * leaves alpha alone — measured at 27,550 of 120,000 bytes on a small P3
+   * document opened as sRGB. Before this field the file said nothing about which
+   * space it was written in, so there was no way to open it back the way it was
+   * saved. Absent in older files, which are assumed sRGB (the only space the app
+   * shipped with when they could have been written).
+   */
+  workingSpace?: WorkingSpace;
   foreground: string;
   background: string;
   activeLayerId: string | null;
@@ -94,6 +108,8 @@ export interface ProjectInput {
   dpi?: number;
   /** Document lighting angle shared by effects that follow it (v20). */
   globalLight?: { angle: number; altitude: number };
+  /** Working colour space the pixels were written in (v24). */
+  workingSpace?: WorkingSpace;
   layers: LayerNode[];
   activeLayerId: string | null;
   selectedLayerIds: string[];
@@ -149,12 +165,13 @@ export function serializeProject(
   const channels = doc.channels ?? [];
   return {
     format: "graphiq-project",
-    version: 23, // v23 adds framed-picture sources (v22 colour samplers, v21 layer comps)
+    version: 24, // v24 adds the authoring colour space (v23 framed-picture sources)
     name: doc.name,
     width: doc.width,
     height: doc.height,
     dpi: doc.dpi ?? 300,
     globalLight: doc.globalLight,
+    workingSpace: doc.workingSpace ?? "srgb",
     foreground: colors.foreground,
     background: colors.background,
     activeLayerId: doc.activeLayerId,

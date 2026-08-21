@@ -15,7 +15,7 @@ import PreferencesDialog, { type PrefsTab } from "./PreferencesDialog";
 import HelpDialog, { type HelpStart } from "./HelpDialog";
 import AboutDialog from "./AboutDialog";
 import TooltipHost from "./Tooltip";
-import { canvasSpaceOf, type ProofTarget, type WorkingSpace } from "../lib/colorspace";
+import { WORKING_SPACE_LABELS, canvasSpaceOf, type ProofTarget, type WorkingSpace } from "../lib/colorspace";
 import { NO_REFINE, decontaminate, type RefineEdge } from "../lib/refine-edge";
 import { boxOf, pivotOf, sanitizeBox, transformRects } from "../lib/selection-transform";
 import {
@@ -716,6 +716,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     smartguides: smartGuides,
   };
   const [colorSpace, setColorSpaceState] = useState<WorkingSpace>("srgb");
+  // Read when a project is written, which happens from callbacks that must not
+  // capture a stale space (the same reason globalLight has one).
+  const colorSpaceRef = useRef(colorSpace);
+  colorSpaceRef.current = colorSpace;
   // Soft proofing (view-only): Ctrl+Alt+Y simulate, Ctrl+Alt+Shift+Y gamut warn.
   const [proofColors, setProofColors] = useState(false);
   const [gamutWarn, setGamutWarn] = useState(false);
@@ -3782,6 +3786,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         // Document state, not per-layer — saved so a reopened file keeps the
         // lighting the effects in it were authored against.
         globalLight: globalLightRef.current,
+        // The space the pixels below were written in. Without it a wide-gamut
+        // document reopened in an sRGB session is colour-managed on decode and
+        // every RGB value shifts (alpha survives, which is what made it look
+        // like a rendering quirk rather than a lossy reopen).
+        workingSpace: colorSpaceRef.current,
         layers: d.layers,
         activeLayerId: d.activeLayerId,
         selectedLayerIds: d.selectedLayerIds,
@@ -4052,6 +4061,23 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // ones so a loaded project never collides with already-open documents.
   const loadProject = (p: ProjectFile, activate = true): string => {
     commitFloatIfAny(); // merge any floating paste on the current doc first
+    /* Open the file in the space it was WRITTEN in (v24), before its pixels are
+       decoded. The layer PNGs carry the authoring space's profile, so decoding
+       them into a canvas in another space colour-manages every one of them: RGB
+       shifts, alpha does not. Both this and setPendingLoads land in one React
+       update, and CanvasArea's colour-space effect is declared above its
+       pending-load effect, so the engine has switched before anything decodes.
+       Files older than v24 predate any space but sRGB, so their absence of a
+       field is not ambiguous. */
+    const fileSpace: WorkingSpace = p.workingSpace ?? "srgb";
+    if (fileSpace !== colorSpaceRef.current && (fileSpace !== "display-p3" || p3Supported())) {
+      /* setColorSpaceState, NOT setWorkingSpace: adopting the file's space is
+         needed to open it correctly, but it is not the user choosing a
+         preference, so it must not overwrite the persisted one. Their own space
+         comes back the next time the app loads. */
+      setColorSpaceState(fileSpace);
+      showToast(`Opened in ${WORKING_SPACE_LABELS[fileSpace]} — the space this file was saved in.`);
+    }
     const idMap = new Map<string, string>();
     const images: { id: string; data: string }[] = [];
     const masks: { id: string; data: string }[] = [];
