@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -21,6 +21,7 @@
     "test:print": "node tools/verify-print.js",
     "test:safearea": "node tools/verify-safe-area.js",
     "test:viewport": "node tools/verify-viewport.js",
+    "test:breakpoint": "node tools/verify-breakpoint.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && vitest run"

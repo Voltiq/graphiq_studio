@@ -38,8 +38,10 @@ const DESKTOP = { width: 1500, height: 950 };
   };
   const errors = [];
 
-  const open = async (viewport) => {
-    const context = await browser.newContext({ viewport });
+  /* `touch` matters: the mobile shell is chosen by a query that asks for a
+     coarse pointer with no hover, not by width alone. */
+  const open = async (viewport, touch = false) => {
+    const context = await browser.newContext({ viewport, hasTouch: touch });
     const page = await context.newPage();
     page.on("pageerror", (e) => errors.push("pageerror: " + String(e)));
     page.on("console", (m) => m.type() === "error" && errors.push("console: " + m.text()));
@@ -95,7 +97,7 @@ const DESKTOP = { width: 1500, height: 950 };
 
   // ---------- 1. the phone profile ----------
   {
-    const { context, page } = await open(MOBILE);
+    const { context, page } = await open(MOBILE, true);
     const s = await shell(page);
     check("the browser understands the small-viewport unit", s.supportsSvh,
       `CSS.supports("height","100svh") = ${s.supportsSvh}`);

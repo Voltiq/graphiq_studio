@@ -148,6 +148,10 @@ jobs:
         run: npm run test:viewport -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
+      - name: Each device gets the right shell
+        run: npm run test:breakpoint -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
 
       - name: Dev server log
         if: failure()

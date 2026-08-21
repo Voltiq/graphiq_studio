@@ -35,8 +35,11 @@ const MOBILE = { width: 390, height: 844 };
   };
   const errors = [];
 
-  const open = async (viewport) => {
-    const context = await browser.newContext({ viewport });
+  /* `touch` is not decoration: the mobile shell is chosen by a query that asks
+     for a coarse pointer with no hover, so a context without it gets the
+     desktop shell however small the viewport is. */
+  const open = async (viewport, touch = false) => {
+    const context = await browser.newContext({ viewport, hasTouch: touch });
     const page = await context.newPage();
     page.on("pageerror", (e) => errors.push("pageerror: " + String(e)));
     page.on("console", (m) => m.type() === "error" && errors.push("console: " + m.text()));
@@ -117,7 +120,7 @@ const MOBILE = { width: 390, height: 844 };
   }
 
   // ---------- 2. mobile, no insets: the baseline every later number moves from ----------
-  const { context, page, cdp } = await open(MOBILE);
+  const { context, page, cdp } = await open(MOBILE, true);
   const flat = await readout(page);
   check("the phone profile gets the mobile shell", flat.mobile === "true", `data-mobile=${flat.mobile}`);
   check("with no insets the bottom chrome is exactly the bar", flat.chromeBottom === 56,
@@ -284,22 +287,20 @@ const MOBILE = { width: 390, height: 844 };
     `--chrome-bottom ${cleared.chromeBottom}px, bar ${cleared.bar.height}px`);
 
   // ---------- 5. landscape: the cutout moves to a side ----------
-  /* A real iPhone in landscape is 844px wide, which today resolves to the
-     DESKTOP shell, because the breakpoint is width-only — that is the NEXT
-     item, not this one. 740px keeps the mobile shell while still being wider
-     than it is tall, so the drawers, the bottom bar and the swipe strips are
-     all in play with a side inset applied.
+  /* A real iPhone in landscape. This used to be 740px, because a width-only
+     breakpoint gave anything wider the desktop shell; the breakpoint now asks
+     about the device as well, so the true size can be used.
 
      The item proposed asserting `rect.left >= safeLeft + 16`. That margin is
      larger than the app's own gutters (--sp-2 is 8px, --sp-3 is 12px), so it
      would fail on correct layout; what is asserted instead is that nothing
      pressable intrudes into the inset AT ALL, which is the actual claim. */
-  const LAND = { width: 740, height: 390 };
+  const LAND = { width: 844, height: 390 };
   for (const [label, insets] of [
     ["a cutout on the left", { top: 0, right: 34, bottom: 21, left: 47 }],
     ["a cutout on the right", { top: 0, right: 47, bottom: 21, left: 34 }],
   ]) {
-    const land = await open(LAND);
+    const land = await open(LAND, true);
     await land.cdp.send("Emulation.setSafeAreaInsetsOverride", { insets });
     await land.page.waitForTimeout(350);
     const lp = land.page;
@@ -415,7 +416,7 @@ const MOBILE = { width: 390, height: 844 };
      left it green. 200px guarantees the clamp has work to do. */
   {
     const FAT = 200;
-    const land = await open(LAND);
+    const land = await open(LAND, true);
     const lp = land.page;
     await lp.locator('[data-tour="mobilebar"] button', { hasText: "Panels" }).first().click();
     await lp.waitForTimeout(700);
