@@ -539,6 +539,41 @@ export default function RightDock({
     [order, left, floats, openMap, groups, activeTab],
   );
 
+  /**
+   * End a drag from the WINDOW, not from the node it started on.
+   *
+   * Dragging a panel to the other dock moves it between two portals, so React
+   * unmounts the node the drag began on and mounts a new one. The browser still
+   * fires `dragend` at the original node — which is now detached, so the event
+   * reaches nothing and `dragId` stays set. Both things it drives then linger:
+   * the panel keeps its half-opacity dragging tint and every dock keeps showing
+   * its dashed drop zone, until some later interaction happens to clear them.
+   *
+   * `drop` fires on the TARGET, which is always live, so it reaches the window
+   * whatever happened to the source. `dragend` still covers drags that end
+   * without a drop and whose source survived (a reorder within one dock), and
+   * Escape covers a cancel. Capture phase so a handler that stops propagation
+   * cannot leave the dock stuck again.
+   */
+  useEffect(() => {
+    if (!dragId) return;
+    const clear = () => {
+      setDragId(null);
+      setHeaderTarget(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") clear();
+    };
+    window.addEventListener("drop", clear, true);
+    window.addEventListener("dragend", clear, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("drop", clear, true);
+      window.removeEventListener("dragend", clear, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [dragId]);
+
   const toggleOpen = (id: PanelId) => setOpenMap((cur) => ({ ...cur, [id]: !cur[id] }));
 
   /* ---- tabbed groups ----------------------------------------------------

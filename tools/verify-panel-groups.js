@@ -56,6 +56,45 @@ const DND = () => {
     await tick();
     return "ok";
   };
+
+  /* Drag a panel into the LEFT dock, which is the case that moves it between two
+     portals. `dragend` is dispatched on the node the drag STARTED on, exactly as
+     a browser does — and that node no longer exists after the move, so the event
+     goes nowhere. Reporting whether it survived is what tells the check apart
+     from a harness quirk. */
+  window.__dragToLeft = async (fromSel) => {
+    const from = document.querySelector(fromSel);
+    if (!from) return "missing source";
+    const dt = new DataTransfer();
+    const fire2 = (el, type) => {
+      if (!el || !el.isConnected) return false;
+      const r = el.getBoundingClientRect();
+      el.dispatchEvent(
+        new DragEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dt,
+          clientX: r.left + r.width / 2,
+          clientY: r.top + r.height / 2,
+        }),
+      );
+      return true;
+    };
+    const tick = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 40)));
+    fire2(from, "dragstart");
+    await tick();
+    const zone = document.querySelector('[aria-label="Left dock"] > div');
+    if (!zone) return "no left drop zone appeared";
+    fire2(zone, "dragover");
+    await tick();
+    fire2(zone, "dragover");
+    await tick();
+    fire2(zone, "drop");
+    await tick();
+    const survived = fire2(from, "dragend");
+    await tick();
+    return survived ? "source survived" : "source replaced mid-drag";
+  };
 };
 
 (async () => {
@@ -217,6 +256,30 @@ const DND = () => {
   check("dragging a tab onto another panel takes it out of the group",
     ungrouped.grouped === 0 && !Object.keys(ungrouped.stored?.groups ?? {}).length,
     `${ungrouped.sections} panels, ${ungrouped.grouped} grouped`);
+
+  // ---------- a cross-dock drag must not leave the dock mid-drag ----------
+  /* Moving a panel to the other dock re-renders it into a different portal, so
+     the node the drag started on is destroyed and its `dragend` reaches nothing.
+     Everything `dragId` drives then lingers: the panel keeps its half-opacity
+     dragging tint and every dock keeps showing its dashed drop zone, until some
+     unrelated interaction clears it. */
+  await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('[data-tour="dock"] button')].find(
+      (b) => (b.getAttribute("aria-label") || "").endsWith("Swatches") && b.className.includes("panelCaret"),
+    );
+    if (btn) btn.closest("header").setAttribute("data-probe-move", "1");
+  });
+  const moved = await page.evaluate(() => window.__dragToLeft('header[data-probe-move="1"]'));
+  await page.waitForTimeout(800);
+  const dockAfter = await page.evaluate(() => ({
+    dragging: document.querySelectorAll('section[data-dragging="true"]').length,
+    zones: document.querySelectorAll('[aria-label="Left dock"] > div, [data-tour="dock"] > div').length,
+    left: document.querySelectorAll('[aria-label="Left dock"] section').length,
+  }));
+  check("a panel can be dragged into the left dock", dockAfter.left > 0, `${moved}, ${dockAfter.left} left-docked`);
+  check("…and the drop leaves nothing greyed out or showing a drop zone",
+    dockAfter.dragging === 0 && dockAfter.zones === 0,
+    `${dockAfter.dragging} still dragging, ${dockAfter.zones} drop zone(s) — ${moved}`);
 
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
