@@ -129,6 +129,31 @@ const CRASH_H = 180;
         return { hash: (a >>> 0).toString(36) + "." + (b >>> 0).toString(36), ink, w: c.width, h: c.height };
       });
 
+    /* A shot taken once the canvas has STOPPED changing.
+     *
+     * Reopening a document decodes its layers and composites asynchronously, so a
+     * single read after a fixed wait can catch a half-drawn frame: the pixels
+     * settle a moment later and the hash from the early read matches nothing.
+     * That is exactly what made the recovery comparison below look like a colour
+     * difference (the ink count happened to match, so it read as one) when the
+     * pixels were in fact identical. Two consecutive equal hashes is the signal
+     * that there is nothing more coming.
+     *
+     * EVERY reading goes through this, not just the ones that bit: `painted` is
+     * the reference three later checks compare against, so a stale read there
+     * would poison them all rather than fail honestly. It costs one extra 250 ms
+     * poll per reading and removes a whole class of flake. */
+    const stableShot = async (tries = 20) => {
+      let prev = await shot();
+      for (let i = 0; i < tries; i++) {
+        await page.waitForTimeout(250);
+        const next = await shot();
+        if (next.hash === prev.hash) return next;
+        prev = next;
+      }
+      return prev;
+    };
+
     // ---- 2. a new document --------------------------------------------------
     await menu("File", "New…");
     const nd = page.locator('div[role="dialog"][aria-label="New document"]');
@@ -137,7 +162,7 @@ const CRASH_H = 180;
     await nd.locator('input[type="number"]').nth(1).fill(String(DOC_H));
     await nd.getByText("Create", { exact: true }).click();
     await page.waitForTimeout(1600);
-    const blank = await shot();
+    const blank = await stableShot();
     check("a new document is the size asked for", blank.w === DOC_W && blank.h === DOC_H,
       `${blank.w}x${blank.h}`);
     check("...and starts empty", blank.ink === 0, `${blank.ink} px of ink`);
@@ -152,7 +177,7 @@ const CRASH_H = 180;
     await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.7, { steps: 24 });
     await page.mouse.up();
     await page.waitForTimeout(900);
-    const painted = await shot();
+    const painted = await stableShot();
     check("painting puts pixels on the canvas", painted.ink > 500, `${painted.ink} px`);
     check("...on a layer the panel shows",
       (await page.locator('li[class*="layerItem"]').count()) === 1,
@@ -162,11 +187,11 @@ const CRASH_H = 180;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.keyboard.press("Control+z");
     await page.waitForTimeout(900);
-    const undone = await shot();
+    const undone = await stableShot();
     check("undo takes the stroke back off", undone.ink === 0, `${undone.ink} px left`);
     await page.keyboard.press("Control+Shift+z");
     await page.waitForTimeout(900);
-    const redone = await shot();
+    const redone = await stableShot();
     // Byte-identical, not merely "ink is back": a redo that re-rasterized the
     // stroke slightly differently would pass the weaker check.
     check("redo restores it exactly", redone.hash === painted.hash,
@@ -208,13 +233,13 @@ const CRASH_H = 180;
     await nd.locator('input[type="number"]').nth(1).fill("90");
     await nd.getByText("Create", { exact: true }).click();
     await page.waitForTimeout(1400);
-    const decoy = await shot();
+    const decoy = await stableShot();
     check("a second, different document is active", decoy.w === 120 && decoy.h === 90,
       `${decoy.w}x${decoy.h}`);
 
     await page.locator('input[type="file"][accept*="gproj"]').setInputFiles(projPath);
     await page.waitForTimeout(2500);
-    const reopened = await shot();
+    const reopened = await stableShot();
     check("opening the project restores the document", reopened.w === DOC_W && reopened.h === DOC_H,
       `${reopened.w}x${reopened.h}`);
     check("...with the very same pixels", reopened.hash === painted.hash,
@@ -292,7 +317,7 @@ const CRASH_H = 180;
       await page.mouse.move(cbox.x + cbox.width * 0.75, cbox.y + cbox.height * 0.25, { steps: 18 });
       await page.mouse.up();
       await page.waitForTimeout(900);
-      const beforeCrash = await shot();
+      const beforeCrash = await stableShot();
       check("there is unsaved work to lose", beforeCrash.ink > 300 && beforeCrash.w === CRASH_W,
         `${beforeCrash.ink} px on a ${beforeCrash.w}x${beforeCrash.h} document`);
 
@@ -378,16 +403,17 @@ const CRASH_H = 180;
         writeFileSync(extracted, candidates[0].e.data);
         await page.locator('input[type="file"][accept*="gproj"]').setInputFiles(extracted);
         await page.waitForTimeout(2500);
-        const back = await shot();
-        // Size and coverage, not a pixel hash. Byte-identical recovery is proven
-        // in isolation (paint → crash → save → reload → open, hashes equal);
-        // asserting it HERE would compare across a page reload at the end of a
-        // long journey, where an unrelated colour difference on documents
-        // reopened after a reload makes the comparison about something other
-        // than the crash.
-        check("...and it opens back into the document that was lost",
-          back.w === CRASH_W && back.h === CRASH_H && back.ink === beforeCrash.ink,
-          `${back.w}x${back.h}, ink ${beforeCrash.ink} vs ${back.ink}`);
+        const back = await stableShot();
+        const sameHash = back.hash === beforeCrash.hash;
+        check("...and it opens back into the document that was lost, pixel for pixel",
+          back.w === CRASH_W && back.h === CRASH_H && sameHash,
+          `${back.w}x${back.h}, hash ${beforeCrash.hash}` +
+            (sameHash
+              ? ` (${back.ink} px of ink)`
+              : ` vs ${back.hash}` +
+                (back.ink === beforeCrash.ink
+                  ? ` — ink MATCHES at ${back.ink}, so the difference is COLOUR, which the old ink-only check could not see`
+                  : `, ink ${beforeCrash.ink} vs ${back.ink}`)));
       }
     }
 

@@ -145,6 +145,63 @@
   }
 }
 
+/* ---- tabbed groups ------------------------------------------------------
+   Several panels sharing one frame. The strip replaces the single title, so it
+   inherits the same type and sits on the same 26px baseline; only the active
+   tab is filled in, and the rest read as quiet siblings rather than buttons. */
+.panelTabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none; /* many tabs scroll rather than wrap the 34px header */
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.panelTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  flex-shrink: 0;
+  border-radius: var(--r-md);
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+  color: var(--text-3);
+  cursor: grab; /* a tab is also the handle that drags a panel OUT of the group */
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--wash);
+    color: var(--text);
+  }
+
+  &[data-active] {
+    background: var(--wash);
+    color: var(--text);
+  }
+
+  /* Truncate rather than wrap: the header is a fixed 34px, and a name is still
+     recognisable from its first few letters next to its icon. */
+  span {
+    max-width: 84px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* A header being hovered as a GROUP target, so a drop is not a guess. */
+.panelHead[data-dropping] {
+  background: color-mix(in oklab, var(--accent) 18%, var(--sidebar));
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
 .panelActions {
   margin-left: auto;
   display: flex;

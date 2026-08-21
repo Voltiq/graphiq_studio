@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useImperativeHandle, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useImperativeHandle, useState, type DragEvent, type DragEventHandler, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { uiZoom } from "../lib/ui-scale";
 import { type WorkingSpace } from "../lib/colorspace";
@@ -20,7 +20,7 @@ import {
   Zap,
 } from "lucide-react";
 import styles from "./RightDock.module.scss";
-import Panel from "./Panel";
+import Panel, { type PanelTab } from "./Panel";
 import ColorPanel from "./panels/ColorPanel";
 import ColorPanelMenu from "./panels/ColorPanelMenu";
 import SwatchesPanel from "./panels/SwatchesPanel";
@@ -40,7 +40,7 @@ import PathsPanel from "./panels/PathsPanel";
 import type { PathsApi } from "../lib/paths";
 import CompsPanel from "./panels/CompsPanel";
 import type { CompsApi } from "../lib/comps";
-import { Camera, Spline } from "lucide-react";
+import { Camera, Spline, type LucideIcon } from "lucide-react";
 import type { NavigatorView, Rect } from "../lib/view";
 import type { LayersApi } from "../lib/layers";
 import type { ChannelSelectOp, SavedChannel } from "../lib/channels";
@@ -98,6 +98,43 @@ const DEFAULT_ORDER: PanelId[] = [
   "actions",
   "metadata",
 ];
+/* A panel's NAME and ICON, in one place. They used to exist only inline in the
+   switch that builds each panel, which was fine while the only thing that needed
+   them was the panel's own header — a tab strip needs them too, and reading them
+   back out of a rendered element would be worse than naming them here. */
+const PANEL_TITLES: Record<PanelId, string> = {
+  navigator: "Navigator",
+  channels: "Channels",
+  color: "Color",
+  swatches: "Swatches",
+  brushes: "Brushes",
+  adjustments: "Adjustments",
+  properties: "Properties",
+  layers: "Layers",
+  paths: "Paths",
+  comps: "Layer Comps",
+  history: "History",
+  actions: "Actions",
+  metadata: "Metadata",
+  info: "Info",
+};
+const PANEL_ICONS: Record<PanelId, LucideIcon> = {
+  navigator: Compass,
+  channels: BarChart3,
+  color: Palette,
+  swatches: SwatchBook,
+  brushes: Brush,
+  adjustments: SlidersHorizontal,
+  properties: Settings2,
+  layers: Layers,
+  paths: Spline,
+  comps: Camera,
+  history: History,
+  actions: Zap,
+  metadata: Info,
+  info: Info,
+};
+
 const ORDER_KEY = "graphiq:panel-order";
 const OPEN_KEY = "graphiq:panel-open";
 const LAYOUT_KEY = "graphiq:panel-layout"; // dock membership + floating positions
@@ -113,6 +150,19 @@ export interface DockLayout {
   /** Floating panels and their positions (local px inside the float host). */
   floats: Partial<Record<PanelId, { x: number; y: number }>>;
   open: Record<PanelId, boolean>;
+  /**
+   * TABBED GROUPS: panel id → group key. Panels sharing a key share one frame,
+   * shown as a tab strip, drawn at the position of their FIRST member in `order`.
+   *
+   * A map rather than an array of arrays, and layered OVER `order` rather than
+   * replacing it, because everything else in the dock — reordering, dock
+   * membership, the Window menu, workspaces — already reads `order` and keeps
+   * working untouched. Membership is the only new fact; sequence still comes
+   * from the one place it always did.
+   */
+  groups?: Partial<Record<PanelId, string>>;
+  /** Which member of each group is showing. Absent → its first open member. */
+  activeTab?: Partial<Record<string, PanelId>>;
 }
 
 /** Imperative capture/apply for workspaces + Reset Workspace (null = defaults). */
@@ -123,11 +173,19 @@ export interface DockApi {
 
 const isPanelId = (v: unknown): v is PanelId => (DEFAULT_ORDER as string[]).includes(v as string);
 
+interface CoercedLayout {
+  left: PanelId[];
+  floats: DockLayout["floats"];
+  groups: Partial<Record<PanelId, string>>;
+  activeTab: Partial<Record<string, PanelId>>;
+}
+const emptyLayout = (): CoercedLayout => ({ left: [], floats: {}, groups: {}, activeTab: {} });
+
 /** Validate a stored/imported layout fragment (unknown ids and junk dropped). */
-function coerceLayout(raw: unknown): { left: PanelId[]; floats: DockLayout["floats"] } {
-  const out: { left: PanelId[]; floats: DockLayout["floats"] } = { left: [], floats: {} };
+function coerceLayout(raw: unknown): CoercedLayout {
+  const out = emptyLayout();
   if (!raw || typeof raw !== "object") return out;
-  const o = raw as { left?: unknown; floats?: unknown };
+  const o = raw as { left?: unknown; floats?: unknown; groups?: unknown; activeTab?: unknown };
   if (Array.isArray(o.left)) out.left = o.left.filter(isPanelId);
   if (o.floats && typeof o.floats === "object") {
     for (const [id, p] of Object.entries(o.floats as Record<string, { x?: unknown; y?: unknown }>)) {
@@ -136,16 +194,33 @@ function coerceLayout(raw: unknown): { left: PanelId[]; floats: DockLayout["floa
       }
     }
   }
+  if (o.groups && typeof o.groups === "object") {
+    for (const [id, key] of Object.entries(o.groups as Record<string, unknown>)) {
+      if (isPanelId(id) && typeof key === "string" && key) out.groups[id] = key;
+    }
+    /* A group of one is not a group. Stored layouts can arrive that way — an
+       older file, a hand-edited workspace, or a member that was dropped as an
+       unknown id above — and a one-tab frame would look like a bug. */
+    const count = new Map<string, number>();
+    for (const key of Object.values(out.groups)) count.set(key!, (count.get(key!) ?? 0) + 1);
+    for (const [id, key] of Object.entries(out.groups))
+      if ((count.get(key!) ?? 0) < 2) delete out.groups[id as PanelId];
+  }
+  if (o.activeTab && typeof o.activeTab === "object") {
+    for (const [key, id] of Object.entries(o.activeTab as Record<string, unknown>)) {
+      if (typeof key === "string" && isPanelId(id) && out.groups[id] === key) out.activeTab[key] = id;
+    }
+  }
   return out;
 }
 
-function loadLayout(): { left: PanelId[]; floats: DockLayout["floats"] } {
-  if (typeof window === "undefined") return { left: [], floats: {} };
+function loadLayout(): CoercedLayout {
+  if (typeof window === "undefined") return emptyLayout();
   try {
     const raw = window.localStorage.getItem(LAYOUT_KEY);
-    return raw ? coerceLayout(JSON.parse(raw)) : { left: [], floats: {} };
+    return raw ? coerceLayout(JSON.parse(raw)) : emptyLayout();
   } catch {
-    return { left: [], floats: {} };
+    return emptyLayout();
   }
 }
 
@@ -294,6 +369,13 @@ interface Props {
   onToast: (message: string) => void;
 }
 
+/** The group-aware extras a dock render passes into one panel's frame. */
+interface PanelExtra {
+  tabs: PanelTab[];
+  onHeaderDragOver: DragEventHandler<HTMLElement> | undefined;
+  headerDropping: boolean;
+}
+
 const IconBtn = ({
   title,
   onClick,
@@ -379,6 +461,11 @@ export default function RightDock({
   const [floats, setFloats] = useState<DockLayout["floats"]>({});
   const [floatTop, setFloatTop] = useState<PanelId | null>(null);
   const [dragId, setDragId] = useState<PanelId | null>(null);
+  const [groups, setGroups] = useState<Partial<Record<PanelId, string>>>({});
+  const [activeTab, setActiveTab] = useState<Partial<Record<string, PanelId>>>({});
+  /** The header a drag is currently over, so it can be highlighted as a group
+   *  target rather than leaving the user to guess what a drop will do. */
+  const [headerTarget, setHeaderTarget] = useState<PanelId | null>(null);
 
   // Load the saved order + open state after mount (avoids a hydration mismatch).
   /* Reading localStorage during render would produce one thing on the server
@@ -392,6 +479,8 @@ export default function RightDock({
     const l = loadLayout();
     setLeft(l.left);
     setFloats(l.floats);
+    setGroups(l.groups);
+    setActiveTab(l.activeTab);
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
   // Persist whenever they change.
@@ -411,11 +500,11 @@ export default function RightDock({
   }, [openMap]);
   useEffect(() => {
     try {
-      window.localStorage.setItem(LAYOUT_KEY, JSON.stringify({ left, floats }));
+      window.localStorage.setItem(LAYOUT_KEY, JSON.stringify({ left, floats, groups, activeTab }));
     } catch {
       /* ignore */
     }
-  }, [left, floats]);
+  }, [left, floats, groups, activeTab]);
 
   // Workspaces + Reset Workspace drive the whole layout through this handle.
   // Published with useImperativeHandle rather than assigned during render: a ref
@@ -426,13 +515,15 @@ export default function RightDock({
   useImperativeHandle(
     dockRef,
     () => ({
-      capture: () => ({ order, left, floats, open: openMap }),
+      capture: () => ({ order, left, floats, open: openMap, groups, activeTab }),
       apply: (l: DockLayout | null) => {
         if (!l) {
           setOrder(DEFAULT_ORDER);
           setOpenMap(DEFAULT_OPEN);
           setLeft([]);
           setFloats({});
+          setGroups({});
+          setActiveTab({});
           return;
         }
         const saved = (l.order ?? []).filter(isPanelId);
@@ -440,16 +531,91 @@ export default function RightDock({
         const c = coerceLayout(l);
         setLeft(c.left);
         setFloats(c.floats);
+        setGroups(c.groups);
+        setActiveTab(c.activeTab);
         setOpenMap({ ...DEFAULT_OPEN, ...(l.open ?? {}) });
       },
     }),
-    [order, left, floats, openMap],
+    [order, left, floats, openMap, groups, activeTab],
   );
 
   const toggleOpen = (id: PanelId) => setOpenMap((cur) => ({ ...cur, [id]: !cur[id] }));
 
+  /* ---- tabbed groups ----------------------------------------------------
+   *
+   * A group is a set of panels sharing a key in `groups`. It is drawn as one
+   * frame at the position of its first member in `order`, with a tab strip in
+   * place of the single title. Nothing else about the dock changes: `order`
+   * still decides sequence, `left` still decides which dock, and a member that
+   * is closed or floated simply is not in the strip.
+   */
+
+  /** Members of a group, in `order`, restricted to one dock's ids AND to panels
+   *  the Window menu is actually showing — a hidden member must not appear as a
+   *  tab, and must not be able to become the frame's active tab, or the whole
+   *  group would render as nothing when panelFor returned null for it. */
+  const membersOf = (key: string, within: PanelId[]) =>
+    within.filter((id) => groups[id] === key && panels[id]);
+
+  /** Drop a panel out of whatever group it is in, dissolving any group of one. */
+  const dropFromGroup = (
+    g: Partial<Record<PanelId, string>>,
+    id: PanelId,
+  ): Partial<Record<PanelId, string>> => {
+    const key = g[id];
+    if (!key) return g;
+    const next = { ...g };
+    delete next[id];
+    const rest = (Object.keys(next) as PanelId[]).filter((p) => next[p] === key);
+    if (rest.length < 2) for (const p of rest) delete next[p]; // a lone tab is not a group
+    return next;
+  };
+
+  /** Put `from` into `onto`'s group, creating one if `onto` has none. */
+  const joinGroup = (from: PanelId, onto: PanelId) => {
+    if (from === onto) return;
+    setGroups((cur) => {
+      const key = cur[onto] ?? `g${Date.now().toString(36)}`;
+      if (cur[from] === key) return cur;
+      const next = dropFromGroup(cur, from);
+      next[onto] = key;
+      next[from] = key;
+      return next;
+    });
+    // A group lives in ONE dock: joining moves the panel to its host's side,
+    // and a floating panel docks again, or the frame would be split in two.
+    setLeft((cur) => {
+      const ontoLeft = cur.includes(onto);
+      const fromLeft = cur.includes(from);
+      if (ontoLeft === fromLeft) return cur;
+      return ontoLeft ? [...cur, from] : cur.filter((x) => x !== from);
+    });
+    setFloats((cur) => {
+      if (!cur[from] && !cur[onto]) return cur;
+      const next = { ...cur };
+      delete next[from];
+      delete next[onto];
+      return next;
+    });
+    setActiveTab((cur) => ({ ...cur, [groups[onto] ?? ""]: from }));
+    setOpenMap((cur) => (cur[from] ? cur : { ...cur, [from]: true })); // a new tab shows itself
+  };
+
+  const leaveGroup = (id: PanelId) => setGroups((cur) => dropFromGroup(cur, id));
+
+  /** The tab a group is showing: the stored one if it is still a member and
+   *  open, otherwise the first member that is. */
+  const activeOf = (key: string, members: PanelId[]): PanelId | null => {
+    const stored = activeTab[key];
+    if (stored && members.includes(stored)) return stored;
+    return members[0] ?? null;
+  };
+
   const isFloating = (id: PanelId) => !!floats[id];
   const toggleFloat = (id: PanelId) => {
+    // Floating takes a panel out of its tab strip: a float is one panel over the
+    // canvas, and leaving it in the group would draw it in two places at once.
+    setGroups((cur) => dropFromGroup(cur, id));
     setFloats((cur) => {
       if (cur[id]) {
         const next = { ...cur };
@@ -496,6 +662,7 @@ export default function RightDock({
 
   /** Drop on a dock's empty tail: join that dock at the end of the order. */
   const moveToDockEnd = (id: PanelId, side: "left" | "right") => {
+    setGroups((cur) => dropFromGroup(cur, id)); // the tail of a dock is not a group
     setLeft((cur) =>
       side === "left" ? (cur.includes(id) ? cur : [...cur, id]) : cur.filter((x) => x !== id),
     );
@@ -535,13 +702,20 @@ export default function RightDock({
         if (targetLeft === has) return cur;
         return targetLeft ? [...cur, dragId] : cur.filter((x) => x !== dragId);
       });
+      /* Dropping on a panel's BODY means "sit next to it", so the dragged panel
+         leaves whatever group it was in — unless the target is in that same
+         group, which is just the pointer passing over its own frame. */
+      if (groups[dragId] && groups[dragId] !== groups[id]) leaveGroup(dragId);
       const r = e.currentTarget.getBoundingClientRect();
       reorder(dragId, id, e.clientY - r.top < r.height / 2);
     },
-    onDragEnd: () => setDragId(null),
+    onDragEnd: () => {
+      setDragId(null);
+      setHeaderTarget(null);
+    },
   });
 
-  const panelFor = (id: PanelId): ReactNode => {
+  const panelFor = (id: PanelId, extra?: Partial<PanelExtra>): ReactNode => {
     const floating = isFloating(id);
     const dp = {
       // Floating panels move by their grip, not HTML5 DnD.
@@ -550,6 +724,21 @@ export default function RightDock({
       onToggle: () => toggleOpen(id),
       floating,
       onFloat: () => toggleFloat(id),
+      /* Dropping ON a header groups instead of reordering, and the drop is
+         stopped here so the section's reorder handler does not also fire and
+         fight it. This is on EVERY panel, grouped or not: dropping on a lone
+         panel's header is how a group gets made in the first place. */
+      onHeaderDragOver: floating
+        ? undefined
+        : (e: DragEvent<HTMLElement>) => {
+            if (!dragId || dragId === id) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setHeaderTarget(id);
+            joinGroup(dragId, id);
+          },
+      headerDropping: headerTarget === id && !!dragId && dragId !== id,
+      ...extra,
     };
     switch (id) {
       case "navigator":
@@ -746,6 +935,63 @@ export default function RightDock({
   const leftIds = order.filter((id) => left.includes(id) && !isFloating(id));
   const floatIds = order.filter((id) => isFloating(id));
 
+  /**
+   * One dock's contents, with grouped panels collapsed into a single frame.
+   *
+   * Walks the dock's ids in `order` and renders the first member of each group
+   * as a tabbed frame, skipping the rest — so a group appears exactly where its
+   * earliest member sits, and reordering any member moves the group. A group
+   * whose members ended up split across docks renders as one frame per dock,
+   * which is the only sensible reading of "these two are in different places";
+   * joining forces them into the same dock so it should not arise.
+   */
+  const renderDock = (ids: PanelId[]): ReactNode[] => {
+    const out: ReactNode[] = [];
+    const drawn = new Set<string>();
+    for (const id of ids) {
+      const key = groups[id];
+      if (!key) {
+        out.push(panelFor(id));
+        continue;
+      }
+      if (drawn.has(key)) continue;
+      drawn.add(key);
+      const members = membersOf(key, ids);
+      /* Render the surviving MEMBER, not the id this loop happened to reach:
+         with the other members hidden by the Window menu, `id` may be the hidden
+         one, and panelFor would return null while the visible member was already
+         marked as drawn — the group would disappear entirely. */
+      if (members.length === 0) continue;
+      if (members.length === 1) {
+        out.push(panelFor(members[0])); // a lone member is just a panel
+        continue;
+      }
+      const active = activeOf(key, members) ?? members[0];
+      out.push(
+        panelFor(active, {
+          tabs: members.map((m) => ({
+            id: m,
+            title: PANEL_TITLES[m],
+            icon: PANEL_ICONS[m],
+            active: m === active,
+            onSelect: () => setActiveTab((cur) => ({ ...cur, [key]: m })),
+            // Dragging a TAB is how a panel leaves the group.
+            draggable: true,
+            onDragStart: (e: DragEvent<HTMLElement>) => {
+              setDragId(m);
+              e.dataTransfer.effectAllowed = "move";
+            },
+            onDragEnd: () => {
+              setDragId(null);
+              setHeaderTarget(null);
+            },
+          })),
+        }),
+      );
+    }
+    return out;
+  };
+
   /** Drop target for a dock's empty space (also how the left dock starts). */
   const dropZone = (side: "left" | "right") =>
     dragId ? (
@@ -762,13 +1008,13 @@ export default function RightDock({
   return (
     <>
       <aside className={styles.dock} aria-label="Panels" data-tour="dock">
-        {rightIds.map((id) => panelFor(id))}
+        {renderDock(rightIds)}
         {dropZone("right")}
       </aside>
       {leftHost &&
         createPortal(
           <>
-            {leftIds.map((id) => panelFor(id))}
+            {renderDock(leftIds)}
             {dropZone("left")}
           </>,
           leftHost,

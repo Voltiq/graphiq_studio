@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "0.76.0",
+  "version": "0.77.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -17,6 +17,7 @@
     "test:blend": "node tools/verify-worker-blend.js",
     "test:react": "node tools/verify-react-state.js",
     "test:colorspace": "node tools/verify-colorspace-roundtrip.js",
+    "test:panels": "node tools/verify-panel-groups.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && vitest run"
