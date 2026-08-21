@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useImperativeHandle, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { uiZoom } from "../lib/ui-scale";
 import { type WorkingSpace } from "../lib/colorspace";
@@ -474,6 +474,22 @@ export default function RightDock({
   /** What the drop under the pointer would do. Drawn as an insertion line or a
    *  highlight, so a drag never has to be guessed at. */
   const [hint, setHint] = useState<DropHint | null>(null);
+  /**
+   * The panel being dragged, in a REF as well as in state.
+   *
+   * The handlers read the ref, never `dragId`. A drag is a discrete event, so
+   * React flushes any `setState` during it synchronously and re-renders — which
+   * replaces the very handlers the browser is midway through dispatching, and a
+   * closure that captured `dragId` before the flush reads `null` afterwards and
+   * silently does nothing. `dragId` stays, but only to drive what is DRAWN.
+   */
+  const dragRef = useRef<PanelId | null>(null);
+  /** Ends a drag from anywhere: the ref first, then what is drawn. */
+  const endDrag = () => {
+    dragRef.current = null;
+    setDragId(null);
+    setHint(null);
+  };
 
   // Load the saved order + open state after mount (avoids a hydration mismatch).
   /* Reading localStorage during render would produce one thing on the server
@@ -557,27 +573,23 @@ export default function RightDock({
    * the panel keeps its half-opacity dragging tint and every dock keeps showing
    * its dashed drop zone, until some later interaction happens to clear them.
    *
-   * `drop` fires on the TARGET, which is always live, so it reaches the window
-   * whatever happened to the source. `dragend` still covers drags that end
-   * without a drop and whose source survived (a reorder within one dock), and
-   * Escape covers a cancel. Capture phase so a handler that stops propagation
-   * cannot leave the dock stuck again.
+   * NOT `drop`, deliberately. A capture listener on the window runs before the
+   * event reaches the panel, and clearing state there re-renders the dock mid
+   * dispatch — which swapped out the very `onDrop` about to be called and made
+   * every drop a no-op. Drops clear themselves through `applyDrop`; this only
+   * has to catch a drag that ends WITHOUT one, where `dragend` fires on a source
+   * that necessarily still exists because nothing moved. Escape covers a cancel.
    */
   useEffect(() => {
     if (!dragId) return;
-    const clear = () => {
-      setDragId(null);
-      setHint(null);
-    };
+    const onEnd = () => endDrag();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") clear();
+      if (e.key === "Escape") endDrag();
     };
-    window.addEventListener("drop", clear, true);
-    window.addEventListener("dragend", clear, true);
+    window.addEventListener("dragend", onEnd, true);
     window.addEventListener("keydown", onKey, true);
     return () => {
-      window.removeEventListener("drop", clear, true);
-      window.removeEventListener("dragend", clear, true);
+      window.removeEventListener("dragend", onEnd, true);
       window.removeEventListener("keydown", onKey, true);
     };
   }, [dragId]);
@@ -757,25 +769,25 @@ export default function RightDock({
     draggable: true,
     dragging: dragId === id,
     onDragStart: (e: DragEvent<HTMLElement>) => {
+      dragRef.current = id;
       setDragId(id);
       e.dataTransfer.effectAllowed = "move";
     },
     onDragOver: (e: DragEvent<HTMLElement>) => {
-      if (!dragId || dragId === id) return;
+      const from = dragRef.current;
+      if (!from || from === id) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
       setHint({ kind: zoneOf(e.currentTarget.getBoundingClientRect(), e.clientY), id });
     },
     onDrop: (e: DragEvent<HTMLElement>) => {
-      if (!dragId || dragId === id) return;
+      const from = dragRef.current;
+      if (!from || from === id) return;
       e.preventDefault();
       e.stopPropagation();
-      applyDrop(dragId, { kind: zoneOf(e.currentTarget.getBoundingClientRect(), e.clientY), id });
+      applyDrop(from, { kind: zoneOf(e.currentTarget.getBoundingClientRect(), e.clientY), id });
     },
-    onDragEnd: () => {
-      setDragId(null);
-      setHint(null);
-    },
+    onDragEnd: endDrag,
   });
 
   /** Carry out what the hint promised. The only place membership changes. */
@@ -796,8 +808,7 @@ export default function RightDock({
       });
       reorder(from, hint.id, hint.kind === "before");
     }
-    setDragId(null);
-    setHint(null);
+    endDrag();
   };
 
   const panelFor = (id: PanelId, extra?: Partial<PanelExtra>): ReactNode => {
@@ -1055,13 +1066,11 @@ export default function RightDock({
             // Dragging a TAB is how a panel leaves the group.
             draggable: true,
             onDragStart: (e: DragEvent<HTMLElement>) => {
+              dragRef.current = m; // the handlers read the ref, not the state
               setDragId(m);
               e.dataTransfer.effectAllowed = "move";
             },
-            onDragEnd: () => {
-              setDragId(null);
-              setHint(null);
-            },
+            onDragEnd: endDrag,
           })),
         }),
       );
