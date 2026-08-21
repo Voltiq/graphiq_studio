@@ -157,6 +157,7 @@ import {
   type TextFxKey,
   type TextFxPreset,
 } from "../lib/text-fx";
+import { clampX } from "../lib/safeArea";
 
 /** In the options bar every slider is the compact inline (label-beside) variant. */
 function Slider(props: React.ComponentProps<typeof BaseSlider>) {
@@ -198,7 +199,7 @@ function OpenTypeControl({ text, onText }: TextProps) {
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
       setPos({
-        left: Math.max(8, Math.min(r.left, window.innerWidth - 328)),
+        left: clampX(r.left, 328),
         top: r.bottom + 6,
       });
     }
@@ -321,7 +322,7 @@ function WarpControl({ text, onText }: TextProps) {
   const toggleOpen = () => {
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
-      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 300)), top: r.bottom + 6 });
+      setPos({ left: clampX(r.left, 300), top: r.bottom + 6 });
     }
     setOpen((o) => !o);
   };
@@ -414,7 +415,7 @@ function PressureControl({
   const toggleOpen = () => {
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
-      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 300)), top: r.bottom + 6 });
+      setPos({ left: clampX(r.left, 300), top: r.bottom + 6 });
     }
     setOpen((o) => !o);
   };
@@ -514,7 +515,7 @@ function TipShapeControl({
   const toggleOpen = () => {
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
-      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 320)), top: r.bottom + 6 });
+      setPos({ left: clampX(r.left, 320), top: r.bottom + 6 });
     }
     setOpen((o) => !o);
   };
@@ -730,7 +731,7 @@ function CustomShapePicker({
   const toggleOpen = () => {
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
-      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 320)), top: r.bottom + 6 });
+      setPos({ left: clampX(r.left, 320), top: r.bottom + 6 });
     }
     setOpen((o) => !o);
   };
@@ -899,7 +900,7 @@ function TextFillControl({ text, onText }: TextProps) {
   const toggleOpen = () => {
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
-      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 330)), top: r.bottom + 6 });
+      setPos({ left: clampX(r.left, 330), top: r.bottom + 6 });
     }
     setOpen((o) => !o);
   };
@@ -1091,7 +1092,7 @@ function TextFxControl({ text, onText }: TextProps) {
   const toggleOpen = () => {
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
-      setPos({ left: Math.max(8, Math.min(r.left, window.innerWidth - 330)), top: r.bottom + 6 });
+      setPos({ left: clampX(r.left, 330), top: r.bottom + 6 });
     }
     setOpen((o) => !o);
   };

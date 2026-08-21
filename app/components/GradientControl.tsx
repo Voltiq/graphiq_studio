@@ -20,6 +20,7 @@ import {
 } from "../lib/gradientio";
 import type { GradientSettings, GradientStop } from "../lib/tools";
 import { DEFAULT_NOISE, buildNoiseStops, type NoiseGradient } from "../lib/gradient-noise";
+import { clampX } from "../lib/safeArea";
 
 /** A CSS linear-gradient string for a preview swatch. */
 export function cssGradient(stops: GradientStop[]): string {
@@ -435,7 +436,7 @@ export default function GradientControl({
        contorted into a shape the linter prefers but a reader does not. */
     // eslint-disable-next-line react-hooks/set-state-in-effect -- see above
     setPos({
-      left: Math.max(8, Math.min(r.left, window.innerWidth - W - 8)) / z,
+      left: clampX(r.left, W) / z,
       top: (r.bottom + 8) / z,
     });
   }, [open]);

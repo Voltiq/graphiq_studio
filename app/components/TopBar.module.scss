@@ -9,7 +9,7 @@
   display: flex;
   align-items: center;
   gap: var(--sp-1);
-  padding: var(--safe-t) var(--sp-3) 0;
+  padding: var(--safe-t) calc(var(--sp-3) + var(--safe-r)) 0 calc(var(--sp-3) + var(--safe-l));
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   z-index: 60;

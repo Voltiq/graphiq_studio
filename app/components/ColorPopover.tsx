@@ -12,6 +12,7 @@ import { createPortal } from "react-dom";
 import styles from "./ColorPopover.module.scss";
 import ColorPicker from "./ColorPicker";
 import { uiZoom } from "../lib/ui-scale";
+import { clampX } from "../lib/safeArea";
 
 type Align = "bottom-start" | "bottom-end" | "right-start" | "right-end";
 
@@ -78,7 +79,7 @@ export default function ColorPopover({
           top = r.bottom + gap;
           left = r.left;
       }
-      left = Math.round(Math.min(Math.max(margin, left), window.innerWidth - pw - margin)) / z;
+      left = Math.round(clampX(left, pw, margin)) / z;
       top = Math.round(Math.min(Math.max(margin, top), window.innerHeight - ph - margin)) / z;
       setPos((prev) => (prev && prev.top === top && prev.left === left ? prev : { top, left }));
     };

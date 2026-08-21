@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import styles from "./Tooltip.module.scss";
 import { uiZoom } from "../lib/ui-scale";
+import { clampX } from "../lib/safeArea";
 
 const TIP_ATTR = "data-tip";
 
@@ -140,8 +141,7 @@ export default function TooltipHost() {
       anchor.bottom + gap + th + margin > window.innerHeight && anchor.top - gap - th - margin > 0
         ? "top"
         : "bottom";
-    const left =
-      Math.max(margin, Math.min(anchor.cx - tw / 2, window.innerWidth - tw - margin)) / z;
+    const left = clampX(anchor.cx - tw / 2, tw, margin) / z;
     const top = (place === "bottom" ? anchor.bottom + gap : anchor.top - gap - th) / z;
     setPos({ left, top, place });
   }, [anchor]);

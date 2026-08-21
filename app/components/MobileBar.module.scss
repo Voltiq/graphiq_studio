@@ -10,7 +10,7 @@
   bottom: 0;
   z-index: 130;
   height: var(--chrome-bottom);
-  padding: 0 var(--sp-2) var(--safe-b);
+  padding: 0 calc(var(--sp-2) + var(--safe-r)) var(--safe-b) calc(var(--sp-2) + var(--safe-l));
   display: flex;
   align-items: center;
   gap: var(--sp-2);

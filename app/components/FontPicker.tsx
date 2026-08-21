@@ -15,6 +15,7 @@ import {
   searchFonts,
   validRecents,
 } from "../lib/fonts";
+import { clampX } from "../lib/safeArea";
 
 const POPOVER_W = 268;
 
@@ -72,7 +73,7 @@ export default function FontPicker({
     // zoomed element render ×z (same rule as the gradient popover).
     const z = uiZoom();
     setPos({
-      left: Math.max(8, Math.min(r.left, window.innerWidth - POPOVER_W * z - 8)) / z,
+      left: clampX(r.left, POPOVER_W * z) / z,
       top: (r.bottom + 6) / z,
     });
     setRecent(loadRecentFonts());

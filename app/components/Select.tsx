@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
 import styles from "./Controls.module.scss";
 import { uiZoom } from "../lib/ui-scale";
+import { clampX } from "../lib/safeArea";
 
 /**
  * Custom dropdown — a styled trigger + a portalled, frosted-glass popup that
@@ -55,7 +56,19 @@ export function Select({
       const margin = 8;
       let top = r.bottom + 4;
       if (top + ph > window.innerHeight - margin) top = Math.max(margin, r.top - 4 - ph);
-      const left = Math.min(r.left, window.innerWidth - r.width - margin);
+      /* The menu's own width, the same way the height is read above. The
+         trigger's width is only its MINIMUM (`minWidth` below), so clamping by
+         the trigger let a menu with longer options overhang the edge it was
+         supposed to be clamped to — 12px into a cutout, in the case that found
+         this. Falls back to the trigger before the portal has mounted.
+
+         On the first pass this reads the menu's NATURAL width, since minWidth
+         is only applied once `pos` exists, so a clamped menu can end up a shade
+         further inboard than it strictly needs to be. That only affects menus
+         that are being clamped at all — an unclamped one still sits flush to
+         its trigger — and it errs inside the edge rather than over it. */
+      const pw = (popRef.current?.offsetWidth ?? 0) * z || r.width;
+      const left = clampX(r.left, pw, margin);
       setPos({ top: top / z, left: left / z, width: r.width / z });
     };
     place();

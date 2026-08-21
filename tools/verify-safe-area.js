@@ -283,7 +283,188 @@ const MOBILE = { width: 390, height: 844 };
   check("clearing the insets puts everything back", cleared.chromeBottom === 56 && cleared.bar.height === 56,
     `--chrome-bottom ${cleared.chromeBottom}px, bar ${cleared.bar.height}px`);
 
-  // ---------- 5. the source itself: nothing hand-rolls env() any more ----------
+  // ---------- 5. landscape: the cutout moves to a side ----------
+  /* A real iPhone in landscape is 844px wide, which today resolves to the
+     DESKTOP shell, because the breakpoint is width-only — that is the NEXT
+     item, not this one. 740px keeps the mobile shell while still being wider
+     than it is tall, so the drawers, the bottom bar and the swipe strips are
+     all in play with a side inset applied.
+
+     The item proposed asserting `rect.left >= safeLeft + 16`. That margin is
+     larger than the app's own gutters (--sp-2 is 8px, --sp-3 is 12px), so it
+     would fail on correct layout; what is asserted instead is that nothing
+     pressable intrudes into the inset AT ALL, which is the actual claim. */
+  const LAND = { width: 740, height: 390 };
+  for (const [label, insets] of [
+    ["a cutout on the left", { top: 0, right: 34, bottom: 21, left: 47 }],
+    ["a cutout on the right", { top: 0, right: 47, bottom: 21, left: 34 }],
+  ]) {
+    const land = await open(LAND);
+    await land.cdp.send("Emulation.setSafeAreaInsetsOverride", { insets });
+    await land.page.waitForTimeout(350);
+    const lp = land.page;
+    const W = LAND.width;
+    const fits = (r) => !!r && r.left >= insets.left && r.right <= W - insets.right;
+    const say = (r) => (r ? `${r.left}…${r.right}` : "missing");
+    const bounds = `safe box is ${insets.left}…${W - insets.right}`;
+
+    const chrome = await lp.evaluate(() => {
+      const r = (el) => {
+        if (!el) return null;
+        const b = el.getBoundingClientRect();
+        return { left: Math.round(b.left), right: Math.round(b.right) };
+      };
+      const barBtns = [...document.querySelectorAll('[data-tour="mobilebar"] button')];
+      return {
+        hamburger: r(document.querySelector('button[aria-label="Menu"]')),
+        barFirst: r(barBtns[0]),
+        barLast: r(barBtns[barBtns.length - 1]),
+        edgeL: r(document.querySelector('.gq-m-edge[data-side="left"]')),
+        edgeR: r(document.querySelector('.gq-m-edge[data-side="right"]')),
+      };
+    });
+    check(`${label}: the top bar's first control clears it`, fits(chrome.hamburger),
+      `${say(chrome.hamburger)} — ${bounds}`);
+    check(`${label}: the bottom bar's buttons clear it`,
+      fits(chrome.barFirst) && fits(chrome.barLast),
+      `first ${say(chrome.barFirst)}, last ${say(chrome.barLast)} — ${bounds}`);
+    /* The swipe strips are invisible hit targets, so they move rather than pad:
+       a 20px strip under a 47px cutout could not be touched at all. */
+    check(`${label}: the swipe strips sit inside it`, fits(chrome.edgeL) && fits(chrome.edgeR),
+      `left ${say(chrome.edgeL)}, right ${say(chrome.edgeR)} — ${bounds}`);
+
+    // The drawers, which are the halves the item names.
+    await lp.locator('[data-tour="mobilebar"] button', { hasText: "Tools" }).first().click();
+    await lp.waitForTimeout(500);
+    const tools = await lp.evaluate(() => {
+      const b = document.querySelector('[data-tour="toolbar"] button');
+      if (!b) return null;
+      const r = b.getBoundingClientRect();
+      return { left: Math.round(r.left), right: Math.round(r.right) };
+    });
+    check(`${label}: the tool drawer's first button clears it`, fits(tools), `${say(tools)} — ${bounds}`);
+    /* Close before opening the other one. The bar genuinely sits above the
+       scrim (z-130 against z-110, and elementFromPoint at the button's centre
+       returns the button), but Playwright's actionability check refuses to
+       click through an overlay that covers the point, so switching drawers
+       directly stalls the run rather than failing anything real. */
+    await lp.locator('[data-tour="mobilebar"] button', { hasText: "Tools" }).first().click();
+    await lp.waitForTimeout(500);
+    await lp.locator('[data-tour="mobilebar"] button', { hasText: "Panels" }).first().click();
+    await lp.waitForTimeout(600);
+    const dock = await lp.evaluate(() => {
+      const el = document.querySelector('[data-tour="dock"]');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const pad = Math.round(parseFloat(getComputedStyle(el).paddingRight));
+      /* Only the controls actually inside the drawer's visible width. Panel
+         content can be wider than the dock and scroll horizontally, so the
+         widest button in there sits off to the right of the viewport whether or
+         not there is an inset — measuring those would say nothing about this. */
+      const vis = [...el.querySelectorAll("button")]
+        .map((b) => b.getBoundingClientRect())
+        .filter((b) => b.right <= r.right + 1 && b.width > 0);
+      return {
+        boxRight: Math.round(r.right),
+        pad,
+        left: vis.length ? Math.round(Math.min(...vis.map((b) => b.left))) : 0,
+        right: vis.length ? Math.round(Math.max(...vis.map((b) => b.right))) : 0,
+        count: vis.length,
+      };
+    });
+    check(`${label}: the panel drawer reserves it`,
+      dock && dock.boxRight === W && dock.pad === insets.right,
+      `drawer ends at ${dock?.boxRight} (viewport ${W}), padding-right ${dock?.pad} (inset ${insets.right})`);
+    /* Measured as a DIFFERENCE, not against the safe box. Panel content is
+       already wider than the 320px dock on a viewport this narrow — with no
+       inset at all the widest control ends past the display edge — so an
+       absolute bound would be asserting something that was never true. What
+       this item changed is that the whole column moves inboard by the inset. */
+    await land.cdp.send("Emulation.setSafeAreaInsetsOverride",
+      { insets: { top: 0, right: 0, bottom: 0, left: 0 } });
+    await lp.waitForTimeout(300);
+    const dockFlat = await lp.evaluate(() => {
+      const el = document.querySelector('[data-tour="dock"]');
+      const vis = [...el.querySelectorAll("button")]
+        .map((b) => b.getBoundingClientRect())
+        .filter((b) => b.width > 0);
+      return { right: Math.round(Math.max(...vis.map((b) => b.right))) };
+    });
+    await land.cdp.send("Emulation.setSafeAreaInsetsOverride", { insets });
+    await lp.waitForTimeout(300);
+    const dockInset = await lp.evaluate(() => {
+      const el = document.querySelector('[data-tour="dock"]');
+      const vis = [...el.querySelectorAll("button")]
+        .map((b) => b.getBoundingClientRect())
+        .filter((b) => b.width > 0);
+      return { right: Math.round(Math.max(...vis.map((b) => b.right))) };
+    });
+    check(`${label}: …and its contents move inboard by exactly that much`,
+      dockFlat.right - dockInset.right === insets.right,
+      `widest control ends at ${dockFlat.right} with no inset, ${dockInset.right} with one ` +
+        `(moved ${dockFlat.right - dockInset.right}, inset is ${insets.right})`);
+
+    await land.context.close();
+  }
+
+  // ---------- 5b. a popup that would overflow the cutout is pulled back ----------
+  /* Deliberately fatter than any real phone. With the true insets above, every
+     popup that can be opened on screen happens to fit anyway — so opening one
+     would pass whether or not the clamp does anything, which is precisely what
+     an earlier version of this check did: reverting a popup to window.innerWidth
+     left it green. 200px guarantees the clamp has work to do. */
+  {
+    const FAT = 200;
+    const land = await open(LAND);
+    const lp = land.page;
+    await lp.locator('[data-tour="mobilebar"] button', { hasText: "Panels" }).first().click();
+    await lp.waitForTimeout(700);
+    await land.cdp.send("Emulation.setSafeAreaInsetsOverride",
+      { insets: { top: 0, right: FAT, bottom: 0, left: 0 } });
+    await lp.waitForTimeout(350);
+
+    /* The rightmost trigger inside the drawer, which is flush to that edge.
+       Clicked by coordinate rather than by locator: the drawer's scrim makes
+       Playwright's actionability check refuse a click the browser would land. */
+    const anchor = await lp.evaluate(async () => {
+      const all = [...document.querySelectorAll('[data-tour="dock"] button[aria-haspopup="listbox"]')]
+        .filter((b) => b.getBoundingClientRect().width > 0);
+      if (!all.length) return null;
+      /* The rightmost one, then scrolled into view: the dock is a tall scroller,
+         and its selects sit well below a 390px-high viewport, so a rect taken
+         where they lie unscrolled points thousands of pixels off screen. */
+      const el = all.reduce((a, b) =>
+        b.getBoundingClientRect().left > a.getBoundingClientRect().left ? b : a);
+      el.scrollIntoView({ block: "center" });
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 120)));
+      const r = el.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > window.innerHeight) return null;
+      return { x: Math.round(r.left), y: Math.round(r.top + r.height / 2), w: Math.round(r.width) };
+    });
+    if (!anchor) {
+      check("a popup that would overflow the cutout is pulled back inside it", false,
+        "no listbox trigger was on screen inside the drawer");
+    } else {
+      await lp.mouse.click(anchor.x + anchor.w / 2, anchor.y);
+      await lp.waitForTimeout(450);
+      const pop = await lp.evaluate(() => {
+        const el = document.querySelector('[role="listbox"]');
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width) };
+      });
+      const limit = LAND.width - FAT;
+      check("a popup that would overflow the cutout is pulled back inside it",
+        !!pop && pop.right <= limit && pop.left < anchor.x,
+        pop
+          ? `anchored at ${anchor.x}, ${pop.width}px wide — would have ended at ${anchor.x + pop.width}, ` +
+            `lands at ${pop.left}…${pop.right} (safe edge ${limit})`
+          : "no popup opened");
+    }
+    await land.context.close();
+  }
+
+  // ---------- 6. the source itself: nothing hand-rolls env() any more ----------
   const scss = [];
   const walk = (dir) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -295,6 +476,21 @@ const MOBILE = { width: 390, height: 844 };
   walk(path.join(process.cwd(), "app"));
   const envUses = [];
   const strayOffsets = [];
+  /* Popups place from JS, so their equivalent of a hand-rolled env() is a clamp
+     against window.innerWidth — the whole display, cutouts included. */
+  const strayClamps = [];
+  const walkTsx = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const f = path.join(dir, e.name);
+      if (e.isDirectory()) walkTsx(f);
+      else if (e.name.endsWith(".tsx")) {
+        for (const line of fs.readFileSync(f, "utf8").split("\n"))
+          if (line.includes("window.innerWidth") && line.includes("Math.min"))
+            strayClamps.push(`${path.basename(f)}: ${line.trim()}`);
+      }
+    }
+  };
+  walkTsx(path.join(process.cwd(), "app"));
   for (const f of scss) {
     const text = fs.readFileSync(f, "utf8");
     for (const line of text.split("\n")) {
@@ -312,6 +508,9 @@ const MOBILE = { width: 390, height: 844 };
     envUses.length === 4 && defsOnly, `${envUses.length} use(s)${defsOnly ? "" : " — " + envUses.join(" | ")}`);
   check("no offset re-adds the chrome heights by hand", strayOffsets.length === 0,
     strayOffsets.length ? strayOffsets.join(" | ") : "none");
+
+  check("every popup clamps to the safe box, not to the whole display",
+    strayClamps.length === 0, strayClamps.length ? strayClamps.join(" | ") : "none");
 
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
   await context.close();

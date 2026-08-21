@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useState } from "react";
 import styles from "./TourOverlay.module.scss";
 import { TOUR_STEPS } from "../lib/tour";
 import { uiZoom } from "../lib/ui-scale";
+import { clampX } from "../lib/safeArea";
 
 /**
  * The interactive onboarding tour: a spotlight over the live chrome (targets
@@ -82,7 +83,7 @@ export default function TourOverlay({
     const below = rect.y + rect.h + pad + 12;
     const fitsBelow = below + cardH < vh - 8;
     const yTop = fitsBelow ? below : Math.max(8, rect.y - pad - 12 - cardH);
-    cx = Math.max(8, Math.min(rect.x + rect.w / 2 - cardW / 2, vw - cardW - 8)) / z;
+    cx = clampX(rect.x + rect.w / 2 - cardW / 2, cardW) / z;
     cy = yTop / z;
   } else {
     cx = (vw / 2 - cardW / 2) / z;

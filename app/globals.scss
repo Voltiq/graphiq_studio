@@ -581,7 +581,12 @@ html[data-mobile="true"] {
     top: var(--chrome-top);
     left: 0;
     bottom: var(--chrome-bottom);
-    width: 76px;
+    /* Grown by the side inset and padded by it, rather than moved: the drawer's
+       background still reaches the edge of the display while its buttons clear
+       a cutout. Padding alone would squeeze the 46px buttons inside the fixed
+       76px box, since box-sizing is border-box. */
+    width: calc(76px + var(--safe-l));
+    padding-left: var(--safe-l);
     transform: translateX(-100%);
     transition: transform var(--t-med) var(--ease-pop);
     z-index: 120;
@@ -595,7 +600,8 @@ html[data-mobile="true"] {
     top: var(--chrome-top);
     right: 0;
     bottom: var(--chrome-bottom);
-    width: min(var(--dock-w), 86vw);
+    width: calc(min(var(--dock-w), 86vw) + var(--safe-r));
+    padding-right: var(--safe-r);
     transform: translateX(100%);
     transition: transform var(--t-med) var(--ease-pop);
     z-index: 120;
@@ -636,7 +642,7 @@ html[data-mobile="true"] {
        scrolling to the end just parked them behind the bar. */
     bottom: var(--chrome-bottom);
     z-index: 80;
-    padding: var(--sp-2);
+    padding: var(--sp-2) calc(var(--sp-2) + var(--safe-r)) var(--sp-2) calc(var(--sp-2) + var(--safe-l));
     gap: 2px;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
@@ -708,9 +714,9 @@ html[data-mobile="true"][data-drawer="panels"] [data-tour="dock"] {
   touch-action: none;
 
   &[data-side="left"] {
-    left: 0;
+    left: var(--safe-l);
   }
   &[data-side="right"] {
-    right: 0;
+    right: var(--safe-r);
   }
 }

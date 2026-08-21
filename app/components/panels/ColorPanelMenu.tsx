@@ -14,6 +14,7 @@ import {
 import styles from "../RightDock.module.scss";
 import { parseColor, toHex6, toHex8, toRgbaCss } from "../../lib/color";
 import { addSwatch } from "../../lib/swatches";
+import { clampX } from "../../lib/safeArea";
 
 /** Exactly the syntaxes parseColor understands — used to reject clipboard text
  *  BEFORE parsing, since parseColor falls back to black for anything it can't
@@ -65,7 +66,7 @@ export default function ColorPanelMenu({
       const r = btnRef.current.getBoundingClientRect();
       // Right-align the menu to the button; keep it on screen.
       setPos({
-        left: Math.max(8, Math.min(r.right - 200, window.innerWidth - 208)),
+        left: clampX(r.right - 200, 200),
         top: r.bottom + 4,
       });
     }
