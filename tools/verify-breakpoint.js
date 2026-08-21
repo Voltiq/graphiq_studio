@@ -113,6 +113,80 @@ const PROFILES = [
     await context.close();
   }
 
+  // ---------- decided BEFORE the first paint, not a frame later ----------
+  /* The shell used to be chosen in an effect, so a phone painted the desktop
+     layout first — toolbar and dock in flow, canvas measured against what was
+     left — and then reflowed. An inline script in <head> settles it first.
+     Watched from an init script, which runs before the page's own scripts, and
+     under 6x CPU throttling so any gap between paint and effect is wide enough
+     to catch rather than something that slipped between two frames. */
+  {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      hasTouch: true,
+    });
+    await context.addInitScript(() => {
+      window.__frames = [];
+      const tick = () => {
+        const toolbar = document.querySelector('[data-tour="toolbar"]');
+        const canvas = document.querySelector('[data-tour="canvas"]');
+        window.__frames.push({
+          mobile: document.documentElement.dataset.mobile ?? "",
+          /* "static" is the desktop flow; the mobile shell lifts it out to
+             "fixed". This is the frame-by-frame record of which layout the
+             browser was actually painting. */
+          toolbar: toolbar ? getComputedStyle(toolbar).position : null,
+          canvasW: canvas ? canvas.clientWidth : null,
+        });
+        if (window.__frames.length < 900) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    const page = await context.newPage();
+    page.on("pageerror", (e) => errors.push("pageerror: " + String(e)));
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 6 });
+    await boot(page);
+    await page.waitForTimeout(1500);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
+
+    const seen = await page.evaluate(() => {
+      const f = window.__frames ?? [];
+      const withToolbar = f.filter((x) => x.toolbar);
+      const widths = [...new Set(f.map((x) => x.canvasW).filter((w) => w))];
+      return {
+        frames: f.length,
+        firstMobile: f.length ? f[0].mobile : "(no frames)",
+        everDesktopFlow: withToolbar.filter((x) => x.toolbar !== "fixed").length,
+        firstToolbar: withToolbar.length ? withToolbar[0].toolbar : "(never rendered)",
+        toolbarFrames: withToolbar.length,
+        widths,
+        fits: window.__gqFits ?? null,
+      };
+    });
+
+    check("the shell is settled before the first frame runs",
+      seen.firstMobile === "true", `first recorded frame had data-mobile="${seen.firstMobile}"`);
+    check("no frame ever paints the toolbar in the desktop flow",
+      seen.toolbarFrames > 0 && seen.everDesktopFlow === 0,
+      `${seen.toolbarFrames} frames with a toolbar, ${seen.everDesktopFlow} of them in flow ` +
+        `(first was "${seen.firstToolbar}")`);
+    check("…so the canvas is never measured against a layout that then reflows",
+      seen.widths.length === 1, `canvas width took ${seen.widths.length} value(s): ${seen.widths.join(", ")}`);
+    check("…and the view is fitted once, not fitted and then re-fitted",
+      seen.fits === 1, `fit() ran ${seen.fits} time(s)`);
+
+    /* The other half of that change: the callback that no longer fires on the
+       starting size must still fire on a real one, or rotating the phone would
+       leave an untouched view off-centre. */
+    await page.setViewportSize({ width: 844, height: 390 });
+    await page.waitForTimeout(800);
+    const afterRotate = await page.evaluate(() => window.__gqFits ?? null);
+    check("…while actually rotating the phone does re-fit it",
+      afterRotate === seen.fits + 1, `fit() ran ${afterRotate} time(s) after the rotation`);
+    await context.close();
+  }
+
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
   for (const k of Object.keys(pages)) await pages[k].context.close();

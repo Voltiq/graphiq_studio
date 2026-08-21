@@ -3955,6 +3955,15 @@ export default function CanvasArea({
   const fit = useCallback(() => {
     const vp = viewportRef.current;
     if (!vp) return;
+    /* Dev-only counter, in the same family as the __gq hooks below. Fitting
+       twice on a cold load is the signature of the canvas having been measured
+       against a layout that then reflowed underneath it — which is what the
+       pre-hydration data-mobile attribute exists to prevent, and what the
+       mobile cold-load rail asserts. */
+    if (process.env.NODE_ENV !== "production") {
+      const dbg = window as unknown as { __gqFits?: number };
+      dbg.__gqFits = (dbg.__gqFits ?? 0) + 1;
+    }
     const w = widthRef.current;
     const h = heightRef.current;
     const raw = Math.min(vp.clientWidth / w, vp.clientHeight / h) * 100 * 0.96;
@@ -4155,13 +4164,23 @@ export default function CanvasArea({
   useEffect(() => {
     const vp = viewportRef.current;
     if (!vp || typeof ResizeObserver === "undefined") return;
+    /* A ResizeObserver delivers one callback on observe() that is not a resize
+       at all, just the starting size. That used to be load-bearing on mobile:
+       the first fit() ran against the transient desktop-flow width (toolbar and
+       dock still in flow) and this re-fitted once the mobile CSS widened the
+       canvas. The shell is now settled before the first paint, so there is no
+       reflow to correct and re-fitting here only fitted an already-fitted view
+       a second time. Genuine resizes — rotating the phone — still re-fit. */
+    let starting = true;
     const ro = new ResizeObserver(() => {
       onViewportRef.current({ w: vp.clientWidth, h: vp.clientHeight });
       setVpSize({ w: vp.clientWidth, h: vp.clientHeight });
-      // On mobile the first fit() runs against the transient desktop-flow width
-      // (toolbar + dock still in flow); once the mobile CSS lifts them out and
-      // the canvas widens, re-fit a still-untouched view so it lands centred.
-      // A touched view (or desktop) just clamps the existing pan, as before.
+      if (starting) {
+        starting = false;
+        return;
+      }
+      // An untouched view on mobile re-fits so it stays centred; a touched view
+      // (or desktop) just clamps the existing pan, as before.
       if (mobileRef.current && !viewTouchedRef.current) fit();
       else setPanRef.current((p) => clampHere(p.x, p.y, scaleRef.current, vp));
     });

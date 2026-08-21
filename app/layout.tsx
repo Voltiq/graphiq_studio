@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { MOBILE_QUERY } from "./lib/breakpoint";
 import localFont from "next/font/local";
 import { getServerAccent, getServerTheme, getServerUiScale } from "./lib/theme.server";
 import "./globals.scss";
@@ -81,6 +82,29 @@ export default async function RootLayout({
       className={`${atlassianSans.variable} ${atlassianMono.variable}`}
       suppressHydrationWarning
     >
+      <head>
+        {/* Which shell to use is a question only the browser can answer — the
+            viewport is not sent with the request, so unlike the theme (a
+            cookie, resolved above) it cannot be decided server-side. Left to
+            React it resolves in an effect, one frame late, and the phone paints
+            the DESKTOP layout first: the toolbar and dock in flow, the canvas
+            measured against what is left, and then a reflow the moment the
+            attribute lands. CanvasArea carried a workaround for exactly that —
+            re-fitting an untouched view when the canvas widened underneath it.
+
+            Running here, before the first paint, there is no first layout to
+            correct. The query string is the one in lib/breakpoint, inlined
+            rather than copied. Failure is silent on purpose: if matchMedia
+            throws, the desktop shell is the safe answer and the effect still
+            puts it right a frame later. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              `(function(){try{if(matchMedia(${JSON.stringify(MOBILE_QUERY)}).matches)` +
+              `document.documentElement.dataset.mobile="true"}catch(e){}})()`,
+          }}
+        />
+      </head>
       {/* atlassianSans.className applies the font directly (immune to var() chains). */}
       <body className={atlassianSans.className}>{children}</body>
     </html>
