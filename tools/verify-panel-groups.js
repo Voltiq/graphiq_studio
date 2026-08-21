@@ -27,7 +27,9 @@
 const { launchBrowser, urlArg } = require("./lib/launch");
 
 const DND = () => {
-  window.__dnd = async (fromSel, toSel) => {
+  /* `where` picks the band inside the target: "edge" aims a few px below its top
+     (insert before it), anything else aims at the middle (become a tab of it). */
+  window.__dnd = async (fromSel, toSel, where) => {
     const from = document.querySelector(fromSel);
     const to = document.querySelector(toSel);
     if (!from || !to) return `missing ${!from ? fromSel : toSel}`;
@@ -40,7 +42,7 @@ const DND = () => {
           cancelable: true,
           dataTransfer: dt,
           clientX: r.left + r.width / 2,
-          clientY: r.top + r.height / 2,
+          clientY: where === "edge" ? r.top + 3 : r.top + r.height / 2,
         }),
       );
     };
@@ -129,6 +131,10 @@ const DND = () => {
           (b) => (b.textContent || "").trim() + (b.getAttribute("aria-selected") === "true" ? "*" : ""),
         ),
       ),
+      /* What the dock says a drop would do right now, which is the whole point
+         of the indicator: it must be visible BEFORE the drop, not inferred
+         afterwards from what happened. */
+      hints: [...document.querySelectorAll("[data-drop]")].map((s) => s.getAttribute("data-drop")),
       stored: (() => {
         try {
           return JSON.parse(localStorage.getItem("graphiq:panel-layout") || "{}");
@@ -250,12 +256,67 @@ const DND = () => {
     const tab = document.querySelector('[data-tour="dock"] [role="tab"]');
     if (tab) tab.setAttribute("data-probe-tab", "1");
   });
-  await page.evaluate(() => window.__dnd("[data-probe-tab]", "section[data-probe-body]"));
+  await page.evaluate(() => window.__dnd("[data-probe-tab]", "section[data-probe-body]", "edge"));
   await page.waitForTimeout(800);
   const ungrouped = await state();
-  check("dragging a tab onto another panel takes it out of the group",
+  check("dragging a tab to another panel's EDGE takes it out of the group",
     ungrouped.grouped === 0 && !Object.keys(ungrouped.stored?.groups ?? {}).length,
     `${ungrouped.sections} panels, ${ungrouped.grouped} grouped`);
+
+  // ---------- the indicator says what a drop would do, BEFORE the drop ------
+  /* Three outcomes decided by a few pixels of pointer position. Hovering each
+     band must announce a different one, and a panel that has not been dropped on
+     must announce nothing — otherwise the drag is still a guess. Probed by
+     holding a dragover at a given offset and reading the state back, without
+     ever dropping. */
+  await page.evaluate(() => {
+    window.__hoverAt = async (fromSel, toSel, offset) => {
+      const from = document.querySelector(fromSel);
+      /* The bands are measured against the whole SECTION, not the header: on an
+         expanded panel the header's bottom edge is still mid-section, and
+         "group" is the right answer there. */
+      const target = document.querySelector(toSel);
+      const to = target && (target.closest("section") || target);
+      if (!from || !to) return "missing";
+      const dt = new DataTransfer();
+      const at = (el, type, y) => {
+        const r = el.getBoundingClientRect();
+        el.dispatchEvent(
+          new DragEvent(type, {
+            bubbles: true, cancelable: true, dataTransfer: dt,
+            clientX: r.left + r.width / 2,
+            clientY: offset === "bottom" ? r.bottom - 3 : offset === "top" ? r.top + 3 : r.top + r.height / 2,
+          }),
+        );
+      };
+      const tick = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 30)));
+      at(from, "dragstart");
+      await tick();
+      at(to, "dragover");
+      await tick();
+      at(to, "dragover");
+      await tick();
+      const hints = [...document.querySelectorAll("[data-drop]")].map((s) => s.getAttribute("data-drop"));
+      at(from, "dragend");
+      await tick();
+      return hints.join(",");
+    };
+  });
+  await tagHeader("Color");
+  await tagHeader("Swatches");
+  const bands = {};
+  for (const where of ["top", "middle", "bottom"]) {
+    bands[where] = await page.evaluate(
+      (w) => window.__hoverAt('header[data-probe="swatches"]', 'header[data-probe="color"]', w),
+      where,
+    );
+    await page.waitForTimeout(300);
+  }
+  check("hovering a panel's top edge promises to insert BEFORE it", bands.top === "before", `got "${bands.top}"`);
+  check("hovering its middle promises to make it a TAB", bands.middle === "group", `got "${bands.middle}"`);
+  check("hovering its bottom edge promises to insert AFTER it", bands.bottom === "after", `got "${bands.bottom}"`);
+  const idle = await state();
+  check("…and nothing is marked once the drag is over", idle.hints.length === 0, JSON.stringify(idle.hints));
 
   // ---------- a cross-dock drag must not leave the dock mid-drag ----------
   /* Moving a panel to the other dock re-renders it into a different portal, so

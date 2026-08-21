@@ -34,8 +34,7 @@ export default function Panel({
   floating,
   onFloat,
   tabs,
-  onHeaderDragOver,
-  headerDropping,
+  dropHint,
 }: {
   title: string;
   icon: LucideIcon;
@@ -57,10 +56,9 @@ export default function Panel({
   /** When present the header becomes a TAB STRIP and `children` is the active
    *  tab's body. `title`/`icon` still name the frame for assistive tech. */
   tabs?: PanelTab[];
-  /** Dropping ON the header groups rather than reorders; the dock supplies this
-   *  and highlights the header while a drag is over it. */
-  onHeaderDragOver?: DragEventHandler<HTMLElement>;
-  headerDropping?: boolean;
+  /** What a drop under the pointer would do right now, drawn as an insertion
+   *  line above/below or a highlight over the whole frame. */
+  dropHint?: "before" | "after" | "group";
 }) {
   const grouped = !!tabs && tabs.length > 1;
   /* A tab has to name the panel it controls, and that panel has to point back,
@@ -75,24 +73,24 @@ export default function Panel({
       data-open={open}
       data-dragging={dragging || undefined}
       data-grouped={grouped || undefined}
+      data-drop={dropHint}
       onDragOver={onDragOver}
       onDrop={onDrop}
     >
       {/* Only the header is draggable, so sliders/inputs in the body are safe. */}
       <header
         className={styles.panelHead}
-        /* Grouping is a drag gesture with nothing on screen to suggest it, and
-           the header is the only place a user is already dragging from. */
+        /* Names both outcomes, because which one a drop gets is a matter of a
+           few pixels and the indicator only appears once you are already
+           dragging. */
         title={
           grouped
             ? "Drag a tab out to separate it"
-            : "Drag to reorder — or drop onto another panel's header to group them as tabs"
+            : "Drag onto another panel: its edge to sit next to it, its middle to become a tab of it"
         }
-        data-dropping={headerDropping || undefined}
         draggable={grouped ? false : draggable}
         onDragStart={grouped ? undefined : onDragStart}
         onDragEnd={grouped ? undefined : onDragEnd}
-        onDragOver={onHeaderDragOver}
       >
         <button
           type="button"

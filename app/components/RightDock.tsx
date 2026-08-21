@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useImperativeHandle, useState, type DragEvent, type DragEventHandler, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useImperativeHandle, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { uiZoom } from "../lib/ui-scale";
 import { type WorkingSpace } from "../lib/colorspace";
@@ -369,11 +369,19 @@ interface Props {
   onToast: (message: string) => void;
 }
 
+/**
+ * What a drop would do, shown while dragging and carried out on release.
+ * `before`/`after` place the panel on its own either side of `id`; `group` makes
+ * it a tab of `id`; `end` puts it at the bottom of a dock.
+ */
+export type DropHint =
+  | { kind: "before" | "after" | "group"; id: PanelId }
+  | { kind: "end"; side: "left" | "right" };
+
 /** The group-aware extras a dock render passes into one panel's frame. */
 interface PanelExtra {
   tabs: PanelTab[];
-  onHeaderDragOver: DragEventHandler<HTMLElement> | undefined;
-  headerDropping: boolean;
+  dropHint: "before" | "after" | "group" | undefined;
 }
 
 const IconBtn = ({
@@ -463,9 +471,9 @@ export default function RightDock({
   const [dragId, setDragId] = useState<PanelId | null>(null);
   const [groups, setGroups] = useState<Partial<Record<PanelId, string>>>({});
   const [activeTab, setActiveTab] = useState<Partial<Record<string, PanelId>>>({});
-  /** The header a drag is currently over, so it can be highlighted as a group
-   *  target rather than leaving the user to guess what a drop will do. */
-  const [headerTarget, setHeaderTarget] = useState<PanelId | null>(null);
+  /** What the drop under the pointer would do. Drawn as an insertion line or a
+   *  highlight, so a drag never has to be guessed at. */
+  const [hint, setHint] = useState<DropHint | null>(null);
 
   // Load the saved order + open state after mount (avoids a hydration mismatch).
   /* Reading localStorage during render would produce one thing on the server
@@ -559,7 +567,7 @@ export default function RightDock({
     if (!dragId) return;
     const clear = () => {
       setDragId(null);
-      setHeaderTarget(null);
+      setHint(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") clear();
@@ -717,10 +725,34 @@ export default function RightDock({
       return next;
     });
 
-  // Drag wiring shared by every docked panel. `draggable`/start/end go on the
-  // header (the handle); `onDragOver` is the section-level drop target that
-  // reorders — and, when the target sits in the OTHER dock, moves the dragged
-  // panel's membership there first (live cross-dock preview).
+  /**
+   * Which of the three things a drop on `id` would do, from where the pointer
+   * is inside it.
+   *
+   * A band at each EDGE inserts the panel before or after; everything between
+   * joins it to that panel as a tab. Two reasons it is a fixed band rather than
+   * the top and bottom halves. First, "next to" and "inside" are different
+   * intents and both have to be reachable on every panel — splitting at the
+   * midpoint offers no way to say "inside" at all. Second, a COLLAPSED panel is
+   * 34px of pure header, and the old rule handed all 34 of them to grouping,
+   * which is why a panel dropped between two others so reliably ended up inside
+   * one instead. The band is capped at a third of the height so the middle never
+   * disappears on a short panel.
+   */
+  const EDGE_BAND = 10;
+  const zoneOf = (rect: DOMRect, clientY: number): "before" | "after" | "group" => {
+    const band = Math.min(EDGE_BAND, rect.height / 3);
+    const y = clientY - rect.top;
+    if (y < band) return "before";
+    if (y > rect.height - band) return "after";
+    return "group";
+  };
+
+  /* Drag wiring shared by every docked panel. The header is the handle; the
+     SECTION is the drop target, and it only ever records what a drop WOULD do.
+     Nothing moves until the drop itself — the old code reordered and changed
+     dock membership live on every dragover, which reshuffled the list under the
+     pointer while you were still aiming at it. */
   const dragProps = (id: PanelId) => ({
     draggable: true,
     dragging: dragId === id,
@@ -729,26 +761,44 @@ export default function RightDock({
       e.dataTransfer.effectAllowed = "move";
     },
     onDragOver: (e: DragEvent<HTMLElement>) => {
-      e.preventDefault();
       if (!dragId || dragId === id) return;
-      const targetLeft = left.includes(id);
-      setLeft((cur) => {
-        const has = cur.includes(dragId);
-        if (targetLeft === has) return cur;
-        return targetLeft ? [...cur, dragId] : cur.filter((x) => x !== dragId);
-      });
-      /* Dropping on a panel's BODY means "sit next to it", so the dragged panel
-         leaves whatever group it was in — unless the target is in that same
-         group, which is just the pointer passing over its own frame. */
-      if (groups[dragId] && groups[dragId] !== groups[id]) leaveGroup(dragId);
-      const r = e.currentTarget.getBoundingClientRect();
-      reorder(dragId, id, e.clientY - r.top < r.height / 2);
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      setHint({ kind: zoneOf(e.currentTarget.getBoundingClientRect(), e.clientY), id });
+    },
+    onDrop: (e: DragEvent<HTMLElement>) => {
+      if (!dragId || dragId === id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      applyDrop(dragId, { kind: zoneOf(e.currentTarget.getBoundingClientRect(), e.clientY), id });
     },
     onDragEnd: () => {
       setDragId(null);
-      setHeaderTarget(null);
+      setHint(null);
     },
   });
+
+  /** Carry out what the hint promised. The only place membership changes. */
+  const applyDrop = (from: PanelId, hint: DropHint) => {
+    if (hint.kind === "end") {
+      moveToDockEnd(from, hint.side);
+    } else if (hint.kind === "group") {
+      joinGroup(from, hint.id);
+    } else {
+      // Its own panel, next to the target: out of any group, into the target's
+      // dock, and either side of it.
+      leaveGroup(from);
+      const targetLeft = left.includes(hint.id);
+      setLeft((cur) => {
+        const has = cur.includes(from);
+        if (targetLeft === has) return cur;
+        return targetLeft ? [...cur, from] : cur.filter((x) => x !== from);
+      });
+      reorder(from, hint.id, hint.kind === "before");
+    }
+    setDragId(null);
+    setHint(null);
+  };
 
   const panelFor = (id: PanelId, extra?: Partial<PanelExtra>): ReactNode => {
     const floating = isFloating(id);
@@ -759,20 +809,12 @@ export default function RightDock({
       onToggle: () => toggleOpen(id),
       floating,
       onFloat: () => toggleFloat(id),
-      /* Dropping ON a header groups instead of reordering, and the drop is
-         stopped here so the section's reorder handler does not also fire and
-         fight it. This is on EVERY panel, grouped or not: dropping on a lone
-         panel's header is how a group gets made in the first place. */
-      onHeaderDragOver: floating
-        ? undefined
-        : (e: DragEvent<HTMLElement>) => {
-            if (!dragId || dragId === id) return;
-            e.preventDefault();
-            e.stopPropagation();
-            setHeaderTarget(id);
-            joinGroup(dragId, id);
-          },
-      headerDropping: headerTarget === id && !!dragId && dragId !== id,
+      /* One drop target per panel, not two. The header used to carry its own
+         grouping handler that stopped propagation so the section's reorder could
+         not also fire; with the zoning above, the header's middle already IS the
+         group band, and one handler cannot fight itself. */
+      dropHint:
+        hint && hint.kind !== "end" && hint.id === id && dragId && dragId !== id ? hint.kind : undefined,
       ...extra,
     };
     switch (id) {
@@ -1018,7 +1060,7 @@ export default function RightDock({
             },
             onDragEnd: () => {
               setDragId(null);
-              setHeaderTarget(null);
+              setHint(null);
             },
           })),
         }),
@@ -1032,11 +1074,16 @@ export default function RightDock({
     dragId ? (
       <div
         className={styles.dockDropZone}
+        data-active={hint?.kind === "end" && hint.side === side ? "" : undefined}
         onDragOver={(e) => {
           e.preventDefault();
-          moveToDockEnd(dragId, side);
+          e.dataTransfer.dropEffect = "move";
+          setHint({ kind: "end", side });
         }}
-        onDrop={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          if (dragId) applyDrop(dragId, { kind: "end", side });
+        }}
       />
     ) : null;
 
