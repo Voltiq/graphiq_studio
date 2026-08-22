@@ -1,6 +1,6 @@
 "use client";
 
-import { PanelsTopLeft, Wrench } from "lucide-react";
+import { Move, PanelsTopLeft, Wrench } from "lucide-react";
 import styles from "./MobileBar.module.scss";
 import { getTool, type ToolId } from "../lib/tools";
 
@@ -16,10 +16,15 @@ export default function MobileBar({
   tool,
   drawer,
   onToggle,
+  panMode,
+  onTogglePan,
 }: {
   tool: ToolId;
   drawer: MobileDrawer;
   onToggle: (d: "tools" | "panels") => void;
+  /** One-finger drag pans instead of using the tool; the tool stays selected. */
+  panMode: boolean;
+  onTogglePan: () => void;
 }) {
   const meta = getTool(tool);
   const ToolIcon = meta.icon;
@@ -44,6 +49,21 @@ export default function MobileBar({
       >
         <ToolIcon size={18} strokeWidth={1.9} />
         <span className={styles.toolName}>{meta.name}</span>
+      </button>
+
+      {/* Pan/zoom without giving up the tool. Every drawing and selection tool
+          takes the one-finger drag, so panning otherwise meant switching to the
+          Hand tool and back for every adjustment. */}
+      <button
+        type="button"
+        className={styles.btn}
+        data-active={panMode}
+        aria-pressed={panMode}
+        title="Drag to pan without changing tool"
+        onClick={onTogglePan}
+      >
+        <Move size={20} />
+        <span>Pan</span>
       </button>
 
       <button

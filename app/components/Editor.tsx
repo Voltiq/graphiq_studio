@@ -481,6 +481,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // Keeps the browser's own pinch/pull-to-refresh off the editor's gestures.
   useGestureGuard();
   const [mobileDrawer, setMobileDrawer] = useState<MobileDrawer>(null);
+  /* Pan/zoom as a mode rather than a tool: the one-finger drag pans while this
+     is on, and the selected tool is left exactly as it was. */
+  const [panMode, setPanMode] = useState(false);
   // Mirror the mobile state onto <html> so the global mobile CSS (keyed off
   // data-mobile / data-drawer, since module classes are hashed) can drive the
   // layout from one source of truth.
@@ -7255,6 +7258,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         />
         <div className={styles.leftDock} ref={setLeftHost} aria-label="Left dock" />
         <CanvasArea
+          panMode={mobile && panMode}
           docs={docs}
           activeId={activeId}
           onSelectDoc={(id) => {
@@ -7576,7 +7580,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
               <span aria-hidden>✓</span>
             </button>
           </div>
-          <MobileBar tool={tool} drawer={mobileDrawer} onToggle={toggleMobileDrawer} />
+          <MobileBar
+            tool={tool}
+            drawer={mobileDrawer}
+            onToggle={toggleMobileDrawer}
+            panMode={panMode}
+            onTogglePan={() => setPanMode((v) => !v)}
+          />
           {mobileDrawer ? (
             <div
               className="gq-m-scrim"

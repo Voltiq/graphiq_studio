@@ -698,6 +698,7 @@ export default function CanvasArea({
   onViewport,
   mobile = false,
   tool,
+  panMode = false,
   brush,
   color,
   foreground,
@@ -833,6 +834,11 @@ export default function CanvasArea({
    *  resize (the desktop→mobile reflow widens the canvas after the first fit). */
   mobile?: boolean;
   tool: ToolId;
+  /** Touch-only override: the one-finger drag pans, whatever tool is selected.
+   *  Every drawing and selection tool consumes that drag, so on a phone panning
+   *  otherwise means switching to the Hand tool and back for each adjustment.
+   *  The tool itself is untouched — the toolbar still shows what it showed. */
+  panMode?: boolean;
   brush: BrushSettings;
   color: string;
   /** Primary / secondary colours — left-button paints with `foreground`, right with `background`. */
@@ -6087,7 +6093,7 @@ export default function CanvasArea({
       zoomToPoint(e.button === 2 || e.altKey ? -1 : 1, e.clientX, e.clientY);
       return;
     }
-    if (tool === "hand") {
+    if (tool === "hand" || panMode) {
       // Drag to pan the canvas around the viewport.
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
@@ -8178,7 +8184,7 @@ export default function CanvasArea({
         <div
           className={styles.viewport}
           ref={viewportRef}
-          style={tool === "hand" ? { cursor: hoverCursor ?? "grab" } : undefined}
+          style={tool === "hand" || panMode ? { cursor: hoverCursor ?? "grab" } : undefined}
           // Dropping image files on the canvas. `dragover` must preventDefault
           // or the browser navigates away to the file, losing the document.
           onDragOver={(e) => {
@@ -8212,7 +8218,7 @@ export default function CanvasArea({
             // around the canvas (target is the viewport itself, not the artwork
             // or an overlay). Capture on the artwork canvas so the existing
             // move/up handlers drive the pan.
-            if (tool !== "hand" || e.target !== e.currentTarget) return;
+            if ((tool !== "hand" && !panMode) || e.target !== e.currentTarget) return;
             e.preventDefault();
             viewRef.current?.setPointerCapture(e.pointerId);
             handRef.current = { sx: e.clientX, sy: e.clientY, px: panR.current.x, py: panR.current.y };
@@ -8245,7 +8251,9 @@ export default function CanvasArea({
                   curveTarget || filterAnchor
                     ? "crosshair"
                     : hoverCursor ??
-                  (tool === "move"
+                  (panMode
+                    ? "grab"
+                    : tool === "move"
                     ? "move"
                     : tool === "hand"
                       ? "grab"

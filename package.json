@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.5.4",
+  "version": "1.6.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -29,6 +29,7 @@
     "test:modifiers": "node tools/verify-modifiers.js",
     "test:commit": "node tools/verify-commit-cancel.js",
     "test:reorder": "node tools/verify-layer-reorder.js",
+    "test:pan": "node tools/verify-pan-mode.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

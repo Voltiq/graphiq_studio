@@ -598,6 +598,13 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Both paths capture and commit**, so the mouse gains the fix too — the rail undoes a mouse reorder as well as a touch one, and checks Redo returns it.
 - **Mutation-tested by dropping the commit**, which fails all four undo checks and prints the original symptom in full: `Layer 1 / Layer 3 / Layer 2 → Layer 2 / Layer 1`.
 
+### Panning as a mode, not a tool
+
+- **The one-finger drag is spoken for.** Every drawing and selection tool consumes it, so panning on a phone meant selecting the Hand tool and going back afterwards — for every adjustment. A **Pan** chip in the bottom bar takes that drag instead and leaves the selected tool alone: the toolbar still shows the brush, and tapping the chip off resumes painting mid-stroke-count.
+- **An override on the existing hand path, not a second implementation.** The pointer-down branch already knew how to pan; it now reads `tool === "hand" || panMode`, and the cursor follows the same way. Nothing about the Hand tool changed, and there is one panning implementation rather than two that can drift.
+- **Both halves are asserted on every drag, because either alone is satisfiable by something broken:** a mode that pans but also paints is no better than before, and one that paints nothing while not panning is a dead canvas. So each drag checks the ink count AND the artwork's offset — off: `ink 0 → 335` and the artwork unmoved; on: artwork `11,248 → 115,287` with `ink 335 → 335`; off again: `ink 335 → 613`, unmoved.
+- **Mutation-tested** by taking `panMode` back out of the branch: the chip reads as on, and the drag paints (`335 → 758`) without panning — precisely the behaviour the item describes.
+
 ### Aiming a panel drop: three zones and an indicator
 
 - **Two complaints, one cause.** A drop said nothing about where it would land, and a panel dragged *between* two others almost always ended up as a tab *inside* one. The zoning was the reason: the header carried its own "group" handler and the section split at its midpoint, so grouping owned the top 34 px — and a COLLAPSED panel is 34 px of pure header, nothing but grouping zone. There was literally nowhere to aim for "between".

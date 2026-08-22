@@ -180,6 +180,10 @@ jobs:
         run: npm run test:reorder -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
+      - name: Pan mode takes the drag without taking the tool
+        run: npm run test:pan -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
 
       - name: Dev server log
         if: failure()
