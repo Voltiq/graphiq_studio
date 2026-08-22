@@ -184,6 +184,10 @@ jobs:
         run: npm run test:pan -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
+      - name: A pinch abandons the gesture it interrupts
+        run: npm run test:pinch -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
 
       - name: Dev server log
         if: failure()

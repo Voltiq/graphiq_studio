@@ -6725,6 +6725,17 @@ export class PaintEngine {
     this.emitChange();
   }
 
+  /** Abort a live move: put the floated pixels back where they came from.
+   *
+   *  A zero offset is all it takes — `endMove` bakes the float at `moveOff`, so
+   *  clearing that first draws every floated layer back exactly where it
+   *  started, and its `moved` check then records no history for a move that did
+   *  not happen. Used when a second finger pre-empts a one-finger drag. */
+  cancelMove() {
+    this.moveOff = { x: 0, y: 0 };
+    this.endMove();
+  }
+
   endMove() {
     if (!this.moving || !this.moveLayer || !this.moveFloat || !this.moveOrig) {
       this.moving = false;

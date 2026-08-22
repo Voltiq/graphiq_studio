@@ -5430,16 +5430,33 @@ export default function CanvasArea({
   // Zoom tool: step in (dir 1) / out (dir -1), pivoting on the clicked point.
   // ---- Two-finger pinch (touch/pen): zoom + pan the canvas together ---------
   // Gated to ≥2 non-mouse pointers, so mouse drawing on desktop is untouched.
-  const beginPinch = () => {
-    const vp = viewportRef.current;
-    const pts = [...pointersRef.current.values()];
-    if (!vp || pts.length < 2) return;
-    // A second finger overrides whatever the first one started — discard any
-    // live paint stroke (no commit) and drop the other tools' in-progress state
-    // so no stray marquee/shape/gradient gets committed on lift.
+  /**
+   * Throw away every gesture the pointer currently has in flight.
+   *
+   * A second finger overrides whatever the first one started, and the danger is
+   * not the gesture that is visibly abandoned — it is the one still holding
+   * state that a pointer-up will happily COMMIT. A move was the clearest case:
+   * `moveRef` survived the pinch, so lifting off baked the layer at wherever
+   * the finger happened to be, as a real edit, with a history entry.
+   *
+   * One place for all of it, rather than a list at the pinch that drifts out of
+   * step with the tools: everything that ends by committing on lift is dropped
+   * here, and a live move is not merely forgotten but put back where it started.
+   *
+   * The polygonal lasso is deliberately NOT here: it is a series of taps
+   * finished with Enter, not a drag, so a pinch has no business ending it.
+   */
+  const abortActiveGesture = () => {
     if (paintingRef.current) {
       engine.cancelStroke();
       paintingRef.current = false;
+    }
+    if (moveRef.current) {
+      const { mode, float } = moveRef.current;
+      moveRef.current = null;
+      endMoveSnap();
+      if (!float && mode === "pixels") engine.cancelMove(); // put the pixels back
+      moveDeltaRef.current = { x: 0, y: 0 };
     }
     handRef.current = null;
     marqueeRef.current = null;
@@ -5448,6 +5465,27 @@ export default function CanvasArea({
     shapeRef.current = null;
     shapeRectRef.current = null;
     gradientRef.current = null;
+    // Handle drags that would otherwise finish on lift.
+    gradDragRef.current = null;
+    nodeDragRef.current = null;
+    tfDragRef.current = null;
+    frameDragRef.current = null;
+    hudRef.current = null;
+    birdRef.current = null;
+    samplerDragRef.current = null;
+    // Pen and direct-selection sub-gestures (the PATH itself survives — it is
+    // finished with the ✓, not by lifting a finger).
+    penDragRef.current = null;
+    penGrabRef.current = null;
+    dsDragRef.current = null;
+    dsMarqueeRef.current = null;
+  };
+
+  const beginPinch = () => {
+    const vp = viewportRef.current;
+    const pts = [...pointersRef.current.values()];
+    if (!vp || pts.length < 2) return;
+    abortActiveGesture();
     gestureSuppressRef.current = true;
     scheduleComposite();
     ensureAnts();

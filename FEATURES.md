@@ -605,6 +605,15 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Both halves are asserted on every drag, because either alone is satisfiable by something broken:** a mode that pans but also paints is no better than before, and one that paints nothing while not panning is a dead canvas. So each drag checks the ink count AND the artwork's offset — off: `ink 0 → 335` and the artwork unmoved; on: artwork `11,248 → 115,287` with `ink 335 → 335`; off again: `ink 335 → 613`, unmoved.
 - **Mutation-tested** by taking `panMode` back out of the branch: the chip reads as on, and the drag paints (`335 → 758`) without panning — precisely the behaviour the item describes.
 
+### A pinch abandons the gesture it interrupts
+
+- **The danger is not the gesture that visibly stops.** `beginPinch` dropped a handful of session refs, and the ones it missed were still holding state that a pointer-up would happily COMMIT. A Move was the clearest: it survived the pinch, so lifting off baked the layer wherever the fingers happened to be, as a real edit with a history entry.
+- **One `abortActiveGesture()`, called by the pinch**, rather than a list at the pinch that drifts out of step with the tools as they are added. It now covers the move, the shape-node and gradient handle drags, the transform box, the frame drag, the brush HUD, the navigator, the sampler drag, and the pen's sub-gestures.
+- **A move is put BACK, not merely forgotten.** Dropping the ref would leave the floated pixels sitting where the finger left them. `cancelMove()` on the engine zeroes the offset and reuses `endMove`, which draws every floated layer back exactly where it started — and its own `moved` check then records no history for a move that did not happen.
+- **What is deliberately not aborted:** the polygonal lasso and the pen PATH. Both are series of taps finished with Enter (or the ✓), not drags, so a pinch has no business ending them — only their in-flight sub-gestures are dropped.
+- **The rail proves its own setup before the case it cares about:** the same drag *without* a pinch must move the ink centre and add a history step (`925,483 → 1226,484`, history `3 → 4`), or the real check would be measuring a drag that never did anything. With the pinch, both are unchanged.
+- **Both position and history are asserted**, because each catches a different failure: a move silently reverted but still recorded is a phantom undo step, and one recorded but not reverted is the original bug. Mutation-testing the move out of the abort fires the position check — `1226,484 → 1503,483`, the layer displaced by a gesture the user cancelled.
+
 ### Aiming a panel drop: three zones and an indicator
 
 - **Two complaints, one cause.** A drop said nothing about where it would land, and a panel dragged *between* two others almost always ended up as a tab *inside* one. The zoning was the reason: the header carried its own "group" handler and the section split at its midpoint, so grouping owned the top 34 px — and a COLLAPSED panel is 34 px of pure header, nothing but grouping zone. There was literally nowhere to aim for "between".
