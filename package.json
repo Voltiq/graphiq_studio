@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.6.3",
+  "version": "1.6.4",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -33,6 +33,7 @@
     "test:pinch": "node tools/verify-pinch-abort.js",
     "test:targets": "node tools/verify-touch-targets.js",
     "test:hittargets": "node tools/verify-hit-targets.js",
+    "test:grab": "node tools/verify-grab-radius.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

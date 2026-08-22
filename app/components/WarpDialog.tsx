@@ -14,6 +14,7 @@ import {
   type WarpSpec,
 } from "../lib/warp";
 import type { Pt } from "../lib/homography";
+import { grabRadius } from "../lib/pointer";
 
 const PW = 560;
 const PH = 430;
@@ -158,7 +159,8 @@ export default function WarpDialog({
     if (kind !== "perspective") return;
     const p = paneToDoc(e);
     let best = -1;
-    let bestD = GRAB / layout.f;
+    // Scaled for the device: the event is right here, so this one needs no ref.
+    let bestD = grabRadius(GRAB, e.pointerType) / layout.f;
     corners.forEach((c, i) => {
       const d = Math.hypot(c.x - p.x, c.y - p.y);
       if (d < bestD) {

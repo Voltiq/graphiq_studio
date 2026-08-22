@@ -128,3 +128,44 @@ export function pressureBucket(p: number, buckets = PRESSURE_BUCKETS): number {
 export function bucketPressure(bucket: number, buckets = PRESSURE_BUCKETS): number {
   return Math.max(1, Math.min(buckets, Math.round(bucket))) / buckets;
 }
+
+/* ------------------------------- grab radii -------------------------------- */
+
+/**
+ * How much larger an on-canvas grab radius should be for a given pointer type.
+ *
+ * Every hit test on the canvas — transform handles, crop corners, shape nodes,
+ * pen anchors, gradient stops — was written against a mouse, whose hotspot is a
+ * single pixel the user can see. A fingertip is neither: its contact patch is
+ * around 8–10mm, the reported point is the centroid of that patch rather than
+ * anywhere the user aimed, and the finger hides the target while it approaches.
+ * Measured on a phone, the crop handles could be missed by 5px and the miss did
+ * not merely fail — it started a NEW crop, destroying the box being adjusted.
+ *
+ * A pen sits between the two: it has a real tip and a visible contact point, so
+ * it needs far less help than a finger, but it is still held at an angle by a
+ * hand that covers the target.
+ *
+ * A MOUSE MUST BE EXACTLY 1. Growing radii for a mouse would make handles start
+ * stealing clicks that are plainly not on them, and every existing radius was
+ * chosen against that device.
+ */
+export function grabScale(pointerType: string): number {
+  if (pointerType === "touch") return 2.5;
+  if (pointerType === "pen") return 1.5;
+  return 1;
+}
+
+/**
+ * A grab radius scaled for the pointer in use, in the same units as `base`.
+ *
+ * `limit` caps the result — pass the largest radius the target can carry
+ * without swallowing its neighbours (half the distance to the next handle, say).
+ * The cap never shrinks the radius below `base`, so a scaled-up pointer can
+ * never end up with a SMALLER target than a mouse gets, which is what a naive
+ * `Math.min` would produce on a small shape.
+ */
+export function grabRadius(base: number, pointerType: string, limit = Infinity): number {
+  const want = base * grabScale(pointerType);
+  return Math.max(base, Math.min(want, limit));
+}

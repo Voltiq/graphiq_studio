@@ -50,6 +50,8 @@ import {
 } from "../lib/guides";
 import {
   effectivePressure,
+  grabRadius,
+  grabScale,
   newPalmState,
   palmDown,
   palmUp,
@@ -300,12 +302,19 @@ function selectZone(
   pivot: { x: number; y: number },
   sc: number,
   allowResize = true,
+  /** Multiplier on the two grab radii below — 1 for a mouse, more for a finger.
+   *  The rotation RING is deliberately not scaled: it is an annulus outside the
+   *  box, already tens of pixels deep, and widening it would only eat into the
+   *  resize handles it surrounds. */
+  grab = 1,
 ): SelZone {
-  if (Math.abs(px - pivot.x) <= 9 / sc && Math.abs(py - pivot.y) <= 9 / sc) return { kind: "anchor" };
+  const anchorR = (9 * grab) / sc;
+  if (Math.abs(px - pivot.x) <= anchorR && Math.abs(py - pivot.y) <= anchorR)
+    return { kind: "anchor" };
   const [lx, ly] = rotatePt(px, py, pivot.x, pivot.y, -angle);
   const bbox = bboxOf(selection);
   if (allowResize) {
-    const edges = hitHandle(bbox, lx, ly, 10 / sc);
+    const edges = hitHandle(bbox, lx, ly, (10 * grab) / sc);
     if (edges) return { kind: "resize", edges };
   }
   const m = RING_OUTER / sc;
@@ -1225,6 +1234,23 @@ export default function CanvasArea({
   /** True when this pen contact is the stylus's ERASER end (barrel bit 5). */
   const isEraserTip = (e: { pointerType: string; buttons: number }): boolean =>
     e.pointerType === "pen" && (e.buttons & 32) !== 0;
+
+  /* ---- Grab radii, sized for the device doing the grabbing ----------------
+     Every hit test below was written against a mouse: 8-12 CSS px, which is
+     about what a visible one-pixel hotspot needs. A fingertip covers ten times
+     that area and reports the centroid of the patch rather than anywhere the
+     user aimed, so on a phone a crop handle could be missed by 5px — and the
+     miss did not merely fail, it started a NEW crop over the box being
+     adjusted. `pointerKindRef` remembers what last touched the canvas, which
+     is always the device that is about to be hit-tested, so the radius can be
+     scaled at the single place each one is defined. */
+  const pointerKindRef = useRef<string>("mouse");
+  /** A grab radius in DOC units: `screenPx` scaled for the pointer in use.
+   *  `limitDoc` caps it for a target whose neighbours are close by. */
+  const grabDoc = (screenPx: number, limitDoc = Infinity): number =>
+    grabRadius(screenPx / Math.max(0.05, zoomRef.current / 100), pointerKindRef.current, limitDoc);
+  /** The bare multiplier, for hit tests that build their own radii. */
+  const grabFactor = (): number => grabScale(pointerKindRef.current);
 
   // ---- Guides ---------------------------------------------------------------
   // The committed guides live in Editor state; `guidesRef` is the LIVE list the
@@ -4887,7 +4913,7 @@ export default function CanvasArea({
     const o = guideOptsRef.current;
     if (!o.show || o.lock) return -1;
     const p = clientToDoc(cx, cy);
-    return hitGuide(guidesRef.current, p.x, p.y, GUIDE_GRAB_PX / (zoomRef.current / 100));
+    return hitGuide(guidesRef.current, p.x, p.y, grabDoc(GUIDE_GRAB_PX));
   };
 
   /**
@@ -5139,7 +5165,11 @@ export default function CanvasArea({
     const ly = dx * sin + dy * cos;
     const hw = cb.w / 2;
     const hh = cb.h / 2;
-    const tol = 9 / (zoomRef.current / 100); // handle grab radius in doc px
+    /* Capped at 40% of the box's smaller half-extent: without it a finger's
+       radius on a small box would make every point a corner, and there would be
+       nowhere left to grab that means "move". The cap never goes below the 9px
+       a mouse gets, so a tiny box is no worse than it was. */
+    const tol = grabDoc(9, Math.min(hw, hh) * 0.4);
     if (lx < -hw - tol || lx > hw + tol || ly < -hh - tol || ly > hh + tol) return "outside";
     const nL = Math.abs(lx + hw) <= tol;
     const nR = Math.abs(lx - hw) <= tol;
@@ -5304,7 +5334,7 @@ export default function CanvasArea({
     };
     const bbox = bboxOf(selection);
     const pivot = selectionPivot ?? { x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h / 2 };
-    const zone = selectZone(p.x, p.y, selection, selectionAngle, pivot, sc);
+    const zone = selectZone(p.x, p.y, selection, selectionAngle, pivot, sc, true, grabFactor());
     if (zone.kind === "anchor") {
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
@@ -5368,7 +5398,10 @@ export default function CanvasArea({
   const tryStartLayerTransform = (e: React.PointerEvent, p: { x: number; y: number }, sc: number) => {
     const box = transformBox();
     if (!box) return false;
-    const zone = selectZone(p.x, p.y, [box], 0, { x: box.x + box.w / 2, y: box.y + box.h / 2 }, sc);
+    const zone = selectZone(
+      p.x, p.y, [box], 0, { x: box.x + box.w / 2, y: box.y + box.h / 2 }, sc, true,
+      grabFactor(),
+    );
     // selectZone's ring is a 44 px band round the WHOLE outline — right for a
     // marquee, a trap here (see inRotateZone). Resize handles are taken as it
     // reports them; rotation only just outside a CORNER.
@@ -5780,9 +5813,20 @@ export default function CanvasArea({
       lx = piv.x + (pt.x - piv.x) * c - (pt.y - piv.y) * sn;
       ly = piv.y + (pt.x - piv.x) * sn + (pt.y - piv.y) * c;
     }
-    const hit = 9 / (zoomRef.current / 100);
-    for (const n of nodes) if (Math.hypot(lx - n.x, ly - n.y) <= hit) return n.id;
-    return null;
+    /* NEAREST, not the first within range. With a mouse's 9px the ranges
+       barely overlap and the distinction never showed; at a finger's radius
+       they overlap constantly, and "whichever came first in the list" would
+       hand back a node the user can see they did not press. */
+    let hit = grabDoc(9);
+    let best: ShapeNode | null = null;
+    for (const n of nodes) {
+      const d = Math.hypot(lx - n.x, ly - n.y);
+      if (d <= hit) {
+        hit = d;
+        best = n.id;
+      }
+    }
+    return best;
   };
 
   // Re-stroke the live pen path from its anchors + current options.
@@ -5883,27 +5927,32 @@ export default function CanvasArea({
   const gradientHandleAt = (p: { x: number; y: number }): "start" | "end" | "mid" | null => {
     const g = gradientRef.current;
     if (!g) return null;
-    const hit = 10 / (zoomRef.current / 100); // ~10 screen px in doc units
+    const hit = grabDoc(10);
     const mid = {
       x: g.start.x + (g.end.x - g.start.x) * g.mid,
       y: g.start.y + (g.end.y - g.start.y) * g.mid,
     };
-    const near = (a: { x: number; y: number }, b: { x: number; y: number }) =>
-      Math.hypot(a.x - b.x, a.y - b.y) <= hit;
-    if (near(p, g.end)) return "end";
-    if (near(p, g.start)) return "start";
-    if (near(p, mid)) return "mid";
-    return null;
+    /* The midpoint lies BETWEEN the other two by construction, so at a finger's
+       radius a fixed end-start-mid priority would make it unreachable on any
+       short gradient. Nearest wins instead. */
+    let best: "start" | "end" | "mid" | null = null;
+    let bestD = hit;
+    for (const [id, q] of [["end", g.end], ["start", g.start], ["mid", mid]] as const) {
+      const d = Math.hypot(p.x - q.x, p.y - q.y);
+      if (d <= bestD) { bestD = d; best = id; }
+    }
+    return best;
   };
 
   // Which measure-line endpoint (if any) a doc-space point is over.
   const measureHandleAt = (p: { x: number; y: number }): "start" | "end" | null => {
     const m = measureRef.current;
     if (!m) return null;
-    const hit = 10 / (zoomRef.current / 100);
-    if (Math.hypot(p.x - m.x2, p.y - m.y2) <= hit) return "end";
-    if (Math.hypot(p.x - m.x1, p.y - m.y1) <= hit) return "start";
-    return null;
+    const hit = grabDoc(10);
+    const dEnd = Math.hypot(p.x - m.x2, p.y - m.y2);
+    const dStart = Math.hypot(p.x - m.x1, p.y - m.y1);
+    if (Math.min(dEnd, dStart) > hit) return null;
+    return dEnd <= dStart ? "end" : "start";
   };
 
   // ---- Arrow-key nudge -------------------------------------------------------
@@ -6040,6 +6089,9 @@ export default function CanvasArea({
   }, [engine, commitNudge]);
 
   const onCanvasPointerDown = (e: React.PointerEvent) => {
+    // Recorded before any early return, so the grab radii below are sized for
+    // the device that is actually about to be hit-tested.
+    pointerKindRef.current = e.pointerType;
     // A pinch (tracked on the viewport, capture-phase) owns the gesture — the
     // tool stands down for touch while one is active or being wound down.
     if (e.pointerType !== "mouse" && (pinchRef.current || gestureSuppressRef.current)) return;
@@ -6147,7 +6199,7 @@ export default function CanvasArea({
       // SCREEN pixels — at 800% zoom a 6-document-pixel grab radius would be
       // half the viewport, and at 10% it would be unclickable.
       const p = toDoc(e);
-      const tol = 8 / Math.max(0.05, zoomRef.current / 100);
+      const tol = grabDoc(8);
       const hit = samplerOps.hit(p.x, p.y, tol);
       if (hit && (e.altKey || e.button === 2)) {
         samplerOps.remove(hit.id);
@@ -6177,7 +6229,7 @@ export default function CanvasArea({
           onCropApplyRef.current();
           return;
         }
-        const hit = 12 / (zoomRef.current / 100);
+        const hit = grabDoc(12);
         let idx = -1;
         let best = hit;
         for (let i = 0; i < 4; i++) {
@@ -6494,7 +6546,7 @@ export default function CanvasArea({
       e.preventDefault();
       viewRef.current?.setPointerCapture(e.pointerId);
       const p = toDoc(e);
-      const tol = 8 / (zoomRef.current / 100);
+      const tol = grabDoc(8);
       const hit = hitTest(path.anchors, path.closed, p, tol, dsSelRef.current);
       const sel = dsSelRef.current;
 
@@ -6866,6 +6918,7 @@ export default function CanvasArea({
     }
   };
   const onCanvasPointerMove = (e: React.PointerEvent) => {
+    pointerKindRef.current = e.pointerType;
     // While a pinch owns the gesture, tools ignore touch moves.
     if (e.pointerType !== "mouse" && (pinchRef.current || gestureSuppressRef.current)) return;
     // Report the doc-space cursor position to the status bar (null off-canvas).
@@ -7000,7 +7053,7 @@ export default function CanvasArea({
           onCropQuadRef.current(next);
           ensureAnts();
         } else {
-          const hit = 12 / (zoomRef.current / 100);
+          const hit = grabDoc(12);
           const onCorner = pq.some((c) => Math.hypot(cur.x - c.x, cur.y - c.y) <= hit);
           const next = onCorner ? "grab" : "crosshair";
           setHoverCursor((c) => (c === next ? c : next));
@@ -7037,7 +7090,7 @@ export default function CanvasArea({
         const p = toDoc(e);
         const bb = bboxOf(sel);
         const pivot = selPivotRef.current ?? { x: bb.x + bb.w / 2, y: bb.y + bb.h / 2 };
-        const zone = selectZone(p.x, p.y, sel, selAngleRef.current, pivot, zoom / 100);
+        const zone = selectZone(p.x, p.y, sel, selAngleRef.current, pivot, zoom / 100, true, grabFactor());
         if (zone.kind === "anchor") next = "grab";
         else if (zone.kind === "resize") next = resizeCursor(zone.edges, selAngleRef.current);
         else if (zone.kind === "ring") next = rotateCursorToward(p.x, p.y, pivot);
@@ -7066,7 +7119,7 @@ export default function CanvasArea({
         if (tb) {
           const p = toDoc(e);
           const pivot = { x: tb.x + tb.w / 2, y: tb.y + tb.h / 2 };
-          const zone = selectZone(p.x, p.y, [tb], 0, pivot, zoom / 100);
+          const zone = selectZone(p.x, p.y, [tb], 0, pivot, zoom / 100, true, grabFactor());
           if (zone.kind === "resize") next = resizeCursor(zone.edges, 0);
           else if (inRotateZone(tb, p.x, p.y, MOVE_ROTATE_REACH / (zoom / 100)))
             next = rotateCursorToward(p.x, p.y, pivot);
