@@ -727,9 +727,16 @@ html[data-mobile="true"][data-drawer="panels"] [data-tour="dock"] {
   }
 }
 
-/* Thin invisible edge strips that capture the open-swipe without stealing
-   touches from the canvas. Only mounted (by Editor) while their drawer is
-   closed. Sit above the canvas, below the drawers. */
+/* Thin invisible edge strips that capture the open-swipe. Only mounted (by
+   Editor) while their drawer is closed. Sit above the canvas, below the drawers.
+
+   THEY ARE A SECONDARY AFFORDANCE, and deliberately so. They sit exactly where
+   iOS and Android put the system back gesture, so the swipe is unreliable on
+   both — the MobileBar's Tools and Panels buttons are the route that always
+   works, and since back now closes the top layer, the system gesture has a
+   sensible job here too. What the strips cost is measurable: `elementFromPoint`
+   at x=4 and x=12 returns the strip, not the canvas, so the outer 20px of each
+   side is not paintable while they are live. */
 .gq-m-edge {
   position: fixed;
   top: var(--chrome-top);
@@ -744,4 +751,12 @@ html[data-mobile="true"][data-drawer="panels"] [data-tour="dock"] {
   &[data-side="right"] {
     right: var(--safe-r);
   }
+}
+
+/* While a drag is live on the canvas, the canvas owns the full width. A stroke
+   that began inland has to be able to run out to the edge, and a second finger
+   landing there — a pinch — belongs to the canvas too. Opening a drawer
+   mid-stroke was never the intent, so nothing is lost by standing aside. */
+html[data-toolgrab="true"] .gq-m-edge {
+  pointer-events: none;
 }

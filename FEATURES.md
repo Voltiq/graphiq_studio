@@ -543,6 +543,16 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **`beforeunload` is registered unconditionally and only speaks when there are edits.** It does not block the back/forward cache — `unload` does — and a handler that returns without touching the event prompts no one. It also does nothing at all on iOS, which is why it is the weaker half of this item: autosaving when the page is hidden is what actually protects an iPhone.
 - **Mutation-tested in both halves:** dropping the popstate handler leaves the drawer open under a back press, and silencing `beforeunload` fails the leave-with-edits check.
 
+### The edge strips, and what they cost
+
+- **Measured before it was argued about.** `elementFromPoint` at x=4 and x=12 returns the strip; at x=30 it returns the canvas. So the outer 20px of each side is genuinely not paintable while the strips are armed — and a slow drag from the edge opens the tool drawer and paints nothing, which is the strips working as designed.
+- **There is no clean win, and the item said so.** The strips sit exactly where iOS and Android put the system back gesture, so the swipe is unreliable on both; moving them anywhere else stops them being edge swipes. What can be fixed is the cost to the canvas.
+- **They stand aside the moment a drag is live.** While a pointer is down on the canvas, `<html>` carries `data-toolgrab` and the strips take `pointer-events: none`: a stroke that began inland runs out to the very edge, and a second finger landing there — a pinch — belongs to the canvas. Opening a drawer mid-stroke was never the intent, so nothing is given up.
+- **An attribute, not React state.** This fires at the start of every stroke, and re-rendering the editor to move an invisible 20px strip would be paid for in paint latency.
+- **What is NOT fixed, asserted so it stays visible:** a stroke still cannot BEGIN in the outer 20px while the strips are armed. Fixing that would mean classifying tools by whether they paint and disarming the strips for those — which trades a reliable affordance for one the platform already fights. The MobileBar's buttons are the primary route and always work; the strips are documented as secondary.
+- **The previous item makes the platform conflict cheaper.** Since back now closes the top layer, the system gesture the strips collide with does something useful in the app rather than throwing it away — which is the part of this collision that actually lost work.
+- [verify-edge-swipe.js](tools/verify-edge-swipe.js) (10 checks, in CI) pins all of it, including the costs. Mutation-tested by removing the stand-aside rule: *x=4 → strip:left* mid-drag.
+
 ### Aiming a panel drop: three zones and an indicator
 
 - **Two complaints, one cause.** A drop said nothing about where it would land, and a panel dragged *between* two others almost always ended up as a tab *inside* one. The zoning was the reason: the header carried its own "group" handler and the section split at its midpoint, so grouping owned the top 34 px — and a COLLAPSED panel is 34 px of pure header, nothing but grouping zone. There was literally nowhere to aim for "between".

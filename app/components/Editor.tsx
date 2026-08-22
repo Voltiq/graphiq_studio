@@ -502,8 +502,33 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   }, [mobile]);
   const toggleMobileDrawer = (d: "tools" | "panels") =>
     setMobileDrawer((cur) => (cur === d ? null : d));
-  // Edge-swipe: open a drawer by dragging inward from a screen edge; the strips
-  // that host these live above the canvas so touches never fight the tools.
+  /* While a pointer is down on the canvas, mark it on <html> so the edge strips
+     stand aside (globals.scss). An attribute rather than React state on
+     purpose: this fires at the start of every stroke, and re-rendering the
+     editor to move an invisible 20px strip would be paid for in paint latency.
+     Mobile only — the strips do not exist anywhere else. */
+  useEffect(() => {
+    if (!mobile) return;
+    const root = document.documentElement;
+    const down = (e: PointerEvent) => {
+      if (e.target instanceof Element && e.target.closest('[data-tour="canvas"]'))
+        root.dataset.toolgrab = "true";
+    };
+    const release = () => delete root.dataset.toolgrab;
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("pointerup", release, true);
+    window.addEventListener("pointercancel", release, true);
+    return () => {
+      window.removeEventListener("pointerdown", down, true);
+      window.removeEventListener("pointerup", release, true);
+      window.removeEventListener("pointercancel", release, true);
+      delete root.dataset.toolgrab;
+    };
+  }, [mobile]);
+
+  // Edge-swipe: open a drawer by dragging inward from a screen edge. A SECONDARY
+  // way in — the MobileBar's buttons are the one that always works, since these
+  // strips sit where the system back gesture lives. See globals.scss.
   const edgeSwipe = useRef<{ x: number; side: "left" | "right"; done: boolean } | null>(null);
   const scrimSwipe = useRef<number | null>(null);
   const SWIPE = 36; // px of travel before a swipe commits

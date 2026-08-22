@@ -164,6 +164,10 @@ jobs:
         run: npm run test:back -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
+      - name: Edge strips stand aside for the canvas
+        run: npm run test:edge -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
 
       - name: Dev server log
         if: failure()
