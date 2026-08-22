@@ -7526,6 +7526,39 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       {/* -------- Mobile shell: bottom bar, drawer scrim, edge-swipe strips ---- */}
       {mobile && (
         <>
+          {/* Finish or throw away whatever is in progress. Enter and Escape are
+              load-bearing for a pen path, a crop, a transform and a text
+              session, and a phone has neither key — so these send exactly those
+              keys, and every existing handler stays as it is. Always rendered,
+              shown by CSS only while `html[data-commit]` says a session is
+              live (CanvasArea publishes it). */}
+          <div className="gq-m-commit" role="group" aria-label="Finish or cancel">
+            <button
+              type="button"
+              aria-label="Cancel"
+              title="Cancel (Escape)"
+              onClick={() =>
+                window.dispatchEvent(
+                  new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+                )
+              }
+            >
+              <span aria-hidden>✕</span>
+            </button>
+            <button
+              type="button"
+              aria-label="Commit"
+              title="Finish (Enter)"
+              data-primary
+              onClick={() =>
+                window.dispatchEvent(
+                  new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+                )
+              }
+            >
+              <span aria-hidden>✓</span>
+            </button>
+          </div>
           <MobileBar tool={tool} drawer={mobileDrawer} onToggle={toggleMobileDrawer} />
           {mobileDrawer ? (
             <div

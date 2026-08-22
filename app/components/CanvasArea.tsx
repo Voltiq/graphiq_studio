@@ -1176,6 +1176,7 @@ export default function CanvasArea({
   const commitPolyLasso = () => {
     const poly = polyRef.current;
     polyRef.current = null;
+    refreshCommittable();
     polyHoverRef.current = null;
     if (!poly) return;
     const region = poly.pts.length >= 3 ? engine.lassoSelect(poly.pts) : null;
@@ -1329,6 +1330,24 @@ export default function CanvasArea({
   // Live pen path: the editable anchors + which handle is being dragged. Stays
   // editable (re-stroked) until committed (Enter / double-click / tool switch).
   const penPathRef = useRef<{ anchors: PenAnchor[]; closed: boolean; layerId: string } | null>(null);
+
+  /* Is there something in progress that Enter would commit and Escape would
+     throw away? A phone has neither key, so the answer is published as
+     `data-commit` on <html> and the on-canvas ✓/✕ pair keys off it in CSS —
+     an attribute rather than React state because several of these sessions
+     live in refs, which do not re-render, and polling for them every frame to
+     move two buttons would be paid for in paint latency. */
+  const refreshCommittable = useCallback(() => {
+    const live =
+      !!penPathRef.current ||
+      !!polyRef.current ||
+      !!cropBoxRef.current ||
+      !!showTransformRef.current ||
+      !!textSessionRef.current;
+    const root = document.documentElement;
+    if (live) root.dataset.commit = "1";
+    else delete root.dataset.commit;
+  }, []);
   const penDragRef = useRef<{ kind: "new" | "anchor" | "in" | "out"; index: number } | null>(null);
   // ---- Direct Selection -----------------------------------------------------
   // Shares `penPathRef` as its working path, so the skeleton/handle overlay and
@@ -3794,7 +3813,8 @@ export default function CanvasArea({
     const onKey = (e: KeyboardEvent) => {
       if ((e.key === "Enter" || e.key === "Escape") && penPathRef.current) {
         e.preventDefault();
-        finishPenPath();
+        if (e.key === "Enter") finishPenPath();
+        else cancelPenPath();
         return;
       }
       // Direct Selection: remove the selected points. Guarded on the tool so a
@@ -3824,6 +3844,7 @@ export default function CanvasArea({
     const cancelPoly = () => {
       if (polyRef.current) {
         polyRef.current = null;
+        refreshCommittable();
         polyHoverRef.current = null;
         ensureAnts();
       }
@@ -4170,6 +4191,12 @@ export default function CanvasArea({
     setPanRef.current(clampHere((vp.clientWidth - width * s) / 2, (vp.clientHeight - height * s) / 2, s, vp));
   }, [width, height, activeId]);
 
+  /* Crop, transform and a text session arrive as props, so they are watched
+     rather than poked at their source. */
+  useEffect(() => {
+    refreshCommittable();
+  }, [cropBox, showTransform, textSession, refreshCommittable]);
+
   // Report the viewport size up, and re-clamp the pan, on resize.
   useEffect(() => {
     const vp = viewportRef.current;
@@ -4223,6 +4250,7 @@ export default function CanvasArea({
     };
     engine.onPathEnd = () => {
       penPathRef.current = null;
+      refreshCommittable();
       penDragRef.current = null;
       penGrabRef.current = null;
       ensureAnts();
@@ -5722,6 +5750,27 @@ export default function CanvasArea({
 
   // Commit (bake) the live pen path and drop the editing state. Also clears a
   // single-anchor path, which never started an engine session to commit.
+  /** Throw the in-progress path away without committing it.
+   *
+   *  Escape used to call finishPenPath, so it COMMITTED — the same as Enter.
+   *  That was invisible while a path being drawn became the single reusable
+   *  Work Path: committing twice left one row either way, so cancelling and
+   *  finishing looked identical from outside. It is the poly lasso in this same
+   *  file that has it right — Enter closes, Escape cancels — and a ✕ button
+   *  that quietly commits would be worse than no button. */
+  const cancelPenPath = () => {
+    dsSourceRef.current = null;
+    dsSelRef.current = new Set();
+    dsDragRef.current = null;
+    dsMarqueeRef.current = null;
+    engine.endPath();
+    penPathRef.current = null;
+    refreshCommittable();
+    penDragRef.current = null;
+    penGrabRef.current = null;
+    ensureAnts();
+  };
+
   const finishPenPath = () => {
     // Hand the committed geometry up BEFORE clearing. An edit of a STORED path
     // goes back to that path; anything else becomes the Work Path.
@@ -5736,6 +5785,7 @@ export default function CanvasArea({
     dsMarqueeRef.current = null;
     engine.endPath();
     penPathRef.current = null;
+    refreshCommittable();
     penDragRef.current = null;
     penGrabRef.current = null;
     ensureAnts();
@@ -6282,6 +6332,7 @@ export default function CanvasArea({
           poly.pts.push({ x: p.x, y: p.y });
         } else {
           polyRef.current = { pts: [{ x: p.x, y: p.y }], op: selectOp(e) };
+          refreshCommittable();
         }
         polyHoverRef.current = { x: p.x, y: p.y };
         ensureAnts();
@@ -6476,6 +6527,7 @@ export default function CanvasArea({
         closed: false,
         layerId: ensureLayer(),
       };
+      refreshCommittable();
       penDragRef.current = { kind: "new", index: 0 };
       ensureAnts();
       return;
@@ -7985,6 +8037,7 @@ export default function CanvasArea({
           closed,
           layerId: ensureLayer(),
         };
+        refreshCommittable();
         renderPenLive();
         ensureAnts();
       },

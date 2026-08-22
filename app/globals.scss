@@ -715,6 +715,44 @@ html[data-mobile="true"][data-drawer] [data-tour="options"] {
   z-index: 118;
 }
 
+/* Finish / cancel for a touchscreen.
+   Enter and Escape decide the fate of a pen path, a crop, a transform or a text
+   session, and a phone has neither. Shown only while CanvasArea says one of
+   those is live, so the pair is not sitting over the picture the rest of the
+   time. Above the drawers' scrim, below the drawers themselves. */
+.gq-m-commit {
+  display: none;
+}
+html[data-mobile="true"][data-commit] .gq-m-commit {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--chrome-bottom) + var(--sp-3));
+  z-index: 118;
+  display: flex;
+  gap: var(--sp-2);
+
+  button {
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    font-size: 22px;
+    line-height: 1;
+    color: var(--text);
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    box-shadow: var(--shadow-md);
+
+    &[data-primary] {
+      color: #fff;
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+  }
+}
+
 /* Open states slide the matching drawer in. */
 html[data-mobile="true"][data-drawer="tools"] [data-tour="toolbar"] {
   transform: none;
