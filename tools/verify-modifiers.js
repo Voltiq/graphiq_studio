@@ -223,6 +223,116 @@ const { launchBrowser, urlArg } = require("./lib/launch");
     `${whole} px → ${cut} px (three quarters would be ~${Math.round(whole * 0.75)}, ` +
       `a replace would be ~${Math.round(quarter)})`);
 
+  // ---------- 7. the same chips, on the PANELS ----------
+  /* Five behaviours live only behind a modifier in the panels — clip a layer to
+     the one below, disable a mask, view a mask on the canvas, combine a channel
+     into the selection, delete a swatch. The chips reach those too: the panels
+     are the document's structure, as much the user's work as the pixels. */
+  const openDrawer = async () => {
+    if ((await page.evaluate(() => document.documentElement.dataset.drawer ?? "")) !== "panels")
+      await page.locator('[data-tour="mobilebar"] button', { hasText: "Panels" }).first().click();
+    await page.waitForTimeout(700);
+  };
+  const closeDrawer = async () => {
+    if ((await page.evaluate(() => document.documentElement.dataset.drawer ?? "")) === "panels") {
+      await page.evaluate(() => window.history.back());
+      await page.waitForTimeout(700);
+    }
+  };
+
+  await closeDrawer();
+  /* TWO layers: the document starts with none at all ("No layers yet"), and
+     clipping needs something underneath to clip to. */
+  for (let i = 0; i < 2; i++) {
+    await page.keyboard.press("Control+Shift+N");
+    await page.waitForTimeout(1200);
+  }
+  await openDrawer();
+
+  /* The enabling fix: with a drawer open the scrim covered the options bar, so
+     the chips were unreachable at exactly the moment the panel behaviours they
+     exist for were on screen. */
+  const chipReachable = await page.evaluate(() => {
+    const chip = document.querySelector('[aria-label="Keyboard modifiers"] button');
+    if (!chip) return false;
+    const r = chip.getBoundingClientRect();
+    const hit = document.elementFromPoint(Math.round(r.left + r.width / 2), Math.round(r.top + r.height / 2));
+    return !!hit && (hit === chip || chip.contains(hit));
+  });
+  check("the chips are still reachable with a panel drawer open", chipReachable,
+    chipReachable ? "the tap lands on the chip" : "something is covering them");
+
+  /* A clip group underlines the base layer's name. Verified as the observable
+     directly — the `title="Clip-group base"` on the same element did not show
+     up in a query, and an indicator that cannot be read is not one. */
+  const clipBases = () =>
+    page.evaluate(
+      () =>
+        [...document.querySelectorAll('[data-tour="dock"] [class*="layerName"]')].filter(
+          (e) => e.style.textDecoration === "underline",
+        ).length,
+    );
+  const layerRows = page.locator('[data-tour="dock"] [class*="layerItem"]');
+  const rowCount = await layerRows.count();
+  check("there are two layers to clip together", rowCount >= 2, `${rowCount} layer row(s)`);
+  check("nothing is clipped to start with", (await clipBases()) === 0, `${await clipBases()} clip base(s)`);
+
+  await chip("Alt").click(); // armed
+  await layerRows.first().click();
+  await page.waitForTimeout(900);
+  check("Alt-tapping a layer row clips it to the one below", (await clipBases()) > 0,
+    `${await clipBases()} clip base(s) after the tap`);
+
+  // A mask to disable — added from the menu, which needs the drawer out of the way.
+  await closeDrawer();
+  await page.locator('button[aria-label="Menu"]').first().click();
+  await page.waitForTimeout(800);
+  check("the menu sheet opens for the mask setup",
+    (await page.locator('[data-menubar][data-sheet="true"]').count()) === 1,
+    `drawer is "${await page.evaluate(() => document.documentElement.dataset.drawer ?? "")}"`);
+  /* Scoped to the sheet: "Layer" also appears as a layer's own type label in
+     the panel behind it, and a loose match picks whichever comes first. */
+  const sheet = page.locator('[data-menubar][data-sheet="true"]');
+  await sheet.locator("button", { hasText: /^Layer$/ }).first().click();
+  await page.waitForTimeout(500);
+  const menuItems = await sheet.locator('[role="menu"] button').count();
+  const addMask = sheet.locator('[role="menu"] button', { hasText: /Add layer mask/ }).first();
+  const hasMaskItem = (await addMask.count()) > 0;
+  check("the Layer menu lists its mask commands", hasMaskItem,
+    `${menuItems} item(s) under Layer, "Add layer mask" found: ${hasMaskItem}`);
+  if (hasMaskItem) {
+    await addMask.click();
+    await page.waitForTimeout(1500);
+  }
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+  await openDrawer();
+
+  /* `data-tip`, not `title`: a MutationObserver in Tooltip.tsx permanently
+     relocates every title attribute so the app can draw its own tooltip. The
+     first version of this looked for `title` and concluded the mask had never
+     been added, when it was there all along. */
+  const maskThumb = page.locator('[data-tour="dock"] [data-tip*="Layer mask"]').first();
+  const maskFound = (await maskThumb.count()) > 0;
+  check("a layer mask can be added and appears in the panel", maskFound && hasMaskItem,
+    maskFound ? "the mask thumbnail is there" : "no mask thumbnail found");
+  if (maskFound) {
+    const titleBefore = (await maskThumb.getAttribute("data-tip")) ?? "";
+    await chip("Shift").click(); // armed
+    await maskThumb.click();
+    await page.waitForTimeout(900);
+    const titleAfter =
+      (await page
+        .locator('[data-tour="dock"] [data-tip*="Layer mask"]')
+        .first()
+        .getAttribute("data-tip")) ?? "";
+    check("Shift-tapping the mask disables it",
+      !/disabled/i.test(titleBefore) && /disabled/i.test(titleAfter),
+      `"${titleBefore.slice(0, 34)}…" → "${titleAfter.slice(0, 40)}…"`);
+  } else {
+    check("Shift-tapping the mask disables it", false, "no mask to tap");
+  }
+
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
   await context.close();

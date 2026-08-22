@@ -705,6 +705,16 @@ html[data-mobile="true"] {
   }
 }
 
+/* With a drawer open, the options bar stays above the scrim — otherwise the
+   modifier chips are unreachable at precisely the moment the panel actions they
+   exist for are on screen. Measured: with the drawer open, the point at the
+   chip's centre hit `.gq-m-scrim`, not the chip. Above the scrim (110), below
+   the drawers (120), so tapping the bar adjusts options instead of dismissing
+   the drawer — which is the more useful reading of that tap anyway. */
+html[data-mobile="true"][data-drawer] [data-tour="options"] {
+  z-index: 118;
+}
+
 /* Open states slide the matching drawer in. */
 html[data-mobile="true"][data-drawer="tools"] [data-tour="toolbar"] {
   transform: none;

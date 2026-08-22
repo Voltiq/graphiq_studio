@@ -78,18 +78,31 @@ const TYPES = [
 ] as const;
 
 /**
+ * The surfaces a latched modifier applies to: the canvas, and the panels.
+ *
+ * Both are the user's DOCUMENT — the canvas holds the pixels and the panels
+ * hold its structure, and each has behaviours that only a held key could reach:
+ * Alt-click a Layers row to clip it to the one below, Shift-click a mask to
+ * disable it, Ctrl-click a channel to add it to the selection.
+ *
+ * The app's own chrome is deliberately NOT in this list. A latched Alt has no
+ * business changing what a menu, a dialog or the bottom bar does, and quietly
+ * rewriting every event in the document would be a trap set for whoever debugs
+ * the next odd click.
+ */
+const SURFACES = '[data-tour="canvas"], [data-tour="dock"], [aria-label="Left dock"]';
+
+/**
  * Start injecting latched modifiers. Returns a function that stops it.
  *
  * Capture phase on `window`, so it runs before React's listener and before any
- * handler the app registers itself. Only events over the CANVAS are touched: a
- * latched Alt has no business changing what a click on a panel or a menu does,
- * and quietly rewriting every event in the document would be a trap.
+ * handler the app registers itself.
  */
 export function installModifierInjection(): () => void {
   const inject = (e: Event) => {
     if (state.shift === "off" && state.alt === "off" && state.ctrl === "off") return;
     const target = e.target;
-    if (!(target instanceof Element) || !target.closest('[data-tour="canvas"]')) return;
+    if (!(target instanceof Element) || !target.closest(SURFACES)) return;
     const set = (prop: string, on: boolean) => {
       if (!on) return;
       try {
@@ -103,18 +116,26 @@ export function installModifierInjection(): () => void {
     set("altKey", state.alt !== "off");
     set("ctrlKey", state.ctrl !== "off");
   };
-  /* One-shot, but only a CANVAS gesture spends it. Tapping the chip is itself a
+  /* One-shot, but only a gesture on one of those SURFACES spends it. Tapping the chip is itself a
      pointer gesture: spending on any pointerup meant the chip's own release
      cleared the flag it had just set, and the second tap appeared to do nothing
      — arming again rather than locking. "Armed for the next gesture" always
      meant the next gesture on the canvas. */
   let onCanvas = false;
   const noteStart = (e: Event) => {
-    onCanvas = e.target instanceof Element && !!e.target.closest('[data-tour="canvas"]');
+    onCanvas = e.target instanceof Element && !!e.target.closest(SURFACES);
   };
   const spend = () => {
-    if (onCanvas) clearArmedModifiers();
+    const was = onCanvas;
     onCanvas = false;
+    if (!was) return;
+    /* Deferred by a turn, because `click` is dispatched AFTER `pointerup` — and
+       the panel behaviours are onClick handlers, not onPointerDown ones. Spent
+       synchronously here, a tap on a Layers row saw `pointerdown alt=true,
+       mousedown alt=true, click alt=FALSE`, so nothing clipped: the canvas
+       worked and the panels did not, for a reason that was invisible from
+       either end. */
+    setTimeout(clearArmedModifiers, 0);
   };
   for (const type of TYPES) window.addEventListener(type, inject, true);
   window.addEventListener("pointerdown", noteStart, true);
