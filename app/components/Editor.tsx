@@ -83,6 +83,7 @@ import {
   type AutosaveSnapshot,
 } from "../lib/autosave";
 import { registerRecovery } from "../lib/crash";
+import { dismissTop, registerDismissible } from "../lib/dismiss";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
 import {
   cleanChannelName,
@@ -490,6 +491,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (mobile && mobileDrawer) el.dataset.drawer = mobileDrawer;
     else delete el.dataset.drawer;
   }, [mobile, mobileDrawer]);
+  // An open drawer absorbs the back gesture rather than letting it leave.
+  useEffect(() => {
+    if (!mobileDrawer) return;
+    return registerDismissible(() => setMobileDrawer(null));
+  }, [mobileDrawer]);
   // Leaving mobile (rotate to landscape / resize up) closes any open drawer.
   useEffect(() => {
     if (!mobile) setMobileDrawer(null);
@@ -682,6 +688,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       return;
     }
     autosaveDirtyRef.current = true;
+    /* Deliberately NOT the same as the flag above, twice over. An autosave
+       clears that one, and "your snapshot is recoverable" is not the promise
+       "your work is saved" — only writing a file clears this. And it asks
+       whether the user has actually DONE anything: a freshly opened editor
+       already reads "Unsaved changes", because its blank document has never
+       been written to a file, and prompting on the way out of an untouched app
+       would be nagging about nothing. Index 0 is the synthetic origin row, so
+       anything past the document's own base is a real edit. */
+    unsavedRef.current = history.index > (activeDocRef.current?.historyBase ?? 0);
     setSaveState((s) => (s.label === "Unsaved changes" ? s : { label: "Unsaved changes", ok: false }));
   }, [history]);
   const [saveAsOpen, setSaveAsOpen] = useState(false);
@@ -3890,6 +3905,65 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     }
   }, [activeId]);
 
+  /** Edits since the document was last written to a FILE. */
+  const unsavedRef = useRef(false);
+
+  /* The back gesture, and leaving with unsaved work.
+   *
+   * On a phone back is how everything is dismissed, and nothing here consumed
+   * it: back left the editor outright. A guard entry is pushed so there is
+   * something for it to land on; when it does, the layer in front is closed and
+   * the guard is pushed again. With nothing left to close, the navigation is
+   * allowed — and only then does beforeunload ask about unsaved work.
+   *
+   * beforeunload is registered unconditionally but only SPEAKS when there are
+   * edits: it does not block the back/forward cache (that is `unload`), and a
+   * handler that returns without touching the event prompts no one. It does
+   * nothing at all on iOS, which is why the autosave-on-hidden work matters
+   * more than this does. */
+  useEffect(() => {
+    const pushGuard = () => {
+      try {
+        // `history` here is the editor's own undo history — hence window.
+        window.history.pushState({ gqBackGuard: true }, "");
+      } catch {
+        /* history unavailable — back simply leaves, as before */
+      }
+    };
+    /* A modal dialog is tried first and by its own route: dialogs sit above
+       everything and own Escape themselves, so the key goes to whatever has
+       focus inside the trap rather than the dialog being closed behind its
+       back. */
+    const closeTopDialog = (): boolean => {
+      const dialog = document.querySelector('[role="dialog"], [role="alertdialog"]');
+      if (!dialog || !(dialog.parentElement && /overlay/i.test(dialog.parentElement.className || "")))
+        return false;
+      const target =
+        document.activeElement && dialog.contains(document.activeElement)
+          ? document.activeElement
+          : dialog;
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      return true;
+    };
+    const onPop = () => {
+      if (closeTopDialog() || dismissTop()) pushGuard();
+    };
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!unsavedRef.current) return;
+      e.preventDefault();
+      e.returnValue = ""; // some browsers still want this set
+    };
+    pushGuard();
+    window.addEventListener("popstate", onPop);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, []);
+
   // Heartbeat: detect an unclean exit and offer the last snapshot for restore.
   useEffect(() => {
     // Read BEFORE arming: installHeartbeat() overwrites the answer.
@@ -4118,6 +4192,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   const markSaved = (label: string) => {
     autosaveDirtyRef.current = false;
+    unsavedRef.current = false;
     setSaveState({ label, ok: true });
   };
 

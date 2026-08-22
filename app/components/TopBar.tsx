@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Menu as MenuIcon, Redo2, Search, Undo2, X } from "lucide-react";
 import styles from "./TopBar.module.scss";
+import { registerDismissible } from "../lib/dismiss";
 import logo from "../icon.png";
 import ThemeToggle from "./ThemeToggle";
 import CommandPalette, { type PaletteCommand } from "./CommandPalette";
@@ -47,6 +48,13 @@ export default function TopBar({
   const [open, setOpen] = useState<string | null>(null);
   // Mobile menu sheet (the collapsed menubar behind the hamburger).
   const [sheetOpen, setSheetOpen] = useState(false);
+  /* While the sheet is up it absorbs the back gesture, instead of the gesture
+     leaving the editor. It keeps its own state; only the way to close it is
+     shared. */
+  useEffect(() => {
+    if (!sheetOpen) return;
+    return registerDismissible(() => setSheetOpen(false));
+  }, [sheetOpen]);
   const barRef = useRef<HTMLDivElement>(null);
   // Back to desktop → drop any open sheet so its fixed overlay can't linger.
   useEffect(() => {

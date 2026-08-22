@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -24,6 +24,7 @@
     "test:breakpoint": "node tools/verify-breakpoint.js",
     "test:gestures": "node tools/verify-gestures.js",
     "test:autosave": "node tools/verify-autosave.js",
+    "test:back": "node tools/verify-back-gesture.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
