@@ -214,7 +214,10 @@ const { launchBrowser, urlArg } = require("./lib/launch");
      the overlay is blank either way and the measurement proves nothing. */
   const overlayInk = () =>
     page.evaluate(() => {
-      const cs = [...document.querySelectorAll("canvas")];
+      /* The last canvas that is NOT the loupe: the loupe was added after the
+         overlay in the DOM and is blank for a mouse, so "the last canvas"
+         started measuring zero ink whatever the overlay was drawing. */
+      const cs = [...document.querySelectorAll("canvas")].filter((c) => !c.hasAttribute("data-loupe"));
       const el = cs[cs.length - 1];
       const d = el.getContext("2d").getImageData(0, 0, el.width, el.height).data;
       let n = 0;

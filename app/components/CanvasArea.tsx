@@ -1252,6 +1252,103 @@ export default function CanvasArea({
   /** The bare multiplier, for hit tests that build their own radii. */
   const grabFactor = (): number => grabScale(pointerKindRef.current);
 
+  /* ---- Loupe --------------------------------------------------------------
+     The problem a bigger grab radius cannot solve: a fingertip covers the very
+     pixels it is being aimed at. Placement is guesswork for exactly the tools
+     where placement IS the result — which pixel the Eyedropper samples, where a
+     pen anchor lands, where the clone source sits.
+
+     So the pixels under the contact are drawn again, magnified, somewhere the
+     finger is not. It is not a new interaction: the Eyedropper already
+     re-samples on every move and commits whatever it was over on release, so
+     the loupe simply makes that drag steerable. The tools that only place on
+     press get the same view of where the press is landing.
+
+     Drawn from the ARTWORK canvas, which is the composite at document
+     resolution — the same pixels the sampler reads, rather than a re-render
+     that could disagree with it. */
+  const loupeRef = useRef<HTMLCanvasElement>(null);
+  /** Contact point in viewport coordinates while a loupe-worthy press is live. */
+  const loupeAtRef = useRef<{ x: number; y: number } | null>(null);
+  const LOUPE_PX = 132; // the loupe's own size on screen
+  const LOUPE_MAG = 5; // how much bigger than the screen it shows things
+  const LOUPE_GAP = 56; // clearance from the contact, so the finger never covers it
+  /** Tools where placement decides the result, and only those. */
+  const LOUPE_TOOLS = new Set(["eyedropper", "pen", "clone", "crop", "gradient"]);
+
+  const drawLoupe = () => {
+    const el = loupeRef.current;
+    const at = loupeAtRef.current;
+    const src = viewRef.current;
+    const vp = viewportRef.current;
+    if (!el || !src || !vp) return;
+    if (!at) {
+      el.removeAttribute("data-at");
+      el.style.display = "none";
+      return;
+    }
+    /* Above the contact by default, below it when there is no room — the one
+       position it must never take is on top of the finger. Clamped sideways so
+       it stays inside the viewport, which clips. */
+    const above = at.y - LOUPE_GAP - LOUPE_PX >= 0;
+    const top = above ? at.y - LOUPE_GAP - LOUPE_PX : at.y + LOUPE_GAP;
+    const left = Math.max(4, Math.min(at.x - LOUPE_PX / 2, vp.clientWidth - LOUPE_PX - 4));
+    el.style.display = "block";
+    el.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+
+    const g = el.getContext("2d");
+    if (!g) return;
+    const scale = Math.max(0.01, zoomRef.current / 100);
+    const winDoc = LOUPE_PX / LOUPE_MAG / scale; // document px the loupe covers
+    const vr = vp.getBoundingClientRect();
+    const d = clientToDoc(at.x + vr.left, at.y + vr.top);
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, LOUPE_PX, LOUPE_PX);
+    /* A ground of its own: the artwork canvas is transparent where the document
+       is, and an unpainted loupe would show the page through it. */
+    g.fillStyle = "#0b0d12";
+    g.fillRect(0, 0, LOUPE_PX, LOUPE_PX);
+    /* Nearest-neighbour: the whole point is to see WHICH pixel, and smoothing
+       would blend the one being sampled into its neighbours. */
+    g.imageSmoothingEnabled = false;
+    g.drawImage(
+      src,
+      d.x - winDoc / 2, d.y - winDoc / 2, winDoc, winDoc,
+      0, 0, LOUPE_PX, LOUPE_PX,
+    );
+    // The pixel that will actually be used, boxed at the centre.
+    const px = Math.max(3, LOUPE_PX / winDoc); // one document pixel, in loupe px
+    const c = LOUPE_PX / 2;
+    g.imageSmoothingEnabled = true;
+    g.lineWidth = 1;
+    g.strokeStyle = "rgba(0,0,0,0.85)";
+    g.strokeRect(Math.round(c - px / 2) - 0.5, Math.round(c - px / 2) - 0.5, px + 1, px + 1);
+    g.strokeStyle = "rgba(255,255,255,0.95)";
+    g.strokeRect(Math.round(c - px / 2) + 0.5, Math.round(c - px / 2) + 0.5, px - 1, px - 1);
+    /* Reported for anything that needs to know what the loupe is showing —
+       the harness checks the centre pixel against the document under the
+       contact, which is the one way a loupe can lie. */
+    el.setAttribute("data-at", `${Math.floor(d.x)},${Math.floor(d.y)}`);
+  };
+
+  /** Show (or move) the loupe for a press that deserves one. */
+  const trackLoupe = (e: React.PointerEvent) => {
+    if (e.pointerType === "mouse" || !LOUPE_TOOLS.has(toolRef.current)) {
+      if (loupeAtRef.current) hideLoupe();
+      return;
+    }
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const r = vp.getBoundingClientRect();
+    loupeAtRef.current = { x: e.clientX - r.left, y: e.clientY - r.top };
+    drawLoupe();
+  };
+  const hideLoupe = () => {
+    if (!loupeAtRef.current) return;
+    loupeAtRef.current = null;
+    drawLoupe();
+  };
+
   // ---- Guides ---------------------------------------------------------------
   // The committed guides live in Editor state; `guidesRef` is the LIVE list the
   // overlay draws, which during a drag is the committed list with one entry
@@ -5480,6 +5577,7 @@ export default function CanvasArea({
    * finished with Enter, not a drag, so a pinch has no business ending it.
    */
   const abortActiveGesture = () => {
+    hideLoupe();
     if (paintingRef.current) {
       engine.cancelStroke();
       paintingRef.current = false;
@@ -6100,6 +6198,7 @@ export default function CanvasArea({
     // resting on the glass is ignored while two-finger pan/zoom keeps working.
     palmRef.current = palmDown(palmRef.current, e.pointerType);
     if (rejectsPointer(palmRef.current, e.pointerType, pointerPrefsRef.current.palm)) return;
+    trackLoupe(e); // after palm rejection: a rested hand gets no loupe either
     commitNudge(); // a pointer gesture finalizes any pending arrow-key nudge
     // On-canvas brush HUD: Alt + right-drag sets size (horizontal) and hardness
     // (vertical). Claimed before every tool branch below, because on the paint
@@ -6919,6 +7018,7 @@ export default function CanvasArea({
   };
   const onCanvasPointerMove = (e: React.PointerEvent) => {
     pointerKindRef.current = e.pointerType;
+    if (loupeAtRef.current) trackLoupe(e);
     // While a pinch owns the gesture, tools ignore touch moves.
     if (e.pointerType !== "mouse" && (pinchRef.current || gestureSuppressRef.current)) return;
     // Report the doc-space cursor position to the status bar (null off-canvas).
@@ -7610,6 +7710,7 @@ export default function CanvasArea({
     if (Math.hypot(p.x - last.x, p.y - last.y) >= 0.75) rec.points.push({ x: p.x, y: p.y });
   };
   const onCanvasPointerUp = (e: React.PointerEvent) => {
+    hideLoupe();
     const wasRejected = rejectsPointer(palmRef.current, e.pointerType, pointerPrefsRef.current.palm);
     palmRef.current = palmUp(palmRef.current, e.pointerType);
     if (wasRejected) return; // this contact never started anything
@@ -8485,6 +8586,18 @@ export default function CanvasArea({
           </div>
           <canvas ref={gridRef} className={styles.overlay} />
           <canvas ref={overlayRef} className={styles.overlay} />
+          {/* Magnified view of the pixels under the finger, parked clear of it.
+              Positioned imperatively (see drawLoupe) rather than through state:
+              it follows every pointermove, and a re-render per move would cost
+              more than the whole overlay redraw it rides alongside. */}
+          <canvas
+            ref={loupeRef}
+            className={styles.loupe}
+            data-loupe
+            width={LOUPE_PX}
+            height={LOUPE_PX}
+            aria-hidden="true"
+          />
           {/* Split divider + side tags, in VIEWPORT space so the line stays a
               constant 2px however far the canvas is zoomed. */}
           {compareSplit !== null && !comparePeek && (() => {

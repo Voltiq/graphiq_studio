@@ -39,7 +39,12 @@ const OFFSET = 14;
    pixels on the overlay canvas. Read from the pixels rather than from React
    state on purpose: this is the box the user can see. */
 const BOX = () => {
-  const ov = [...document.querySelectorAll('[data-tour="canvas"] canvas')].pop();
+  /* The overlay is the last canvas that is NOT the loupe. "The last canvas"
+     alone was right until the loupe was added after it, at which point this
+     started measuring a 132px circle and reporting every handle as missed. */
+  const ov = [...document.querySelectorAll('[data-tour="canvas"] canvas')]
+    .filter((c) => !c.hasAttribute("data-loupe"))
+    .pop();
   const g = ov.getContext("2d", { willReadFrequently: true });
   const d = g.getImageData(0, 0, ov.width, ov.height).data;
   let x0 = 1e9,

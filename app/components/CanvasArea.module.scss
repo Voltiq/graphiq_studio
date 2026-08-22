@@ -497,3 +497,25 @@ $ruler: 22px;
   background: var(--border);
   margin: 0 2px;
 }
+
+/* The loupe: a magnified view of the pixels under a finger, parked clear of it.
+   Sits above every other overlay because it exists precisely when something is
+   in the way. Click-through — it is a window, never a target — and positioned
+   by transform from JS, so following the finger costs no layout. */
+.loupe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: none;
+  width: 132px;
+  height: 132px;
+  pointer-events: none;
+  z-index: 8;
+  border-radius: 50%;
+  border: 2px solid var(--surface-3);
+  box-shadow: var(--shadow-md), 0 0 0 1px var(--border);
+  /* Nearest-neighbour all the way to the screen: the canvas is drawn at its own
+     size, but a fractional device pixel ratio would resample it on the way out
+     and blur the very pixel edges the loupe exists to show. */
+  image-rendering: pixelated;
+}
