@@ -144,6 +144,42 @@ const { launchBrowser, urlArg } = require("./lib/launch");
       ? `${afterHidden.docs} document(s), ${Math.round(afterHidden.bytes / 1024)} KB, savedAt ${afterHidden.savedAt}`
       : "nothing stored");
 
+  /* The point of the format: the pixels are BESIDE the JSON, not inside it.
+     Inlined as base64 they made one ~134 MB string per document, which cost
+     281 ms of blocked main thread to build at the moment the page is hiding. */
+  const shape = await page.evaluate(async () => {
+    const dbs = await indexedDB.databases();
+    if (!dbs.some((d) => d.name === "graphiq-autosave")) return null;
+    return new Promise((resolve) => {
+      const r = indexedDB.open("graphiq-autosave");
+      r.onerror = () => resolve(null);
+      r.onsuccess = () => {
+        const db = r.result;
+        const tx = db.transaction("snapshots", "readonly");
+        const g = tx.objectStore("snapshots").get("latest");
+        g.onsuccess = async () => {
+          const snap = g.result;
+          db.close();
+          if (!snap?.docs?.length) return resolve(null);
+          const d = snap.docs[0];
+          const json = typeof d.json === "string" ? d.json : await d.json.text();
+          resolve({
+            images: Object.keys(d.images ?? {}).length,
+            refs: (json.match(/gqblob:/g) ?? []).length,
+            inlined: (json.match(/data:image\/png;base64/g) ?? []).length,
+            jsonKB: Math.round(json.length / 1024),
+          });
+        };
+        g.onerror = () => { db.close(); resolve(null); };
+      };
+    });
+  });
+  check("the pixels are stored beside the JSON, not inside it",
+    !!shape && shape.images > 0 && shape.refs === shape.images && shape.inlined === 0,
+    shape
+      ? `${shape.images} image blob(s), ${shape.refs} reference(s), ${shape.inlined} inlined, JSON ${shape.jsonKB} KB`
+      : "no snapshot");
+
   // ---------- 3. the tab is taken away, and the work comes back ----------
   /* A second page rather than a reload: a reload says goodbye through pagehide
      and the next boot would look like a clean exit. */
@@ -327,6 +363,103 @@ const { launchBrowser, urlArg } = require("./lib/launch");
       `status: "${failed.slice(-52)}"`);
     check("…and says what happened instead", /Autosave failed/i.test(failed),
       `status: "${failed.slice(-52)}"`);
+    await fresh.close();
+  }
+
+  // ---------- 8. a snapshot written by an older version still restores ----------
+  /* Autosave now keeps each image in its own Blob with a `gqblob:` reference in
+     the JSON. Anyone upgrading has a snapshot in the OLD shape sitting in their
+     browser, and it has to keep working.
+
+     The fixture is not hand-written — an earlier attempt at that spent its time
+     debugging the fixture's own field names and colours rather than the app.
+     Instead the app writes a real snapshot, and it is then converted BACK to the
+     previous shape: every reference replaced by its blob as a data URL, the
+     images map dropped, the JSON stored as a plain string. */
+  {
+    const fresh = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const seed = await fresh.newPage();
+    await boot(seed);
+    const c = await seed.locator('[data-tour="canvas"] canvas').first().boundingBox();
+    await seed.mouse.move(c.x + c.width * 0.35, c.y + c.height * 0.45);
+    await seed.mouse.down();
+    for (let i = 1; i <= 10; i++)
+      await seed.mouse.move(c.x + c.width * (0.35 + i * 0.02), c.y + c.height * (0.45 + i * 0.02));
+    await seed.mouse.up();
+    await seed.waitForTimeout(900);
+    const painted = await stableShot(seed);
+    await seed.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await seed.waitForTimeout(2500);
+
+    const converted = await seed.evaluate(async () => {
+      const read = () =>
+        new Promise((res) => {
+          const r = indexedDB.open("graphiq-autosave");
+          r.onsuccess = () => {
+            const db = r.result;
+            const tx = db.transaction("snapshots", "readonly");
+            const g = tx.objectStore("snapshots").get("latest");
+            g.onsuccess = () => { db.close(); res(g.result ?? null); };
+            g.onerror = () => { db.close(); res(null); };
+          };
+          r.onerror = () => res(null);
+        });
+      const snap = await read();
+      if (!snap) return "no snapshot to convert";
+      const asDataUrl = (blob) =>
+        new Promise((res) => {
+          const fr = new FileReader();
+          fr.onload = () => res(String(fr.result));
+          fr.onerror = () => res("");
+          fr.readAsDataURL(blob);
+        });
+      const docs = [];
+      let refs = 0;
+      for (const d of snap.docs) {
+        let json = typeof d.json === "string" ? d.json : await d.json.text();
+        for (const [key, blob] of Object.entries(d.images ?? {})) {
+          const url = await asDataUrl(blob);
+          const before = json;
+          json = json.split(`gqblob:${key}`).join(url);
+          if (json !== before) refs++;
+        }
+        docs.push({ json, name: d.name });   // a plain string, and no images map
+      }
+      await new Promise((res) => {
+        const r = indexedDB.open("graphiq-autosave");
+        r.onsuccess = () => {
+          const db = r.result;
+          const tx = db.transaction("snapshots", "readwrite");
+          tx.objectStore("snapshots").put({ docs, activeIndex: snap.activeIndex, savedAt: snap.savedAt }, "latest");
+          tx.oncomplete = () => { db.close(); res(null); };
+          tx.onerror = () => { db.close(); res(null); };
+        };
+        r.onerror = () => res(null);
+      });
+      return `${docs.length} document(s), ${refs} image(s) inlined`;
+    });
+    check("a snapshot can be put back into the previous format", !String(converted).startsWith("no "),
+      String(converted));
+
+    /* The seed page stays OPEN: closing it is a real unload, which the heartbeat
+       correctly reads as a clean exit and would clear the flag this depends on. */
+    const upgraded = await fresh.newPage();
+    await boot(upgraded);
+    const dialog = upgraded.locator('div[aria-label="Restore session"]');
+    const offered = await dialog.count();
+    check("a snapshot from the previous format is still offered", offered === 1,
+      offered ? "the restore dialog is up" : "no restore dialog appeared");
+    if (offered) {
+      await dialog.locator("button", { hasText: "Restore" }).first().click();
+      await upgraded.waitForTimeout(2500);
+      const back = await stableShot(upgraded);
+      check("…and it restores pixel for pixel", back === painted, `recovered ${back}, was ${painted}`);
+    } else {
+      check("…and it restores pixel for pixel", false, "nothing to restore");
+    }
     await fresh.close();
   }
 

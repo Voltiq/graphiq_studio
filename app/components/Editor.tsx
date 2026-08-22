@@ -73,6 +73,7 @@ import {
   type LayerComp,
 } from "../lib/comps";
 import {
+  BLOB_REF,
   clearAutosave,
   installHeartbeat,
   readAutosave,
@@ -3796,9 +3797,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
    *  does that from a worker, so the 1 s of PNG encoding this used to do on the
    *  main thread happens off it. Absent, every image is encoded here as before,
    *  which is what the crash path and the file export need: neither can await. */
-  const serializeDocToJSON = (d: Doc, encoded?: ReadonlyMap<string, string>): string => {
+  const serializeDocToJSON = (d: Doc, encoded?: ReadonlyMap<string, Blob>): string => {
     const isActive = d.id === activeIdRef.current;
-    const pre = (key: string, encode: () => string | null) => encoded?.get(key) ?? encode();
+    /* A reference, not the pixels: the Blob travels beside the JSON rather than
+       inside it. Anything not in the map is encoded here, as before. */
+    const pre = (key: string, encode: () => string | null) =>
+      encoded?.has(key) ? `${BLOB_REF}${key}` : encode();
     const project = serializeProject(
       {
         name: d.name,
@@ -3899,13 +3903,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
    *  from the engine; inactive ones can't have changed since they were cached).
    *  Shared by the autosave tick and by crash recovery. */
   const collectOpenDocs = useCallback((
-    encoded?: ReadonlyMap<string, string>,
+    encoded?: ReadonlyMap<string, Blob>,
   ): { entries: AutosaveDoc[]; activeIndex: number } => {
     const docsNow = docsRef.current;
     const active = activeDocRef.current;
+    /* The cached entry carries its images too, so an inactive tab's references
+       still resolve in the next snapshot — they are only re-encoded when that
+       tab is the active one. */
     docJsonCache.current.set(active.id, {
       json: serializeDocToJSON(active, encoded),
       name: active.name,
+      ...(encoded && encoded.size ? { images: Object.fromEntries(encoded) } : {}),
     });
     const openIds = new Set(docsNow.map((d) => d.id));
     for (const k of [...docJsonCache.current.keys()]) if (!openIds.has(k)) docJsonCache.current.delete(k);
@@ -3966,8 +3974,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
    *  so the result is byte-identical — the encoder is the same, it simply runs
    *  somewhere else. Anything that fails to encode is left out of the map and
    *  falls back to the main-thread getter. */
-  const encodeDocOffThread = useCallback(async (d: Doc): Promise<Map<string, string>> => {
-    const out = new Map<string, string>();
+  const encodeDocOffThread = useCallback(async (d: Doc): Promise<Map<string, Blob>> => {
+    const out = new Map<string, Blob>();
     const eng = paintRef.current;
     if (!eng) return out;
     const jobs: Promise<void>[] = [];
@@ -3975,7 +3983,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       if (!canvas) return;
       jobs.push(
         encodePngOffThread(canvas)
-          .then((url) => void out.set(key, url))
+          .then((blob) => {
+            if (blob) out.set(key, blob);
+          })
           .catch(() => {}),
       );
     };

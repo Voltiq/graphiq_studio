@@ -9,11 +9,25 @@ const STORE = "snapshots";
 const KEY = "latest";
 const ALIVE_KEY = "graphiq:session-alive";
 
-/** One document inside a snapshot: its `.gproj` JSON + display name. */
+/** One document inside a snapshot: its `.gproj` JSON + display name.
+ *
+ *  `images` is how autosave keeps the pixels OUT of that JSON. Each entry is a
+ *  PNG Blob, and the JSON holds `gqblob:<key>` where a data URL would otherwise
+ *  sit. Writing it that way is the whole point: building one JSON string with
+ *  three 12-megapixel layers base64'd into it measured 281 ms of blocked main
+ *  thread, at the moment the page is being hidden. Blobs cross from the encoder
+ *  by reference and go into IndexedDB as they are.
+ *
+ *  Absent on a snapshot written by the crash path, which cannot await a worker
+ *  and so still inlines data URLs — and on anything written before this. */
 export interface AutosaveDoc {
   json: string;
   name: string;
+  images?: Record<string, Blob>;
 }
+
+/** Marks a place in the JSON where an image lives in `images` instead. */
+export const BLOB_REF = "gqblob:";
 
 export interface AutosaveSnapshot {
   /** Every open document at snapshot time, in tab order. */
@@ -40,11 +54,41 @@ interface LegacySnapshot {
 interface StoredDoc {
   json: string | Blob;
   name: string;
+  images?: Record<string, Blob>;
 }
 
 /** Coerce any stored value into the current snapshot shape — migrating a legacy
  *  single-document entry, and reading a document stored either way — or null if
  *  it isn't a usable snapshot. */
+/** Put the blobs back where the references are, as data URLs.
+ *
+ *  Restoring is user-initiated and happens once, so the base64 is affordable
+ *  HERE in a way it is not on every autosave — and it keeps every consumer of a
+ *  snapshot's JSON exactly as it was, which is worth more than the saving.
+ *  (Object URLs would be cheaper still, but they have to be revoked by someone,
+ *  and there is no good moment for that between here and the decoder.) */
+async function inlineImages(json: string, images?: Record<string, Blob>): Promise<string> {
+  if (!images || !json.includes(BLOB_REF)) return json;
+  const urls = new Map<string, string>();
+  for (const [key, blob] of Object.entries(images)) {
+    urls.set(
+      key,
+      await new Promise<string>((resolve) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result));
+        fr.onerror = () => resolve("");
+        fr.readAsDataURL(blob);
+      }),
+    );
+  }
+  /* The references sit inside JSON string literals, so a plain replace is
+     enough — the keys are ids, with nothing needing escaping. */
+  return json.replace(
+    new RegExp(`${BLOB_REF}([^"]+)`, "g"),
+    (whole, key: string) => urls.get(key) ?? whole,
+  );
+}
+
 async function coerceSnapshot(raw: unknown): Promise<AutosaveSnapshot | null> {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Partial<{ docs: StoredDoc[]; activeIndex: number; savedAt: number }> &
@@ -55,7 +99,7 @@ async function coerceSnapshot(raw: unknown): Promise<AutosaveSnapshot | null> {
     const docs: AutosaveDoc[] = [];
     for (const d of o.docs) {
       const json = d ? await text(d.json) : null;
-      if (json) docs.push({ json, name: d.name ?? "Untitled" });
+      if (json) docs.push({ json: await inlineImages(json, d.images), name: d.name ?? "Untitled" });
     }
     if (!docs.length) return null;
     const activeIndex = Math.max(0, Math.min(docs.length - 1, o.activeIndex ?? 0));
@@ -93,6 +137,7 @@ export async function writeAutosave(snap: AutosaveSnapshot): Promise<AutosaveWri
       docs: snap.docs.map((d) => ({
         json: new Blob([d.json], { type: "application/json" }),
         name: d.name,
+        ...(d.images ? { images: d.images } : {}),
       })),
       activeIndex: snap.activeIndex,
       savedAt: snap.savedAt,

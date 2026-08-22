@@ -11,10 +11,22 @@
  *
  * AFTER moving the encode into app/workers/png.worker.ts:
  *
- *     AUTOSAVE: 0-1 long tasks, 0-99 ms blocked
+ *     AUTOSAVE: 0-1 long tasks, 0-60 ms blocked   (one layer)
+ *     AUTOSAVE: 2 long tasks, 281-298 ms blocked  (three layers, 134.5 MB)
  *
- * What is left is JSON.stringify over the base64 and the IndexedDB write, both
- * of which scale with how many documents are open rather than with the encode.
+ * The three-layer figure is the one the item asked about, and the encode was
+ * not what was left in it: an encode tally reported all three going through the
+ * worker. It was JSON.stringify over ~134 MB of base64, plus the Blob copy.
+ *
+ * AFTER also keeping the images OUT of that JSON — each one its own Blob, with
+ * a `gqblob:` reference in its place:
+ *
+ *     AUTOSAVE: 0 long tasks, 0 ms blocked        (three layers)
+ *     stored: JSON 1 KB + 100.9 MB of PNG (was one 134.5 MB string)
+ *
+ * Moving the stringify to a worker was tried and rejected by measurement: the
+ * structured clone of the object costs 54 ms of blocked main thread, against
+ * 0 ms for doing the same work here.
  *
  * WHY NOT toBlob, since it is the obvious answer: it is async in shape but
  * still encodes on the caller's thread — measured at 409 ms blocked for a
