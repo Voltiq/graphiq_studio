@@ -3948,8 +3948,18 @@ export default function CanvasArea({
   const panRef = useRef(pan);
   panRef.current = pan;
 
+  /** Clamp a pan against the LIVE viewport.
+   *
+   *  A viewport with no area cannot constrain anything, and clamping against
+   *  one turns a correct pan into a wrong one. That is not hypothetical: on a
+   *  cold load the stage is momentarily 0px wide while the shell settles, and
+   *  the pan `fit()` had computed against the real size — centred — came back
+   *  from here as `-80`, leaving the picture off to the left. The pan is
+   *  returned untouched instead; the next layout with a real size clamps it. */
   const clampHere = (x: number, y: number, scale: number, vp: HTMLElement) =>
-    clampPan(x, y, scale, widthRef.current, heightRef.current, vp.clientWidth, vp.clientHeight);
+    vp.clientWidth > 0 && vp.clientHeight > 0
+      ? clampPan(x, y, scale, widthRef.current, heightRef.current, vp.clientWidth, vp.clientHeight)
+      : { x, y };
 
   /** Zoom the whole document to fit the viewport and centre it. */
   const fit = useCallback(() => {

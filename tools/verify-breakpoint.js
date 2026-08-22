@@ -176,6 +176,34 @@ const PROFILES = [
     check("…and the view is fitted once, not fitted and then re-fitted",
       seen.fits === 1, `fit() ran ${seen.fits} time(s)`);
 
+    /* Where all of that has to end up: the picture centred in the stage. The
+       checks above are about WHEN the layout is decided; this is about the
+       result, and it is the one that caught a real bug — the stage is
+       momentarily 0px wide during the cold load, and a pan clamped against a
+       viewport with no width came back as -80 instead of 11, parking the
+       picture off to the left while every other reading looked correct. */
+    const centred = await page.evaluate(() => {
+      const stage = document.querySelector('[data-tour="canvas"] [class*="viewport"]');
+      if (!stage) return null;
+      const v = stage.getBoundingClientRect();
+      /* The artwork is the transformed pan/zoom wrapper, not the overlay canvas
+         (which is exactly the stage's size and would always look centred). */
+      const art = [...stage.querySelectorAll("*")]
+        .filter((e) => getComputedStyle(e).transform !== "none")
+        .map((e) => e.getBoundingClientRect())
+        .filter((b) => b.width > 20 && b.width < stage.clientWidth)[0];
+      if (!art) return null;
+      return {
+        left: Math.round(art.left - v.left), right: Math.round(v.right - art.right),
+        top: Math.round(art.top - v.top), bottom: Math.round(v.bottom - art.bottom),
+      };
+    });
+    check("the picture lands centred in the stage",
+      !!centred && Math.abs(centred.left - centred.right) <= 1 && Math.abs(centred.top - centred.bottom) <= 1,
+      centred
+        ? `gaps left ${centred.left} / right ${centred.right}, top ${centred.top} / bottom ${centred.bottom}`
+        : "no artwork found");
+
     /* The other half of that change: the callback that no longer fires on the
        starting size must still fire on a real one, or rotating the phone would
        leave an untouched view off-centre. */
