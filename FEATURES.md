@@ -614,6 +614,16 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **The rail proves its own setup before the case it cares about:** the same drag *without* a pinch must move the ink centre and add a history step (`925,483 → 1226,484`, history `3 → 4`), or the real check would be measuring a drag that never did anything. With the pinch, both are unchanged.
 - **Both position and history are asserted**, because each catches a different failure: a move silently reverted but still recorded is a phantom undo step, and one recorded but not reverted is the original bug. Mutation-testing the move out of the abort fires the position check — `1226,484 → 1503,483`, the layer displaced by a gesture the user cancelled.
 
+### Sliders a finger can hit
+
+- **The hit target is the input, not the thumb** — and the input is 3–4px tall, with the picker's hue and alpha strips at 10px. Two rules fix all of it: padding grows the reachable box while `background-clip: content-box` keeps the painted track exactly where it was, so nothing looks different and only the reachable area changes.
+- **Every range input, not the ones inside one wrapper.** Scoping the rule to `.slider input` left a 3px target sitting in the Layers panel, which the rail caught. One rule for all ~220 call sites is the whole point of doing it this way.
+- **Touch only, deliberately.** The same padding on desktop would make every row containing a slider 20px taller, and a mouse can already hit 4px. The rail asserts the desktop box is still 4px, so the scoping cannot rot into a redesign nobody asked for.
+- **12px of padding, not 10.** Padding adds to whatever the track already is, and the tracks are not all the same height: 10px left that 3px slider at 23px, one short of the bar. Measured, not assumed.
+- **The check is whether a touch LANDS, not what the box measures.** A 24px box with something on top of it is no use, so `elementFromPoint` is fired at the centre and 10px either side, and then the slider is actually dragged and its value read back (`60 → 744`).
+- **Two rail bugs worth recording, both about measuring the wrong thing.** The first slider in the DOM sat at x=613 on a 390px phone — off the side of a bar that does not scroll — and every hit test against it missed, which reads as "covered" rather than "not on screen". And a loose `[class*="alpha"]` search matched `.alphaTrack`, an inner element that is not a hit target, reporting a 10px strip that does not exist.
+- **That off-screen slider is a finding in itself:** the brush's option sliders are past the right edge on a phone, in a bar that does not scroll, so they are unreachable regardless of how big their hit boxes are. That is the per-tool sheet item in M3, and this rail measures in the panels instead.
+
 ### Aiming a panel drop: three zones and an indicator
 
 - **Two complaints, one cause.** A drop said nothing about where it would land, and a panel dragged *between* two others almost always ended up as a tab *inside* one. The zoning was the reason: the header carried its own "group" handler and the section split at its midpoint, so grouping owned the top 34 px — and a COLLAPSED panel is 34 px of pure header, nothing but grouping zone. There was literally nowhere to aim for "between".

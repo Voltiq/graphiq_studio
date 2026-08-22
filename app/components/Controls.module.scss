@@ -443,3 +443,25 @@
   background: var(--border);
   flex-shrink: 0;
 }
+
+/* ---- Finger-sized sliders (touch only) ------------------------------------
+   The range input IS the hit target — not its thumb — and it is 4px tall, which
+   is roughly a tenth of what a fingertip can reliably hit. The box grows to
+   24px through PADDING, with the background clipped to the content box, so the
+   visible track stays exactly 4px where it always was and only the reachable
+   area changes.
+
+   EVERY range input, not just the ones inside `.slider`: the panels use their
+   own wrappers, and scoping the rule to one of them left a 3px target sitting
+   in the Layers panel. One rule for all ~220 call sites is the point.
+
+   Touch only, deliberately: the same padding on desktop would make every row
+   containing a slider 20px taller. A mouse can already hit 4px. */
+html[data-mobile="true"] input[type="range"] {
+  box-sizing: content-box;
+  /* 12, not 10: the padding is added to whatever the track already is, and the
+     tracks are not all the same — a 3px one in the Layers panel came out at
+     23px and missed the 24px bar by a pixel. */
+  padding: 12px 0;
+  background-clip: content-box;
+}

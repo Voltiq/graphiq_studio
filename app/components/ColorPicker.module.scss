@@ -283,3 +283,22 @@
     box-shadow: 0 0 0 1px var(--surface), 0 0 0 3px var(--accent);
   }
 }
+
+/* The hue and alpha strips are 10px, which is the same problem as the sliders
+   and the same answer: the visible bar keeps its height, the reachable box does
+   not. These are real elements rather than inputs, so the padding goes on
+   directly and the gradient is clipped to the content box. */
+html[data-mobile="true"] {
+  .hue,
+  .alpha {
+    box-sizing: content-box;
+    padding: 7px 0;
+    background-clip: content-box;
+  }
+  /* The alpha strip paints through absolutely-positioned children, which fill
+     the padding box — inset them so the visible bar matches the hue's. */
+  .alpha .alphaTrack,
+  .alpha .checker {
+    inset: 7px 0;
+  }
+}
