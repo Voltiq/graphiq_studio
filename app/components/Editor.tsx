@@ -3938,30 +3938,64 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     registerRecovery(() => collectOpenDocs().entries);
   }, [collectOpenDocs]);
 
-  // Periodic snapshot of ALL open documents (only when something changed since
-  // the last write). Refreshes the active document from the engine, keeps the
-  // cached JSON for the rest, prunes closed tabs, and writes them in tab order.
+  /** Snapshot ALL open documents, if anything changed since the last write.
+   *  Refreshes the active document from the engine, keeps the cached JSON for
+   *  the rest, prunes closed tabs, and writes them in tab order.
+   *
+   *  Guarded against overlapping runs: the timer and the page going away can
+   *  both ask at once, and the second would re-serialize every layer for a
+   *  snapshot identical to the one already in flight. */
+  const savingRef = useRef(false);
+  const writeSnapshot = useCallback(async () => {
+    if (!autosaveDirtyRef.current || savingRef.current) return;
+    savingRef.current = true;
+    try {
+      const { entries, activeIndex } = collectOpenDocs();
+      if (!entries.length) return;
+      await writeAutosave({ docs: entries, activeIndex, savedAt: Date.now() });
+      autosaveDirtyRef.current = false;
+      setSaveState({
+        label: `Autosaved ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
+        ok: true,
+      });
+    } catch {
+      /* serialization/storage hiccup — try again next tick */
+    } finally {
+      savingRef.current = false;
+    }
+  }, [collectOpenDocs]);
+
+  // Periodic snapshot.
   useEffect(() => {
     const mins = prefs.autosaveMinutes;
     if (!mins) return;
-    const id = window.setInterval(async () => {
-      if (!autosaveDirtyRef.current) return;
-      try {
-        const { entries, activeIndex } = collectOpenDocs();
-        if (!entries.length) return;
-        await writeAutosave({ docs: entries, activeIndex, savedAt: Date.now() });
-        autosaveDirtyRef.current = false;
-        setSaveState({
-          label: `Autosaved ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
-          ok: true,
-        });
-      } catch {
-        /* serialization/storage hiccup — try again next tick */
-      }
-    }, mins * 60_000);
+    const id = window.setInterval(() => void writeSnapshot(), mins * 60_000);
     return () => window.clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefs.autosaveMinutes]);
+  }, [prefs.autosaveMinutes, writeSnapshot]);
+
+  /* ...and a snapshot the moment the page goes away, which on a phone is the
+     one that matters. A timer alone means up to `autosaveMinutes` of work — two
+     by default — dies when the OS reclaims a backgrounded tab, and iOS does
+     that eagerly and without warning. `visibilitychange → hidden` is the last
+     point a page is reliably allowed to write; `pagehide` covers the paths that
+     skip it (a bfcache entry, a navigation away). Both fire on an ordinary tab
+     switch too, which is exactly the point: the snapshot is already on disk
+     before the tab is a candidate for discarding.
+
+     Not `beforeunload`: it does not fire at all on iOS, and asking for it costs
+     the page its bfcache entry. */
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") void writeSnapshot();
+    };
+    const onPageHide = () => void writeSnapshot();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, [writeSnapshot]);
 
   // "Reduce motion" preference -> data-motion on <html> (globals.scss kills
   // animations/transitions under [data-motion="off"], like the OS setting).
