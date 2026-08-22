@@ -173,3 +173,50 @@
     transform: rotate(180deg); /* the X↔ swap gesture, previewed */
   }
 }
+
+/* ---- The colour stack, un-stacked for a finger ----
+   The diagonal arrangement above is two 24px swatches overlapping inside a
+   36px box with a 15px swap pinned to its corner — three targets in the space
+   of one, and the smallest of them a sixth of the area a fingertip needs.
+   Raising the three in place is not possible: at 44px each they would cover
+   one another, and the corner swap would sit squarely on top of the
+   foreground swatch it is meant to sit beside.
+
+   So on touch they become a column instead: foreground, swap, background,
+   44px each with a 4px gap, no overlap anywhere. It is 136px tall against 36,
+   which the drawer absorbs — `.tools` above it scrolls, and `.colors` is
+   pinned to the bottom by `margin-top: auto` either way. */
+html[data-mobile="true"] {
+  .swatchStack {
+    width: 44px;
+    height: 136px;
+
+    .swatchWrapFg {
+      top: 0;
+      left: 0;
+    }
+
+    /* Bottom-anchored on desktop; here it is the third row, so the offsets it
+       inherits have to be cleared, not just overridden. */
+    .swatchWrapBg {
+      top: 92px;
+      left: 0;
+      right: auto;
+      bottom: auto;
+    }
+
+    .swatch {
+      width: 44px;
+      height: 44px;
+    }
+
+    .swap {
+      top: 46px;
+      left: 0;
+      right: auto;
+      width: 44px;
+      height: 44px;
+      border-radius: var(--r-lg);
+    }
+  }
+}

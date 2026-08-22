@@ -286,19 +286,28 @@
 
 /* The hue and alpha strips are 10px, which is the same problem as the sliders
    and the same answer: the visible bar keeps its height, the reachable box does
-   not. These are real elements rather than inputs, so the padding goes on
+   not (10px track + 17px either side = the 44px floor). These are real elements rather than inputs, so the padding goes on
    directly and the gradient is clipped to the content box. */
 html[data-mobile="true"] {
   .hue,
   .alpha {
     box-sizing: content-box;
-    padding: 7px 0;
+    padding: 17px 0;
     background-clip: content-box;
   }
   /* The alpha strip paints through absolutely-positioned children, which fill
      the padding box — inset them so the visible bar matches the hue's. */
   .alpha .alphaTrack,
   .alpha .checker {
-    inset: 7px 0;
+    inset: 17px 0;
+  }
+
+  /* The saved-swatch palette is a fixed 8-column grid, which put each chip at
+     31px — under the 44px floor, and forced to it the row ran 87px past the
+     edge of a drawer that clips. Sized by the chips instead: as many 44px
+     columns as fit, which is six on a 390px phone and eight again on anything
+     wider. */
+  .swatches {
+    grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
   }
 }

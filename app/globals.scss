@@ -645,6 +645,32 @@ html[data-mobile="true"] {
     height: 46px;
   }
 
+  /* ---- 44px minimum for everything pressable ----
+     The rule above was the only one of its kind: the tool buttons grew, and
+     the ~200 other controls — panel carets, header buttons, the zoom pill,
+     document tabs, colour chips, menu rows, every select and number field —
+     kept their mouse-sized 20–34px boxes. A sweep counted 24 distinct kinds
+     under 44×44, which is the smallest box a fingertip lands on reliably.
+
+     Applied to the ELEMENTS, not to classes: these live in eight modules whose
+     class names are hashed, so `.headBtn` is not addressable from here, while
+     `button` is and needs no per-module upkeep as panels come and go.
+
+     `min-*` rather than `width`/`height`, so a control that is already big
+     enough is left exactly as it was. Every text control (tabs, presets,
+     selects, chips) is already wider than 44px, so in practice min-width
+     only reaches the square icon buttons. */
+  :is(button, select, [role="menuitem"]) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  /* Ranges are excluded: their hit area is grown by padding instead — see
+     Controls.module.scss — because a range's box IS its track, and a 44px
+     track would be a 44px-thick line. */
+  input:not([type="range"]) {
+    min-height: 44px;
+  }
+
   /* Floating panels aren't draggable on touch — the single right drawer is the
      one home for panels on mobile. */
   .gq-m-floathost-hidden {

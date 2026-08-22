@@ -459,9 +459,11 @@
    containing a slider 20px taller. A mouse can already hit 4px. */
 html[data-mobile="true"] input[type="range"] {
   box-sizing: content-box;
-  /* 12, not 10: the padding is added to whatever the track already is, and the
+  /* 21, not 20: the padding is added to whatever the track already is, and the
      tracks are not all the same — a 3px one in the Layers panel came out at
-     23px and missed the 24px bar by a pixel. */
-  padding: 12px 0;
+     43px on 20 and missed the 44px floor by a pixel. The floor was 24px when
+     this rule was written; the sweep that raised every other control to 44
+     raised it too, since a slider is no easier to hit than a button. */
+  padding: 21px 0;
   background-clip: content-box;
 }

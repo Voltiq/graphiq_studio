@@ -3039,3 +3039,26 @@ input.savedName {
 .compFooter .compChips {
   margin-right: auto;
 }
+
+/* ---- Rows that a 44px floor would push off the side ----
+   Every button in the dock grew to 44px on touch (globals.scss), and two rows
+   here held more of them than a 335px drawer has room for: the Layers footer
+   ran 366px wide against 295 of usable width, and the Swatches toolbar 308.
+   The dock clips, so the overflow was not scrollable — the last buttons were
+   simply gone. Both wrap onto a second line instead; neither is a row whose
+   order carries meaning. */
+html[data-mobile="true"] {
+  .layerFooter,
+  .swToolbar {
+    flex-wrap: wrap;
+  }
+
+  /* The Swatches toolbar separates create-actions from export-actions with a
+     flex:1 spacer. Once the row wraps, a zero-basis spacer just leaves the
+     break wherever it happens to fall; a full-width one puts it between the
+     two groups, which is where it already was horizontally. */
+  .swToolbarSpacer {
+    flex-basis: 100%;
+    height: 0;
+  }
+}

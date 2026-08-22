@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -32,6 +32,7 @@
     "test:pan": "node tools/verify-pan-mode.js",
     "test:pinch": "node tools/verify-pinch-abort.js",
     "test:targets": "node tools/verify-touch-targets.js",
+    "test:hittargets": "node tools/verify-hit-targets.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
