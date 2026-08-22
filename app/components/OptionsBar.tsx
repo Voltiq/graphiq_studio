@@ -158,6 +158,7 @@ import {
   type TextFxPreset,
 } from "../lib/text-fx";
 import { clampX } from "../lib/safeArea";
+import ModifierChips from "./ModifierChips";
 
 /** In the options bar every slider is the compact inline (label-beside) variant. */
 function Slider(props: React.ComponentProps<typeof BaseSlider>) {
@@ -1408,6 +1409,8 @@ export default function OptionsBar({
 
   return (
     <div className={styles.optionsbar} data-tour="options">
+      {/* Shift/Alt/Ctrl for a finger. Hidden unless the shell is mobile. */}
+      <ModifierChips />
       <div className={styles.toolBadge}>
         <Icon size={16} strokeWidth={2} />
         <span>{meta.name}</span>

@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -26,6 +26,7 @@
     "test:autosave": "node tools/verify-autosave.js",
     "test:back": "node tools/verify-back-gesture.js",
     "test:edge": "node tools/verify-edge-swipe.js",
+    "test:modifiers": "node tools/verify-modifiers.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

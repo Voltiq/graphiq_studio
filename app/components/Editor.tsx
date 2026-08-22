@@ -84,6 +84,7 @@ import {
 } from "../lib/autosave";
 import { registerRecovery } from "../lib/crash";
 import { dismissTop, registerDismissible } from "../lib/dismiss";
+import { installModifierInjection } from "../lib/modifiers";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
 import {
   cleanChannelName,
@@ -472,6 +473,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const mobile = useIsMobile();
   // Publishes --kb-inset / --vv-h for every overlay; see useVisualViewport.
   useVisualViewport();
+  /* Latched Shift/Alt/Ctrl reach the canvas's existing modifier tests; see
+     lib/modifiers. Installed always, and inert until a chip is tapped — the
+     chips themselves are mobile-only, but a latch left armed while the window
+     is resized to a desktop shell should still behave. */
+  useEffect(() => installModifierInjection(), []);
   // Keeps the browser's own pinch/pull-to-refresh off the editor's gestures.
   useGestureGuard();
   const [mobileDrawer, setMobileDrawer] = useState<MobileDrawer>(null);

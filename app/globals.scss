@@ -600,6 +600,11 @@ html[data-mobile="true"] {
     min-height: var(--optionsbar-h);
   }
 
+  /* The modifier chips exist only where there is no keyboard to hold. */
+  [data-tour="options"] [role="group"][aria-label="Keyboard modifiers"] {
+    display: inline-flex;
+  }
+
   /* ---- Toolbar → left drawer ---- */
   [data-tour="toolbar"] {
     position: fixed;

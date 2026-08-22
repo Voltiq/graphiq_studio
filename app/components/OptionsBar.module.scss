@@ -357,3 +357,58 @@
 .shapeCell:hover .shapeDel {
   opacity: 1;
 }
+
+/* ---- Modifier chips (touch only) ------------------------------------------
+   Shift/Alt/Ctrl for a device with no keyboard. Sticky at the start of the bar
+   so they stay reachable while the tool's own options scroll past them —
+   "persistent" is the point: a modifier you cannot see the state of is worse
+   than no modifier at all. */
+.modifierChips {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  display: none; /* mobile only — see globals.scss */
+  align-items: center;
+  gap: 4px;
+  padding-right: var(--sp-2);
+  background: var(--surface);
+}
+
+.modifierChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 46px;
+  min-height: 34px;
+  justify-content: center;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: var(--weight-medium);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+
+  &[data-mode="armed"] {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--selected-bg);
+  }
+  /* Locked reads as heavier than armed, since it outlives the next gesture. */
+  &[data-mode="locked"] {
+    color: var(--on-accent, #fff);
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
