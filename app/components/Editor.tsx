@@ -74,8 +74,7 @@ import {
 } from "../lib/comps";
 import {
   clearAutosave,
-  markSessionAlive,
-  markSessionClean,
+  installHeartbeat,
   readAutosave,
   wasUncleanExit,
   writeAutosave,
@@ -3881,12 +3880,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   // Heartbeat: detect an unclean exit and offer the last snapshot for restore.
   useEffect(() => {
+    // Read BEFORE arming: installHeartbeat() overwrites the answer.
     const unclean = wasUncleanExit();
-    markSessionAlive();
-    const onHide = () => markSessionClean();
-    window.addEventListener("pagehide", onHide);
+    const stopHeartbeat = installHeartbeat();
     if (unclean) void readAutosave().then((s) => s && setRestoreSnap(s));
-    return () => window.removeEventListener("pagehide", onHide);
+    return stopHeartbeat;
   }, []);
 
   /** Every open document, serialized now, in tab order (active one refreshed

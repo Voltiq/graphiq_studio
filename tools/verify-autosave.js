@@ -196,6 +196,69 @@ const { launchBrowser, urlArg } = require("./lib/launch");
     stillQuiet?.savedAt === quiet?.savedAt,
     `savedAt stayed ${stillQuiet?.savedAt ?? "none"}`);
 
+  // ---------- 6. the heartbeat: a tab switch is not a goodbye ----------
+  /* Its own context, so the flag and the snapshot start clean. The two halves
+     compound in the real failure: the snapshot IS written on the tab switch
+     (section 2), and then the heartbeat used to throw away the only signal that
+     would have offered it back. */
+  {
+    const fresh = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const live = await fresh.newPage();
+    await boot(live);
+    const flag = () => live.evaluate(() => localStorage.getItem("graphiq:session-alive"));
+    check("a live session is marked alive", (await flag()) === "1", `flag ${await flag()}`);
+
+    const c = await live.locator('[data-tour="canvas"] canvas').first().boundingBox();
+    await live.mouse.move(c.x + c.width * 0.4, c.y + c.height * 0.5);
+    await live.mouse.down();
+    for (let i = 1; i <= 10; i++)
+      await live.mouse.move(c.x + c.width * (0.4 + i * 0.02), c.y + c.height * (0.5 + i * 0.02));
+    await live.mouse.up();
+    await live.waitForTimeout(900);
+    const work = await stableShot(live);
+
+    /* A tab switch, as the browser reports it: pagehide with persisted set,
+       the page still alive in the back/forward cache. */
+    await live.evaluate(() =>
+      window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
+    await live.waitForTimeout(2000);
+    check("switching tabs does not mark it clean", (await flag()) === "1",
+      `flag after a persisted pagehide: ${await flag()}`);
+
+    await live.evaluate(() => {
+      window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await live.waitForTimeout(500);
+    check("…and coming back leaves it alive", (await flag()) === "1", `flag ${await flag()}`);
+
+    /* Now the OS takes the tab. No goodbye, so the flag stays set. */
+    const after = await fresh.newPage();
+    await boot(after);
+    const dialog = after.locator('div[aria-label="Restore session"]');
+    const offered = await dialog.count();
+    check("a kill after a tab switch still offers the work back", offered === 1,
+      offered ? "the restore dialog is up" : "no restore dialog appeared");
+    if (offered) {
+      await dialog.locator("button", { hasText: "Restore" }).first().click();
+      await after.waitForTimeout(2500);
+      const back = await stableShot(after);
+      check("…and it is the work that was on screen", back === work, `recovered ${back}, was ${work}`);
+    } else {
+      check("…and it is the work that was on screen", false, "nothing to restore");
+    }
+    await after.close();
+
+    /* The other side of the rule: a real close must still read as clean, or
+       every ordinary exit would offer recovery it does not need. */
+    await live.evaluate(() =>
+      window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false })));
+    await live.waitForTimeout(500);
+    check("closing for real does mark it clean", (await flag()) === null,
+      `flag after an unpersisted pagehide: ${await flag()}`);
+    await fresh.close();
+  }
+
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
   await context.close();
