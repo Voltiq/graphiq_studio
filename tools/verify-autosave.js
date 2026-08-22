@@ -73,7 +73,10 @@ const { launchBrowser, urlArg } = require("./lib/launch");
               resolve(
                 s
                   ? { docs: s.docs?.length ?? 0, savedAt: s.savedAt ?? 0,
-                      bytes: (s.docs ?? []).reduce((n, d) => n + (d.json?.length ?? 0), 0) }
+                      /* A document's JSON is stored as a Blob now (strings are
+                         still read, for snapshots written before that). */
+                      bytes: (s.docs ?? []).reduce(
+                        (n, d) => n + (typeof d.json === "string" ? d.json.length : (d.json?.size ?? 0)), 0) }
                   : null,
               );
             };
@@ -256,6 +259,74 @@ const { launchBrowser, urlArg } = require("./lib/launch");
     await live.waitForTimeout(500);
     check("closing for real does mark it clean", (await flag()) === null,
       `flag after an unpersisted pagehide: ${await flag()}`);
+    await fresh.close();
+  }
+
+  // ---------- 7. a write that fails must SAY so ----------
+  /* IndexedDB caps a single value at about 127 MiB (measured:
+     `size=141557806 bytes, max=133169152`), which a few open photographs used
+     to sail past — and the write failed into a bare catch while the status bar
+     still read "Autosaved HH:MM". Documents are stored as Blobs now, which are
+     held out of line and do not count towards that cap, so the realistic case
+     no longer fails at all; this checks what happens when a write fails ANYWAY.
+
+     The fault is injected rather than provoked: filling a 10 GB quota in a rail
+     is not practical, so the object store is removed underneath the app, which
+     makes the very next write throw. */
+  {
+    const fresh = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    const live = await fresh.newPage();
+    await boot(live);
+    const label = () =>
+      live.locator('[data-tour="status"]').innerText().then((t) => t.replace(/\s+/g, " "));
+
+    const c = await live.locator('[data-tour="canvas"] canvas').first().boundingBox();
+    const stroke = async (at) => {
+      await live.mouse.move(c.x + c.width * at, c.y + c.height * at);
+      await live.mouse.down();
+      for (let i = 1; i <= 8; i++)
+        await live.mouse.move(c.x + c.width * (at + i * 0.02), c.y + c.height * (at + i * 0.01));
+      await live.mouse.up();
+      await live.waitForTimeout(700);
+    };
+    const hide = async () => {
+      await live.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await live.waitForTimeout(2500);
+      await live.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await live.waitForTimeout(300);
+    };
+
+    await stroke(0.3);
+    await hide();
+    check("a snapshot that works says so", (await label()).includes("Autosaved"),
+      `status: "${(await label()).slice(-40)}"`);
+
+    // Take the store away, so the next write cannot land.
+    await live.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const req = indexedDB.open("graphiq-autosave", 2);
+          req.onupgradeneeded = () => req.result.deleteObjectStore("snapshots");
+          req.onsuccess = () => {
+            req.result.close();
+            resolve(null);
+          };
+          req.onerror = () => resolve(null);
+        }),
+    );
+    await stroke(0.6);
+    await hide();
+    const failed = await label();
+    check("a snapshot that fails does NOT claim to have worked", !failed.includes("Autosaved"),
+      `status: "${failed.slice(-52)}"`);
+    check("…and says what happened instead", /Autosave failed/i.test(failed),
+      `status: "${failed.slice(-52)}"`);
     await fresh.close();
   }
 

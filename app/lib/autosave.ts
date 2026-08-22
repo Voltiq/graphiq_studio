@@ -30,21 +30,40 @@ interface LegacySnapshot {
   savedAt: number;
 }
 
-/** Coerce any stored value into the current snapshot shape (migrating a legacy
- *  single-document entry), or null if it isn't a usable snapshot. */
-function coerceSnapshot(raw: unknown): AutosaveSnapshot | null {
+/** How a document is STORED. The JSON goes in as a Blob because IndexedDB caps
+ *  a single structured-clone value at about 127 MiB — a 4000x3000 photograph
+ *  serializes to ~45 MB of base64 per document, so a few open documents used to
+ *  sail past that and the write failed with
+ *  `size=141557806 bytes, max=133169152`. A Blob is stored out of line and does
+ *  not count towards that limit: the same payload writes fine. Strings are
+ *  still READ, because snapshots written before this exist. */
+interface StoredDoc {
+  json: string | Blob;
+  name: string;
+}
+
+/** Coerce any stored value into the current snapshot shape — migrating a legacy
+ *  single-document entry, and reading a document stored either way — or null if
+ *  it isn't a usable snapshot. */
+async function coerceSnapshot(raw: unknown): Promise<AutosaveSnapshot | null> {
   if (!raw || typeof raw !== "object") return null;
-  const o = raw as Partial<AutosaveSnapshot> & Partial<LegacySnapshot>;
+  const o = raw as Partial<{ docs: StoredDoc[]; activeIndex: number; savedAt: number }> &
+    Partial<LegacySnapshot>;
+  const text = async (v: unknown): Promise<string | null> =>
+    typeof v === "string" ? v : v instanceof Blob ? await v.text() : null;
   if (Array.isArray(o.docs)) {
-    const docs = o.docs.filter(
-      (d): d is AutosaveDoc => !!d && typeof d.json === "string",
-    );
+    const docs: AutosaveDoc[] = [];
+    for (const d of o.docs) {
+      const json = d ? await text(d.json) : null;
+      if (json) docs.push({ json, name: d.name ?? "Untitled" });
+    }
     if (!docs.length) return null;
     const activeIndex = Math.max(0, Math.min(docs.length - 1, o.activeIndex ?? 0));
     return { docs, activeIndex, savedAt: o.savedAt ?? Date.now() };
   }
-  if (typeof o.json === "string") {
-    return { docs: [{ json: o.json, name: o.name ?? "Untitled" }], activeIndex: 0, savedAt: o.savedAt ?? Date.now() };
+  const legacy = await text(o.json);
+  if (legacy) {
+    return { docs: [{ json: legacy, name: o.name ?? "Untitled" }], activeIndex: 0, savedAt: o.savedAt ?? Date.now() };
   }
   return null;
 }
@@ -60,18 +79,40 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-export async function writeAutosave(snap: AutosaveSnapshot): Promise<void> {
+/** Whether the snapshot reached storage. A failure has to be REPORTED, not
+ *  swallowed: this used to return void whatever happened, so a write that was
+ *  rejected still left the caller announcing "Autosaved HH:MM" — the case where
+ *  the work is most at risk reassuring the user most confidently. */
+export type AutosaveWrite = { ok: true } | { ok: false; reason: string };
+
+export async function writeAutosave(snap: AutosaveSnapshot): Promise<AutosaveWrite> {
   try {
     const db = await openDb();
+    /* Each document's JSON as its own Blob — see StoredDoc. */
+    const stored = {
+      docs: snap.docs.map((d) => ({
+        json: new Blob([d.json], { type: "application/json" }),
+        name: d.name,
+      })),
+      activeIndex: snap.activeIndex,
+      savedAt: snap.savedAt,
+    };
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, "readwrite");
-      tx.objectStore(STORE).put(snap, KEY);
+      tx.objectStore(STORE).put(stored, KEY);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      // A quota rejection aborts the transaction without firing onerror first.
+      tx.onabort = () => reject(tx.error);
     });
     db.close();
-  } catch {
-    /* storage unavailable — autosave silently off */
+    return { ok: true };
+  } catch (e) {
+    const err = e as { name?: string; message?: string } | null;
+    return {
+      ok: false,
+      reason: err?.name === "QuotaExceededError" ? "there is no room left in storage" : "storage refused it",
+    };
   }
 }
 
@@ -85,7 +126,7 @@ export async function readAutosave(): Promise<AutosaveSnapshot | null> {
       req.onerror = () => reject(req.error);
     });
     db.close();
-    return coerceSnapshot(raw);
+    return await coerceSnapshot(raw);
   } catch {
     return null;
   }

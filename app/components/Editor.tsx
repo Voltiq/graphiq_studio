@@ -4006,7 +4006,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       const encoded = await encodeDocOffThread(activeDocRef.current);
       const { entries, activeIndex } = collectOpenDocs(encoded);
       if (!entries.length) return;
-      await writeAutosave({ docs: entries, activeIndex, savedAt: Date.now() });
+      const written = await writeAutosave({ docs: entries, activeIndex, savedAt: Date.now() });
+      if (!written.ok) {
+        /* Say so, and leave the document DIRTY so the next tick tries again.
+           Claiming "Autosaved" when nothing was stored is worse than saying
+           nothing at all — it is the case where the work is most at risk. */
+        setSaveState({ label: `Autosave failed — ${written.reason}`, ok: false });
+        return;
+      }
       autosaveDirtyRef.current = false;
       setSaveState({
         label: `Autosaved ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`,
