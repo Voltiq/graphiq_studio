@@ -204,6 +204,7 @@ import SelectionChannelDialog from "./SelectionChannelDialog";
 import LiquifyDialog from "./LiquifyDialog";
 import MobileBar, { type MobileDrawer } from "./MobileBar";
 import { useVisualViewport } from "../lib/useVisualViewport";
+import { encodePngOffThread } from "../lib/png-offthread";
 import { useGestureGuard } from "../lib/useGestureGuard";
 import { useIsMobile } from "../lib/useMediaQuery";
 import TrimDialog, { type TrimMode, type TrimSides } from "./TrimDialog";
@@ -3791,8 +3792,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // lets autosave snapshot all of them. History labels are engine-global, so
   // only the active document carries them (the rest get empty display-only
   // metadata; the undo stack was never file-replayable regardless).
-  const serializeDocToJSON = (d: Doc): string => {
+  /** `encoded` lets a caller supply images it has already encoded — autosave
+   *  does that from a worker, so the 1 s of PNG encoding this used to do on the
+   *  main thread happens off it. Absent, every image is encoded here as before,
+   *  which is what the crash path and the file export need: neither can await. */
+  const serializeDocToJSON = (d: Doc, encoded?: ReadonlyMap<string, string>): string => {
     const isActive = d.id === activeIdRef.current;
+    const pre = (key: string, encode: () => string | null) => encoded?.get(key) ?? encode();
     const project = serializeProject(
       {
         name: d.name,
@@ -3834,11 +3840,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           : (d.historyLog ?? []),
         index: isActive ? historyRef.current.index : 0,
       },
-      (id) => paintRef.current?.getLayerImage(id) ?? null,
-      (id) => paintRef.current?.getMaskImage(id) ?? null,
+      (id) => pre(`layer:${id}`, () => paintRef.current?.getLayerImage(id) ?? null),
+      (id) => pre(`mask:${id}`, () => paintRef.current?.getMaskImage(id) ?? null),
       // Channel rasters live in the same masks map, under the doc-scoped key.
-      (chId) => paintRef.current?.getMaskImage(selectionChannelKey(d.id, chId)) ?? null,
-      (id) => paintRef.current?.getFrameSourceImage(id) ?? null,
+      (chId) =>
+        pre(`mask:${selectionChannelKey(d.id, chId)}`, () =>
+          paintRef.current?.getMaskImage(selectionChannelKey(d.id, chId)) ?? null),
+      (id) => pre(`frame:${id}`, () => paintRef.current?.getFrameSourceImage(id) ?? null),
     );
     return JSON.stringify(project);
   };
@@ -3890,10 +3898,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   /** Every open document, serialized now, in tab order (active one refreshed
    *  from the engine; inactive ones can't have changed since they were cached).
    *  Shared by the autosave tick and by crash recovery. */
-  const collectOpenDocs = useCallback((): { entries: AutosaveDoc[]; activeIndex: number } => {
+  const collectOpenDocs = useCallback((
+    encoded?: ReadonlyMap<string, string>,
+  ): { entries: AutosaveDoc[]; activeIndex: number } => {
     const docsNow = docsRef.current;
     const active = activeDocRef.current;
-    docJsonCache.current.set(active.id, { json: serializeDocToJSON(active), name: active.name });
+    docJsonCache.current.set(active.id, {
+      json: serializeDocToJSON(active, encoded),
+      name: active.name,
+    });
     const openIds = new Set(docsNow.map((d) => d.id));
     for (const k of [...docJsonCache.current.keys()]) if (!openIds.has(k)) docJsonCache.current.delete(k);
     const entries: AutosaveDoc[] = [];
@@ -3944,11 +3957,54 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
    *  both ask at once, and the second would re-serialize every layer for a
    *  snapshot identical to the one already in flight. */
   const savingRef = useRef(false);
+
+  /** Encode everything the ACTIVE document's JSON needs, in a worker.
+   *
+   *  Only the active document: `collectOpenDocs` re-serializes that one and
+   *  reuses cached JSON for the rest, so the others cost nothing here either.
+   *  Each canvas is exactly the one the synchronous getter would have encoded,
+   *  so the result is byte-identical — the encoder is the same, it simply runs
+   *  somewhere else. Anything that fails to encode is left out of the map and
+   *  falls back to the main-thread getter. */
+  const encodeDocOffThread = useCallback(async (d: Doc): Promise<Map<string, string>> => {
+    const out = new Map<string, string>();
+    const eng = paintRef.current;
+    if (!eng) return out;
+    const jobs: Promise<void>[] = [];
+    const add = (key: string, canvas: HTMLCanvasElement | null) => {
+      if (!canvas) return;
+      jobs.push(
+        encodePngOffThread(canvas)
+          .then((url) => void out.set(key, url))
+          .catch(() => {}),
+      );
+    };
+    const walk = (layers: readonly LayerNode[]) => {
+      for (const l of layers) {
+        // A group has no raster of its own, but its mask is still stored.
+        if (l.type !== "group") {
+          add(`layer:${l.id}`, eng.getLayerImageCanvas(l.id));
+          add(`frame:${l.id}`, eng.getFrameSourceImageCanvas(l.id));
+        }
+        add(`mask:${l.id}`, eng.getMaskImageCanvas(l.id));
+        if (l.type === "group") walk(l.children);
+      }
+    };
+    walk(d.layers);
+    for (const ch of d.channels ?? []) {
+      const key = selectionChannelKey(d.id, ch.id);
+      add(`mask:${key}`, eng.getMaskImageCanvas(key));
+    }
+    await Promise.all(jobs);
+    return out;
+  }, []);
+
   const writeSnapshot = useCallback(async () => {
     if (!autosaveDirtyRef.current || savingRef.current) return;
     savingRef.current = true;
     try {
-      const { entries, activeIndex } = collectOpenDocs();
+      const encoded = await encodeDocOffThread(activeDocRef.current);
+      const { entries, activeIndex } = collectOpenDocs(encoded);
       if (!entries.length) return;
       await writeAutosave({ docs: entries, activeIndex, savedAt: Date.now() });
       autosaveDirtyRef.current = false;
@@ -3961,7 +4017,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     } finally {
       savingRef.current = false;
     }
-  }, [collectOpenDocs]);
+  }, [collectOpenDocs, encodeDocOffThread]);
 
   // Periodic snapshot.
   useEffect(() => {

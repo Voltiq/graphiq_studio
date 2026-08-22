@@ -341,6 +341,11 @@ export interface EngineHandle {
   getLayerImage: (id: string) => string | null;
   /** Doc-sized copy of a layer's raster (blank canvas if none yet). */
   getLayerCanvas: (id: string) => HTMLCanvasElement;
+  /* The canvases the PNG getters would encode, for callers that encode
+     elsewhere (autosave, in a worker). */
+  getLayerImageCanvas: (id: string) => HTMLCanvasElement | null;
+  getMaskImageCanvas: (id: string) => HTMLCanvasElement | null;
+  getFrameSourceImageCanvas: (id: string) => HTMLCanvasElement | null;
   getMaskImage: (id: string) => string | null;
   setMaskImage: (id: string, source: CanvasImageSource) => void;
   setLayerImage: (id: string, source: CanvasImageSource, x?: number, y?: number) => void;
@@ -3755,6 +3760,11 @@ export class PaintEngine {
     return c ? c.toDataURL("image/png") : null;
   }
 
+  /** Exactly the canvas `getFrameSourceImage` would encode — see above. */
+  getFrameSourceImageCanvas(id: string): HTMLCanvasElement | null {
+    return this.frameSrc.get(id) ?? null;
+  }
+
   clearFrameSource(id: string) {
     this.frameSrc.delete(id);
   }
@@ -3763,6 +3773,14 @@ export class PaintEngine {
   getLayerImage(id: string): string | null {
     const l = this.layers.get(id);
     return l ? l.c.toDataURL("image/png") : null;
+  }
+
+  /** Exactly the canvas `getLayerImage` would encode — its OWN raster, not the
+   *  doc-sized copy `getLayerCanvas` makes, so a caller that encodes this gets
+   *  byte-identical output. Autosave hands these to a worker instead of
+   *  encoding on the main thread; everything else uses the getters above. */
+  getLayerImageCanvas(id: string): HTMLCanvasElement | null {
+    return this.layers.get(id)?.c ?? null;
   }
 
   /** A doc-sized COPY of a layer's raster as a canvas (blank if it has none
@@ -3835,6 +3853,11 @@ export class PaintEngine {
   getMaskImage(id: string): string | null {
     const m = this.masks.get(id);
     return m ? m.c.toDataURL("image/png") : null;
+  }
+
+  /** Exactly the canvas `getMaskImage` would encode — see getLayerImageCanvas. */
+  getMaskImageCanvas(id: string): HTMLCanvasElement | null {
+    return this.masks.get(id)?.c ?? null;
   }
 
   /** Restore a mask from a decoded image (project load) + derive its alpha. */
