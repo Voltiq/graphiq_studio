@@ -579,6 +579,25 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **The check was passing for the wrong reason, which is how the bug surfaced.** It committed first and cancelled second, so both readings were "1 row" and it went green while ✕ was committing. Cancelling FIRST, from an empty Paths panel, is the only ordering where the count can tell them apart: **0 → 0 for ✕, then 0 → 1 for ✓**. Mutation-testing Escape back to committing now fails both — `0 → 1` on the cancel, and `1 → 1` on the commit, the second line showing precisely why the original ordering was blind.
 - [verify-commit-cancel.js](tools/verify-commit-cancel.js) (10 checks, in CI) also asserts the pair is absent when nothing is in progress: two buttons parked permanently over the picture would be the other kind of failure.
 
+### Reordering layers with a finger
+
+- **HTML5 drag and drop does not fire for touch at all**, so the layer order could not be changed on a phone by any route. Touch gets long-press to lift and drag to move; the mouse keeps the drag-and-drop it already had, untouched, which is what the item asked for.
+- **A long press is the only thing that separates "lift this row" from "scroll the list"** — the one ambiguity a finger has here. Movement beyond 8px before the press lands cancels it as a scroll.
+- **`touch-action` cannot stop the list scrolling once a row is lifted**, because it is latched when the gesture starts and the gesture has already started by then. The scroll is refused in a non-passive `touchmove` listener instead.
+- **The listeners live only for as long as a drag does, and that is not tidiness — it is the fix.** Attached for the lifetime of the panel, a window `pointerup`/`pointercancel` pair broke the MOUSE path outright: the rows stopped reordering by drag-and-drop entirely. Guarding the handlers was not enough; it is the registration and not the handler that does it, which a no-op listener confirmed. Since nothing needs them until a finger has actually lifted a row, they go on then and come off at the end, and a mouse drag never coexists with them.
+- **That regression was caught by bisecting against the original file**, not by reasoning: the same drag reordered `Layer 3 / 2 / 1` into `Layer 1 / 3 / 2` on the file without the change and did nothing with it. "Leaving the mouse path identical" is only a claim until something drives it, so the rail drives both.
+- **The composite is checked, not just the list.** A panel that lists rows in a new order while the picture is unchanged would be a rename, not a reorder — and the setup verifies its own premise first by hiding the top layer to confirm the one beneath is a different colour, so the check cannot pass on two layers that happen to look alike. Reordering moves the centre pixel from `255,255,255` to `99,102,241`.
+- **The item also asked that Undo restore the order. It did not, and never had:** `api.move` patched the document without pushing a history entry, so a reorder had never been undoable by mouse either. That was split out rather than fixed in passing, and done next — see *One drag, one undo* below.
+
+### One drag, one undo
+
+- **Reordering was never recorded at all.** `api.move` patched the layer tree through `patchActiveDoc`, which writes no history entry — so Undo after a reorder stepped straight past it. The symptom was not subtle once looked at: three layers became two, because the Undo landed on the layer creation before the drag and removed it.
+- **It was never a touch problem.** The mouse had the identical gap, and long predates the touch path; giving reordering a second input route is simply what made it visible.
+- **Live moves, one entry at the end.** The row has to follow the pointer, so the moves stay live and unrecorded; the tree as it stood when the drag began is captured at lift, and the whole gesture is written as a single `pushStructural` when it ends. Recording as it went would have made every intermediate position its own undo step — the rail asserts **one** Undo is enough, not that Undo eventually gets there.
+- **The same shape the samplers already use** (`moveLive` / `commitMove`), rather than a new mechanism: it was the established answer in this codebase to exactly this question.
+- **Both paths capture and commit**, so the mouse gains the fix too — the rail undoes a mouse reorder as well as a touch one, and checks Redo returns it.
+- **Mutation-tested by dropping the commit**, which fails all four undo checks and prints the original symptom in full: `Layer 1 / Layer 3 / Layer 2 → Layer 2 / Layer 1`.
+
 ### Aiming a panel drop: three zones and an indicator
 
 - **Two complaints, one cause.** A drop said nothing about where it would land, and a panel dragged *between* two others almost always ended up as a tab *inside* one. The zoning was the reason: the header carried its own "group" handler and the section split at its midpoint, so grouping owned the top 34 px — and a COLLAPSED panel is 34 px of pure header, nothing but grouping zone. There was literally nowhere to aim for "between".

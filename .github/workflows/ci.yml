@@ -176,6 +176,10 @@ jobs:
         run: npm run test:commit -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
+      - name: Layers reorder by touch, and still by mouse
+        run: npm run test:reorder -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
 
       - name: Dev server log
         if: failure()

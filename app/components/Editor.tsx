@@ -3496,6 +3496,23 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         if (!findNode(without, targetId)) return d; // target was inside the moved group
         return { ...d, layers: insertRelative(without, removed, targetId, before) };
       }),
+    /* Reordering has always changed the tree without recording anything, so
+       Undo stepped straight past it to whatever came before — by mouse as much
+       as by touch. The moves stay live (the row has to follow the pointer), and
+       the whole drag is written as one entry when it ends, which is the same
+       shape the samplers already use. */
+    commitMove: (before) => {
+      const docId = activeIdRef.current;
+      const d = activeDocRef.current;
+      const after = d.layers;
+      if (before === after) return;
+      const sel: Sel = { active: d.activeLayerId, selected: d.selectedLayerIds };
+      paintRef.current?.pushStructural(
+        "Reorder layer",
+        () => setDocSel(docId, before, sel),
+        () => setDocSel(docId, after, sel),
+      );
+    },
     remove: removeSelected,
     duplicate: duplicateSelected,
     group: groupSelected,

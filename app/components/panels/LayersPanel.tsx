@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { type CSSProperties, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDownToLine,
@@ -144,6 +144,105 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
   const selected = new Set(selectedLayerIds);
 
   const [dragId, setDragId] = useState<string | null>(null);
+
+  /* Reordering by TOUCH.
+   *
+   * The rows reorder with HTML5 drag and drop, and those events do not fire for
+   * a finger at all — so on a phone the layer order could not be changed, by
+   * any route. This is a second path rather than a replacement: the mouse keeps
+   * the drag-and-drop it already had, unchanged, and touch gets long-press to
+   * lift and drag to move. Both end up calling the same `api.move`.
+   *
+   * A long press is what separates "lift this row" from "scroll the list",
+   * which is the only ambiguity a finger has here. */
+  const LIFT_MS = 350;
+  const SLOP = 8; // px of movement that still counts as holding still
+  const touchDrag = useRef<{
+    id: string;
+    x: number;
+    y: number;
+    timer: number | null;
+    lifted: boolean;
+  } | null>(null);
+
+  /* The move/end listeners live only for as long as a touch drag does.
+   *
+   * They used to be attached for the lifetime of the panel, and that broke the
+   * MOUSE path outright: with a window `pointerup`/`pointercancel` pair
+   * registered, the rows stopped reordering by drag-and-drop entirely — the
+   * same drag reordered against the file without them and did nothing with.
+   * Guarding the handlers was not enough, because it is the registration and
+   * not the handler that does it. Since nothing needs them until a finger has
+   * actually lifted a row, they go on at that moment and come off at the end,
+   * and a mouse drag never coexists with them at all. */
+  const detach = useRef<(() => void) | null>(null);
+  /** The stack as it stood when this drag began, for the single undo entry. */
+  const treeBefore = useRef<LayerNode[] | null>(null);
+  const commitMove = useCallback(() => {
+    const before = treeBefore.current;
+    treeBefore.current = null;
+    if (before) api.commitMove(before);
+  }, [api]);
+
+  const endTouchDrag = useCallback(() => {
+    const t = touchDrag.current;
+    if (t?.timer) window.clearTimeout(t.timer);
+    touchDrag.current = null;
+    detach.current?.();
+    detach.current = null;
+    if (t?.lifted) commitMove();
+    setDragId(null);
+  }, [commitMove]);
+
+  const attachTouchDrag = useCallback(() => {
+    const onMove = (e: PointerEvent) => {
+      const t = touchDrag.current;
+      if (!t) return;
+      if (!t.lifted) {
+        // Still deciding: enough movement before the press lands means a scroll.
+        if (Math.hypot(e.clientX - t.x, e.clientY - t.y) > SLOP) endTouchDrag();
+        return;
+      }
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const row = el instanceof Element ? el.closest("[data-layer-id]") : null;
+      const overId = row?.getAttribute("data-layer-id");
+      if (!overId || overId === t.id) return;
+      const r = row!.getBoundingClientRect();
+      api.move(t.id, overId, e.clientY - r.top < r.height / 2);
+    };
+    const onUp = () => endTouchDrag();
+    /* Once lifted, the list must stop scrolling under the finger. `touch-action`
+       cannot do it: it is latched when the gesture starts, and the gesture has
+       already started by the time the press lands — so the scroll is refused
+       here instead, which needs a non-passive listener. */
+    const block = (e: TouchEvent) => {
+      if (touchDrag.current?.lifted) e.preventDefault();
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    document.addEventListener("touchmove", block, { passive: false });
+    detach.current = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      document.removeEventListener("touchmove", block);
+    };
+  }, [api, endTouchDrag]);
+
+  const onRowPointerDown = (e: React.PointerEvent, id: string) => {
+    if (e.pointerType !== "touch" || filterActive || editingId === id) return;
+    const timer = window.setTimeout(() => {
+      const t = touchDrag.current;
+      if (!t) return;
+      t.lifted = true;
+      t.timer = null;
+      treeBefore.current = api.layers;
+      setDragId(t.id); // the row dims, exactly as it does for a mouse drag
+    }, LIFT_MS);
+    touchDrag.current = { id, x: e.clientX, y: e.clientY, timer, lifted: false };
+    attachTouchDrag();
+  };
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number; node: LayerNode } | null>(null);
@@ -379,12 +478,15 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                 data-hidden={!l.visible}
                 data-dim={dim || (isolatedOut ? isolatedOut.has(l.id) : false)}
                 data-dragging={l.id === dragId}
+                data-layer-id={l.id}
                 style={{ paddingLeft: 8 + depth * 14 + (clip === "member" ? 14 : 0) } as React.CSSProperties}
                 draggable={editingId !== l.id && !filterActive}
+                onPointerDown={(e) => onRowPointerDown(e, l.id)}
                 onClick={(e) => onRowClick(e, l.id)}
                 onContextMenu={(e) => openMenu(e, l)}
                 onDragStart={(e) => {
                   setDragId(l.id);
+                  treeBefore.current = api.layers;
                   e.dataTransfer.effectAllowed = "move";
                 }}
                 onDragOver={(e) => {
@@ -398,7 +500,10 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                     api.move(dragId, l.id, before);
                   }
                 }}
-                onDragEnd={() => setDragId(null)}
+                onDragEnd={() => {
+                  commitMove();
+                  setDragId(null);
+                }}
               >
                 {clip === "member" && (
                   <CornerDownRight

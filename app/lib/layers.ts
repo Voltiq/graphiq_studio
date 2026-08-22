@@ -687,8 +687,13 @@ export interface LayersApi {
   add: () => void;
   select: (id: string, mode?: SelectMode) => void;
   update: (id: string, patch: LayerPatch) => void;
-  /** Move `fromId` to just before/after `targetId` (may re-parent across groups). */
+  /** Move `fromId` to just before/after `targetId` (may re-parent across groups).
+   *  LIVE: the row follows the pointer, and no history is written for the
+   *  intermediate positions a drag passes through. */
   move: (fromId: string, targetId: string, before: boolean) => void;
+  /** End a run of `move`s, recording the whole drag as ONE undoable step.
+   *  `before` is the tree as it stood when the drag started. */
+  commitMove: (before: LayerNode[]) => void;
   remove: () => void;
   duplicate: () => void;
   group: () => void;
