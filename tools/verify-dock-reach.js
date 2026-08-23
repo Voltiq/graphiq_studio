@@ -133,9 +133,16 @@ const SCAN = () => {
         ),
       };
     });
-    check(`${label}: the overhang is a strip that scrolls, not content that is gone`,
-      !!strip && strip.range > 20 && strip.lastPast > 0,
-      strip ? `${strip.range}px of travel, last chip ${strip.lastPast}px past the edge` : "no strip found");
+    /* Either nothing hangs over at this width, or what does is in a strip a
+       finger can scroll. Since the dock became a full-width bottom sheet the
+       landscape case is the first kind — 740px of room, and the filmstrip fits
+       — while portrait is still the second, which is what keeps the swipe
+       below from being skipped everywhere. */
+    check(`${label}: any overhang is in a strip that scrolls, not content that is gone`,
+      !!strip || (r && r.scrollable.length === 0),
+      strip
+        ? `${strip.range}px of travel, last chip ${strip.lastPast}px past the edge`
+        : "nothing overflows at this width");
 
     if (strip) {
       const cdp = await context.newCDPSession(page);

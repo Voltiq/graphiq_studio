@@ -14,7 +14,7 @@
  *
  * Run: node tools/verify-layer-reorder.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg } = require("./lib/launch");
+const { launchBrowser, setSheetDetent, urlArg } = require("./lib/launch");
 
 (async () => {
   const browser = await launchBrowser();
@@ -90,6 +90,11 @@ const { launchBrowser, urlArg } = require("./lib/launch");
      lands on nothing at all. Collapsing everything above it brings all three
      rows on screen together, which a drag between them needs. */
   const showLayers = async (page) => {
+    /* The panels dock is a bottom sheet on a phone and opens half-height, which
+       leaves the layer rows below the fold — their boxes are off screen and a
+       dispatched touch lands on nothing. A person raises it to work with
+       layers; so does this. */
+    await setSheetDetent(page, "full");
     await page.evaluate(() => {
       for (const section of document.querySelectorAll('[data-tour="dock"] section')) {
         const caret = section.querySelector('button[class*="panelCaret"]');

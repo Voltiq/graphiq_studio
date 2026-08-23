@@ -221,6 +221,7 @@ import RecentsDialog from "./RecentsDialog";
 import ExportDialog, { type BatchRun } from "./ExportDialog";
 import ImportDialog, { type ImportItem, type ImportMode, type ImportOptions } from "./ImportDialog";
 import StartCard from "./StartCard";
+import { type Detent } from "./SheetHandle";
 
 import ColorDialog from "./ColorDialog";
 import ProfileCompareDialog from "./ProfileCompareDialog";
@@ -490,6 +491,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // Keeps the browser's own pinch/pull-to-refresh off the editor's gestures.
   useGestureGuard();
   const [mobileDrawer, setMobileDrawer] = useState<MobileDrawer>(null);
+  /* How tall the panels sheet stands. "half" on open: peek is a glance and
+     full is the old drawer, so the middle is the one that shows a panel and
+     the picture it describes at the same time. */
+  const [sheetDetent, setSheetDetent] = useState<Detent>("half");
   /* Pan/zoom as a mode rather than a tool: the one-finger drag pans while this
      is on, and the selected tool is left exactly as it was. */
   const [panMode, setPanMode] = useState(false);
@@ -508,7 +513,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const el = document.documentElement;
     if (mobile && mobileDrawer) el.dataset.drawer = mobileDrawer;
     else delete el.dataset.drawer;
-  }, [mobile, mobileDrawer]);
+    /* The panels sheet's height. Written on the root next to `data-drawer`, so
+       the CSS that sizes the sheet needs no class name and no prop drilling. */
+    if (mobile && mobileDrawer === "panels") el.dataset.sheet = sheetDetent;
+    else delete el.dataset.sheet;
+  }, [mobile, mobileDrawer, sheetDetent]);
   // An open drawer absorbs the back gesture rather than letting it leave.
   useEffect(() => {
     if (!mobileDrawer) return;
@@ -7538,6 +7547,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             :last-child that the UI-scale zoom selector targets. */}
         <div className={`${styles.floatHost} gq-m-floathost-hidden`} ref={setFloatHost} />
         <RightDock
+          mobile={mobile}
+          detent={sheetDetent}
+          onDetent={setSheetDetent}
           foreground={foreground}
           background={background}
           onForeground={setForeground}

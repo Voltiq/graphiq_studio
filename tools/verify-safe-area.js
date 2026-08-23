@@ -127,10 +127,17 @@ const MOBILE = { width: 390, height: 844 };
     `--chrome-bottom ${flat.chromeBottom}px`);
   check("…and the bar's box matches it", flat.bar?.height === 56 && flat.bar?.bottom === MOBILE.height,
     `${flat.bar?.height}px tall, bottom at ${flat.bar?.bottom}`);
-  check("the drawers span from under the chrome to above the bar",
-    flat.toolbar?.top === 96 && flat.toolbar?.bottom === MOBILE.height - 56 &&
-    flat.dock?.top === 96 && flat.dock?.bottom === MOBILE.height - 56,
-    `toolbar ${flat.toolbar?.top}–${flat.toolbar?.bottom}, dock ${flat.dock?.top}–${flat.dock?.bottom}`);
+  /* The TOOLS drawer still spans the chrome band: it slides in from the side.
+     The panels dock does not — it is a bottom sheet now, so while closed it is
+     translated DOWN and its box sits below the fold entirely. Its own geometry
+     is the panel-sheet rail's subject; what matters here is that it rests on
+     the bar rather than under it. */
+  check("the tools drawer spans from under the chrome to above the bar",
+    flat.toolbar?.top === 96 && flat.toolbar?.bottom === MOBILE.height - 56,
+    `toolbar ${flat.toolbar?.top}–${flat.toolbar?.bottom}`);
+  check("…and the panels sheet is parked below the fold, resting on the bar",
+    flat.dock?.top === MOBILE.height - 56,
+    `dock ${flat.dock?.top}–${flat.dock?.bottom}, bar starts at ${MOBILE.height - 56}`);
 
   // ---------- 3. mobile WITH a notch and a home indicator ----------
   /* Everything below depends on the browser being able to emulate insets. If it
@@ -182,9 +189,9 @@ const MOBILE = { width: 390, height: 844 };
     `--chrome-top ${flat.chromeTop} -> ${notched.chromeTop}`);
   /* The reason --safe-t was NOT folded in before the bar reserved it: the two
      have to move together or a strip of bare canvas opens under the chrome. */
-  check("…leaving no gap between the chrome and the drawers",
-    notched.toolbar.top === notched.topbar.bottom + 48 && notched.dock.top === notched.toolbar.top,
-    `bar ends at ${notched.topbar.bottom}, +48px options bar, drawers start at ${notched.toolbar.top}`);
+  check("…leaving no gap between the chrome and the tools drawer",
+    notched.toolbar.top === notched.topbar.bottom + 48,
+    `bar ends at ${notched.topbar.bottom}, +48px options bar, drawer starts at ${notched.toolbar.top}`);
 
   // ---------- 3b. the mobile menu sheet, still under the notch and the bar ----------
   /* The sheet is the collapsed menubar behind the hamburger. It ran from the

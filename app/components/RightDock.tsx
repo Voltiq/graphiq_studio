@@ -2,6 +2,7 @@
 
 import { useEffect, useImperativeHandle, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
+import SheetHandle, { type Detent } from "./SheetHandle";
 import { uiZoom } from "../lib/ui-scale";
 import { type WorkingSpace } from "../lib/colorspace";
 import {
@@ -363,6 +364,10 @@ interface Props {
   leftHost?: HTMLElement | null;
   /** Portal target for floating panels (an overlay above the canvas). */
   floatHost?: HTMLElement | null;
+  /** Touch: the dock is a bottom sheet, and these drive its height. */
+  mobile?: boolean;
+  detent?: Detent;
+  onDetent?: (d: Detent) => void;
   /** Imperative layout capture/apply for workspaces + Reset Workspace. */
   dockRef?: RefObject<DockApi | null>;
   /** Transient status message (clipboard results from the Color panel menu). */
@@ -399,6 +404,9 @@ const IconBtn = ({
 );
 
 export default function RightDock({
+  mobile = false,
+  detent,
+  onDetent,
   foreground,
   background,
   onForeground,
@@ -1099,6 +1107,9 @@ export default function RightDock({
   return (
     <>
       <aside className={styles.dock} aria-label="Panels" data-tour="dock">
+        {/* Touch only: the dock is a bottom sheet there, and a sheet needs
+            something to take hold of. */}
+        {mobile && detent && onDetent && <SheetHandle detent={detent} onDetent={onDetent} />}
         {renderDock(rightIds)}
         {dropZone("right")}
       </aside>

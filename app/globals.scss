@@ -624,19 +624,86 @@ html[data-mobile="true"] {
     will-change: transform;
   }
 
-  /* ---- Panels dock → right drawer ---- */
+  /* ---- Panels dock → bottom sheet with detents ----
+     It used to be a 320px drawer down the right-hand side, which on a 390px
+     screen covered 82% of the width: with a panel open, 13% of the picture was
+     left visible. A panel describes the artwork, so being unable to see both
+     at once is the whole problem — and height is the axis a phone has to spare.
+
+     Three heights, set by `html[data-sheet]` and read from --sheet-h:
+       peek  25vh — the canvas keeps 57% of the screen
+       half  50vh
+       full  everything between the bars, which is what the drawer always was
+
+     `top` is deliberately not set: the sheet is anchored to the bottom and
+     sized, so a detent change animates the height rather than sliding the
+     whole panel. */
+  --sheet-h: 50vh;
+
+  &[data-sheet="peek"] {
+    /* 18vh, not 25. The stage starts below the tabs and the ruler, so the
+       picture's visible height is measured from y=154 on a 844px screen — a
+       25vh sheet left it 423px, which is 50% of the screen and misses the mark
+       the item set. 18vh leaves 482px, or 57%. */
+    --sheet-h: 18vh;
+  }
+  &[data-sheet="half"] {
+    --sheet-h: 50vh;
+  }
+  &[data-sheet="full"] {
+    --sheet-h: calc(100vh - var(--chrome-top) - var(--chrome-bottom));
+  }
+
   [data-tour="dock"] {
     position: fixed;
-    top: var(--chrome-top);
+    top: auto;
+    left: 0;
     right: 0;
     bottom: var(--chrome-bottom);
-    width: calc(min(var(--dock-w), 86vw) + var(--safe-r));
+    width: auto;
+    height: var(--sheet-h);
+    max-height: calc(100vh - var(--chrome-top) - var(--chrome-bottom));
+    padding-left: var(--safe-l);
     padding-right: var(--safe-r);
-    transform: translateX(100%);
-    transition: transform var(--t-med) var(--ease-pop);
+    transform: translateY(100%);
+    transition: transform var(--t-med) var(--ease-pop), height var(--t-med) var(--ease-pop);
+    border-top-left-radius: var(--r-lg);
+    border-top-right-radius: var(--r-lg);
     z-index: 120;
     box-shadow: var(--shadow);
     will-change: transform;
+  }
+
+  /* While a detent is being dragged the height follows the finger, and an
+     animation on it would lag behind by a frame every frame. */
+  &[data-sheet-drag] [data-tour="dock"] {
+    transition: none;
+  }
+
+  /* ---- The grab handle ----
+     A 44px band at the top of the sheet: drag it to resize, tap it to move on
+     to the next detent. Both, because a drag is the gesture people try and a
+     tap is the one that always works. */
+  .gq-m-sheet-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    height: 28px;
+    margin: 0 auto;
+    width: 100%;
+    /* The sheet's contents scroll; this must not, or a drag that starts here
+       would scroll the panels instead of resizing the sheet. */
+    touch-action: none;
+    cursor: grab;
+
+    &::before {
+      content: "";
+      width: 40px;
+      height: 4px;
+      border-radius: var(--r-pill);
+      background: var(--border-strong);
+    }
   }
 
   /* Roomier, thumb-sized tool targets inside the drawer — the narrow rail's
@@ -815,6 +882,14 @@ html[data-mobile="true"][data-drawer="tools"] [data-tour="toolbar"] {
 }
 html[data-mobile="true"][data-drawer="panels"] [data-tour="dock"] {
   transform: none;
+}
+
+/* The scrim is for the tools drawer, which still covers the screen. The panels
+   sheet exists so the artwork stays visible and touchable beside it — dimming
+   the very thing it describes, and swallowing taps on it, would undo the
+   change. */
+html[data-mobile="true"][data-drawer="panels"] .gq-m-scrim {
+  display: none;
 }
 
 /* Scrim behind an open drawer — tap (or swipe) to dismiss. Rendered by Editor

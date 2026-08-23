@@ -91,4 +91,34 @@ async function withOptionsSheet(page, fn) {
   }
 }
 
-module.exports = { launchBrowser, channelArg, urlArg, dismissStartCard, withOptionsSheet };
+/**
+ * Put the phone's panels sheet at a given height: "peek", "half" or "full".
+ *
+ * The panels dock is a bottom sheet with three detents and opens at "half", so
+ * a harness that wants to work with a tall panel — dragging layer rows, say —
+ * has to raise it first, exactly as a person would. Before this, rows below the
+ * fold had off-screen boxes and every dispatched touch landed on nothing, which
+ * reads as "long press does not lift a row".
+ *
+ * Taps the handle, which steps through the detents and wraps. A no-op on
+ * desktop and anywhere the sheet is not open.
+ */
+async function setSheetDetent(page, want) {
+  const handle = page.locator("[data-sheet-handle]");
+  if (!(await handle.count())) return false;
+  for (let i = 0; i < 4; i++) {
+    if ((await page.evaluate(() => document.documentElement.dataset.sheet)) === want) return true;
+    await handle.first().click();
+    await page.waitForTimeout(420);
+  }
+  return (await page.evaluate(() => document.documentElement.dataset.sheet)) === want;
+}
+
+module.exports = {
+  launchBrowser,
+  channelArg,
+  urlArg,
+  dismissStartCard,
+  withOptionsSheet,
+  setSheetDetent,
+};
