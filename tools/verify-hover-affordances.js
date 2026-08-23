@@ -30,7 +30,7 @@
  *
  * Run: node tools/verify-hover-affordances.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg } = require("./lib/launch");
+const { launchBrowser, openPanel, setSheetDetent, urlArg } = require("./lib/launch");
 
 /** Each reveal button, and the row it lives in — the base rule is often nested
  *  inside the parent, so a bare probe element would not inherit it. */
@@ -159,11 +159,9 @@ const OPACITIES = (kinds) => {
   await page.waitForTimeout(1200);
   await page.locator('[data-tour="mobilebar"] button', { hasText: "Panels" }).first().click();
   await page.waitForTimeout(1000);
-  await page.evaluate(() => {
-    for (const c of document.querySelectorAll('[data-tour="dock"] button[class*="panelCaret"]'))
-      if ((c.getAttribute("aria-label") || "").startsWith("Expand")) c.click();
-  });
-  await page.waitForTimeout(1500);
+  /* The sheet is an accordion on a phone, so "expand everything" leaves only
+     the last one open — each journey asks for the panel it needs instead. */
+  await setSheetDetent(page, "full");
 
   const countOf = (cls) =>
     page.evaluate((k) => document.querySelectorAll(`[class*="${k}"]`).length, cls);
@@ -186,7 +184,8 @@ const OPACITIES = (kinds) => {
     return true;
   };
 
-  const journey = async (what, createTip, cls) => {
+  const journey = async (what, createTip, cls, panelId) => {
+    if (panelId) await openPanel(page, panelId);
     const before = await countOf(cls);
     const made = await tapTip(createTip);
     const after = await countOf(cls);
@@ -204,8 +203,8 @@ const OPACITIES = (kinds) => {
     check(`…and pressing it deletes the ${what}`, gone < after, `${after} → ${gone} rows`);
   };
 
-  await journey("history snapshot", "Take a snapshot of the current state", "snapDel");
-  await journey("saved brush", "Save the current brush settings as a preset", "brushDel");
+  await journey("history snapshot", "Take a snapshot of the current state", "snapDel", "history");
+  await journey("saved brush", "Save the current brush settings as a preset", "brushDel", "brushes");
 
   // ------------------------------------------------ long-press for a tooltip
   await page.evaluate(() => window.history.back()); // close the drawer: its scrim eats presses

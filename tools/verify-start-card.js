@@ -26,7 +26,7 @@
  * Run: node tools/verify-start-card.js [--url ...] [--channel ...]
  */
 const zlib = require("zlib");
-const { launchBrowser, urlArg } = require("./lib/launch");
+const { launchBrowser, openPanel, setSheetDetent, urlArg } = require("./lib/launch");
 
 /** A solid-colour PNG, built here so the harness carries no fixture files.
  *  Hand-rolled for the same reason the app encodes its own PNGs: it is a
@@ -183,16 +183,17 @@ const PHOTO = { w: 61, h: 43, rgb: [0, 128, 255] };
   check("…and its pixels are on a layer, not an empty canvas",
     landed?.centre === `${PHOTO.rgb.join(",")},255`,
     `centre pixel rgba(${landed?.centre}), photo was rgb(${PHOTO.rgb.join(",")})`);
-  const layers = await phone.page.evaluate(async () => {
-    const btn = [...document.querySelectorAll('[data-tour="mobilebar"] button')].find((b) =>
-      /Panels/.test(b.textContent || ""));
-    btn?.click();
-    await new Promise((r) => setTimeout(r, 900));
-    const n = document.querySelectorAll('[data-tour="dock"] [data-layer-id]').length;
-    window.history.back();
-    await new Promise((r) => setTimeout(r, 700));
-    return n;
-  });
+  /* The panels sheet is an accordion and starts with everything shut, so the
+     Layers rows are not in the DOM until that panel is asked for. */
+  await phone.page.locator('[data-tour="mobilebar"] button', { hasText: "Panels" }).first().click();
+  await phone.page.waitForTimeout(800);
+  await setSheetDetent(phone.page, "full");
+  await openPanel(phone.page, "layers");
+  const layers = await phone.page.evaluate(
+    () => document.querySelectorAll('[data-tour="dock"] [data-layer-id]').length,
+  );
+  await phone.page.evaluate(() => window.history.back());
+  await phone.page.waitForTimeout(700);
   check("…as exactly one layer", layers === 1, `${layers} layer row(s)`);
   check("and the card is gone once there is something to edit",
     (await cardBox(phone.page)) === null);

@@ -114,6 +114,58 @@ async function setSheetDetent(page, want) {
   return (await page.evaluate(() => document.documentElement.dataset.sheet)) === want;
 }
 
+/**
+ * Make one named panel the open one: "layers", "history", "brushes", …
+ *
+ * On a phone the panels sheet is an accordion — one open at a time, because
+ * the desktop defaults put 4086px of content in it and left the Layers header
+ * 3488px down. So "expand every panel" no longer means what it used to: it
+ * leaves whichever was clicked LAST open and everything else shut, which reads
+ * as "the panel is empty" for anything looking at the others.
+ *
+ * Harnesses ask for the panel they need instead. On desktop this just expands
+ * it, leaving the rest alone.
+ */
+async function openPanel(page, id) {
+  const section = page.locator(`[data-panel-id="${id}"]`);
+  if (!(await section.count())) return false;
+  if ((await section.first().getAttribute("data-open")) === "true") return true;
+  await section.locator('button[class*="panelCaret"]').first().click();
+  await page.waitForTimeout(650);
+  return (await section.first().getAttribute("data-open")) === "true";
+}
+
+/**
+ * Run `fn` with one panel open and reachable, then leave the drawer as found.
+ *
+ * A collapsed panel renders NOTHING — its controls are not off screen, they are
+ * absent. On a phone the sheet is an accordion and starts with everything shut,
+ * so anything reaching for a panel's control (the Colour panel's HEX field, the
+ * Layers footer) has to open it first, exactly as a person would. Several
+ * harnesses used to get these for free because five panels were open by
+ * default; that default is what made the sheet 4086px tall.
+ */
+async function withPanel(page, id, fn) {
+  const bar = page.locator('[data-tour="mobilebar"] button', { hasText: "Panels" });
+  const onPhone = (await bar.count()) > 0;
+  const wasOpen =
+    (await page.evaluate(() => document.documentElement.dataset.drawer ?? "")) === "panels";
+  if (onPhone && !wasOpen) {
+    await bar.first().click();
+    await page.waitForTimeout(700);
+  }
+  if (onPhone) await setSheetDetent(page, "full");
+  await openPanel(page, id);
+  try {
+    return await fn();
+  } finally {
+    if (onPhone && !wasOpen) {
+      await page.evaluate(() => window.history.back());
+      await page.waitForTimeout(600);
+    }
+  }
+}
+
 module.exports = {
   launchBrowser,
   channelArg,
@@ -121,4 +173,6 @@ module.exports = {
   dismissStartCard,
   withOptionsSheet,
   setSheetDetent,
+  openPanel,
+  withPanel,
 };

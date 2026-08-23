@@ -35,7 +35,7 @@
  *
  * Run: node tools/verify-hit-targets.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg } = require("./lib/launch");
+const { launchBrowser, openPanel, urlArg } = require("./lib/launch");
 
 const MIN = 44;
 
@@ -214,7 +214,32 @@ const REACH = (scope) => {
     }`,
   );
 
-  /* The two rows that a 44px floor overflows out of a drawer that clips. */
+  /* The two rows that a 44px floor overflows out of a drawer that clips. Each
+     lives in its own panel, and the sheet is an accordion now — "expand
+     everything" leaves only the last one open, so both are asked for in turn
+     and measured while they are the open one. */
+  const measureRow = async (panelId, selector) => {
+    await openPanel(page, panelId);
+    return page.evaluate((sel) => {
+      const dock = document.querySelector('[data-tour="dock"]');
+      const right = dock.getBoundingClientRect().right;
+      const row = document.querySelector(sel);
+      if (!row) return null;
+      let over = 0;
+      let n = 0;
+      for (const b of row.children) {
+        const r = b.getBoundingClientRect();
+        if (r.width < 1) continue;
+        n++;
+        over = Math.max(over, Math.round(r.right - right));
+      }
+      return { n, over };
+    }, selector);
+  };
+  const rowsMeasured = {
+    layers: await measureRow("layers", '[class*="layerFooter"]'),
+    swatches: await measureRow("swatches", '[class*="swToolbar"]'),
+  };
   const rows = await page.evaluate(() => {
     const dock = document.querySelector('[data-tour="dock"]');
     const right = dock.getBoundingClientRect().right;
@@ -238,14 +263,14 @@ const REACH = (scope) => {
   });
   check(
     "the Layers footer wraps instead of running off the drawer",
-    rows.layers && rows.layers.n >= 6 && rows.layers.over <= 0,
-    rows.layers ? `${rows.layers.n} buttons, ${rows.layers.over}px past the edge` : "row not found",
+    rowsMeasured.layers && rowsMeasured.layers.n >= 6 && rowsMeasured.layers.over <= 0,
+    rowsMeasured.layers ? `${rowsMeasured.layers.n} buttons, ${rowsMeasured.layers.over}px past the edge` : "row not found",
   );
   check(
     "the Swatches toolbar wraps too",
-    rows.swatches && rows.swatches.n >= 5 && rows.swatches.over <= 0,
-    rows.swatches
-      ? `${rows.swatches.n} children, ${rows.swatches.over}px past the edge`
+    rowsMeasured.swatches && rowsMeasured.swatches.n >= 5 && rowsMeasured.swatches.over <= 0,
+    rowsMeasured.swatches
+      ? `${rowsMeasured.swatches.n} children, ${rowsMeasured.swatches.over}px past the edge`
       : "row not found",
   );
   await backOut();

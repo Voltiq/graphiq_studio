@@ -25,7 +25,7 @@
  *
  * Run: node tools/verify-two-stage.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg, withOptionsSheet } = require("./lib/launch");
+const { launchBrowser, openPanel, urlArg, withOptionsSheet, withPanel } = require("./lib/launch");
 
 const AIM_ERROR = 5; // the item's own number
 const GRAB_FROM = 18; // how far from the marker the grabbing finger lands
@@ -89,7 +89,7 @@ const GRAB_FROM = 18; // how far from the marker the grabbing finger lands
   // ---------------------------------------------------------------- setup --
   await page.keyboard.press("Control+Shift+N");
   await page.waitForTimeout(1200);
-  await setValue("hex", "000000");
+  await withPanel(page, "color", () => setValue("hex", "000000"));
   await page.waitForTimeout(400);
   await page.keyboard.press("n"); // pencil
   await page.waitForTimeout(400);
@@ -98,7 +98,7 @@ const GRAB_FROM = 18; // how far from the marker the grabbing finger lands
   const cv = await page.locator('[data-tour="canvas"] canvas').first().boundingBox();
   await page.mouse.click(Math.round(cv.x + cv.width / 2), Math.round(cv.y + cv.height / 2));
   await page.waitForTimeout(1100);
-  await setValue("hex", "FFFFFF");
+  await withPanel(page, "color", () => setValue("hex", "FFFFFF"));
   await page.waitForTimeout(400);
   await withOptionsSheet(page, () => setValue("Size", "1"));
   await page.waitForTimeout(400);
@@ -198,7 +198,15 @@ const GRAB_FROM = 18; // how far from the marker the grabbing finger lands
     );
 
   const reset = async () => {
-    await setValue("hex", "FF0000");
+    /* Both inside ONE visit to the sheet. The HEX field lives in the Colour
+       panel and the readout the checks below watch lives in Info; the sheet is
+       an accordion, so opening Colour closes Info and it has to be asked back.
+       Doing that in a second `withPanel` would open and shut the sheet twice
+       per attempt, and there are twenty attempts. */
+    await withPanel(page, "color", async () => {
+      await setValue("hex", "FF0000");
+      await openPanel(page, "info");
+    });
     await page.waitForTimeout(280);
   };
 

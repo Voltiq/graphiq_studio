@@ -35,8 +35,11 @@ export default function Panel({
   onFloat,
   tabs,
   dropHint,
+  panelId,
 }: {
   title: string;
+  /** Stable id, so the sheet can measure this panel after it opens. */
+  panelId?: string;
   icon: LucideIcon;
   /** Collapsed/expanded state (owned & persisted by the parent dock). */
   open: boolean;
@@ -70,6 +73,7 @@ export default function Panel({
   return (
     <section
       className={styles.panel}
+      data-panel-id={panelId}
       data-open={open}
       data-dragging={dragging || undefined}
       data-grouped={grouped || undefined}

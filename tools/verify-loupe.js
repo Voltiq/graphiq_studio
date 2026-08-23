@@ -26,7 +26,7 @@
  *
  * Run: node tools/verify-loupe.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg, withOptionsSheet } = require("./lib/launch");
+const { launchBrowser, urlArg, withOptionsSheet, withPanel } = require("./lib/launch");
 
 const MAG = 5; // must match LOUPE_MAG in CanvasArea
 const AIM_ERROR = 6; // screen px each attempt lands off target — a modest finger
@@ -106,7 +106,7 @@ const OFFSETS = Array.from({ length: 10 }, (_, i) => {
      colour it was painted. */
   await page.keyboard.press("Control+Shift+N");
   await page.waitForTimeout(1200);
-  check("the foreground colour can be set exactly", await setValue("hex", "000000"));
+  check("the foreground colour can be set exactly", await withPanel(page, "color", () => setValue("hex", "000000")));
   await page.waitForTimeout(500);
   await page.keyboard.press("n"); // pencil: hard-edged, no falloff
   await page.waitForTimeout(400);
@@ -116,7 +116,7 @@ const OFFSETS = Array.from({ length: 10 }, (_, i) => {
   await page.mouse.click(Math.round(cv.x + cv.width / 2), Math.round(cv.y + cv.height / 2));
   await page.waitForTimeout(1100);
 
-  await setValue("hex", "FFFFFF");
+  await withPanel(page, "color", () => setValue("hex", "FFFFFF"));
   await page.waitForTimeout(500);
   await withOptionsSheet(page, () => setValue("Size", "1"));
   await page.waitForTimeout(400);
@@ -258,7 +258,7 @@ const OFFSETS = Array.from({ length: 10 }, (_, i) => {
        attempt that sampled nothing at all is distinguishable from one that
        sampled the background - otherwise a press that never reached the canvas
        would be counted as an honest miss. */
-    await setValue("hex", "FF0000");
+    await withPanel(page, "color", () => setValue("hex", "FF0000"));
     await page.waitForTimeout(260);
     /* And drop any placement marker the LAST attempt left behind. Two-stage
        placement landed after this harness was written: a marker sitting within

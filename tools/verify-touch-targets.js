@@ -17,7 +17,7 @@
  *
  * Run: node tools/verify-touch-targets.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg } = require("./lib/launch");
+const { launchBrowser, openPanel, setSheetDetent, urlArg } = require("./lib/launch");
 
 (async () => {
   const browser = await launchBrowser();
@@ -73,12 +73,21 @@ const { launchBrowser, urlArg } = require("./lib/launch");
   const { context, page } = await open({ width: 390, height: 844 }, true);
   await page.keyboard.press("Control+Shift+N"); // a layer, so the panels have something to show
   await page.waitForTimeout(1100);
-  /* Measured in the PANELS, not the options bar: on a 390px phone the brush's
-     option sliders sit past the right edge of a bar that does not scroll, so
-     none of them is reachable to begin with — which is the subject of its own
-     item (the per-tool sheet), not this one. */
+  /* Measured in the PANELS rather than the options bar, because the bar's
+     controls now live in a sheet of their own and this rail is about the
+     panels' sliders. The COLOUR panel specifically: it holds both a slider and
+     the hue/alpha strips the second half of this checks, and the panels sheet
+     is an accordion — nothing is open until it is asked for, so the first
+     version of this found no slider at all. */
   await page.locator('[data-tour="mobilebar"] button', { hasText: "Panels" }).first().click();
   await page.waitForTimeout(900);
+  await setSheetDetent(page, "full");
+  /* Two passes, because the sheet is an accordion and the two halves of this
+     rail live in different panels: the range input is the NAVIGATOR's zoom
+     slider (the Colour panel has none — its hue and alpha are custom
+     elements), and the strips are in Colour. */
+  await openPanel(page, "navigator");
+  await page.waitForTimeout(600);
 
   const slider = await visibleSlider(page);
   check("a slider is on screen to measure", !!slider,
@@ -112,7 +121,9 @@ const { launchBrowser, urlArg } = require("./lib/launch");
   check("dragging it 40px changes the value", valueBefore !== valueAfter,
     `${valueBefore} → ${valueAfter}`);
 
-  /* The colour strips, in the same drawer. */
+  /* The colour strips — a second pass, in the panel that owns them. */
+  await openPanel(page, "color");
+  await page.waitForTimeout(600);
   const strips = await page.evaluate(() => {
     /* The strips themselves, not what is painted inside them: `.alphaTrack` and
        the handles also match a loose "hue|alpha" search and are not hit
@@ -132,6 +143,7 @@ const { launchBrowser, urlArg } = require("./lib/launch");
   const desk = await open({ width: 1400, height: 900 }, false);
   await desk.page.keyboard.press("Control+Shift+N");
   await desk.page.waitForTimeout(1100);
+  await openPanel(desk.page, "navigator"); // open by default, but say so
   const deskSlider = await visibleSlider(desk.page);
   check("on desktop the slider keeps its original 4px box",
     !!deskSlider && deskSlider.h < 24, `${deskSlider?.h}px tall`);

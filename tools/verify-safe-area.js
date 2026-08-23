@@ -17,7 +17,7 @@
  */
 const fs = require("fs");
 const path = require("path");
-const { launchBrowser, urlArg } = require("./lib/launch");
+const { launchBrowser, openPanel, setSheetDetent, urlArg } = require("./lib/launch");
 
 /* An iPhone-ish profile: a notch at the top, the home indicator at the foot. */
 const NOTCH = { top: 47, right: 0, bottom: 34, left: 0 };
@@ -430,6 +430,14 @@ const MOBILE = { width: 390, height: 844 };
     await land.cdp.send("Emulation.setSafeAreaInsetsOverride",
       { insets: { top: 0, right: FAT, bottom: 0, left: 0 } });
     await lp.waitForTimeout(350);
+
+    /* The panels sheet is an accordion and starts with everything shut, so a
+       collapsed panel's controls are ABSENT rather than off screen. Layers is
+       asked for because it carries two listbox triggers, one of them flush to
+       the right edge — which is the case this check is about. */
+    await setSheetDetent(lp, "full");
+    await openPanel(lp, "layers");
+    await lp.waitForTimeout(500);
 
     /* The rightmost trigger inside the drawer, which is flush to that edge.
        Clicked by coordinate rather than by locator: the drawer's scrim makes

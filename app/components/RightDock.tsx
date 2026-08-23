@@ -473,6 +473,18 @@ export default function RightDock({
 }: Props) {
   const [order, setOrder] = useState<PanelId[]>(DEFAULT_ORDER);
   const [openMap, setOpenMap] = useState<Record<PanelId, boolean>>(DEFAULT_OPEN);
+  /* ---- The phone's accordion --------------------------------------------
+     On a desktop the dock is a tall column and five panels open at once is
+     convenient. In a bottom sheet it is the difference between usable and not:
+     with the default five expanded, the stack measured 4086px, the LAYERS
+     header sat 3488px down it, and only four of sixteen panels could be
+     reached without scrolling — at any height. One open at a time keeps the
+     stack to fifteen headers plus one panel, so everything is a tap away.
+
+     Its own state, never persisted: the desktop layout is saved under
+     OPEN_KEY, and writing a phone's "everything shut" over it would collapse
+     someone's carefully arranged dock the next time they sat down. */
+  const [mobileOpenId, setMobileOpenId] = useState<PanelId | null>(null);
   const [left, setLeft] = useState<PanelId[]>([]);
   const [floats, setFloats] = useState<DockLayout["floats"]>({});
   const [floatTop, setFloatTop] = useState<PanelId | null>(null);
@@ -603,6 +615,43 @@ export default function RightDock({
   }, [dragId]);
 
   const toggleOpen = (id: PanelId) => setOpenMap((cur) => ({ ...cur, [id]: !cur[id] }));
+
+  /** Is this panel showing? On a phone, only the one that was opened last. */
+  const isOpen = (id: PanelId): boolean => (mobile ? mobileOpenId === id : openMap[id]);
+
+  /**
+   * Open or close a panel.
+   *
+   * On a phone this also RAISES the sheet when the panel that just opened is
+   * taller than the room available — and never lowers it. Growing to fit what
+   * you asked for is helpful; shrinking under you after you deliberately made
+   * the sheet tall is not, which is why the rule is one-directional.
+   *
+   * The height is measured after the panel has rendered rather than read from
+   * a list of "tall" panels: such a list is wrong the moment a panel gains a
+   * row, and nothing would say so.
+   */
+  const togglePanel = (id: PanelId) => {
+    if (!mobile) {
+      toggleOpen(id);
+      return;
+    }
+    const opening = mobileOpenId !== id;
+    setMobileOpenId(opening ? id : null);
+    if (!opening || !onDetent) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const dock = document.querySelector('[data-tour="dock"]');
+        const section = document.querySelector(`[data-panel-id="${id}"]`);
+        if (!dock || !section) return;
+        const need = section.getBoundingClientRect().height;
+        const have = dock.getBoundingClientRect().height;
+        if (need <= have) return;
+        if (detent === "peek") onDetent("half");
+        else if (detent === "half") onDetent("full");
+      });
+    });
+  };
 
   /* ---- tabbed groups ----------------------------------------------------
    *
@@ -824,8 +873,9 @@ export default function RightDock({
     const dp = {
       // Floating panels move by their grip, not HTML5 DnD.
       ...(floating ? { draggable: false } : dragProps(id)),
-      open: openMap[id],
-      onToggle: () => toggleOpen(id),
+      panelId: id,
+      open: isOpen(id),
+      onToggle: () => togglePanel(id),
       floating,
       onFloat: () => toggleFloat(id),
       /* One drop target per panel, not two. The header used to carry its own

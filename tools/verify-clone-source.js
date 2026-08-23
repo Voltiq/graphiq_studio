@@ -25,7 +25,7 @@
  *
  * Run: node tools/verify-clone-source.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg, withOptionsSheet } = require("./lib/launch");
+const { launchBrowser, urlArg, withOptionsSheet, withPanel } = require("./lib/launch");
 
 const AIM_ERROR = 5; // how far off the Alt-tap lands
 const GRAB_FROM = 18; // how far from the marker the grabbing finger lands
@@ -63,7 +63,7 @@ const GRAB_FROM = 18; // how far from the marker the grabbing finger lands
   const build = async (page) => {
     await page.keyboard.press("Control+Shift+N");
     await page.waitForTimeout(1200);
-    await setValueIn(page, "hex", "000000");
+    await withPanel(page, "color", () => setValueIn(page, "hex", "000000"));
     await page.waitForTimeout(400);
     await page.keyboard.press("n"); // pencil
     await page.waitForTimeout(400);
@@ -72,7 +72,7 @@ const GRAB_FROM = 18; // how far from the marker the grabbing finger lands
     const cv = await page.locator('[data-tour="canvas"] canvas').first().boundingBox();
     await page.mouse.click(Math.round(cv.x + cv.width / 2), Math.round(cv.y + cv.height / 2));
     await page.waitForTimeout(1100);
-    await setValueIn(page, "hex", "FFFFFF");
+    await withPanel(page, "color", () => setValueIn(page, "hex", "FFFFFF"));
     await page.waitForTimeout(400);
     await withOptionsSheet(page, () => setValueIn(page, "Size", "1"));
     await page.waitForTimeout(400);

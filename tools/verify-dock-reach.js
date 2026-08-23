@@ -22,7 +22,7 @@
  *
  * Run: node tools/verify-dock-reach.js [--url ...] [--channel ...]
  */
-const { dismissStartCard, launchBrowser, urlArg } = require("./lib/launch");
+const { dismissStartCard, launchBrowser, openPanel, setSheetDetent, urlArg } = require("./lib/launch");
 
 /* Every interactive control past the dock's right edge, split by whether
    anything can scroll it into view. Deliberately NOT filtered to "deepest
@@ -85,13 +85,13 @@ const SCAN = () => {
     await page.waitForTimeout(1200);
     await page.locator('[data-tour="mobilebar"] button', { hasText: "Panels" }).first().click();
     await page.waitForTimeout(900);
-    /* Every panel expanded: a collapsed one renders nothing, so a scan of the
-       default state would be measuring two panels and calling it fourteen. */
-    await page.evaluate(() => {
-      for (const c of document.querySelectorAll('[data-tour="dock"] button[class*="panelCaret"]'))
-        if ((c.getAttribute("aria-label") || "").startsWith("Expand")) c.click();
-    });
-    await page.waitForTimeout(1600);
+    /* The sheet is an accordion, so this opens the ONE panel whose content is
+       widest — Adjustments, which holds the filter filmstrip that started this
+       whole item. Expanding all of them used to be the way to get the widest
+       row on screen; now it would just leave the last one open. */
+    await setSheetDetent(page, "full");
+    await openPanel(page, "adjustments");
+    await page.waitForTimeout(900);
     return { context, page };
   };
 
@@ -101,8 +101,8 @@ const SCAN = () => {
   ]) {
     const { context, page } = await openDock(viewport, label);
     const r = await page.evaluate(SCAN);
-    check(`${label}: the dock is open with its panels expanded`,
-      !!r && r.seen >= 40, r ? `${r.seen} controls rendered in a ${r.dockWidth}px dock` : "no dock");
+    check(`${label}: the dock is open with its widest panel expanded`,
+      !!r && r.seen >= 20, r ? `${r.seen} controls rendered in a ${r.dockWidth}px dock` : "no dock");
     check(`${label}: nothing is stranded past the edge with no way back`,
       r && r.lost.length === 0,
       r && r.lost.length ? r.lost.slice(0, 4).join(", ") : "none stranded");

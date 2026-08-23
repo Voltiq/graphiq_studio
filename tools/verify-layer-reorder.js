@@ -14,7 +14,7 @@
  *
  * Run: node tools/verify-layer-reorder.js [--url ...] [--channel ...]
  */
-const { launchBrowser, setSheetDetent, urlArg } = require("./lib/launch");
+const { launchBrowser, openPanel, setSheetDetent, urlArg } = require("./lib/launch");
 
 (async () => {
   const browser = await launchBrowser();
@@ -95,6 +95,9 @@ const { launchBrowser, setSheetDetent, urlArg } = require("./lib/launch");
        dispatched touch lands on nothing. A person raises it to work with
        layers; so does this. */
     await setSheetDetent(page, "full");
+    /* One request instead of collapsing everything else by hand: the phone's
+       sheet is an accordion, and on desktop this just expands Layers. */
+    await openPanel(page, "layers");
     await page.evaluate(() => {
       for (const section of document.querySelectorAll('[data-tour="dock"] section')) {
         const caret = section.querySelector('button[class*="panelCaret"]');

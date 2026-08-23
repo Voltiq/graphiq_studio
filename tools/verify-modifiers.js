@@ -14,7 +14,7 @@
  *
  * Run: node tools/verify-modifiers.js [--url ...] [--channel ...]
  */
-const { dismissStartCard, launchBrowser, urlArg } = require("./lib/launch");
+const { dismissStartCard, launchBrowser, openPanel, setSheetDetent, urlArg } = require("./lib/launch");
 
 (async () => {
   const browser = await launchBrowser();
@@ -275,6 +275,10 @@ const { dismissStartCard, launchBrowser, urlArg } = require("./lib/launch");
           (e) => e.style.textDecoration === "underline",
         ).length,
     );
+  /* The sheet is an accordion and starts with everything shut, so the Layers
+     rows are not in the DOM until it is asked for. */
+  await setSheetDetent(page, "full");
+  await openPanel(page, "layers");
   const layerRows = page.locator('[data-tour="dock"] [class*="layerItem"]');
   const rowCount = await layerRows.count();
   check("there are two layers to clip together", rowCount >= 2, `${rowCount} layer row(s)`);
