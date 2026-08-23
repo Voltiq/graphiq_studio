@@ -432,3 +432,203 @@
     opacity: 1;
   }
 }
+
+/* ---- Touch: a compact bar plus an options sheet ---------------------------
+   Measured at 390px: every one of the 29 tools overflowed this bar. The
+   controls row is 25-127px wide once the modifier chips and the tool badge
+   have taken their share, and it held up to 1982px of widgets — with Crop
+   active, Apply sat 1400px off the right, which made the only way to commit a
+   crop unreachable. The controls now live in a sheet; the bar keeps the tool's
+   name, the way in, and any action that would lose work if it were buried. */
+.sheetToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  min-height: 34px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-md);
+  font-size: 13px;
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+
+  &[aria-expanded="true"] {
+    color: var(--accent);
+    background: var(--selected-bg);
+    border-color: var(--accent);
+  }
+}
+
+/* Tap-away, and something for the eye to read the sheet against. Below the
+   sheet, above everything else the canvas area draws. */
+.sheetScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 118;
+  background: var(--blanket);
+}
+
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  /* Sits on the bottom bar rather than over it: the drawers and Pan stay
+     reachable while the options are open, because changing a brush size and
+     then panning is one thought, not two. */
+  bottom: var(--chrome-bottom);
+  z-index: 119;
+  display: flex;
+  flex-direction: column;
+  max-height: 62vh;
+  padding-bottom: var(--sp-2);
+  background: var(--surface-3);
+  border-top: 1px solid var(--border);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  box-shadow: var(--shadow-md);
+  animation: gqSheetIn var(--t-med) var(--ease-pop);
+}
+
+@keyframes gqSheetIn {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+}
+
+.sheetHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.sheetTitle {
+  font-size: 14px;
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+/* The controls were written for a ROW. Down a column they need to stretch,
+   and the vertical rules that separated them need to lie down. */
+.sheetBody {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+
+  /* A divider between rows, not beside them. */
+  > .divider {
+    width: 100%;
+    height: 1px;
+    margin: 0;
+  }
+
+  /* Anything that was an inline cluster becomes a full-width row that wraps
+     rather than running off the side — which is the whole complaint. */
+  > * {
+    flex-shrink: 0;
+    max-width: 100%;
+  }
+
+  /* Sliders are the common case and the reason the bar was two metres wide.
+     The bar's variant lays them out as ONE ROW — label, value, a 104px track —
+     which in a 358px column still ran 82px past the edge once the label and
+     the number field had taken their share. In the sheet they go back to the
+     stacked form the panels use, with the track across the full width.
+
+     The `[class*="inline"]` half is load-bearing: `.slider.inline` sets the row
+     direction with two classes, so a one-class override loses to it. */
+  [class*="slider"],
+  [class*="slider"][class*="inline"] {
+    width: 100%;
+    min-width: 0;
+    /* A wrapping row rather than a column: the head (label + value) keeps its
+       own line and the track is forced onto the next by a 100% basis. Written
+       this way so it does not depend on whether the head is a wrapper element
+       or the label and value are siblings — stacking them blindly put "Size"
+       and "24px" on two separate lines. */
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px 8px;
+
+    > [class*="sliderHead"] {
+      flex: 1 0 100%;
+    }
+
+    input[type="range"] {
+      flex: 1 0 100%;
+      width: 100%;
+      min-width: 0;
+    }
+  }
+
+  /* Hint text was written for a bar, where `white-space: nowrap` keeps a
+     sentence on one line and the row scrolls. In a column the BOX fits and the
+     text does not — the pen's hint reported a 390px rect over 452px of content,
+     which is an overflow nothing on screen appears to cause. Sentences wrap
+     here. */
+  [class*="Hint"],
+  [class*="hint"],
+  [class*="muted"] {
+    white-space: normal;
+  }
+
+  /* Anything else that was a row of chips wraps instead of running off. */
+  [class*="wrap"],
+  [class*="group"],
+  [class*="segmented"] {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+}
+
+/* The compact bar's own row. The modifier chips take 154px of a 390px screen
+   before anything else is drawn, so what is left has to be spent carefully:
+   with Crop pinning Reset and Apply beside the Options button, the default
+   12px gaps put the row 11px over the edge. The buttons themselves stay at
+   44px — that floor is not negotiable — so the space comes out of the gaps. */
+[data-mobile-options] .controls {
+  gap: var(--sp-1);
+}
+
+[data-mobile-options] .sheetToggle {
+  padding: 0 var(--sp-2);
+}
+
+/* The pinned commit action reads as the primary one. */
+[data-mobile-options] .iconBtn.apply {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* While the sheet is open the bar has to stay ABOVE its own scrim, or the
+   Options button that opened it is the one thing you cannot tap to close it —
+   the scrim swallowed every attempt. The modifier chips come up with it, which
+   is right: arming Alt and then changing a setting is one thought. */
+/* Anchored on `.optionsbar`, not on the data attributes alone: CSS Modules
+   rejects a top-level selector with no local class ("not pure"), and it does so
+   at COMPILE time — the whole app returned a 500 until this carried one. */
+.optionsbar[data-mobile-options][data-sheet-open] {
+  z-index: 119;
+}
+
+/* …and the controls above the scrim WITHIN it. The scrim is a child of the bar,
+   so raising the bar raises the scrim with it and the Options button stays
+   buried — every attempt to tap it closed was swallowed. Order in the DOM is
+   what decides between siblings at the same level, so the row that has to stay
+   live says so explicitly. */
+.optionsbar[data-mobile-options][data-sheet-open] .controls {
+  position: relative;
+  z-index: 120;
+}

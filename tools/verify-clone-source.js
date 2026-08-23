@@ -25,7 +25,7 @@
  *
  * Run: node tools/verify-clone-source.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg } = require("./lib/launch");
+const { launchBrowser, urlArg, withOptionsSheet } = require("./lib/launch");
 
 const AIM_ERROR = 5; // how far off the Alt-tap lands
 const GRAB_FROM = 18; // how far from the marker the grabbing finger lands
@@ -67,14 +67,14 @@ const GRAB_FROM = 18; // how far from the marker the grabbing finger lands
     await page.waitForTimeout(400);
     await page.keyboard.press("n"); // pencil
     await page.waitForTimeout(400);
-    await setValueIn(page, "Size", "400");
+    await withOptionsSheet(page, () => setValueIn(page, "Size", "400"));
     await page.waitForTimeout(400);
     const cv = await page.locator('[data-tour="canvas"] canvas').first().boundingBox();
     await page.mouse.click(Math.round(cv.x + cv.width / 2), Math.round(cv.y + cv.height / 2));
     await page.waitForTimeout(1100);
     await setValueIn(page, "hex", "FFFFFF");
     await page.waitForTimeout(400);
-    await setValueIn(page, "Size", "1");
+    await withOptionsSheet(page, () => setValueIn(page, "Size", "1"));
     await page.waitForTimeout(400);
     await page.keyboard.press("Control+1");
     await page.waitForTimeout(900);
@@ -108,18 +108,25 @@ const GRAB_FROM = 18; // how far from the marker the grabbing finger lands
          default) the offset from the PREVIOUS stroke persists, and a second dab
          samples somewhere else entirely — correct behaviour that would make
          each check here depend on every check before it. */
-    await setValueIn(page, "Size", "3");
+    await withOptionsSheet(page, () => setValueIn(page, "Size", "3"));
     await page.waitForTimeout(300);
-    await setValueIn(page, "Hardness", "100");
+    await withOptionsSheet(page, () => setValueIn(page, "Hardness", "100"));
     await page.waitForTimeout(300);
-    const aligned = page
-      .locator('[data-tour="options"] button[role="switch"]', { hasText: "Aligned" })
-      .first();
-    if ((await aligned.count()) && (await aligned.getAttribute("aria-checked")) === "true") {
-      await aligned.click();
-      await page.waitForTimeout(400);
-    }
-    return { ...geom, aligned: await aligned.getAttribute("aria-checked").catch(() => null) };
+    /* On a phone the toggle lives in the options SHEET, which is not rendered
+       until it is opened — so this used to find nothing and silently leave
+       Aligned on, which then broke the checks that depend on it. */
+    const alignedState = await withOptionsSheet(page, async () => {
+      const aligned = page
+        .locator('[data-tour="options"] button[role="switch"]', { hasText: "Aligned" })
+        .first();
+      if (!(await aligned.count())) return null;
+      if ((await aligned.getAttribute("aria-checked")) === "true") {
+        await aligned.click();
+        await page.waitForTimeout(400);
+      }
+      return aligned.getAttribute("aria-checked");
+    });
+    return { ...geom, aligned: alignedState };
   };
 
   /** The colour of one DOCUMENT pixel. */

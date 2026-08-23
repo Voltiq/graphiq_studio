@@ -7231,6 +7231,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         }}
       />
       <OptionsBar
+          mobile={mobile}
         tool={tool}
         paintSurface={paintSurface}
         quickMask={quickMask}

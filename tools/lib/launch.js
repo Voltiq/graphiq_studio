@@ -63,4 +63,32 @@ async function dismissStartCard(page) {
   return true;
 }
 
-module.exports = { launchBrowser, channelArg, urlArg, dismissStartCard };
+/**
+ * Run `fn` with the phone's options sheet open, then put it back.
+ *
+ * On touch a tool's controls no longer live in the options bar — they are in a
+ * sheet, and the sheet is not rendered until it is opened. So a harness that
+ * reaches for `input[type="range"][aria-label="Size"]` finds NOTHING on a phone
+ * rather than finding it off-screen, which is a different failure from the one
+ * those harnesses were written against. This is how they reach it now.
+ *
+ * A no-op on desktop, where the controls are in the bar as they always were.
+ */
+async function withOptionsSheet(page, fn) {
+  const toggle = page.locator("[data-options-open]");
+  const onPhone = (await toggle.count()) > 0;
+  if (onPhone) {
+    await toggle.first().click();
+    await page.waitForTimeout(450);
+  }
+  try {
+    return await fn();
+  } finally {
+    if (onPhone && (await page.locator("[data-options-sheet]").count())) {
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(350);
+    }
+  }
+}
+
+module.exports = { launchBrowser, channelArg, urlArg, dismissStartCard, withOptionsSheet };

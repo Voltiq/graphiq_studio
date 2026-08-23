@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -41,6 +41,7 @@
     "test:startcard": "node tools/verify-start-card.js",
     "test:recents": "node tools/verify-recents.js",
     "test:toolsheet": "node tools/verify-tool-sheet.js",
+    "test:optionsheet": "node tools/verify-options-sheet.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

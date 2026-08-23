@@ -25,7 +25,7 @@
  *
  * Run: node tools/verify-two-stage.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg } = require("./lib/launch");
+const { launchBrowser, urlArg, withOptionsSheet } = require("./lib/launch");
 
 const AIM_ERROR = 5; // the item's own number
 const GRAB_FROM = 18; // how far from the marker the grabbing finger lands
@@ -93,14 +93,14 @@ const GRAB_FROM = 18; // how far from the marker the grabbing finger lands
   await page.waitForTimeout(400);
   await page.keyboard.press("n"); // pencil
   await page.waitForTimeout(400);
-  await setValue("Size", "400");
+  await withOptionsSheet(page, () => setValue("Size", "400"));
   await page.waitForTimeout(400);
   const cv = await page.locator('[data-tour="canvas"] canvas').first().boundingBox();
   await page.mouse.click(Math.round(cv.x + cv.width / 2), Math.round(cv.y + cv.height / 2));
   await page.waitForTimeout(1100);
   await setValue("hex", "FFFFFF");
   await page.waitForTimeout(400);
-  await setValue("Size", "1");
+  await withOptionsSheet(page, () => setValue("Size", "1"));
   await page.waitForTimeout(400);
   await page.keyboard.press("Control+1"); // 100%: one document pixel, one screen pixel
   await page.waitForTimeout(900);

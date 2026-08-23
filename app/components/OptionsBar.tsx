@@ -42,6 +42,7 @@ import {
   ChevronRight,
   ChevronUp,
   RotateCcw,
+  SlidersHorizontal,
   Ruler,
   Square,
   Strikethrough,
@@ -158,6 +159,7 @@ import {
   type TextFxPreset,
 } from "../lib/text-fx";
 import { clampX } from "../lib/safeArea";
+import { registerDismissible } from "../lib/dismiss";
 import ModifierChips from "./ModifierChips";
 
 /** In the options bar every slider is the compact inline (label-beside) variant. */
@@ -1252,6 +1254,7 @@ interface CropProps {
 }
 
 export default function OptionsBar({
+  mobile = false,
   tool,
   paintSurface,
   quickMask,
@@ -1403,9 +1406,214 @@ export default function OptionsBar({
   TextProps &
   DodgeProps &
   MoveProps &
-  CropProps) {
+  CropProps & {
+    /** Touch: the controls move into a sheet and the bar keeps the essentials. */
+    mobile?: boolean;
+  }) {
   const meta = getTool(tool);
   const Icon = meta.icon;
+
+  /* ---- Touch: a compact bar plus a sheet ---------------------------------
+     Measured at 390px, every one of the 29 tools overflowed this bar — the
+     controls row is only 25–127px wide once the chips and the tool badge have
+     taken their share, and it held up to 1982px of controls. Scrolling a 100px
+     window across two metres of widgets is not a way to reach anything, and
+     with Crop active the Apply button sat 1400px off the right.
+
+     So on touch the controls move into a sheet and the bar keeps three things:
+     the modifier chips, the tool's name, and the way in. Commit and
+     destructive actions are PINNED beside it, because those are the ones you
+     need without going looking — and losing a crop is not a thing to make
+     somebody hunt for. */
+  const [sheetOpen, setSheetOpen] = useState(false);
+  /* Back closes it before it closes anything else, the same registry the
+     drawers and the menu sheet use. */
+  useEffect(() => {
+    if (!sheetOpen) return;
+    return registerDismissible(() => setSheetOpen(false));
+  }, [sheetOpen]);
+  // A different tool means different options; the sheet does not survive it.
+  useEffect(() => setSheetOpen(false), [tool]);
+  useEffect(() => {
+    if (!sheetOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setSheetOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [sheetOpen]);
+
+  /** The actions that stay on the bar. Deliberately few: an action is pinned
+   *  when NOT finding it loses work or strands a session. */
+  const pinned =
+    tool === "crop" ? (
+      <>
+        {/* Icons, not words: the chips take 154px of a 390px row before
+            anything else is drawn, and three labelled buttons do not fit
+            beside them. Both carry an aria-label, and a long press names
+            them. */}
+        <button
+          type="button"
+          className={styles.iconBtn}
+          onClick={onCropReset}
+          data-pin="reset"
+          aria-label="Reset crop"
+          title="Reset crop"
+        >
+          <RotateCcw size={15} />
+        </button>
+        <button
+          type="button"
+          className={`${styles.iconBtn} ${styles.apply}`}
+          onClick={onCropApply}
+          data-pin="commit"
+          aria-label="Apply crop"
+          title="Apply crop (Enter)"
+        >
+          <Check size={15} />
+        </button>
+      </>
+    ) : tool === "frame" ? (
+      <button
+        type="button"
+        className={styles.iconBtn}
+        onClick={onFrameReset}
+        data-pin="reset"
+        title="Recentre the picture at its fitted size"
+      >
+        <RotateCcw size={14} />
+      </button>
+    ) : null;
+
+  const options = renderOptions(
+    tool,
+    foreground,
+    onForeground,
+    brush,
+    onBrush,
+    moveMode,
+    onMoveMode,
+    resizeMode,
+    onResizeMode,
+    resizeSmooth,
+    onResizeSmooth,
+    marqueeShape,
+    onMarqueeShape,
+    lassoMode,
+    onLassoMode,
+    triangleApex,
+    onTriangleApex,
+    selBox,
+    onSelBox,
+    wand,
+    onWand,
+    quickSelect,
+    onQuickSelect,
+    bucket,
+    onBucket,
+    gradient,
+    onGradient,
+    pen,
+    onPen,
+    eyedropper,
+    onEyedropper,
+    { shape, onShape, fill, onFill, stroke, onStroke },
+    { crop, onCrop, cropBox, onCropBox, onCropApply, onCropReset, docWidth, docHeight },
+    { blur, onBlur },
+    { smudge, onSmudge },
+    { mixer, onMixer, onCleanMixer },
+    {
+      frameShape,
+      onFrameShape,
+      frameFit,
+      onFrameFit,
+      frameSelected,
+      frameHasContent,
+      frameScale,
+      onFrameScale,
+      onFrameNudge,
+      onFrameReset,
+    },
+    { sponge, onSponge },
+    { historyBrush, onHistoryBrush },
+    { heal, onHeal },
+    { redEye, onRedEye },
+    { clone, onClone },
+    { text, onText },
+    { dodge, onDodge },
+    {
+      snap,
+      onSnap,
+      autoSelect,
+      onAutoSelect,
+      autoSelectScope,
+      onAutoSelectScope,
+      showTransform,
+      onShowTransform,
+      alignToCanvas,
+      onAlignToCanvas,
+      onAlign,
+      onDistribute,
+    },
+    measure,
+    onMeasureClear,
+    onStraighten,
+  );
+
+  if (mobile) {
+    return (
+      <div
+        className={styles.optionsbar}
+        data-tour="options"
+        data-mobile-options
+        data-sheet-open={sheetOpen || undefined}
+      >
+        <ModifierChips />
+        {/* No tool badge here: the bottom bar already names the current tool,
+            and at 390px it was the widest thing on this row — "Rectangular
+            marquee" alone left 38px for the controls. */}
+        <div className={styles.controls}>
+          {pinned}
+          <button
+            type="button"
+            className={styles.sheetToggle}
+            data-options-open
+            aria-expanded={sheetOpen}
+            onClick={() => setSheetOpen((o) => !o)}
+          >
+            <SlidersHorizontal size={15} />
+            Options
+          </button>
+        </div>
+        {sheetOpen && (
+          <>
+            <div
+              className={styles.sheetScrim}
+              onPointerDown={() => setSheetOpen(false)}
+              aria-hidden="true"
+            />
+            <div className={styles.sheet} data-options-sheet role="group" aria-label={`${meta.name} options`}>
+              <div className={styles.sheetHead}>
+                <span className={styles.sheetTitle}>{meta.name}</span>
+                <button
+                  type="button"
+                  className={styles.iconBtn}
+                  onClick={() => setSheetOpen(false)}
+                  aria-label="Close options"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+              <div className={styles.sheetBody}>{options}</div>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className={styles.optionsbar} data-tour="options">
@@ -1451,82 +1659,7 @@ export default function OptionsBar({
         </button>
       )}
       <Divider />
-      <div className={styles.controls}>
-        {renderOptions(
-          tool,
-          foreground,
-          onForeground,
-          brush,
-          onBrush,
-          moveMode,
-          onMoveMode,
-          resizeMode,
-          onResizeMode,
-          resizeSmooth,
-          onResizeSmooth,
-          marqueeShape,
-          onMarqueeShape,
-          lassoMode,
-          onLassoMode,
-          triangleApex,
-          onTriangleApex,
-          selBox,
-          onSelBox,
-          wand,
-          onWand,
-          quickSelect,
-          onQuickSelect,
-          bucket,
-          onBucket,
-          gradient,
-          onGradient,
-          pen,
-          onPen,
-          eyedropper,
-          onEyedropper,
-          { shape, onShape, fill, onFill, stroke, onStroke },
-          { crop, onCrop, cropBox, onCropBox, onCropApply, onCropReset, docWidth, docHeight },
-          { blur, onBlur },
-          { smudge, onSmudge },
-          { mixer, onMixer, onCleanMixer },
-          {
-            frameShape,
-            onFrameShape,
-            frameFit,
-            onFrameFit,
-            frameSelected,
-            frameHasContent,
-            frameScale,
-            onFrameScale,
-            onFrameNudge,
-            onFrameReset,
-          },
-          { sponge, onSponge },
-          { historyBrush, onHistoryBrush },
-          { heal, onHeal },
-          { redEye, onRedEye },
-          { clone, onClone },
-          { text, onText },
-          { dodge, onDodge },
-          {
-            snap,
-            onSnap,
-            autoSelect,
-            onAutoSelect,
-            autoSelectScope,
-            onAutoSelectScope,
-            showTransform,
-            onShowTransform,
-            alignToCanvas,
-            onAlignToCanvas,
-            onAlign,
-            onDistribute,
-          },
-          measure,
-          onMeasureClear,
-          onStraighten,
-        )}
-      </div>
+      <div className={styles.controls}>{options}</div>
     </div>
   );
 }

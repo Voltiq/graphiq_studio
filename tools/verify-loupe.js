@@ -26,7 +26,7 @@
  *
  * Run: node tools/verify-loupe.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg } = require("./lib/launch");
+const { launchBrowser, urlArg, withOptionsSheet } = require("./lib/launch");
 
 const MAG = 5; // must match LOUPE_MAG in CanvasArea
 const AIM_ERROR = 6; // screen px each attempt lands off target — a modest finger
@@ -110,7 +110,7 @@ const OFFSETS = Array.from({ length: 10 }, (_, i) => {
   await page.waitForTimeout(500);
   await page.keyboard.press("n"); // pencil: hard-edged, no falloff
   await page.waitForTimeout(400);
-  check("the pencil size can be set exactly", await setValue("Size", "400"));
+  check("the pencil size can be set exactly", await withOptionsSheet(page, () => setValue("Size", "400")));
   await page.waitForTimeout(400);
   const cv = await page.locator('[data-tour="canvas"] canvas').first().boundingBox();
   await page.mouse.click(Math.round(cv.x + cv.width / 2), Math.round(cv.y + cv.height / 2));
@@ -118,7 +118,7 @@ const OFFSETS = Array.from({ length: 10 }, (_, i) => {
 
   await setValue("hex", "FFFFFF");
   await page.waitForTimeout(500);
-  await setValue("Size", "1");
+  await withOptionsSheet(page, () => setValue("Size", "1"));
   await page.waitForTimeout(400);
   await page.keyboard.press("Control+1"); // 100% — the zoom the item names
   await page.waitForTimeout(900);
