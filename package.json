@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -36,6 +36,7 @@
     "test:grab": "node tools/verify-grab-radius.js",
     "test:loupe": "node tools/verify-loupe.js",
     "test:twostage": "node tools/verify-two-stage.js",
+    "test:clonesrc": "node tools/verify-clone-source.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

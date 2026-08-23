@@ -208,6 +208,10 @@ jobs:
         run: npm run test:twostage -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
+      - name: The clone source can be seen and moved with a finger
+        run: npm run test:clonesrc -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
 
       - name: Dev server log
         if: failure()

@@ -1678,6 +1678,10 @@ export default function CanvasArea({
   cloneRef.current = clone;
   const cloneHoverRef = useRef<{ x: number; y: number } | null>(null);
   const cloneSrcRef = useRef<{ x: number; y: number } | null>(null);
+  /* Offset from the pointer to the clone source while it is being dragged —
+     the same shape as the Eyedropper's `placeGrabRef`, and for the same reason:
+     a source held at the finger's own position is a source under the finger. */
+  const cloneGrabRef = useRef<{ dx: number; dy: number } | null>(null);
   const cloneOffRef = useRef<{ x: number; y: number } | null>(null);
   const cloneAltRef = useRef(false);
   // Text tool: the active edit session (a styled overlay <textarea>), plus the
@@ -3419,24 +3423,28 @@ export default function CanvasArea({
       drawBrushCursor(hx, hy, Math.max(1, (sp.size / 2) * s), sp.hardness);
     }
 
-    if (!anchorArmed && toolRef.current === "clone" && cloneHoverRef.current) {
+    /* Hover is not required for the SOURCE marker, only for the brush ring
+       around the pointer. On a mouse the two always coincide, which is why this
+       used to be one block; on a touchscreen the finger lifts the moment the
+       source is set, and a source you cannot see is one you cannot adjust. */
+    if (!anchorArmed && toolRef.current === "clone" && (cloneHoverRef.current || cloneSrcRef.current)) {
       const c = cloneRef.current;
       const hov = cloneHoverRef.current;
-      const hx = p.x + hov.x * s;
-      const hy = p.y + hov.y * s;
+      const hx = hov ? p.x + hov.x * s : 0;
+      const hy = hov ? p.y + hov.y * s : 0;
       const r = Math.max(1, (c.size / 2) * s);
       // Where the clone is (or would be) sampling from.
       const off = cloneOffRef.current;
       let srcPt: { x: number; y: number } | null = null;
-      if (paintingRef.current && off) srcPt = { x: hov.x + off.x, y: hov.y + off.y };
+      if (paintingRef.current && off && hov) srcPt = { x: hov.x + off.x, y: hov.y + off.y };
       else if (cloneSrcRef.current)
-        srcPt = c.aligned && off ? { x: hov.x + off.x, y: hov.y + off.y } : cloneSrcRef.current;
+        srcPt = c.aligned && off && hov ? { x: hov.x + off.x, y: hov.y + off.y } : cloneSrcRef.current;
 
       if (srcPt) {
         const sx = p.x + srcPt.x * s;
         const sy = p.y + srcPt.y * s;
         // Faint connector from source to the brush while actively cloning.
-        if (paintingRef.current && off) {
+        if (paintingRef.current && off && hov) {
           ctx.setLineDash([4, 4]);
           ctx.lineWidth = 1;
           ctx.strokeStyle = lite(0.45);
@@ -3459,7 +3467,9 @@ export default function CanvasArea({
       }
 
       // Alt held → "set source" reticle; otherwise the normal brush ring.
-      if (cloneAltRef.current) {
+      if (!hov) {
+        /* no pointer on the canvas: the source marker above is the whole of it */
+      } else if (cloneAltRef.current) {
         ctx.beginPath();
         ctx.arc(hx, hy, 9, 0, Math.PI * 2);
         ctx.lineWidth = 3;
@@ -3742,7 +3752,7 @@ export default function CanvasArea({
       ((toolRef.current === "smudge" || toolRef.current === "mixer") && smudgeHoverRef.current) ||
       (toolRef.current === "dodge" && dodgeHoverRef.current) ||
       (toolRef.current === "sponge" && spongeHoverRef.current) ||
-      (toolRef.current === "clone" && cloneHoverRef.current) ||
+      (toolRef.current === "clone" && (cloneHoverRef.current || cloneSrcRef.current)) ||
       // Move ▸ transform controls: the box is a standing overlay like the ants,
       // so the loop has to stay alive for it — this branch clears the overlay
       // when it stops, which would wipe the box a frame after it appeared.
@@ -5675,6 +5685,7 @@ export default function CanvasArea({
   const abortActiveGesture = () => {
     hideLoupe();
     placeGrabRef.current = null;
+    cloneGrabRef.current = null;
     if (paintingRef.current) {
       engine.cancelStroke();
       paintingRef.current = false;
@@ -7073,7 +7084,24 @@ export default function CanvasArea({
       // Alt / Option click sets the clone source (re-anchoring the offset).
       if (e.altKey) {
         e.preventDefault();
-        cloneSrcRef.current = { x: p.x, y: p.y };
+        const prev = cloneSrcRef.current;
+        /* Near the source already set: pick it UP by the offset the grab starts
+           with, so the finger sits clear of the point being aimed. Otherwise
+           the press sets a new source and the same drag refines it. Both are
+           touch-only: a mouse sets a source exactly where it clicks and has
+           never had a drag here, so it keeps that. */
+        if (e.pointerType !== "mouse") {
+          const near = prev && Math.hypot(p.x - prev.x, p.y - prev.y) <= grabDoc(12);
+          cloneGrabRef.current = near
+            ? { dx: prev.x - p.x, dy: prev.y - p.y }
+            : { dx: 0, dy: 0 };
+          if (!near) cloneSrcRef.current = { x: p.x, y: p.y };
+          viewRef.current?.setPointerCapture(e.pointerId);
+          trackLoupe(e, cloneSrcRef.current ?? undefined);
+        } else {
+          cloneSrcRef.current = { x: p.x, y: p.y };
+          cloneGrabRef.current = null;
+        }
         cloneOffRef.current = null;
         cloneAltRef.current = true;
         ensureAnts();
@@ -7245,6 +7273,17 @@ export default function CanvasArea({
     if (toolRef.current === "clone") {
       cloneHoverRef.current = { x: cur.x, y: cur.y };
       cloneAltRef.current = e.altKey;
+      const g = cloneGrabRef.current;
+      if (g) {
+        // Refining the source: it moves with the finger, keeping the offset,
+        // and the loupe magnifies the SOURCE rather than the fingertip.
+        const at = { x: cur.x + g.dx, y: cur.y + g.dy };
+        cloneSrcRef.current = at;
+        cloneOffRef.current = null;
+        trackLoupe(e, at);
+        ensureAnts();
+        return;
+      }
       ensureAnts();
     }
     // Text: drag from the press point rubber-bands a paragraph box (preview).
@@ -7837,6 +7876,14 @@ export default function CanvasArea({
   };
   const onCanvasPointerUp = (e: React.PointerEvent) => {
     hideLoupe();
+    /* The source stays where it was dragged to — only the grab ends. */
+    if (cloneGrabRef.current) {
+      cloneGrabRef.current = null;
+      const v = viewRef.current;
+      if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
+      ensureAnts();
+      return;
+    }
     const wasRejected = rejectsPointer(palmRef.current, e.pointerType, pointerPrefsRef.current.palm);
     palmRef.current = palmUp(palmRef.current, e.pointerType);
     if (wasRejected) return; // this contact never started anything
