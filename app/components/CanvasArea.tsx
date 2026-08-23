@@ -1331,8 +1331,11 @@ export default function CanvasArea({
     el.setAttribute("data-at", `${Math.floor(d.x)},${Math.floor(d.y)}`);
   };
 
-  /** Show (or move) the loupe for a press that deserves one. */
-  const trackLoupe = (e: React.PointerEvent) => {
+  /** Show (or move) the loupe for a press that deserves one.
+   *  `atDoc` overrides what it centres on: while a marker is being dragged the
+   *  thing worth magnifying is the marker, which is deliberately not under the
+   *  finger. */
+  const trackLoupe = (e: React.PointerEvent, atDoc?: { x: number; y: number }) => {
     if (e.pointerType === "mouse" || !LOUPE_TOOLS.has(toolRef.current)) {
       if (loupeAtRef.current) hideLoupe();
       return;
@@ -1340,6 +1343,18 @@ export default function CanvasArea({
     const vp = viewportRef.current;
     if (!vp) return;
     const r = vp.getBoundingClientRect();
+    if (atDoc) {
+      const v = viewRef.current;
+      if (v) {
+        const vb = v.getBoundingClientRect();
+        loupeAtRef.current = {
+          x: vb.left - r.left + (atDoc.x * vb.width) / width,
+          y: vb.top - r.top + (atDoc.y * vb.height) / height,
+        };
+        drawLoupe();
+        return;
+      }
+    }
     loupeAtRef.current = { x: e.clientX - r.left, y: e.clientY - r.top };
     drawLoupe();
   };
@@ -1347,6 +1362,31 @@ export default function CanvasArea({
     if (!loupeAtRef.current) return;
     loupeAtRef.current = null;
     drawLoupe();
+  };
+
+  /* ---- Provisional placement ----------------------------------------------
+     The loupe shows you where you are; this is what lets you be wrong about it.
+     A tap with the Eyedropper commits a sample at whatever pixel the fingertip
+     happened to cover, and until now the only recourse was to tap again and
+     hope. The sampled point now stays on screen as a marker, and pressing near
+     it picks it UP rather than starting a new sample: drag, watch the loupe and
+     the Info readout, release when it is right. Each move re-samples, so the
+     colour is always the marker's — there is no separate confirm to forget.
+
+     Held BY THE OFFSET the grab started with, not snapped to the finger, so the
+     finger can sit clear of the marker while dragging it. That is the whole
+     point on a touchscreen: the thing you are aiming is not under your hand.
+
+     Touch and pen only. A mouse can hit a pixel first time and would only get
+     a marker in the way of the next click. */
+  const placeRef = useRef<{ x: number; y: number } | null>(null);
+  /** Offset from the pointer to the marker while it is being dragged. */
+  const placeGrabRef = useRef<{ dx: number; dy: number } | null>(null);
+  const clearPlacement = () => {
+    if (!placeRef.current && !placeGrabRef.current) return;
+    placeRef.current = null;
+    placeGrabRef.current = null;
+    ensureAnts();
   };
 
   // ---- Guides ---------------------------------------------------------------
@@ -3085,6 +3125,34 @@ export default function CanvasArea({
       ctx.strokeRect(x, y, w, h);
     }
 
+    // --- the provisional placement marker (touch/pen, Eyedropper) ---
+    // A ring big enough to see past a fingertip, with a hairline cross through
+    // the exact pixel it stands for. Drawn last of the eyedropper's chrome so
+    // it reads as the thing you can grab.
+    const mark = placeRef.current;
+    if (toolRef.current === "eyedropper" && mark) {
+      const mx = Math.round(p.x + (Math.floor(mark.x) + 0.5) * s) + 0.5;
+      const my = Math.round(p.y + (Math.floor(mark.y) + 0.5) * s) + 0.5;
+      ctx.setLineDash([]);
+      for (const [w2, colour] of [[3.5, "rgba(0,0,0,0.65)"], [1.5, "#fff"]] as const) {
+        ctx.lineWidth = w2;
+        ctx.strokeStyle = colour;
+        ctx.beginPath();
+        ctx.arc(mx, my, 11, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(mx - 17, my);
+        ctx.lineTo(mx - 4, my);
+        ctx.moveTo(mx + 4, my);
+        ctx.lineTo(mx + 17, my);
+        ctx.moveTo(mx, my - 17);
+        ctx.lineTo(mx, my - 4);
+        ctx.moveTo(mx, my + 4);
+        ctx.lineTo(mx, my + 17);
+        ctx.stroke();
+      }
+    }
+
     // --- resize handles + rotation anchor (Marquee + Wand tools) ---
     if (
       toolRef.current === "select" ||
@@ -3680,7 +3748,7 @@ export default function CanvasArea({
       // when it stops, which would wipe the box a frame after it appeared.
       (toolRef.current === "move" && showTransformRef.current && !!transformBox()) ||
       (toolRef.current === "text" && textDragRef.current) ||
-      (toolRef.current === "eyedropper" && hoverRef.current) ||
+      (toolRef.current === "eyedropper" && (hoverRef.current || placeRef.current)) ||
       (toolRef.current === "measure" && measureRef.current) ||
       birdRef.current ||
       filterAnchorRef.current ||
@@ -3909,6 +3977,22 @@ export default function CanvasArea({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, engine]);
 
+  // Esc drops the Eyedropper's placement marker, keeping the colour it sampled.
+  // The same shape as the bucket's below: the RESULT stands, the handle for
+  // adjusting it goes away.
+  useEffect(() => {
+    if (tool !== "eyedropper") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && placeRef.current) {
+        e.preventDefault();
+        clearPlacement();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool]);
+
   // Esc deselects the just-filled pixel — keeping the fill, dropping the marker.
   useEffect(() => {
     if (tool !== "bucket") return;
@@ -4059,12 +4143,15 @@ export default function CanvasArea({
   // Cancel a pending trailing recompute on unmount.
   useEffect(() => () => clearTimeout(wandThrottleRef.current.timer), []);
 
-  // Drop the eyedropper outline when switching to another tool.
+  // Drop the eyedropper outline — and its placement marker — on tool change.
   useEffect(() => {
     if (tool !== "eyedropper") {
       hoverRef.current = null;
+      placeRef.current = null;
+      placeGrabRef.current = null;
       ensureAnts();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, ensureAnts]);
   // Keep the latest values reachable from one-time listeners / stable callbacks.
   const zoomRef = useRef(zoom);
@@ -5232,18 +5319,27 @@ export default function CanvasArea({
       Math.max(0, Math.min(1, p.y / height)),
     );
   };
-  const pick = (e: React.PointerEvent) => {
-    const p = toDoc(e);
-    hoverRef.current = { x: p.x, y: p.y };
+  /** Sample at a DOCUMENT point, wherever the pointer itself happens to be.
+   *  The Info panel reads the cursor stream, so it is told the sampled point
+   *  rather than the finger's — while a marker is being dragged those differ,
+   *  and the readout the item asks you to watch has to describe the marker. */
+  const pickAt = (q: { x: number; y: number }) => {
+    hoverRef.current = { x: q.x, y: q.y };
+    onCursor(
+      q.x >= 0 && q.y >= 0 && q.x < width && q.y < height
+        ? { x: Math.floor(q.x), y: Math.floor(q.y) }
+        : null,
+    );
     const hex = engine.sampleColor(
-      Math.floor(p.x),
-      Math.floor(p.y),
+      Math.floor(q.x),
+      Math.floor(q.y),
       sampleSize,
       sampleAllLayers,
       activeLayerId,
     );
     if (hex) onPick(hex);
   };
+  const pick = (e: React.PointerEvent) => pickAt(toDoc(e));
 
   // ---- Crop tool geometry --------------------------------------------------
   // Classify a doc-space point against the current (possibly straightened) crop
@@ -5578,6 +5674,7 @@ export default function CanvasArea({
    */
   const abortActiveGesture = () => {
     hideLoupe();
+    placeGrabRef.current = null;
     if (paintingRef.current) {
       engine.cancelStroke();
       paintingRef.current = false;
@@ -6313,8 +6410,26 @@ export default function CanvasArea({
         samplerOps.add(p.x, p.y);
         return;
       }
+      /* Near the existing marker: pick it up rather than sample where the
+         finger landed. Uses the same pointer-scaled radius as every other
+         on-canvas handle, so on touch anywhere within ~22px counts as "this
+         one" — which is the point, since the finger covers roughly that much. */
+      const mark = placeRef.current;
+      if (mark && e.pointerType !== "mouse") {
+        const d = Math.hypot(p.x - mark.x, p.y - mark.y);
+        if (d <= grabDoc(12)) {
+          placeGrabRef.current = { dx: mark.x - p.x, dy: mark.y - p.y };
+          pickingRef.current = true;
+          pickAt(mark);
+          trackLoupe(e, mark);
+          ensureAnts();
+          return;
+        }
+      }
       pickingRef.current = true;
+      placeGrabRef.current = null;
       pick(e);
+      placeRef.current = e.pointerType === "mouse" ? null : { x: p.x, y: p.y };
       ensureAnts();
       return;
     }
@@ -7309,7 +7424,18 @@ export default function CanvasArea({
         return;
       }
       if (pickingRef.current) {
-        pick(e);
+        const g = placeGrabRef.current;
+        if (g) {
+          const p = toDoc(e);
+          const at = { x: p.x + g.dx, y: p.y + g.dy };
+          placeRef.current = at;
+          pickAt(at);
+          trackLoupe(e, at);
+        } else {
+          const p = toDoc(e);
+          pick(e);
+          if (pointerKindRef.current !== "mouse") placeRef.current = { x: p.x, y: p.y };
+        }
       } else {
         const p = toDoc(e);
         hoverRef.current = { x: p.x, y: p.y };
@@ -7918,6 +8044,9 @@ export default function CanvasArea({
     }
     if (pickingRef.current) {
       pickingRef.current = false;
+      /* The marker stays where the sample was taken — that is what makes the
+         placement provisional rather than final. Only the GRAB ends here. */
+      placeGrabRef.current = null;
       const v = viewRef.current;
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       return;

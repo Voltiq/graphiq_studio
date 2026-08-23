@@ -260,6 +260,14 @@ const OFFSETS = Array.from({ length: 10 }, (_, i) => {
        would be counted as an honest miss. */
     await setValue("hex", "FF0000");
     await page.waitForTimeout(260);
+    /* And drop any placement marker the LAST attempt left behind. Two-stage
+       placement landed after this harness was written: a marker sitting within
+       the grab radius turns the next press into "pick that up" rather than
+       "sample here", which quietly took the no-loupe baseline from 0/10 to
+       10/10 — measuring the marker instead of the loupe. Both runs start from
+       nothing, which is the state the comparison is about. */
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(240);
     let x = target.x + off.dx;
     let y = target.y + off.dy;
     await touch("touchStart", [{ x, y }]);

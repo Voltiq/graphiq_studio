@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -35,6 +35,7 @@
     "test:hittargets": "node tools/verify-hit-targets.js",
     "test:grab": "node tools/verify-grab-radius.js",
     "test:loupe": "node tools/verify-loupe.js",
+    "test:twostage": "node tools/verify-two-stage.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
