@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.9.1",
+  "version": "1.10.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -40,6 +40,7 @@
     "test:hoveronly": "node tools/verify-hover-affordances.js",
     "test:startcard": "node tools/verify-start-card.js",
     "test:recents": "node tools/verify-recents.js",
+    "test:toolsheet": "node tools/verify-tool-sheet.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

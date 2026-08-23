@@ -639,10 +639,40 @@ html[data-mobile="true"] {
     will-change: transform;
   }
 
-  /* Roomier, thumb-sized tool targets inside the drawer. */
-  [data-tour="toolbar"] button[aria-pressed] {
+  /* Roomier, thumb-sized tool targets inside the drawer — the narrow rail's
+     icon buttons. The labelled sheet sizes its own cells. */
+  [data-tour="toolbar"] button[aria-pressed]:not([data-tool]),
+  [data-tour="toolbar"]:not([data-mobile-rail]) button[aria-pressed] {
     width: 46px;
     height: 46px;
+  }
+
+  /* The tools drawer carries WORDS on touch, so it is as wide as the panels
+     drawer rather than a 76px rail. 29 unlabelled icons in that column was 2.9
+     screens of scrolling, named only by a keyboard shortcut the device has no
+     way to press. */
+  [data-tour="toolbar"][data-mobile-rail] {
+    width: calc(min(320px, 86vw) + var(--safe-l));
+    padding-left: var(--safe-l);
+
+    /* The rail centres its 46px buttons, which makes every child shrink to its
+       own content — and a grid that has shrunk to one column's width lays out
+       in ONE column however many it was asked for. Measured: 29 cells still
+       stacked to 1495px of scroll until this was stretched. */
+    align-items: stretch;
+
+    /* The rail packed its groups with separators; the sheet is two labelled
+       sections and needs ordinary padding instead. */
+    [class*="tools"] {
+      align-items: stretch;
+      padding: var(--sp-2) var(--sp-2) var(--sp-3);
+      gap: 0;
+    }
+
+    /* The colour stack keeps its own centring. */
+    [class*="colors"] {
+      justify-content: center;
+    }
   }
 
   /* ---- 44px minimum for everything pressable ----

@@ -118,6 +118,32 @@ export const TOOL_GROUPS: Tool[][] = [
 
 export const ALL_TOOLS: Tool[] = TOOL_GROUPS.flat();
 
+/**
+ * The handful of tools a touch layout puts up front.
+ *
+ * On a phone the rail is a drawer, and 29 icons in a 76px column is 2.9 screens
+ * of scrolling with nothing but a keyboard shortcut to name them — a shortcut
+ * being exactly what a phone has no way to press. The drawer shows these six
+ * first and the rest in a labelled grid below.
+ *
+ * Six, and these six, because they are the ones a photograph needs: get it
+ * straight (move, crop), choose part of it (marquee), paint on it (brush,
+ * eraser) and fix a blemish (spot heal). Everything else is a specialism.
+ */
+export const PRIMARY_TOOL_IDS: ToolId[] = ["move", "select", "crop", "brush", "eraser", "heal"];
+
+/** Those six, in that order. */
+export const PRIMARY_TOOLS: Tool[] = PRIMARY_TOOL_IDS.map(
+  (id) => ALL_TOOLS.find((t) => t.id === id)!,
+).filter(Boolean);
+
+/** Everything else, in rail order — so the grid reads like the rail did.
+ *  Derived rather than listed, which is what keeps the two lists a partition:
+ *  a tool added to TOOL_GROUPS lands here automatically instead of vanishing. */
+export const OVERFLOW_TOOLS: Tool[] = ALL_TOOLS.filter(
+  (t) => !PRIMARY_TOOL_IDS.includes(t.id),
+);
+
 export const DEFAULT_TOOL: ToolId = "brush";
 
 /** Move tool sub-mode: move the marquee outline only, or the actual pixels. */

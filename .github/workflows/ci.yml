@@ -224,6 +224,10 @@ jobs:
         run: npm run test:recents -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
+      - name: The tools drawer is a labelled sheet on touch
+        run: npm run test:toolsheet -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
 
       - name: Dev server log
         if: failure()

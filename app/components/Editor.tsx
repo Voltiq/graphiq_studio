@@ -7343,6 +7343,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       />
       <div className={styles.body}>
         <Toolbar
+          mobile={mobile}
           tool={tool}
           onToolChange={(id) => {
             setTool(id);
