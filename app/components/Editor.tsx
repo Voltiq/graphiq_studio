@@ -220,6 +220,7 @@ import SaveAsDialog from "./SaveAsDialog";
 import RecentsDialog from "./RecentsDialog";
 import ExportDialog, { type BatchRun } from "./ExportDialog";
 import ImportDialog, { type ImportItem, type ImportMode, type ImportOptions } from "./ImportDialog";
+import StartCard from "./StartCard";
 import ColorDialog from "./ColorDialog";
 import ProfileCompareDialog from "./ProfileCompareDialog";
 import {
@@ -3931,6 +3932,20 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   });
   const autosaveDirtyRef = useRef(false); // history moved since the last write
   const [restoreSnap, setRestoreSnap] = useState<AutosaveSnapshot | null>(null);
+
+  /* ---- The phone's start card -------------------------------------------
+     Shown over an UNTOUCHED document only: one document, no layers, and no
+     history past its base. That predicate is the whole safety story — the card
+     is a launch state, not a modal, and appearing over someone's work would
+     make it a nuisance rather than a shortcut.
+
+     Dismissal lasts the session rather than being persisted. Reloading onto a
+     blank artboard is exactly the state the card is for, so remembering the
+     dismissal for ever would be answering a question the user was not asked. */
+  const [startDismissed, setStartDismissed] = useState(false);
+  const [startSnap, setStartSnap] = useState<AutosaveSnapshot | null>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   // Per-document `.gproj` JSON, so a snapshot covers EVERY open tab, not just
   // the active one. A document is (re)serialized when it's active (each tick)
   // and when you switch away from it — it can't change while inactive — and is
@@ -4013,6 +4028,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       window.removeEventListener("popstate", onPop);
       window.removeEventListener("beforeunload", onBeforeUnload);
     };
+  }, []);
+
+  /* Whether there is anything to continue FROM. Read once on mount, and only
+     to label a button — the restore itself goes through the same
+     `restoreSnapshot` the crash path uses. */
+  useEffect(() => {
+    void readAutosave().then((snap) => snap?.docs?.length && setStartSnap(snap));
   }, []);
 
   // Heartbeat: detect an unclean exit and offer the last snapshot for restore.
@@ -5087,6 +5109,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     );
   };
 
+  /** A photo picked from the start card: it becomes the document, no dialog. */
+  const onStartPhotoPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!picked.length) return;
+    setStartDismissed(true);
+    await importFiles(picked, "canvas");
+  };
+
   const onImportPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const allFiles = Array.from(e.target.files ?? []);
     e.target.value = "";
@@ -5100,7 +5131,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
    * PSD has to open as a layered document just as a picked one does, and that
    * only stays true if there is one path.
    */
-  const importFiles = async (allFiles: File[]) => {
+  const importFiles = async (allFiles: File[], direct?: ImportMode) => {
     if (!allFiles.length) return;
     // PSDs and animations open as their own layered documents; everything else
     // flows through the import dialog.
@@ -5173,6 +5204,17 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       );
     }
     if (!items.length) return;
+    /* `direct` skips the import dialog and takes the choice the caller already
+       made. The phone's start card is the one caller: "open a photo" has
+       exactly one sensible outcome — the photo becomes the document — and
+       asking about anchors and oversize handling first would be a dialog
+       between the user and the thing they came to do. Everything upstream of
+       here is shared, so a PSD picked from the start card still opens as a
+       layered document, and an animation still opens as frames. */
+    if (direct) {
+      await applyImport(direct, { anchor: 4, expand: true, profileMode: "convert" }, items);
+      return;
+    }
     setImportItems(items);
   };
 
@@ -5732,8 +5774,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     );
   };
 
-  const applyImport = async (mode: ImportMode, opts: ImportOptions) => {
-    let items = importItems;
+  /** `from` supplies the items directly. The dialog path leaves it out and the
+   *  items come from state, as they always did; the start card cannot, because
+   *  it never opened a dialog — and setting the state first would not help, a
+   *  state update is not visible to the call that scheduled it. That is exactly
+   *  how the direct route failed silently the first time: no items, no error,
+   *  no document. */
+  const applyImport = async (mode: ImportMode, opts: ImportOptions, from?: ImportItem[]) => {
+    let items = from ?? importItems;
     setImportItems(null);
     if (!items?.length) return;
     if (opts.profileMode === "assign") {
@@ -7547,6 +7595,33 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       {/* -------- Mobile shell: bottom bar, drawer scrim, edge-swipe strips ---- */}
       {mobile && (
         <>
+          {/* The launch state. `docs.length === 1 && !docs[0].layers.length`
+              is "nothing has been made yet"; the history check catches an edit
+              that left no layer behind (a canvas resize, say). */}
+          {!startDismissed &&
+            !restoreSnap &&
+            docs.length === 1 &&
+            !active?.layers.length &&
+            history.index <= (active?.historyBase ?? 0) && (
+              <StartCard
+                onOpen={() => photoInputRef.current?.click()}
+                onCapture={() => cameraInputRef.current?.click()}
+                onContinue={
+                  startSnap
+                    ? () => {
+                        restoreSnapshot(startSnap);
+                        setStartDismissed(true);
+                      }
+                    : undefined
+                }
+                continueLabel={
+                  startSnap
+                    ? startSnap.docs.map((d) => d.name).join(", ").slice(0, 60)
+                    : undefined
+                }
+                onDismiss={() => setStartDismissed(true)}
+              />
+            )}
           {/* Finish or throw away whatever is in progress. Enter and Escape are
               load-bearing for a pen path, a crop, a transform and a text
               session, and a phone has neither key — so these send exactly those
@@ -8096,6 +8171,28 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         hidden
       />
       <input ref={cubeInputRef} type="file" accept=".cube" onChange={onCubePicked} hidden />
+
+      {/* The start card's two pickers. Separate inputs rather than one with a
+          toggle: `capture` is an ATTRIBUTE, and it is what makes the OS open
+          the camera instead of the photo library. Both go straight to a
+          document — see the `direct` argument to importFiles. */}
+      <input
+        ref={photoInputRef}
+        type="file"
+        accept="image/*"
+        data-start-input="open"
+        onChange={onStartPhotoPicked}
+        hidden
+      />
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        data-start-input="camera"
+        onChange={onStartPhotoPicked}
+        hidden
+      />
 
       <TooltipHost />
     </div>

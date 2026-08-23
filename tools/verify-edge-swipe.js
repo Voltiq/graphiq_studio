@@ -14,7 +14,7 @@
  *
  * Run: node tools/verify-edge-swipe.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg } = require("./lib/launch");
+const { dismissStartCard, launchBrowser, urlArg } = require("./lib/launch");
 
 (async () => {
   const browser = await launchBrowser();
@@ -40,6 +40,10 @@ const { launchBrowser, urlArg } = require("./lib/launch");
   }
   await page.addStyleTag({ content: "nextjs-portal{display:none!important}" }).catch(() => {});
   await page.waitForTimeout(800);
+  /* A fresh phone opens on the launch card, which covers the canvas area — so
+     every hit test below would land on it rather than on the strips or the
+     artwork. A user starts blank; so does this. */
+  await dismissStartCard(page);
 
   const Y = 500;
   const whatIsAt = (x, y) =>

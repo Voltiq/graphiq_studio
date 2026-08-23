@@ -29,7 +29,7 @@
  *
  * Run: node tools/verify-grab-radius.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg } = require("./lib/launch");
+const { dismissStartCard, launchBrowser, urlArg } = require("./lib/launch");
 
 /** How far off each attempt lands — outside the mouse's 9px, inside a finger's. */
 const OFFSET = 14;
@@ -95,6 +95,7 @@ const DIRS = {
   }
   await page.addStyleTag({ content: "nextjs-portal{display:none!important}" }).catch(() => {});
   await page.waitForTimeout(800);
+  await dismissStartCard(page); // a fresh phone opens on the launch card
   const cdp = await context.newCDPSession(page);
 
   const touch = (type, points) =>

@@ -14,7 +14,7 @@
  *
  * Run: node tools/verify-modifiers.js [--url ...] [--channel ...]
  */
-const { launchBrowser, urlArg } = require("./lib/launch");
+const { dismissStartCard, launchBrowser, urlArg } = require("./lib/launch");
 
 (async () => {
   const browser = await launchBrowser();
@@ -41,6 +41,9 @@ const { launchBrowser, urlArg } = require("./lib/launch");
     }
     await page.addStyleTag({ content: "nextjs-portal{display:none!important}" }).catch(() => {});
     await page.waitForTimeout(800);
+    // A fresh phone opens on the launch card, which covers the canvas this
+    // harness taps. A user chooses to start blank; so does this.
+    await dismissStartCard(page);
     return { context, page };
   };
 

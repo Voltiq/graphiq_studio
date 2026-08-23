@@ -43,4 +43,24 @@ function launchBrowser(opts = {}) {
   return chromium.launch({ ...base, ...opts });
 }
 
-module.exports = { launchBrowser, channelArg, urlArg };
+/**
+ * Clear the phone's start card, if it is showing.
+ *
+ * A fresh mobile profile opens on the launch card rather than straight onto the
+ * artboard, and the card covers the canvas area — deliberately, since there is
+ * nothing underneath worth touching yet. Any harness that presses the canvas on
+ * a fresh load has to get past it exactly as a user does, by choosing to start
+ * blank. Harnesses that make a layer first (`Control+Shift+N`) never see it,
+ * which is why only some of them need this.
+ *
+ * A no-op on desktop, and on any state where the card is not showing.
+ */
+async function dismissStartCard(page) {
+  const blank = page.locator('[data-start="blank"]');
+  if (!(await blank.count())) return false;
+  await blank.first().click();
+  await page.waitForTimeout(400);
+  return true;
+}
+
+module.exports = { launchBrowser, channelArg, urlArg, dismissStartCard };

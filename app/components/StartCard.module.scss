@@ -1,0 +1,114 @@
+/* The phone's launch card.
+   Sits over the canvas area, above the artwork and below every dialog, so the
+   menu sheet and the drawers still open on top of it if the user goes looking
+   for something else first. */
+.wrap {
+  /* Fixed to the chrome's own insets rather than absolute inside a parent: the
+     canvas region is assembled from several stacked elements and none of them
+     is a reliable offset parent, while --chrome-top/--chrome-bottom describe
+     exactly the area the artwork occupies. */
+  position: fixed;
+  top: var(--chrome-top);
+  right: 0;
+  bottom: var(--chrome-bottom);
+  left: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-4);
+  /* Not a scrim: the artwork behind stays legible, because the card is an
+     offer rather than a demand. */
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 100%;
+  max-width: 320px;
+  padding: var(--sp-4);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+}
+
+.title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.sub {
+  margin: 0 0 var(--sp-2);
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* Every row is a 48px target: this is the first thing a finger meets, and the
+   44px floor is a minimum rather than a goal. */
+%row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 48px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--r-md);
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+}
+
+.primary {
+  @extend %row;
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  font-weight: var(--weight-semibold);
+
+  &:active {
+    filter: brightness(0.94);
+  }
+}
+
+.action {
+  @extend %row;
+  color: var(--text);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+
+  &:active {
+    background: var(--wash);
+  }
+}
+
+.quiet {
+  @extend %row;
+  color: var(--text-2);
+  background: none;
+  border: 1px solid transparent;
+
+  &:active {
+    background: var(--wash);
+  }
+}
+
+/* The restore row carries a second line naming what would come back. */
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.meta {
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

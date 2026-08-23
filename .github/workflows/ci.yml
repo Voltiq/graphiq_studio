@@ -216,6 +216,10 @@ jobs:
         run: npm run test:hoveronly -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
+      - name: The phone opens on a photo-first start card
+        run: npm run test:startcard -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
 
       - name: Dev server log
         if: failure()
