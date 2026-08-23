@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -42,6 +42,7 @@
     "test:recents": "node tools/verify-recents.js",
     "test:toolsheet": "node tools/verify-tool-sheet.js",
     "test:optionsheet": "node tools/verify-options-sheet.js",
+    "test:dockreach": "node tools/verify-dock-reach.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
