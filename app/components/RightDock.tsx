@@ -472,6 +472,16 @@ export default function RightDock({
   onToast,
 }: Props) {
   const [order, setOrder] = useState<PanelId[]>(DEFAULT_ORDER);
+  /* Dev-only commit counter, in the same family as CanvasArea's __gq hooks.
+     The question it answers: does a closed panel drawer keep re-rendering
+     while a stroke is being painted? (Measured: twice across a thirty-step
+     stroke, against 52 with the sheet open — see tools/verify-stranded-panels.js.)
+     No dep array, so it ticks once per commit. */
+  useEffect(() => {
+    const w = window as unknown as { __gqPanelRenders?: number };
+    w.__gqPanelRenders = (w.__gqPanelRenders ?? 0) + 1;
+  });
+
   const [openMap, setOpenMap] = useState<Record<PanelId, boolean>>(DEFAULT_OPEN);
   /* ---- The phone's accordion --------------------------------------------
      On a desktop the dock is a tall column and five panels open at once is
@@ -515,7 +525,12 @@ export default function RightDock({
   /* Reading localStorage during render would produce one thing on the server
      (where there is none) and another on the client — a hydration mismatch. An
      effect after mount is the fix for that, not a symptom of one, so the
-     cascading-render rule is suppressed across this block deliberately. */
+     cascading-render rule is suppressed across this block deliberately.
+
+     (The suppression once reported itself as unused: a render-time mutation
+     further up made the react-hooks plugin bail out of analysing this
+     component, so the rule it silences never ran. Fixing that brought it
+     back.) */
   /* eslint-disable react-hooks/set-state-in-effect -- see above */
   useEffect(() => {
     setOrder(loadOrder());
@@ -1077,7 +1092,25 @@ export default function RightDock({
     }
   };
 
-  const rightIds = order.filter((id) => !left.includes(id) && !isFloating(id));
+  /* ---- On a phone there is ONE home for panels -------------------------
+     The desktop has three: a right dock, a left dock and free-floating
+     windows. The mobile shell shows only the first, which stranded anything
+     the user had arranged into the other two — a panel docked left or left
+     floating was rendered into a host the phone hides, so it existed and was
+     unreachable. Seeded and measured: 13 of 14 panels in the sheet, with the
+     14th nowhere a finger could go.
+
+     The left dock host is worse than absent, too: at 360px it still lays out
+     over the screen and swallows every press, so with a panel docked left even
+     the start card could not be dismissed.
+
+     So on touch the sheet holds `order` — all of them — and the two other
+     hosts are not portaled into at all (see the `!mobile` guards below). The
+     ids below stay plain derived values, unread on a phone; deciding it once,
+     at the portal, is what keeps the left host from laying itself over the
+     screen. The stored layout is untouched either way: plug the same profile
+     into a desktop and the left dock and the floats are where they were. */
+  const rightIds = mobile ? order : order.filter((id) => !left.includes(id) && !isFloating(id));
   const leftIds = order.filter((id) => left.includes(id) && !isFloating(id));
   const floatIds = order.filter((id) => isFloating(id));
 
@@ -1163,7 +1196,10 @@ export default function RightDock({
         {renderDock(rightIds)}
         {dropZone("right")}
       </aside>
-      {leftHost &&
+      {/* Not on touch: see `rightIds` above — the sheet already holds these,
+          and an empty left host still lays out at its full width. */}
+      {!mobile &&
+        leftHost &&
         createPortal(
           <>
             {renderDock(leftIds)}
@@ -1171,7 +1207,8 @@ export default function RightDock({
           </>,
           leftHost,
         )}
-      {floatHost &&
+      {!mobile &&
+        floatHost &&
         createPortal(
           floatIds.map((id) => {
             const node = panelFor(id);

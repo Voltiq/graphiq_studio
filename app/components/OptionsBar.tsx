@@ -1432,8 +1432,15 @@ export default function OptionsBar({
     if (!sheetOpen) return;
     return registerDismissible(() => setSheetOpen(false));
   }, [sheetOpen]);
-  // A different tool means different options; the sheet does not survive it.
-  useEffect(() => setSheetOpen(false), [tool]);
+  /* A different tool means different options; the sheet does not survive it.
+     Adjusted during render rather than in an effect, so the sheet is already
+     shut in the paint that shows the new tool — an effect would flash the old
+     tool's options inside it for a frame. */
+  const [sheetTool, setSheetTool] = useState(tool);
+  if (sheetTool !== tool) {
+    setSheetTool(tool);
+    setSheetOpen(false);
+  }
   useEffect(() => {
     if (!sheetOpen) return;
     const onKey = (e: KeyboardEvent) => {

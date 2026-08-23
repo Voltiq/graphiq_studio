@@ -4161,7 +4161,6 @@ export default function CanvasArea({
       placeGrabRef.current = null;
       ensureAnts();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, ensureAnts]);
   // Keep the latest values reachable from one-time listeners / stable callbacks.
   const zoomRef = useRef(zoom);

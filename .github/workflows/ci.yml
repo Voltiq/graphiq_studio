@@ -245,6 +245,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: No panel is stranded outside the phone's one dock
+        run: npm run test:stranded -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

@@ -768,8 +768,13 @@ html[data-mobile="true"] {
     min-height: 44px;
   }
 
-  /* Floating panels aren't draggable on touch — the single right drawer is the
-     one home for panels on mobile. */
+  /* Floating panels aren't draggable on touch — the bottom sheet is the one
+     home for panels on mobile, and RightDock puts every panel in it there
+     (see rightIds). Both of the other hosts are hidden.
+
+     The left dock is not merely redundant: at 360px it still laid out at its
+     full --dock-w width over the shell and swallowed every press, so with a
+     panel docked left even the start card could not be dismissed. */
   .gq-m-floathost-hidden {
     display: none;
   }

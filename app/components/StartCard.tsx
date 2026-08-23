@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { Camera, FileImage, RotateCcw, Square } from "lucide-react";
 import styles from "./StartCard.module.scss";
 import type { RecentImage } from "../lib/recents";
@@ -9,12 +9,10 @@ import type { RecentImage } from "../lib/recents";
  *  Without the cleanup every reopen of the card leaks one blob URL per row —
  *  small, but the card is the first thing a phone renders and it renders often. */
 function useThumbUrls(recents: RecentImage[]): string[] {
-  const [urls, setUrls] = useState<string[]>([]);
-  useEffect(() => {
-    const made = recents.map((r) => URL.createObjectURL(r.thumb));
-    setUrls(made);
-    return () => made.forEach((u) => URL.revokeObjectURL(u));
-  }, [recents]);
+  /* Derived, not stored: making the URLs in an effect meant a first paint with
+     no thumbnails and a second render to fill them in. */
+  const urls = useMemo(() => recents.map((r) => URL.createObjectURL(r.thumb)), [recents]);
+  useEffect(() => () => urls.forEach((u) => URL.revokeObjectURL(u)), [urls]);
   return urls;
 }
 
