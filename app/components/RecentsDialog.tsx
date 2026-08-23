@@ -25,7 +25,9 @@ export default function RecentsDialog({
   const [items, setItems] = useState<RecentMeta[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  const refresh = () => listRecents().then(setItems);
+  /* Projects only: this dialog opens `.gproj` TEXT, and the store now also
+     remembers pictures for the phone's start card. */
+  const refresh = () => listRecents("project").then(setItems);
   useEffect(() => {
     refresh();
   }, []);

@@ -112,3 +112,58 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ---- Recent pictures ------------------------------------------------------
+   A short list between the pickers and the way out: it is the fastest route
+   back into something you were already working on, but only if you have been
+   here before, so it is absent on a first run rather than empty. */
+.recents {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--sp-2);
+  /* Capped and scrollable: eight rows plus the buttons above them would push
+     the card past a short phone in landscape. */
+  max-height: 42vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.groupLabel {
+  padding: 0 var(--sp-3) var(--sp-1);
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.recent {
+  @extend %row;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2);
+  color: var(--text);
+  background: none;
+  border: 1px solid transparent;
+
+  &:active {
+    background: var(--wash);
+  }
+}
+
+.thumb {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-sm);
+  object-fit: cover;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+}
+
+.recentName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}

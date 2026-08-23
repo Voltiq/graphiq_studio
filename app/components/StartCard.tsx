@@ -1,7 +1,22 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Camera, FileImage, RotateCcw, Square } from "lucide-react";
 import styles from "./StartCard.module.scss";
+import type { RecentImage } from "../lib/recents";
+
+/** Object URLs for the stored thumbnails, revoked when the card goes away.
+ *  Without the cleanup every reopen of the card leaks one blob URL per row —
+ *  small, but the card is the first thing a phone renders and it renders often. */
+function useThumbUrls(recents: RecentImage[]): string[] {
+  const [urls, setUrls] = useState<string[]>([]);
+  useEffect(() => {
+    const made = recents.map((r) => URL.createObjectURL(r.thumb));
+    setUrls(made);
+    return () => made.forEach((u) => URL.revokeObjectURL(u));
+  }, [recents]);
+  return urls;
+}
 
 /**
  * The phone's launch state.
@@ -24,6 +39,8 @@ export default function StartCard({
   onCapture,
   onContinue,
   continueLabel,
+  recents = [],
+  onOpenRecent,
   onDismiss,
 }: {
   /** The photo-library picker fired. */
@@ -33,8 +50,12 @@ export default function StartCard({
   /** Restore the last session's autosave; absent when there is nothing to restore. */
   onContinue?: () => void;
   continueLabel?: string;
+  /** Pictures opened before, newest first. */
+  recents?: RecentImage[];
+  onOpenRecent?: (entry: RecentImage) => void;
   onDismiss: () => void;
 }) {
+  const thumbs = useThumbUrls(recents);
   return (
     <div className={styles.wrap} data-startcard role="region" aria-label="Start">
       <div className={styles.card}>
@@ -49,6 +70,29 @@ export default function StartCard({
           <Camera size={18} />
           Take photo
         </button>
+        {recents.length > 0 && onOpenRecent && (
+          <div className={styles.recents} data-recents>
+            <span className={styles.groupLabel}>Recent</span>
+            {recents.map((r, i) => (
+              <button
+                type="button"
+                key={r.id}
+                className={styles.recent}
+                data-recent={r.name}
+                onClick={() => onOpenRecent(r)}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img className={styles.thumb} src={thumbs[i]} alt="" data-recent-thumb width={40} height={40} />
+                <span className={styles.stack}>
+                  <span className={styles.recentName}>{r.name}</span>
+                  <span className={styles.meta}>
+                    {r.width} × {r.height}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
         {onContinue && (
           <button type="button" className={styles.action} onClick={onContinue} data-start="continue">
             <RotateCcw size={18} />

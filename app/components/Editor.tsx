@@ -221,6 +221,7 @@ import RecentsDialog from "./RecentsDialog";
 import ExportDialog, { type BatchRun } from "./ExportDialog";
 import ImportDialog, { type ImportItem, type ImportMode, type ImportOptions } from "./ImportDialog";
 import StartCard from "./StartCard";
+
 import ColorDialog from "./ColorDialog";
 import ProfileCompareDialog from "./ProfileCompareDialog";
 import {
@@ -258,7 +259,14 @@ import { buildZip, type ZipEntry } from "../lib/zip";
 import { dedupeFilenames, targetFilename } from "../lib/exportpresets";
 import { exportSVG, looksLikeSVG, parseSVGFile, translateVectorPath } from "../lib/svg";
 import { buildPSD, parsePSD, type PsdDocument, type PsdImage, type PsdNode, type PsdOutNode } from "../lib/psd";
-import { addRecent, setRecentsLimit } from "../lib/recents";
+import {
+  addRecent,
+  listRecentImages,
+  makeThumb,
+  readRecentFile,
+  setRecentsLimit,
+  type RecentImage,
+} from "../lib/recents";
 import {
   actionLabel,
   freshActionId,
@@ -3944,6 +3952,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
      dismissal for ever would be answering a question the user was not asked. */
   const [startDismissed, setStartDismissed] = useState(false);
   const [startSnap, setStartSnap] = useState<AutosaveSnapshot | null>(null);
+  const [recents, setRecents] = useState<RecentImage[]>([]);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   // Per-document `.gproj` JSON, so a snapshot covers EVERY open tab, not just
@@ -4035,6 +4044,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
      `restoreSnapshot` the crash path uses. */
   useEffect(() => {
     void readAutosave().then((snap) => snap?.docs?.length && setStartSnap(snap));
+    void listRecentImages().then(setRecents);
   }, []);
 
   // Heartbeat: detect an unclean exit and offer the last snapshot for restore.
@@ -5109,6 +5119,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     );
   };
 
+  /** A remembered picture, opened again from its stored bytes. */
+  const openRecent = async (entry: RecentImage) => {
+    setStartDismissed(true);
+    const file = await readRecentFile(entry.id);
+    /* The bytes can be gone — storage cleared, or an entry written by a build
+       that stored something else. Falling back to the picker beats a card that
+       does nothing when tapped. */
+    if (!file) {
+      setRecents(await listRecentImages());
+      photoInputRef.current?.click();
+      return;
+    }
+    await importFiles([file], "canvas");
+  };
+
   /** A photo picked from the start card: it becomes the document, no dialog. */
   const onStartPhotoPicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(e.target.files ?? []);
@@ -5431,7 +5456,35 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   // Import each image as its own new canvas/tab.
+  /* Remembered when a picture opens as its own document — which is what the
+     start card's Open/Take photo do, and what "New canvas" does from the import
+     dialog. Placing an image as a LAYER is not remembered: that is editing the
+     document you already had, not opening a picture.
+
+     Fire-and-forget on purpose. The open has already succeeded by the time this
+     runs, and a full disk must not turn "your photo is open" into an error. */
+  const rememberRecent = (items: ImportItem[]) => {
+    void (async () => {
+      for (const it of items) {
+        if (!it.file || !it.bitmap) continue;
+        const thumb = await makeThumb(it.bitmap);
+        if (!thumb) continue;
+        await addRecent(it.name, {
+          image: {
+            file: it.file,
+            thumb,
+            width: it.bitmap.width,
+            height: it.bitmap.height,
+            type: it.file.type || "image/*",
+          },
+        });
+      }
+      setRecents(await listRecentImages());
+    })();
+  };
+
   const importAsCanvases = (items: ImportItem[]) => {
+    rememberRecent(items);
     const entries: PendingLoad[] = [];
     let firstId: string | null = null;
     const docs: Doc[] = items.map((it) => {
@@ -7619,6 +7672,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
                     ? startSnap.docs.map((d) => d.name).join(", ").slice(0, 60)
                     : undefined
                 }
+                recents={recents}
+                onOpenRecent={openRecent}
                 onDismiss={() => setStartDismissed(true)}
               />
             )}
