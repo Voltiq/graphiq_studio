@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -37,6 +37,7 @@
     "test:loupe": "node tools/verify-loupe.js",
     "test:twostage": "node tools/verify-two-stage.js",
     "test:clonesrc": "node tools/verify-clone-source.js",
+    "test:hoveronly": "node tools/verify-hover-affordances.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

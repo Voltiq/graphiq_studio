@@ -388,3 +388,23 @@
     border-color: var(--accent);
   }
 }
+
+/* ---- Reveal-on-hover, on a device that cannot hover ------------------------
+   The delete button on each gradient preset is invisible until its row is hovered, which is a
+   reasonable way to keep a dense list readable — and completely unreachable
+   with a finger. There is no gesture that hovers, so on a touch device the
+   button simply does not exist.
+
+   Gated on `hover: none` rather than the mobile shell's `data-mobile`: the
+   condition that matters is whether this device can hover at all, not how wide
+   its screen is. A tablet gets the DESKTOP shell today and still cannot hover,
+   so `data-mobile` would have left it exactly as broken.
+
+   The density the hover-reveal was protecting is a real cost, and it is paid
+   here: a touch user sees every delete button at once. An invisible control is
+   worse than a crowded one. */
+@media (hover: none) {
+  .presetDel {
+    opacity: 1;
+  }
+}

@@ -114,6 +114,86 @@ export default function TooltipHost() {
     };
   }, []);
 
+  /* Touch: a long press stands in for a hover.
+     ------------------------------------------------------------------------
+     The hover path above returns immediately for `pointerType === "touch"`,
+     which is correct — a finger has no hover to track — but it left every
+     icon-only control on a phone with no label at all. The MutationObserver
+     mirrors `title` to `aria-label`, so a screen reader is fine; a person
+     looking at the screen is not.
+
+     Holding still on a control for half a second shows its tip, and the tap
+     that would otherwise follow is SWALLOWED: a deliberate "what is this?"
+     gesture should not also press the button it is asking about. That one
+     suppressed click is the reason this needs a capture-phase listener rather
+     than being purely decorative.
+
+     It stands down for anything that is already a drag: past the slop, or on a
+     row the Layers panel has picked up (its own long press lifts at 350ms, and
+     a tip appearing over a row in flight would be noise on top of a gesture
+     the user is mid-way through). */
+  useEffect(() => {
+    const HOLD = 500; // long enough not to fire on a tap, short enough to find
+    const SLOP = 10; // past this the press is a drag, not a question
+    const LINGER = 2600; // a tip with no pointer-out to end it needs an ending
+    let timer = 0;
+    let hideTimer = 0;
+    let start: { x: number; y: number } | null = null;
+    let swallowClick = false;
+
+    const stop = () => {
+      window.clearTimeout(timer);
+      timer = 0;
+      start = null;
+    };
+    const onDown = (e: PointerEvent) => {
+      swallowClick = false;
+      if (e.pointerType !== "touch") return;
+      const t = (e.target as HTMLElement | null)?.closest?.(`[${TIP_ATTR}]`) ?? null;
+      const text = t?.getAttribute(TIP_ATTR);
+      if (!t || !text) return;
+      start = { x: e.clientX, y: e.clientY };
+      timer = window.setTimeout(() => {
+        timer = 0;
+        if (!t.isConnected) return;
+        if (t.closest('[data-dragging="true"]')) return; // a row already in flight
+        const r = t.getBoundingClientRect();
+        swallowClick = true;
+        setAnchor({ text, cx: r.left + r.width / 2, top: r.top, bottom: r.bottom });
+        window.clearTimeout(hideTimer);
+        hideTimer = window.setTimeout(() => setAnchor(null), LINGER);
+      }, HOLD);
+    };
+    const onMove = (e: PointerEvent) => {
+      if (!start || e.pointerType !== "touch") return;
+      if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > SLOP) stop();
+    };
+    const onUp = () => stop();
+    /* Capture phase, so the control never sees the click the long press ended
+       with. Fires once: the flag is cleared on the next press either way. */
+    const onClick = (e: MouseEvent) => {
+      if (!swallowClick) return;
+      swallowClick = false;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("pointercancel", onUp, true);
+    window.addEventListener("click", onClick, true);
+    return () => {
+      stop();
+      window.clearTimeout(hideTimer);
+      window.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("pointermove", onMove, true);
+      window.removeEventListener("pointerup", onUp, true);
+      window.removeEventListener("pointercancel", onUp, true);
+      window.removeEventListener("click", onClick, true);
+    };
+  }, []);
+
   // Drop the measured position the moment the anchor goes away, DURING render:
   // keeping it would flash the next tip at the previous one's coordinates for a
   // frame. The MEASUREMENT below cannot move out of an effect — it reads
