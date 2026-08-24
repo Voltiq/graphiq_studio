@@ -32,3 +32,31 @@
  *  result. */
 export const MOBILE_QUERY =
   "(pointer: coarse) and (hover: none) and ((max-width: 600px) or (max-height: 500px))";
+
+/** The DEVICE, with nothing said about the screen: a finger, and nothing to
+ *  hover. This is the right gate for how big a control has to be, which is a
+ *  question about the pointer and not about the layout — a tablet's buttons
+ *  need the same 44px a phone's do, while its shell looks nothing like one.
+ *
+ *  Splitting the two apart is what this tier is: `data-touch` sizes things,
+ *  `data-mobile` and `data-tablet` lay them out. Before it, the 44px floor and
+ *  the slider padding lived inside the phone's block, so a tablet — entirely
+ *  touch-driven — got mouse-sized controls: a sweep at 768×1024 found **23
+ *  distinct kinds under 44px**, down to a 15×15 swap arrow. */
+export const TOUCH_QUERY = "(pointer: coarse) and (hover: none)";
+
+/** A touch device that is not a phone.
+ *
+ *  Deliberately the exact complement of `MOBILE_QUERY` within `TOUCH_QUERY`, so
+ *  every coarse, hoverless device lands in exactly one of the two and none in
+ *  both: the phone query claims anything with a short side, this claims the
+ *  rest. There is no upper bound, because there is no width at which a tablet
+ *  stops being driven by a finger — a 1366px iPad in landscape still needs
+ *  44px buttons, and giving it the mouse shell because it is wide would repeat
+ *  the mistake this tier exists to fix.
+ *
+ *  What it changes, measured at 768×1024 before: a 48px rail and a 320px dock
+ *  both in flow left **378px of canvas out of 768**, and an iPad mini fared
+ *  worse at **354 of 744**. */
+export const TABLET_QUERY =
+  "(pointer: coarse) and (hover: none) and (min-width: 601px) and (min-height: 501px)";

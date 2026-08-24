@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { MOBILE_QUERY } from "./lib/breakpoint";
+import { MOBILE_QUERY, TABLET_QUERY, TOUCH_QUERY } from "./lib/breakpoint";
 import localFont from "next/font/local";
 import { getServerAccent, getServerTheme, getServerUiScale } from "./lib/theme.server";
 import "./globals.scss";
@@ -100,17 +100,27 @@ export default async function RootLayout({
         <script
           dangerouslySetInnerHTML={{
             __html:
-              `(function(){try{var m=matchMedia(${JSON.stringify(MOBILE_QUERY)}).matches;` +
-              `if(m)document.documentElement.dataset.mobile="true";` +
-              /* Rulers default off on a phone, and that has to be settled here
+              `(function(){try{var d=document.documentElement;` +
+              `var m=matchMedia(${JSON.stringify(MOBILE_QUERY)}).matches;` +
+              `if(m)d.dataset.mobile="true";` +
+              /* Three attributes, two questions. `data-touch` is the DEVICE and
+                 sizes the controls; `data-mobile` / `data-tablet` are the
+                 SCREEN and lay them out. Keeping them apart is the whole tier:
+                 the 44px floor used to live inside the phone's block, so a
+                 tablet — a finger with no hover, exactly like a phone — got
+                 mouse-sized controls, 23 kinds of them under 44px. */
+              `if(matchMedia(${JSON.stringify(TOUCH_QUERY)}).matches)d.dataset.touch="true";` +
+              `if(matchMedia(${JSON.stringify(TABLET_QUERY)}).matches)d.dataset.tablet="true";` +
+              /* Rulers default off on any TOUCH device, and that has to be settled here
                  rather than in an effect. Flipping it after mount resized the
                  stage AFTER the one cold-load fit had already run against the
                  taller box, leaving the artwork 22px — one ruler — off centre.
                  A stored choice is read from the same key the editor uses, so
                  the pre-paint answer and the React answer agree. The editor
                  drops this attribute once its own state owns the decision. */
-              `if(m){var r=null;try{r=JSON.parse(localStorage.getItem("pe-view")||"{}").rulers}catch(e2){}` +
-              `if(typeof r!=="boolean")document.documentElement.dataset.rulersDefault="off"}` +
+              `if(matchMedia(${JSON.stringify(TOUCH_QUERY)}).matches){var r=null;` +
+              `try{r=JSON.parse(localStorage.getItem("pe-view")||"{}").rulers}catch(e2){}` +
+              `if(typeof r!=="boolean")d.dataset.rulersDefault="off"}` +
               `}catch(e){}})()`,
           }}
         />

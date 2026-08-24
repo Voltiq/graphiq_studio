@@ -209,7 +209,7 @@ import MobileBar, { type MobileDrawer } from "./MobileBar";
 import { useVisualViewport } from "../lib/useVisualViewport";
 import { encodePngOffThread } from "../lib/png-offthread";
 import { useGestureGuard } from "../lib/useGestureGuard";
-import { MOBILE_QUERY, useIsMobile } from "../lib/useMediaQuery";
+import { TOUCH_QUERY, useIsMobile, useIsTablet, useMediaQuery } from "../lib/useMediaQuery";
 import TrimDialog, { type TrimMode, type TrimSides } from "./TrimDialog";
 import SelectModifyDialog from "./SelectModifyDialog";
 import LayerStyleDialog from "./LayerStyleDialog";
@@ -483,6 +483,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [tool, setTool] = useState<ToolId>(DEFAULT_TOOL);
   // --- Mobile shell: the Toolbar and panels dock become swipe-in drawers ----
   const mobile = useIsMobile();
+  /* A touch device that is not a phone. Mutually exclusive with `mobile` by
+     construction — see TABLET_QUERY, which is the exact complement. */
+  const tablet = useIsTablet();
   // Publishes --kb-inset / --vv-h for every overlay; see useVisualViewport.
   useVisualViewport();
   /* Latched Shift/Alt/Ctrl reach the canvas's existing modifier tests; see
@@ -511,24 +514,51 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       delete el.dataset.mobile;
     };
   }, [mobile]);
+  /* The tablet shell, and the touch flag that both shells share. Written the
+     same way and for the same reason: hashed module classes cannot be reached
+     from globals.scss, so the root attribute is the one source of truth. The
+     inline script in layout.tsx sets all three before the first paint; these
+     effects keep them right when the window is resized or a device changes
+     mode mid-session. */
   useEffect(() => {
     const el = document.documentElement;
-    if (mobile && mobileDrawer) el.dataset.drawer = mobileDrawer;
+    if (tablet) el.dataset.tablet = "true";
+    else delete el.dataset.tablet;
+    return () => {
+      delete el.dataset.tablet;
+    };
+  }, [tablet]);
+  const touch = useMediaQuery(TOUCH_QUERY);
+  useEffect(() => {
+    const el = document.documentElement;
+    if (touch) el.dataset.touch = "true";
+    else delete el.dataset.touch;
+    return () => {
+      delete el.dataset.touch;
+    };
+  }, [touch]);
+  /* Both touch shells use `data-drawer`, and they use it for different things:
+     the phone opens either drawer, the tablet only ever opens "panels" (its
+     rail is persistent, which is the difference between the two tiers). */
+  const drawerShell = mobile || tablet;
+  useEffect(() => {
+    const el = document.documentElement;
+    if (drawerShell && mobileDrawer) el.dataset.drawer = mobileDrawer;
     else delete el.dataset.drawer;
     /* The panels sheet's height. Written on the root next to `data-drawer`, so
        the CSS that sizes the sheet needs no class name and no prop drilling. */
     if (mobile && mobileDrawer === "panels") el.dataset.sheet = sheetDetent;
     else delete el.dataset.sheet;
-  }, [mobile, mobileDrawer, sheetDetent]);
+  }, [drawerShell, mobile, mobileDrawer, sheetDetent]);
   // An open drawer absorbs the back gesture rather than letting it leave.
   useEffect(() => {
     if (!mobileDrawer) return;
     return registerDismissible(() => setMobileDrawer(null));
   }, [mobileDrawer]);
-  // Leaving mobile (rotate to landscape / resize up) closes any open drawer.
+  // Leaving the touch shells (resize up to a desktop) closes any open drawer.
   useEffect(() => {
-    if (!mobile) setMobileDrawer(null);
-  }, [mobile]);
+    if (!drawerShell) setMobileDrawer(null);
+  }, [drawerShell]);
   const toggleMobileDrawer = (d: "tools" | "panels") =>
     setMobileDrawer((cur) => (cur === d ? null : d));
   /* While a pointer is down on the canvas, mark it on <html> so the edge strips
@@ -6076,9 +6106,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   useEffect(() => {
     try {
       const v = JSON.parse(localStorage.getItem("pe-view") || "{}");
-      /* Rulers default OFF on a phone and ON everywhere else. A DEFAULT, not
-         an override: a stored boolean wins either way, so View ▸ Rulers sticks
-         once it is used.
+      /* Rulers default OFF on any TOUCH device and ON everywhere else. A
+         DEFAULT, not an override: a stored boolean wins either way, so View ▸
+         Rulers sticks once it is used.
+
+         Gated on the DEVICE rather than on the phone shell, because the reason
+         is about the pointer: a ruler is for measuring against something you
+         can place precisely, which a fingertip is not, and that is as true of a
+         tablet as of a phone. It is also what takes a 768px tablet's canvas
+         from 690px to 712 — the vertical ruler was the last 22px between the
+         stage and the whole width.
 
          The same decision is made before the first paint by the inline script
          in layout.tsx — it has to be, because the stage's size comes from a
@@ -6086,7 +6123,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
          into React state and then drops the bridging attribute, so from here on
          `data-rulers` is the only thing deciding. */
       if (typeof v.rulers === "boolean") setShowRulers(v.rulers);
-      else if (window.matchMedia(MOBILE_QUERY).matches) setShowRulers(false);
+      else if (window.matchMedia(TOUCH_QUERY).matches) setShowRulers(false);
       delete document.documentElement.dataset.rulersDefault;
       if (typeof v.grid === "boolean") setShowGrid(v.grid);
       if (typeof v.snap === "boolean") setSnap(v.snap);
@@ -7213,11 +7250,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   return (
-    <div className={styles.app}>
+    <div className={styles.app} data-app>
       {/* Focus management for every modal dialog (see DialogFocus). */}
       <DialogFocus />
       <TopBar
         mobile={mobile}
+        tablet={tablet}
+        panelsOpen={tablet && mobileDrawer === "panels"}
+        onTogglePanels={() => toggleMobileDrawer("panels")}
         onMenuAction={handleMenuAction}
         onSelectTool={setTool}
         shortcutLabels={shortcutLabels}
@@ -7567,6 +7607,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         <div className={`${styles.floatHost} gq-m-floathost-hidden`} ref={setFloatHost} />
         <RightDock
           mobile={mobile}
+          tablet={tablet}
           detent={sheetDetent}
           onDetent={setSheetDetent}
           foreground={foreground}

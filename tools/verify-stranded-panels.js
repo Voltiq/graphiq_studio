@@ -174,22 +174,44 @@ const REPORT = () => {
 
   await round.page.setViewportSize({ width: 1400, height: 900 });
   await round.page.waitForTimeout(1400);
-  const deskState = await round.page.evaluate(() => {
+  const wide = await round.page.evaluate(() => {
+    const dock = document.querySelector('[data-tour="dock"]');
     const leftHost = document.querySelector('[aria-label="Left dock"]');
     const floatHost = document.querySelector('[class*="floatHost"]');
     return {
-      inLeft: [...(leftHost?.querySelectorAll("[data-panel-id]") ?? [])].map((e) =>
-        e.getAttribute("data-panel-id"),
-      ),
-      floating: [...(floatHost?.querySelectorAll("[data-panel-id]") ?? [])].map((e) =>
-        e.getAttribute("data-panel-id"),
-      ),
+      tier: document.documentElement.dataset.mobile
+        ? "phone"
+        : document.documentElement.dataset.tablet
+          ? "tablet"
+          : "desktop",
+      inDock: [...(dock?.querySelectorAll("[data-panel-id]") ?? [])].length,
+      everywhere: document.querySelectorAll("[data-panel-id]").length,
+      inLeft: [...(leftHost?.querySelectorAll("[data-panel-id]") ?? [])].length,
+      floating: [...(floatHost?.querySelectorAll("[data-panel-id]") ?? [])].length,
+      stored: (() => {
+        try {
+          return JSON.parse(window.localStorage.getItem("graphiq:panel-layout") ?? "null");
+        } catch {
+          return null;
+        }
+      })(),
     };
   });
-  check("…and the same page, widened, docks it on the left again",
-    deskState.inLeft.includes("layers"), `left dock holds: ${deskState.inLeft.join(", ") || "nothing"}`);
-  check("…and floats the floating one",
-    deskState.floating.includes("info"), `floating: ${deskState.floating.join(", ") || "nothing"}`);
+  /* Widening a TOUCH context does not produce a desktop — it produces a large
+     tablet, and the tablet tier folds panels into the one dock for the same
+     reason the phone does: both hosts are positioned by dragging. This check
+     used to assert the left dock and the float came back, which was true when
+     the only two tiers were phone and desktop and became wrong the moment a
+     third existed. What matters either way is that the phone did not REWRITE
+     anything, and the stored JSON above already says so. */
+  check("…and widening it gives the tablet shell, not the phone's",
+    wide.tier === "tablet", `1400×900 with touch is a ${wide.tier}`);
+  check("…which still holds every panel in the one dock",
+    wide.inDock === wide.everywhere && wide.inLeft === 0 && wide.floating === 0,
+    `${wide.inDock} of ${wide.everywhere} in the dock; left ${wide.inLeft}, floating ${wide.floating}`);
+  check("…with the stored arrangement still intact underneath it",
+    !!wide.stored && wide.stored.left?.includes("layers") && !!wide.stored.floats?.info,
+    `left: [${wide.stored?.left?.join(", ") ?? "?"}], floats: [${Object.keys(wide.stored?.floats ?? {}).join(", ") || "none"}]`);
   await round.context.close();
 
   // ------------------------------------- what a closed sheet costs a stroke --

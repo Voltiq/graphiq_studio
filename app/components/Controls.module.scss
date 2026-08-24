@@ -456,8 +456,12 @@
    in the Layers panel. One rule for all ~220 call sites is the point.
 
    Touch only, deliberately: the same padding on desktop would make every row
-   containing a slider 20px taller. A mouse can already hit 4px. */
-html[data-mobile="true"] input[type="range"] {
+   containing a slider 20px taller. A mouse can already hit 4px.
+
+   Gated on `data-touch` — the DEVICE — rather than on the phone shell. A
+   tablet is a finger too, and this rule sitting behind `data-mobile` was one
+   of the 23 control kinds a tablet got at mouse size. */
+html[data-touch="true"] input[type="range"] {
   box-sizing: content-box;
   /* 21, not 20: the padding is added to whatever the track already is, and the
      tracks are not all the same — a 3px one in the Layers panel came out at

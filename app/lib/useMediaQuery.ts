@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { MOBILE_QUERY } from "./breakpoint";
+import { MOBILE_QUERY, TABLET_QUERY } from "./breakpoint";
 
 /** Reactive `window.matchMedia` — re-renders when the query starts/stops
  *  matching. SSR-safe: returns `false` until mounted (desktop-first, so the
@@ -20,6 +20,9 @@ export function useMediaQuery(query: string): boolean {
 
 /** Re-exported so existing imports keep working; defined in ./breakpoint,
  *  which the root layout also reads. See the note there. */
-export { MOBILE_QUERY } from "./breakpoint";
+export { MOBILE_QUERY, TABLET_QUERY, TOUCH_QUERY } from "./breakpoint";
 
 export const useIsMobile = () => useMediaQuery(MOBILE_QUERY);
+
+/** A touch device that is not a phone. Mutually exclusive with `useIsMobile`. */
+export const useIsTablet = () => useMediaQuery(TABLET_QUERY);

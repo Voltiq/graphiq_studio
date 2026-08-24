@@ -366,6 +366,9 @@ interface Props {
   floatHost?: HTMLElement | null;
   /** Touch: the dock is a bottom sheet, and these drive its height. */
   mobile?: boolean;
+  /** A touch device that is not a phone: one home for panels, but no bottom
+   *  sheet and no accordion — a tablet has the height for several at once. */
+  tablet?: boolean;
   detent?: Detent;
   onDetent?: (d: Detent) => void;
   /** Imperative layout capture/apply for workspaces + Reset Workspace. */
@@ -405,6 +408,7 @@ const IconBtn = ({
 
 export default function RightDock({
   mobile = false,
+  tablet = false,
   detent,
   onDetent,
   foreground,
@@ -1110,7 +1114,12 @@ export default function RightDock({
      at the portal, is what keeps the left host from laying itself over the
      screen. The stored layout is untouched either way: plug the same profile
      into a desktop and the left dock and the floats are where they were. */
-  const rightIds = mobile ? order : order.filter((id) => !left.includes(id) && !isFloating(id));
+  /* Both touch shells fold every panel into one dock, for the same reason:
+     the left dock and the float host are positioned by DRAGGING, and a finger
+     is worst at exactly that. What differs is the dock — a bottom sheet on a
+     phone, a side drawer on a tablet — and that is CSS, not this. */
+  const oneHome = mobile || tablet;
+  const rightIds = oneHome ? order : order.filter((id) => !left.includes(id) && !isFloating(id));
   const leftIds = order.filter((id) => left.includes(id) && !isFloating(id));
   const floatIds = order.filter((id) => isFloating(id));
 
@@ -1196,9 +1205,9 @@ export default function RightDock({
         {renderDock(rightIds)}
         {dropZone("right")}
       </aside>
-      {/* Not on touch: see `rightIds` above — the sheet already holds these,
+      {/* Not on touch: see `rightIds` above — the one dock already holds these,
           and an empty left host still lays out at its full width. */}
-      {!mobile &&
+      {!oneHome &&
         leftHost &&
         createPortal(
           <>
@@ -1207,7 +1216,7 @@ export default function RightDock({
           </>,
           leftHost,
         )}
-      {!mobile &&
+      {!oneHome &&
         floatHost &&
         createPortal(
           floatIds.map((id) => {

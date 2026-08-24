@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Menu as MenuIcon, Redo2, Search, Undo2, X } from "lucide-react";
+import { Check, Menu as MenuIcon, PanelRight, Redo2, Search, Undo2, X } from "lucide-react";
 import styles from "./TopBar.module.scss";
 import { registerDismissible } from "../lib/dismiss";
 import logo from "../icon.png";
@@ -23,6 +23,9 @@ export default function TopBar({
   checks,
   shortcutLabels,
   mobile = false,
+  tablet = false,
+  panelsOpen = false,
+  onTogglePanels,
 }: {
   onMenuAction?: (action: string) => void;
   onSelectTool?: (id: ToolId) => void;
@@ -39,6 +42,12 @@ export default function TopBar({
   /** On mobile the inline menubar collapses behind a hamburger, the brand text
    *  and search hint hide, and the menus open as a full-height sheet. */
   mobile?: boolean;
+  /** A touch device that is not a phone: the panels dock is an overlay there,
+   *  so it needs something to open it — the phone has the MobileBar for that
+   *  and a desktop has the dock permanently in flow. */
+  tablet?: boolean;
+  panelsOpen?: boolean;
+  onTogglePanels?: () => void;
 }) {
   // The registry's effective label, falling back to the static default.
   const keyFor = (kind: "menu" | "tool", id: string, fallback?: string): string | undefined => {
@@ -46,6 +55,10 @@ export default function TopBar({
     if (v === undefined) return fallback;
     return v || undefined; // "" = explicitly unbound → show nothing
   };
+  /* Both touch shells collapse the menubar behind the hamburger: at the 44px
+     floor its ten names alone are 593px, and the whole bar wanted 1123 — wider
+     than an iPad Pro. See globals.scss. */
+  const touchShell = mobile || tablet;
   const [open, setOpen] = useState<string | null>(null);
   // Mobile menu sheet (the collapsed menubar behind the hamburger).
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -59,11 +72,11 @@ export default function TopBar({
   const barRef = useRef<HTMLDivElement>(null);
   // Back to desktop → drop any open sheet so its fixed overlay can't linger.
   useEffect(() => {
-    if (!mobile) {
+    if (!touchShell) {
       setSheetOpen(false);
       setOpen(null);
     }
-  }, [mobile]);
+  }, [touchShell]);
 
   // ---- Command palette (Ctrl+K): every tool + executable menu item ----------
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -110,7 +123,7 @@ export default function TopBar({
   // checkable toggle (View ▸ Grid etc.), where staying open lets you flip more.
   const runMenuAction = (action: string, keepOpen: boolean) => {
     onMenuAction?.(action);
-    if (mobile && !keepOpen) {
+    if (touchShell && !keepOpen) {
       setOpen(null);
       setSheetOpen(false);
     }
@@ -118,7 +131,7 @@ export default function TopBar({
 
   return (
     <header className={styles.topbar} data-tour="topbar">
-      {mobile && (
+      {touchShell && (
         <button
           type="button"
           className={styles.hamburger}
@@ -143,13 +156,13 @@ export default function TopBar({
         )}
       </div>
 
-      {mobile && sheetOpen && <div className={styles.sheetScrim} onClick={() => setSheetOpen(false)} />}
-      <nav className={styles.menubar} data-menubar data-sheet={mobile && sheetOpen ? "true" : undefined} ref={barRef}>
+      {touchShell && sheetOpen && <div className={styles.sheetScrim} onClick={() => setSheetOpen(false)} />}
+      <nav className={styles.menubar} data-menubar data-sheet={touchShell && sheetOpen ? "true" : undefined} ref={barRef}>
         {/* Search leads the sheet, because browsing ten menus to find one of
             151 commands is the slow path and should not be the only path
             offered. Wrapped in a .menuRoot so it picks up the sheet's row
             metrics rather than needing its own. */}
-        {mobile && sheetOpen && (
+        {touchShell && sheetOpen && (
           <div className={styles.menuRoot}>
             <button
               type="button"
@@ -247,8 +260,8 @@ export default function TopBar({
           aria-label="Open the command palette"
           title="Command palette (Ctrl+K)"
         >
-          <Search size={mobile ? 15 : 14} />
-          {mobile ? (
+          <Search size={touchShell ? 15 : 14} />
+          {touchShell ? (
             /* A word, not an icon. As an unlabelled magnifier among five other
                icon buttons this was the least likely thing on the bar to be
                tried, which is the wrong outcome for the fastest way into 151
@@ -262,6 +275,21 @@ export default function TopBar({
             </>
           )}
         </button>
+
+        {tablet && (
+          <button
+            type="button"
+            className={styles.iconBtn}
+            onClick={onTogglePanels}
+            aria-label="Panels"
+            aria-pressed={panelsOpen}
+            data-panels-toggle
+            data-open={panelsOpen || undefined}
+            title="Panels"
+          >
+            <PanelRight size={16} />
+          </button>
+        )}
 
         <ThemeToggle initialTheme={initialTheme} />
 

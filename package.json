@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.18.0",
+  "version": "1.19.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -50,6 +50,7 @@
     "test:chrome": "node tools/verify-mobile-chrome.js",
     "test:tour": "node tools/verify-tour.js",
     "test:share": "node tools/verify-share.js",
+    "test:tablet": "node tools/verify-tablet.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

@@ -580,6 +580,45 @@ input[type="range"]:focus-visible {
 }
 
 /* ==========================================================================
+   TOUCH SIZING — the DEVICE, not the screen
+
+   How big a control has to be is a question about the pointer: a fingertip is
+   the same size on a phone and on a tablet. How the shell is laid out is a
+   question about the screen, and that is `data-mobile` / `data-tablet`.
+
+   These rules used to live inside the phone's block, which meant a tablet —
+   coarse pointer, no hover, driven entirely by a finger — got the mouse-sized
+   originals. Measured at 768×1024: **23 distinct kinds under 44px**, down to a
+   15×15 swap arrow and a 24×24 swatch.
+   ========================================================================== */
+html[data-touch="true"] {
+  /* ---- 44px minimum for everything pressable ----
+     The tool buttons had a rule of their own; the ~200 other controls — panel
+     carets, header buttons, the zoom pill, document tabs, colour chips, menu
+     rows, every select and number field — kept their mouse-sized 20–34px
+     boxes. 44×44 is the smallest box a fingertip lands on reliably.
+
+     Applied to the ELEMENTS, not to classes: these live in eight modules whose
+     class names are hashed, so `.headBtn` is not addressable from here, while
+     `button` is and needs no per-module upkeep as panels come and go.
+
+     `min-*` rather than `width`/`height`, so a control that is already big
+     enough is left exactly as it was. Every text control (tabs, presets,
+     selects, chips) is already wider than 44px, so in practice min-width
+     only reaches the square icon buttons. */
+  :is(button, select, [role="menuitem"]) {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  /* Ranges are excluded: their hit area is grown by padding instead — see
+     Controls.module.scss — because a range's box IS its track, and a 44px
+     track would be a 44px-thick line. */
+  input:not([type="range"]) {
+    min-height: 44px;
+  }
+}
+
+/* ==========================================================================
    MOBILE LAYOUT
    Driven ENTIRELY by `html[data-mobile="true"]`, which Editor sets from the
    `useIsMobile()` matchMedia hook — so JS behaviour and CSS layout share one
@@ -777,32 +816,6 @@ html[data-mobile="true"] {
     }
   }
 
-  /* ---- 44px minimum for everything pressable ----
-     The rule above was the only one of its kind: the tool buttons grew, and
-     the ~200 other controls — panel carets, header buttons, the zoom pill,
-     document tabs, colour chips, menu rows, every select and number field —
-     kept their mouse-sized 20–34px boxes. A sweep counted 24 distinct kinds
-     under 44×44, which is the smallest box a fingertip lands on reliably.
-
-     Applied to the ELEMENTS, not to classes: these live in eight modules whose
-     class names are hashed, so `.headBtn` is not addressable from here, while
-     `button` is and needs no per-module upkeep as panels come and go.
-
-     `min-*` rather than `width`/`height`, so a control that is already big
-     enough is left exactly as it was. Every text control (tabs, presets,
-     selects, chips) is already wider than 44px, so in practice min-width
-     only reaches the square icon buttons. */
-  :is(button, select, [role="menuitem"]) {
-    min-width: 44px;
-    min-height: 44px;
-  }
-  /* Ranges are excluded: their hit area is grown by padding instead — see
-     Controls.module.scss — because a range's box IS its track, and a 44px
-     track would be a 44px-thick line. */
-  input:not([type="range"]) {
-    min-height: 44px;
-  }
-
   /* Floating panels aren't draggable on touch — the bottom sheet is the one
      home for panels on mobile, and RightDock puts every panel in it there
      (see rightIds). Both of the other hosts are hidden.
@@ -814,6 +827,22 @@ html[data-mobile="true"] {
     display: none;
   }
 
+}
+
+/* ==========================================================================
+   MENU BAR ON TOUCH — both shells, for the same measured reason
+
+   Ten menu names at the 44px touch floor come to 593px, and with the brand
+   and the action buttons the bar wanted **1123px**. That does not fit an iPad
+   Pro at 1024, let alone an iPad mini at 744 — the Panels toggle sat entirely
+   outside the viewport, and Playwright refused to click it with "element is
+   outside of the viewport", which is exactly what a finger would have found.
+
+   So the inline menubar collapses behind the hamburger on any touch device,
+   not just on a phone. `data-touch` is the right gate: it is the floor that
+   makes the names too wide, and the floor follows the pointer.
+   ========================================================================== */
+html[data-touch="true"] {
   /* ---- TopBar menu sheet ----
      The inline menubar collapses; the hamburger reveals it as a full-height
      scrollable column of large touch rows. Structural selectors (the nav's
@@ -961,6 +990,85 @@ html[data-mobile="true"][data-drawer="panels"] [data-tour="dock"] {
    the very thing it describes, and swallowing taps on it, would undo the
    change. */
 html[data-mobile="true"][data-drawer="panels"] .gq-m-scrim {
+  display: none;
+}
+
+/* ==========================================================================
+   TABLET LAYOUT
+   Driven by `html[data-tablet="true"]` — a coarse, hoverless device that is
+   not a phone. Sizing is already handled by `data-touch` above; this block is
+   only about where things go.
+
+   The problem it fixes, measured before: a 48px rail and a 320px dock both in
+   flow left **378px of canvas out of 768**, and an iPad mini fared worse at
+   **354 of 744** — under half the screen given to the picture on a device
+   bought for looking at pictures.
+
+   The rail STAYS. It is 56px of a 768px screen, every tool is one tap rather
+   than two, and a tablet has the width to spare — this is the difference
+   between a tablet and a phone, whose 320px rail had to become a drawer.
+   The dock does not stay: 320px is 42% of an iPad mini and it is the thing you
+   consult rather than the thing you work in.
+   ========================================================================== */
+html[data-tablet="true"] {
+  /* Wide enough for a 44px tool button plus its breathing room. The rail is
+     `--toolbar-w` everywhere, so this one token moves it. */
+  --toolbar-w: 56px;
+
+  /* Panels become an overlay from the right, out of flow, so the canvas is
+     full width whether they are open or shut. */
+  [data-tour="dock"] {
+    position: fixed;
+    top: var(--chrome-top);
+    bottom: var(--chrome-bottom);
+    right: 0;
+    width: var(--dock-w);
+    max-width: 86vw;
+    transform: translateX(100%);
+    /* Hidden while shut, so nothing inside it can be tabbed to or scrolled
+       into view — a closed drawer is not part of the page. The delay lets the
+       slide-out finish before it disappears; opening removes it at once. */
+    /* Hidden while shut, so nothing inside it can be tabbed to — a closed
+       drawer is not part of the page. The delay lets the slide-out finish
+       before it disappears; opening reveals it at once.
+
+       This was first written to fix a different symptom, and the diagnosis was
+       wrong: opening the drawer scrolled `.app` sideways by 355px, dragging the
+       rail and the canvas to x=-355 where they stayed. The overflow was blamed
+       on this drawer sitting beyond the right edge — but `.app`'s scrollWidth
+       of 1123 was the TOP BAR's number, not the dock's, and a `position: fixed`
+       element contributes no scrollable overflow to an ancestor that is not its
+       containing block. Collapsing the menubar (which is what made the bar
+       1123px wide) removed the overflow outright. An `overflow: clip` added
+       alongside is gone again: it guarded nothing, and a mutation removing it
+       changed nothing. What is left here earns its place on its own terms. */
+    visibility: hidden;
+    transition: transform var(--t-med) var(--ease-pop), visibility 0s linear var(--t-med);
+    z-index: 120;
+    border-left: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    will-change: transform;
+  }
+
+  /* The two hosts a finger cannot arrange, hidden for the same reason they are
+     on a phone: both are positioned by DRAGGING, which is the gesture touch is
+     worst at, and RightDock folds their panels into the one dock instead. */
+  .gq-m-floathost-hidden {
+    display: none;
+  }
+}
+
+html[data-tablet="true"][data-drawer="panels"] [data-tour="dock"] {
+  transform: none;
+  visibility: visible;
+  transition: transform var(--t-med) var(--ease-pop), visibility 0s;
+}
+
+/* No scrim behind the tablet's panels, for the reason the phone's sheet has
+   none: a panel describes the artwork, and dimming the artwork while you read
+   about it — or swallowing a tap meant for it — undoes the point. There is
+   room here to have both at once. */
+html[data-tablet="true"][data-drawer="panels"] .gq-m-scrim {
   display: none;
 }
 
