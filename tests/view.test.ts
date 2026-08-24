@@ -220,4 +220,21 @@ describe("clampPan", () => {
     const loose = clampPan(-9999, 0, 1, 400, 300, 800, 600, 200);
     expect(loose.x).toBe(200 - 400);
   });
+
+  /* Why callers must not clamp against a viewport that is not laid out yet.
+     The bounds are `keep - scaledSize` to `viewport - keep`, so once the
+     viewport is narrower than `keep` the UPPER bound is negative and every
+     sane pan — a centred one included — is dragged off to the left. Caught in
+     the wild twice: first as a 0px stage during a cold load, then as a **22px**
+     one once the phone stopped drawing rulers, which walked straight past the
+     `> 0` guard written for the first. `CanvasArea`'s `clampHere` now declines
+     to clamp below KEEP in either axis; this pins the arithmetic that makes
+     that necessary. */
+  it("cannot constrain anything once the viewport is narrower than KEEP", () => {
+    const centred = clampPan(13, 271, 0.19, 1920, 1080, 390, 748);
+    expect(centred).toEqual({ x: 13, y: 271 }); // a real viewport leaves it alone
+    const tiny = clampPan(13, 271, 0.19, 1920, 1080, 22, 684);
+    expect(tiny.x).toBe(22 - KEEP); // …a 22px one hauls it to -58
+    expect(tiny.x).toBeLessThan(0);
+  });
 });

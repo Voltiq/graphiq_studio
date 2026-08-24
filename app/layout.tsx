@@ -100,8 +100,18 @@ export default async function RootLayout({
         <script
           dangerouslySetInnerHTML={{
             __html:
-              `(function(){try{if(matchMedia(${JSON.stringify(MOBILE_QUERY)}).matches)` +
-              `document.documentElement.dataset.mobile="true"}catch(e){}})()`,
+              `(function(){try{var m=matchMedia(${JSON.stringify(MOBILE_QUERY)}).matches;` +
+              `if(m)document.documentElement.dataset.mobile="true";` +
+              /* Rulers default off on a phone, and that has to be settled here
+                 rather than in an effect. Flipping it after mount resized the
+                 stage AFTER the one cold-load fit had already run against the
+                 taller box, leaving the artwork 22px — one ruler — off centre.
+                 A stored choice is read from the same key the editor uses, so
+                 the pre-paint answer and the React answer agree. The editor
+                 drops this attribute once its own state owns the decision. */
+              `if(m){var r=null;try{r=JSON.parse(localStorage.getItem("pe-view")||"{}").rulers}catch(e2){}` +
+              `if(typeof r!=="boolean")document.documentElement.dataset.rulersDefault="off"}` +
+              `}catch(e){}})()`,
           }}
         />
       </head>

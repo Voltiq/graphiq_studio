@@ -446,8 +446,65 @@ $ruler: 22px;
 }
 
 /* ------------------------------ Zoom control ------------------------------ */
+/* The phone's status readout: the document's name and size and whether it is
+   saved — the three things the desktop status bar carries and the mobile shell
+   drops, since `[data-tour="status"]` is hidden there.
+
+   A readout, not a bar: no background of its own beyond a soft plate, and
+   `pointer-events: none` so it never intercepts a stroke aimed at the artwork
+   underneath it. */
+.mobileStatus {
+  position: absolute;
+  /* Stacked clear of the zoom pill, which occupies `--chrome-bottom + 16` to
+     `+ 70` (54px tall). 78 leaves an 8px gap; 62 overlapped it by eight. */
+  bottom: calc(var(--chrome-bottom) + 78px);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm, var(--shadow-md));
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.mobileStatusName {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.mobileStatusSep {
+  width: 1px;
+  height: 10px;
+  flex-shrink: 0;
+  background: var(--border);
+}
+
+.mobileStatusSaved {
+  color: var(--ok, var(--text-2));
+}
+
+.mobileStatusDirty {
+  color: var(--text-3);
+}
+
 .zoomBar {
   position: absolute;
+  /* Desktop keeps a flat 16px: the stage there already ends above the status
+     bar. On a phone the stage runs UNDER the MobileBar, so this pill needs
+     lifting - see the `[data-zoombar]` rule in globals.scss. */
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);

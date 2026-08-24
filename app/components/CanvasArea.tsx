@@ -65,7 +65,7 @@ import {
   splitFromPointer,
   type CompareAxis,
 } from "../lib/compare";
-import { clampPan, normalizeRect, type Pan, type Rect } from "../lib/view";
+import { clampPan, KEEP, normalizeRect, type Pan, type Rect } from "../lib/view";
 import type { ColorSampler } from "../lib/samplers";
 import type { GestureReadout } from "../lib/samplers";
 import type {
@@ -706,6 +706,7 @@ export default function CanvasArea({
   setPan,
   onViewport,
   mobile = false,
+  saveState,
   tool,
   panMode = false,
   brush,
@@ -842,6 +843,8 @@ export default function CanvasArea({
   /** Mobile shell: while an untouched view is still auto-fit, re-fit on viewport
    *  resize (the desktop→mobile reflow widens the canvas after the first fit). */
   mobile?: boolean;
+  /** Autosave/save wording from the editor; mirrored into the mobile readout. */
+  saveState?: { label: string; ok: boolean };
   tool: ToolId;
   /** Touch-only override: the one-finger drag pans, whatever tool is selected.
    *  Every drawing and selection tool consumes that drag, so on a phone panning
@@ -4196,14 +4199,26 @@ export default function CanvasArea({
 
   /** Clamp a pan against the LIVE viewport.
    *
-   *  A viewport with no area cannot constrain anything, and clamping against
-   *  one turns a correct pan into a wrong one. That is not hypothetical: on a
-   *  cold load the stage is momentarily 0px wide while the shell settles, and
-   *  the pan `fit()` had computed against the real size — centred — came back
-   *  from here as `-80`, leaving the picture off to the left. The pan is
-   *  returned untouched instead; the next layout with a real size clamps it. */
+   *  A viewport that cannot hold `KEEP` in an axis cannot constrain anything in
+   *  it, and clamping against one turns a correct pan into a wrong one — the
+   *  bounds are `keep - scaledSize` to `viewport - keep`, and with a viewport
+   *  narrower than `keep` that upper bound is NEGATIVE, so a centred pan is
+   *  dragged off to the left.
+   *
+   *  That is not hypothetical, twice over. On a cold load the stage is
+   *  momentarily unlaid-out, and a pan `fit()` had computed against the real
+   *  size came back from here as `-80`. The guard added then tested for zero —
+   *  and zero turned out to be one case of the thing, not the thing. Defaulting
+   *  the rulers off on a phone changed that transient from 0px wide to **22px**
+   *  (the ruler track, before the rest of the grid resolves), which walked
+   *  straight past a `> 0` test: a fitted pan of 13 was clamped to -58 and the
+   *  picture sat off the left edge again, with every other reading correct.
+   *
+   *  So the test is whether the viewport is big enough for the rule to mean
+   *  anything. Below that the pan is returned untouched; the next layout with a
+   *  real size clamps it. */
   const clampHere = (x: number, y: number, scale: number, vp: HTMLElement) =>
-    vp.clientWidth > 0 && vp.clientHeight > 0
+    vp.clientWidth >= KEEP && vp.clientHeight >= KEEP
       ? clampPan(x, y, scale, widthRef.current, heightRef.current, vp.clientWidth, vp.clientHeight)
       : { x, y };
 
@@ -4222,7 +4237,30 @@ export default function CanvasArea({
     }
     const w = widthRef.current;
     const h = heightRef.current;
-    const raw = Math.min(vp.clientWidth / w, vp.clientHeight / h) * 100 * 0.96;
+    /* On a phone the fit keeps the artwork clear of the edge-swipe strips.
+       They are `position: fixed` over the outer 20px of each side, and they
+       only stand aside once a pointer has landed ON the canvas (the
+       `data-toolgrab` dance in Editor) — so an artwork edge underneath one can
+       never start a gesture at all: `elementFromPoint` there returns the strip.
+
+       That was masked while the phone drew a 22px vertical ruler, which
+       happened to push the fitted artwork outside them. Reclaiming the ruler
+       put the left edge at x=13 and made the crop corner ungrabbable — caught
+       by the options-sheet rail, whose Apply then committed nothing.
+
+       Zooming in still runs the artwork under the strips, which is the
+       documented cost of having them; the view Graphiq OPENS with should not.
+       `beginBirdsEye` deliberately keeps the full width: it is a transient
+       overview reached mid-drag, when the strips are already standing aside.
+
+       The token is read rather than `mobileRef`: `mobile` is a React prop that
+       is false until the media query settles, and the first fit runs before
+       that, so gating on it inset by zero and changed nothing. CSS has the
+       answer at the first paint. */
+    const strip =
+      parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--edge-strip")) || 0;
+    const usableW = Math.max(1, vp.clientWidth - strip * 2);
+    const raw = Math.min(usableW / w, vp.clientHeight / h) * 100 * 0.96;
     const z = clamp(Math.max(1, Math.floor(raw)), MIN_ZOOM, MAX_ZOOM);
     const s = z / 100;
     const px = (vp.clientWidth - w * s) / 2;
@@ -8441,7 +8479,7 @@ export default function CanvasArea({
 
   return (
     <section className={styles.canvasArea} data-tour="canvas">
-      <div className={styles.tabs}>
+      <div className={styles.tabs} data-tabs data-count={docs.length}>
         {docs.map((d) =>
           editingTabId === d.id ? (
             <div key={d.id} className={styles.tab} data-active={true}>
@@ -8515,14 +8553,15 @@ export default function CanvasArea({
         <span className={styles.tabSpacer} />
       </div>
 
-      <div className={styles.stageWrap} data-rulers={showRulers}>
+      <div className={styles.stageWrap} data-stagewrap data-rulers={showRulers}>
         {showRulers && (
           <>
-            <div className={styles.rulerCorner} />
+            <div className={styles.rulerCorner} data-ruler />
             {/* Press-and-drag anywhere on a ruler to pull out a guide (Alt swaps
                 the orientation). Locked guides make the rulers inert. */}
             <div
               className={styles.rulerH}
+              data-ruler
               data-guides={!lockGuides || undefined}
               onPointerDown={onRulerPointerDown("h")}
               title={lockGuides ? "Guides are locked (View ▸ Lock guides)" : "Drag down for a guide"}
@@ -8535,6 +8574,7 @@ export default function CanvasArea({
             </div>
             <div
               className={styles.rulerV}
+              data-ruler
               data-guides={!lockGuides || undefined}
               onPointerDown={onRulerPointerDown("v")}
               title={lockGuides ? "Guides are locked (View ▸ Lock guides)" : "Drag right for a guide"}
@@ -8594,6 +8634,11 @@ export default function CanvasArea({
         >
           <div
             className={styles.canvasShadow}
+            /* The artwork itself, panned and scaled. Named so a harness can ask
+               for it rather than guessing "the first transformed element in the
+               stage" — a heuristic that quietly started matching a centred
+               readout pill instead. */
+            data-artboard
             style={{
               width: width * scale,
               height: height * scale,
@@ -8935,11 +8980,40 @@ export default function CanvasArea({
           )}
         </div>
 
-        <div className={styles.zoomBar}>
+        {/* Touch only: the three readings the desktop status bar carries and
+            the mobile shell used to drop — the document's name and size, and
+            whether the work is saved. It sits above the zoom pill rather than
+            inside it so the pill keeps its shape, and it is a readout, not a
+            control: `pointer-events: none` leaves the artwork under it
+            drawable. Name and size come from the same props the status bar
+            uses, so there is one source for both shells. */}
+        {mobile && (
+          <div className={styles.mobileStatus} data-mobile-status>
+            <span className={styles.mobileStatusName} data-status-name>
+              {docs.find((d) => d.id === activeId)?.name ?? ""}
+            </span>
+            <span className={styles.mobileStatusSep} aria-hidden />
+            <span data-status-size>
+              {width} × {height}
+            </span>
+            <span className={styles.mobileStatusSep} aria-hidden />
+            <span
+              className={saveState?.ok ? styles.mobileStatusSaved : styles.mobileStatusDirty}
+              data-status-save
+              data-saved={saveState?.ok ? "true" : "false"}
+            >
+              {saveState?.label ?? "Not saved"}
+            </span>
+          </div>
+        )}
+
+        <div className={styles.zoomBar} data-zoombar>
           <button type="button" onClick={() => step(-1)} aria-label="Zoom out">
             <Minus size={14} />
           </button>
-          <span className={styles.zoomValue}>{zoom}%</span>
+          <span className={styles.zoomValue} data-zoom-value>
+            {zoom}%
+          </span>
           <button type="button" onClick={() => step(1)} aria-label="Zoom in">
             <Plus size={14} />
           </button>

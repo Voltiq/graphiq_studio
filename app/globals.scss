@@ -134,6 +134,14 @@
      right answer on a desktop browser. `--vv-h` is the visible height itself,
      for anything that would rather size to it than subtract from it. */
   --kb-inset: 0px;
+  /* How much of each side the mobile edge-swipe strips claim — zero here,
+     because the strips are a mobile-shell thing; the phone block below sets the
+     real width. Read by `.gq-m-edge` for its own width AND by CanvasArea's
+     fit(), which insets by it so the artwork never opens underneath a strip.
+     One token, so the two cannot drift — and because it comes from CSS it is
+     already correct at the first paint, which `mobile` (a React prop that
+     settles a frame later) is not. */
+  --edge-strip: 0px;
   --vv-h: 100dvh;
   --chrome-bottom: calc(var(--statusbar-h) + var(--safe-b));
 
@@ -589,9 +597,36 @@ html[data-mobile="true"] {
      of the chrome is a different height here — one override, and everything
      anchored to --chrome-bottom follows. */
   --chrome-bottom: calc(var(--mobilebar-h) + var(--safe-b));
+  /* The edge-swipe strips exist only here. See :root for what reads this. */
+  --edge-strip: 20px;
 
   [data-tour="status"] {
     display: none;
+  }
+
+  /* One document does not need a tab strip. Measured at 390×844, the chrome
+     above the artwork was 154px — a 48px top bar, a 48px options bar, 36px of
+     tabs showing a single tab, and 22px of ruler — leaving 634px of a 844px
+     screen. Reclaiming the tabs and the ruler takes that to 692px.
+
+     `data-count` rather than `:only-child`, because the strip also holds the
+     "New canvas" button and a spacer, so the tab is never an only child. The
+     strip returns the moment there are two documents, which is the moment it
+     starts carrying information. Renaming, which used to live only on the
+     tab, is now File ▸ Rename document… (and so in the palette). */
+  [data-tabs][data-count="1"] {
+    display: none;
+  }
+
+  /* The zoom pill clears the MobileBar. The canvas stage runs the full height
+     here — it ends at the bottom of the screen, with the bar drawn over it —
+     so a pill at a flat `bottom: 16px` sat at y=774–828 against a bar starting
+     at 788, and lost the stacking contest 5 to 130. Measured before the fix:
+     a press at the centre of Zoom out, Zoom in AND Fit on screen all reached
+     `button.tool`, so none of the three could be used with a finger, and the
+     percentage readout was painted underneath the bar. */
+  [data-zoombar] {
+    bottom: calc(var(--chrome-bottom) + 16px);
   }
 
   /* Options bar already scrolls horizontally — just guarantee it can't be
@@ -844,6 +879,27 @@ html[data-mobile="true"] {
   }
 }
 
+/* Rulers off by default on a phone, decided before the first paint.
+   `data-rulers-default` is stamped by the inline script in layout.tsx and
+   removed by the editor as soon as its own `data-rulers` state takes over — it
+   exists only to bridge that gap, because the stage's size comes from this grid
+   template and the cold-load fit measures it immediately. Settling it an effect
+   later left the artwork one ruler (22px) off centre.
+
+   Rulers cost 22px of height and 22px of width on a 390px screen, and a ruler
+   is for measuring against a pointer you can place precisely — which a
+   fingertip is not. View ▸ Rulers still turns them on, and that choice sticks. */
+html[data-rulers-default="off"] {
+  [data-stagewrap] {
+    grid-template-columns: 0 1fr;
+    grid-template-rows: 0 1fr;
+  }
+
+  [data-ruler] {
+    display: none;
+  }
+}
+
 /* With a drawer open, the options bar stays above the scrim — otherwise the
    modifier chips are unreachable at precisely the moment the panel actions they
    exist for are on screen. Measured: with the drawer open, the point at the
@@ -941,7 +997,9 @@ html[data-mobile="true"][data-drawer="panels"] .gq-m-scrim {
   position: fixed;
   top: var(--chrome-top);
   bottom: var(--chrome-bottom);
-  width: 20px;
+  /* One source of truth: `fit()` reads this token so the fitted artwork lands
+     clear of the strips, and this rule draws them that wide. */
+  width: var(--edge-strip);
   z-index: 115;
   touch-action: none;
 

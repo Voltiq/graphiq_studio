@@ -187,12 +187,16 @@ const PROFILES = [
       if (!stage) return null;
       const v = stage.getBoundingClientRect();
       /* The artwork is the transformed pan/zoom wrapper, not the overlay canvas
-         (which is exactly the stage's size and would always look centred). */
-      const art = [...stage.querySelectorAll("*")]
-        .filter((e) => getComputedStyle(e).transform !== "none")
-        .map((e) => e.getBoundingClientRect())
-        .filter((b) => b.width > 20 && b.width < stage.clientWidth)[0];
-      if (!art) return null;
+         (which is exactly the stage's size and would always look centred).
+
+         Asked for by name. This used to take "the first element in the stage
+         with a transform, between 20px and the stage's width" — which held
+         until the phone gained a status readout centred with
+         `translateX(-50%)`, at which point the check measured the gaps around a
+         266px pill and failed on artwork that was perfectly centred. */
+      const board = stage.querySelector("[data-artboard]");
+      if (!board) return null;
+      const art = board.getBoundingClientRect();
       return {
         left: Math.round(art.left - v.left), right: Math.round(v.right - art.right),
         top: Math.round(art.top - v.top), bottom: Math.round(v.bottom - art.bottom),

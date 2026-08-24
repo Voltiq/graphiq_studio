@@ -209,7 +209,7 @@ import MobileBar, { type MobileDrawer } from "./MobileBar";
 import { useVisualViewport } from "../lib/useVisualViewport";
 import { encodePngOffThread } from "../lib/png-offthread";
 import { useGestureGuard } from "../lib/useGestureGuard";
-import { useIsMobile } from "../lib/useMediaQuery";
+import { MOBILE_QUERY, useIsMobile } from "../lib/useMediaQuery";
 import TrimDialog, { type TrimMode, type TrimSides } from "./TrimDialog";
 import SelectModifyDialog from "./SelectModifyDialog";
 import LayerStyleDialog from "./LayerStyleDialog";
@@ -217,6 +217,7 @@ import CurvesDialog from "./CurvesDialog";
 import LevelsDialog, { type EyedropKind } from "./LevelsDialog";
 import Toast from "./Toast";
 import SaveAsDialog from "./SaveAsDialog";
+import RenameDocDialog from "./RenameDocDialog";
 import RecentsDialog from "./RecentsDialog";
 import ExportDialog, { type BatchRun } from "./ExportDialog";
 import ImportDialog, { type ImportItem, type ImportMode, type ImportOptions } from "./ImportDialog";
@@ -752,6 +753,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setSaveState((s) => (s.label === "Unsaved changes" ? s : { label: "Unsaved changes", ok: false }));
   }, [history]);
   const [saveAsOpen, setSaveAsOpen] = useState(false);
+  /* Renaming used to live only on the document tab. The phone reclaims that
+     strip when there is a single document, so it needs a second door — and a
+     desktop keyboard user never had one at all. */
+  const [renameOpen, setRenameOpen] = useState(false);
   const [recentsOpen, setRecentsOpen] = useState(false);
   const [panels, setPanelsState] = useState<PanelVisibility>(ALL_PANELS);
   const [showRulers, setShowRulers] = useState(true);
@@ -6070,7 +6075,18 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   useEffect(() => {
     try {
       const v = JSON.parse(localStorage.getItem("pe-view") || "{}");
+      /* Rulers default OFF on a phone and ON everywhere else. A DEFAULT, not
+         an override: a stored boolean wins either way, so View ▸ Rulers sticks
+         once it is used.
+
+         The same decision is made before the first paint by the inline script
+         in layout.tsx — it has to be, because the stage's size comes from a
+         grid template the cold-load fit measures straight away. This mirrors it
+         into React state and then drops the bridging attribute, so from here on
+         `data-rulers` is the only thing deciding. */
       if (typeof v.rulers === "boolean") setShowRulers(v.rulers);
+      else if (window.matchMedia(MOBILE_QUERY).matches) setShowRulers(false);
+      delete document.documentElement.dataset.rulersDefault;
       if (typeof v.grid === "boolean") setShowGrid(v.grid);
       if (typeof v.snap === "boolean") setSnap(v.snap);
       if (typeof v.docgrid === "boolean") setShowDocGrid(v.docgrid);
@@ -6566,6 +6582,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "open-recent") setRecentsOpen(true);
     else if (actionId === "save") saveProject();
     else if (actionId === "save-as") setSaveAsOpen(true);
+    else if (actionId === "doc-rename") setRenameOpen(true);
     else if (actionId === "import") openImport();
     else if (actionId === "export-as") openExport();
     else if (actionId === "export-svg") exportVectorSVG();
@@ -7371,6 +7388,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         <div className={styles.leftDock} ref={setLeftHost} aria-label="Left dock" />
         <CanvasArea
           panMode={mobile && panMode}
+          saveState={saveState}
           docs={docs}
           activeId={activeId}
           onSelectDoc={(id) => {
@@ -8154,6 +8172,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           defaultName={active.name}
           onSave={saveProjectAs}
           onClose={() => setSaveAsOpen(false)}
+        />
+      )}
+
+      {renameOpen && (
+        <RenameDocDialog
+          defaultName={active.name}
+          onRename={(name) => renameDoc(active.id, name)}
+          onClose={() => setRenameOpen(false)}
         />
       )}
 
