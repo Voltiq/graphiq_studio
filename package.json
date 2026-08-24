@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.20.0",
+  "version": "1.21.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -52,6 +52,7 @@
     "test:share": "node tools/verify-share.js",
     "test:tablet": "node tools/verify-tablet.js",
     "test:dialogsheets": "node tools/verify-dialog-sheets.js",
+    "test:dialoginternals": "node tools/verify-dialog-internals.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

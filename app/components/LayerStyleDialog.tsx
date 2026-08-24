@@ -752,7 +752,7 @@ export default function LayerStyleDialog({
         </header>
 
         <div className={styles.layout}>
-          <div className={styles.list} role="listbox" aria-label="Effects">
+          <div className={styles.list} role="listbox" aria-label="Effects" data-dialog-rail>
             <div
               className={`${styles.fxRow} ${styles.stylesRow}`}
               data-sel={showStyles}

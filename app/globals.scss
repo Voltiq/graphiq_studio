@@ -1057,6 +1057,57 @@ html[data-mobile="true"] {
     overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
+
+    /* The two-column dialogs stack. Blur Gallery, Liquify, Warp and Refine
+       Edge each lay a fixed-size preview beside a controls column, with the
+       preview `flex-shrink: 0` — so on a phone the controls were pushed off
+       the right edge and the dialog's own `overflow: hidden` clipped them
+       away. Measured at 390×844: Blur Gallery's only slider sat **294px past**
+       the edge, Liquify's and Warp's **354px**, Layer Style's **142px**. Not
+       "awkward" — unreachable, with nothing to scroll sideways.
+
+       A no-op on the dialogs whose middle is a plain block, which is most of
+       them. */
+    flex-direction: column;
+  }
+
+  /* …and the preview inside it becomes responsive. The canvases are sized by
+     inline `style={{ width: PW, height: PH }}` with PW at 500–560, and their
+     width/height ATTRIBUTES carry the same ratio — so this is the ordinary
+     responsive-replaced-element recipe: `max-width` constrains a width from
+     any origin, inline included, and `height: auto` then follows the intrinsic
+     ratio rather than squashing the picture. The `!important` is only for the
+     height, because an inline declaration outranks a stylesheet. */
+  [role="dialog"]:has(> header) canvas {
+    max-width: 100%;
+    height: auto !important;
+  }
+
+  /* A side rail becomes a strip along the top. Layer Style's effects rail is
+     200px wide and, once stacked, **562px tall of an 844px sheet** — nine rows
+     you scroll past before reaching the controls they select. As a row it is
+     one 44px band that scrolls sideways, which is the same filmstrip the
+     options bar uses, and both the choice and its settings stay on screen.
+
+     `[data-dialog-rail]` rather than `[role="listbox"]`, which was the first
+     hook and was wrong: `Select.tsx` gives every dropdown popup that role, so
+     the rule turned each `<select>` opened inside a dialog into a horizontal
+     strip of options. The attribute marks the two things that really are side
+     rails — Layer Style's effects and Smart Filter's stack. */
+  [role="dialog"]:has(> header) [data-dialog-rail] {
+    width: auto;
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  [role="dialog"]:has(> header) [data-dialog-rail] > * {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 }
 

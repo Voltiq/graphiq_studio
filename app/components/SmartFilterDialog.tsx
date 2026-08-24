@@ -796,7 +796,7 @@ export default function SmartFilterDialog({
         </header>
 
         <div className={styles.layout}>
-          <div className={styles.list} role="listbox" aria-label="Smart filters">
+          <div className={styles.list} role="listbox" aria-label="Smart filters" data-dialog-rail>
             <span className={styles.listLabel}>Stack (top renders last — drag to reorder)</span>
             {[...shown].reverse().map((f) => {
               const Icon = FILTER_ICONS[f.type];

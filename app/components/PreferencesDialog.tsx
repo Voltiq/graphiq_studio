@@ -593,7 +593,7 @@ export default function PreferencesDialog({
         </header>
 
         <div className={styles.prefsLayout}>
-          <nav className={styles.prefsNav} aria-label="Preference sections">
+          <nav className={styles.prefsNav} aria-label="Preference sections" data-dialog-rail>
             {TABS.map((t) => (
               <button
                 key={t.id}
