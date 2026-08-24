@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -46,6 +46,7 @@
     "test:panelsheet": "node tools/verify-panel-sheet.js",
     "test:accordion": "node tools/verify-panel-accordion.js",
     "test:stranded": "node tools/verify-stranded-panels.js",
+    "test:palette": "node tools/verify-command-palette.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

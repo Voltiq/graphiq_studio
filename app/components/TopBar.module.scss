@@ -288,6 +288,39 @@
   color: var(--text-3);
 }
 
+/* The word on the phone's trigger. Sized like the other bar text rather than
+   the desktop hint, which is deliberately quiet — this one is the primary way
+   into the menus and should not read as a placeholder. */
+.searchLabel {
+  font-size: 13px;
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* Search as the menu sheet's first row. Styled to sit slightly proud of the
+   ten menu names under it: same metrics, accent-tinted, so the eye lands on it
+   first without it shouting. */
+.sheetSearch {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 44px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  font-size: 15px;
+  font-weight: var(--weight-medium);
+  text-align: left;
+  color: var(--text);
+  background: var(--wash);
+  border: 1px solid var(--border);
+
+  &:active {
+    background: var(--wash-2);
+  }
+}
+
 .searchKbd {
   flex-shrink: 0;
   font-family: var(--font-mono);

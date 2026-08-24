@@ -826,6 +826,17 @@ html[data-mobile="true"] {
     box-shadow: none;
     background: var(--surface-2);
     animation: none;
+    /* The open menu scrolls INSIDE the sheet instead of pushing the other nine
+       off the end of it. Measured at 390×844: opening Layer (44 items) grew the
+       sheet to 2471px — 2.9 screens — so reaching Select, the menu directly
+       below it, meant scrolling past all 44. Capped, the ten menu names stay
+       within about one screen of each other whatever is open.
+       `overscroll-behavior: contain` stops a flick inside a menu from carrying
+       on into the sheet once it hits the end. */
+    max-height: 46vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
   [data-menubar][data-sheet="true"] [role="menu"] button {
     padding: 11px 12px;

@@ -204,8 +204,12 @@ const MOBILE = { width: 390, height: 844 };
   await page.waitForTimeout(300);
 
   /* Use the LONGEST menu, since that is the one that overflows. Which one that
-     is should not be hard-coded — it changes as menus gain items. */
-  const roots = page.locator(`${sheetSel} > div > button`);
+     is should not be hard-coded — it changes as menus gain items.
+
+     `[data-sheet-search]` is excluded because it is not a menu root: it is the
+     palette trigger that leads the sheet, and clicking it CLOSES the sheet, so
+     including it emptied the very thing this loop is walking. */
+  const roots = page.locator(`${sheetSel} > div > button:not([data-sheet-search])`);
   const rootCount = await roots.count();
   let longest = { index: 0, items: 0, name: "?" };
   for (let i = 0; i < rootCount; i++) {
@@ -219,19 +223,31 @@ const MOBILE = { width: 390, height: 844 };
   }
   await roots.nth(longest.index).click();
   await page.waitForTimeout(300);
+  /* Both scrollers, because there are two now: an expanded menu is capped and
+     scrolls WITHIN the sheet (globals.scss) so it cannot push the other nine
+     menus off the end. Before that cap the sheet was the only scroller and this
+     one line was enough. */
   await page.evaluate((sel) => {
     const s = document.querySelector(sel);
+    const inner = s.querySelector('[role="menu"]');
+    if (inner) inner.scrollTop = inner.scrollHeight;
     s.scrollTop = s.scrollHeight; // all the way to the last row
   }, sheetSel);
   await page.waitForTimeout(250);
 
   const sheetProbe = await page.evaluate((sel) => {
     const sheet = document.querySelector(sel);
-    /* The LOWEST row on screen once scrolled to the end — not the expanded
-       menu's last item, which is followed by the remaining root buttons and so
-       sits comfortably mid-sheet. The bottom row is the one the MobileBar used
-       to cover, and the only one that can tell the two layouts apart. */
-    const rows = [...sheet.querySelectorAll("button")];
+    /* The lowest row THAT IS ON SCREEN once scrolled to the end. The bottom
+       row is the one the MobileBar used to cover, and the only one that can
+       tell the two layouts apart — but "lowest" has to mean lowest visible.
+       Taking the largest `bottom` outright now picks a row parked inside the
+       capped menu's own scroller, hundreds of pixels below the fold, where
+       `elementFromPoint` returns null and the result reads as "blocked by
+       nothing" — a fail on a layout that is in fact correct. */
+    const rows = [...sheet.querySelectorAll("button")].filter((b) => {
+      const r = b.getBoundingClientRect();
+      return r.height > 0 && r.top >= 0 && r.bottom <= window.innerHeight;
+    });
     const el = rows.reduce((lowest, b) =>
       b.getBoundingClientRect().bottom > lowest.getBoundingClientRect().bottom ? b : lowest);
     const r = el.getBoundingClientRect();

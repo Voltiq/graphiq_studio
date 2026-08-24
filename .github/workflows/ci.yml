@@ -250,6 +250,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: The command palette is the phone's primary menu
+        run: npm run test:palette -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

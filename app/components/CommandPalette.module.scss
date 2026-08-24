@@ -8,7 +8,12 @@
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding-top: 11dvh;
+  /* The drop from the top scales with what is VISIBLE, not with the screen.
+     `dvh` does not shrink for an on-screen keyboard — mobile browsers leave the
+     layout viewport alone and report the difference through `visualViewport`,
+     which is what `--kb-inset` carries — so a flat 11dvh spent 93px of the 544
+     left above a 300px keyboard on empty space. */
+  padding-top: min(11dvh, calc((100dvh - var(--kb-inset, 0px)) * 0.11));
   background: var(--blanket);
   animation: fade var(--t-fast) var(--ease);
 }
@@ -32,6 +37,12 @@
   border-radius: var(--r-xl);
   box-shadow: var(--shadow);
   overflow: hidden;
+  /* Never taller than the room left above a keyboard. The overlay already ends
+     at `--kb-inset`, but a flex item is free to overflow its container, so
+     without this the list ran on BEHIND the keyboard: measured at 390×844 with
+     a 300px inset, the list ended at y=570 against a keyboard starting at 544,
+     and the rows under it could be scrolled to but never tapped. */
+  max-height: 100%;
   animation: drop var(--t-med) var(--ease-pop);
 }
 
@@ -84,6 +95,11 @@
 
 .list {
   max-height: min(52dvh, 430px);
+  /* No `flex: 1 1 auto; min-height: 0` here, though the shape of this rule
+     invites it: an `overflow` other than `visible` already makes a flex item's
+     automatic minimum size 0, so the list shrinks under the panel's
+     `max-height: 100%` on its own. Both lines were written, then deleted after
+     removing them changed nothing a 380px keyboard could detect. */
   overflow-y: auto;
   padding: 6px;
   display: flex;

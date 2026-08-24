@@ -279,7 +279,13 @@ const REACH = (scope) => {
   await page.locator('button[aria-label="Menu"]').first().click();
   await page.waitForTimeout(900);
   await sweep("menu sheet", '[data-menubar][data-sheet="true"]');
-  await page.locator('[data-menubar][data-sheet="true"] > div > button').first().click();
+  /* `:not([data-sheet-search])` — the sheet's first row is the palette trigger,
+     not a menu, and clicking it closes the sheet. Without this the "menu open"
+     sweep ran against a sheet that had just shut itself. */
+  await page
+    .locator('[data-menubar][data-sheet="true"] > div > button:not([data-sheet-search])')
+    .first()
+    .click();
   await page.waitForTimeout(700);
   await sweep("menu open", '[data-menubar][data-sheet="true"]');
   const menuReach = await page.evaluate(REACH, '[data-menubar][data-sheet="true"]');

@@ -8,7 +8,8 @@ import logo from "../icon.png";
 import ThemeToggle from "./ThemeToggle";
 import CommandPalette, { type PaletteCommand } from "./CommandPalette";
 import { MENUS } from "../lib/menus";
-import { TOOL_GROUPS, type ToolId } from "../lib/tools";
+import { buildPaletteCommands } from "../lib/palette";
+import { type ToolId } from "../lib/tools";
 import { DEFAULT_THEME, type Theme } from "../lib/theme";
 
 export default function TopBar({
@@ -67,35 +68,14 @@ export default function TopBar({
   // ---- Command palette (Ctrl+K): every tool + executable menu item ----------
   const [paletteOpen, setPaletteOpen] = useState(false);
 
-  const commands = useMemo<PaletteCommand[]>(() => {
-    const out: PaletteCommand[] = [];
-    for (const t of TOOL_GROUPS.flat()) {
-      out.push({
-        key: `tool:${t.id}`,
-        label: t.name,
-        sub: "Tool",
-        shortcut: keyFor("tool", t.id, t.shortcut),
-        icon: t.icon,
-        run: () => onSelectTool?.(t.id),
-      });
-    }
-    for (const menu of MENUS) {
-      for (const item of menu.items) {
-        if (!item.action || item.disabled) continue; // placeholders aren't runnable
-        const action = item.action;
-        out.push({
-          key: `menu:${action}:${item.label}`,
-          label: item.label.replace(/…$/, ""),
-          sub: `${menu.label} menu`,
-          shortcut: keyFor("menu", action, item.shortcut),
-          action,
-          run: () => onMenuAction?.(action),
-        });
-      }
-    }
-    return out;
+  /* Built by a pure function in ../lib/palette so the coverage property —
+     nothing the menus offer is missing from search — is unit-testable without
+     rendering the editor. See tests/palette.test.ts. */
+  const commands = useMemo<PaletteCommand[]>(
+    () => buildPaletteCommands({ keyFor, onSelectTool, onMenuAction }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shortcutLabels]);
+    [shortcutLabels, onSelectTool, onMenuAction],
+  );
 
   // Ctrl+K opens the palette (the chip in the pill advertises it).
   useEffect(() => {
@@ -165,6 +145,26 @@ export default function TopBar({
 
       {mobile && sheetOpen && <div className={styles.sheetScrim} onClick={() => setSheetOpen(false)} />}
       <nav className={styles.menubar} data-menubar data-sheet={mobile && sheetOpen ? "true" : undefined} ref={barRef}>
+        {/* Search leads the sheet, because browsing ten menus to find one of
+            151 commands is the slow path and should not be the only path
+            offered. Wrapped in a .menuRoot so it picks up the sheet's row
+            metrics rather than needing its own. */}
+        {mobile && sheetOpen && (
+          <div className={styles.menuRoot}>
+            <button
+              type="button"
+              className={styles.sheetSearch}
+              data-sheet-search
+              onClick={() => {
+                setSheetOpen(false);
+                setPaletteOpen(true);
+              }}
+            >
+              <Search size={16} />
+              <span>Search all commands…</span>
+            </button>
+          </div>
+        )}
         {MENUS.map((menu) => (
           <div key={menu.label} className={styles.menuRoot}>
             <button
@@ -247,8 +247,15 @@ export default function TopBar({
           aria-label="Open the command palette"
           title="Command palette (Ctrl+K)"
         >
-          <Search size={14} />
-          {!mobile && (
+          <Search size={mobile ? 15 : 14} />
+          {mobile ? (
+            /* A word, not an icon. As an unlabelled magnifier among five other
+               icon buttons this was the least likely thing on the bar to be
+               tried, which is the wrong outcome for the fastest way into 151
+               menu commands. The keyboard hint is dropped — there is no
+               Ctrl+K on a phone. */
+            <span className={styles.searchLabel}>Search</span>
+          ) : (
             <>
               <span className={styles.searchHint}>Search tools &amp; menus…</span>
               <kbd className={styles.searchKbd}>Ctrl+K</kbd>
