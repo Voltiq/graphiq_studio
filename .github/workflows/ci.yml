@@ -275,6 +275,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: Every dialog is a usable full-screen sheet on a phone
+        run: npm run test:dialogsheets -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

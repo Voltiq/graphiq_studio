@@ -994,6 +994,84 @@ html[data-mobile="true"][data-drawer="panels"] .gq-m-scrim {
 }
 
 /* ==========================================================================
+   DIALOGS ON A PHONE — full-screen sheets
+
+   The mobile block never mentioned dialogs, so all 39 kept their desktop
+   metrics. Walked at 390×844, every one of the 44 a menu can open was narrower
+   than the screen — 358px of 390, or 342 for the preview dialogs — and the
+   family behind 22 of them (PasteDialog.module.scss) has **no `max-height` at
+   all** next to an `overflow: hidden`, so a tall dialog does not scroll, it
+   clips.
+
+   At 390×844 that very nearly does not matter: Export is 816px tall and fits
+   by fourteen. Move to an iPhone SE at 375×667 and the same dialog is 816px in
+   a 667px window — its header sits at **top = -74**, its footer 74px past the
+   fold, and `elementFromPoint` on the Export button returns **nothing**. There
+   is no scroll to reach it, because the clipping is the overflow rule. Raise a
+   300px keyboard on the tall phone and it is the same story, 136px worse.
+
+   `:has(> header)` is the scope, and it is a description rather than a trick:
+   every one of the 38 real dialogs has a title bar, and the three other things
+   wearing `role="dialog"` — the command palette, the colour popover and the
+   onboarding tour — have none, so none of them is dressed as a sheet.
+   ========================================================================== */
+html[data-mobile="true"] {
+  [role="dialog"]:has(> header) {
+    position: fixed;
+    inset: 0;
+    /* Ends above the keyboard rather than behind it. */
+    bottom: var(--kb-inset, 0px);
+    /* `!important` because four dialogs size themselves with an inline
+       `style={{ width: N }}` — Merge to HDR at 520, Batch at 480, the six
+       Select ▸ Modify dialogs at 360 and New guide at 340 — and an inline style
+       beats any stylesheet. Left alone they stayed wider than the screen, and
+       Merge to HDR's and Batch's primary buttons sat off the right edge where
+       `elementFromPoint` returned nothing. Overriding per-dialog sizing is
+       precisely this rule's job: on a phone every one of them is full-bleed. */
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    max-height: none !important;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    display: flex;
+    flex-direction: column;
+    padding-top: var(--safe-t);
+    padding-bottom: var(--safe-b);
+    /* The desktop `pop` scales up from the middle, which reads as a mistake at
+       full bleed. A sheet comes from the bottom. */
+    animation: gqDialogUp var(--t-med) var(--ease-pop);
+  }
+
+  /* The title bar and the actions are pinned; everything between them scrolls.
+     This is the half that matters — the footer is where Apply and Cancel live,
+     and clipping it is what made Export unusable on a short phone. */
+  [role="dialog"]:has(> header) > header,
+  [role="dialog"]:has(> header) > footer {
+    flex: 0 0 auto;
+  }
+  [role="dialog"]:has(> header) > *:not(header):not(footer) {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@keyframes gqDialogUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ==========================================================================
    TABLET LAYOUT
    Driven by `html[data-tablet="true"]` — a coarse, hoverless device that is
    not a phone. Sizing is already handled by `data-touch` above; this block is
