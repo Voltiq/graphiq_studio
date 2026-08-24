@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useState } from "react";
 import styles from "./TourOverlay.module.scss";
-import { TOUR_STEPS } from "../lib/tour";
+import { tourSteps } from "../lib/tour";
 import { uiZoom } from "../lib/ui-scale";
 import { clampX } from "../lib/safeArea";
 
@@ -18,6 +18,7 @@ export default function TourOverlay({
   onStep,
   onClose,
   onOpenSample,
+  mobile = false,
 }: {
   step: number;
   onStep: (n: number) => void;
@@ -25,9 +26,14 @@ export default function TourOverlay({
   onClose: () => void;
   /** Create + open the sample document (offered on the last step). */
   onOpenSample: () => void;
+  /** Picks the step list. The two laps differ in length as well as in content,
+   *  so every read of it — the current step, `last`, the dots — has to come
+   *  from the SAME list or the tour ends on the wrong card. */
+  mobile?: boolean;
 }) {
-  const s = TOUR_STEPS[Math.max(0, Math.min(step, TOUR_STEPS.length - 1))];
-  const last = step >= TOUR_STEPS.length - 1;
+  const steps = tourSteps(mobile);
+  const s = steps[Math.max(0, Math.min(step, steps.length - 1))];
+  const last = step >= steps.length - 1;
   const [rect, setRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
   // Measure the target (viewport px) per step + on resize.
@@ -100,8 +106,8 @@ export default function TourOverlay({
         <span className={styles.title}>{s.title}</span>
         <span className={styles.body}>{s.body}</span>
         <div className={styles.foot}>
-          <div className={styles.dots} aria-label={`Step ${step + 1} of ${TOUR_STEPS.length}`}>
-            {TOUR_STEPS.map((t, i) => (
+          <div className={styles.dots} aria-label={`Step ${step + 1} of ${steps.length}`}>
+            {steps.map((t, i) => (
               <span key={t.id} className={styles.dot} data-on={i === step} />
             ))}
           </div>

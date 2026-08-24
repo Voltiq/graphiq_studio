@@ -8988,7 +8988,7 @@ export default function CanvasArea({
             drawable. Name and size come from the same props the status bar
             uses, so there is one source for both shells. */}
         {mobile && (
-          <div className={styles.mobileStatus} data-mobile-status>
+          <div className={styles.mobileStatus} data-mobile-status data-tour="mobilestatus">
             <span className={styles.mobileStatusName} data-status-name>
               {docs.find((d) => d.id === activeId)?.name ?? ""}
             </span>

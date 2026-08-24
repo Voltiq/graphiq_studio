@@ -3,6 +3,27 @@
 // Each step spotlights a chrome region found by its `data-tour` attribute
 // (TourOverlay measures it live, so docked/floating layouts still work);
 // steps without a target render as a centred card (welcome / finish).
+//
+// TWO LISTS, because the desktop one cannot be repaired into a mobile one.
+// Measured at 390×844, three of its six spotlights pointed at nothing a phone
+// user could see:
+//
+//   toolbar  320×692 at x=-320 — the tools rail is a closed drawer, VISIBLE
+//                                AREA ZERO. An empty rectangle off the side.
+//   dock     390×422 at y=788  — the panels sheet is parked below the fold;
+//                                its only on-screen sliver is 788–844, which
+//                                is precisely the MobileBar's own rect, so the
+//                                step said "Panels" while highlighting the
+//                                bottom bar.
+//   status     0×0            — the desktop status bar is `display: none`
+//                                here, so the spotlight collapsed to the 12×12
+//                                dot the padding leaves in the corner.
+//
+// The bodies were no better: they teach Ctrl+K, hovering a tool for its
+// shortcut, Ctrl+wheel, Space-drag, and dragging a panel to the left dock or
+// floating it — none of which a phone has, and the last two the mobile shell
+// deliberately removed. So the phone gets its own lap, pointing only at chrome
+// that is on screen the whole time. Nothing here has to be opened first.
 
 export interface TourStep {
   id: string;
@@ -12,6 +33,7 @@ export interface TourStep {
   body: string;
 }
 
+/** The desktop lap. */
 export const TOUR_STEPS: TourStep[] = [
   {
     id: "welcome",
@@ -60,3 +82,59 @@ export const TOUR_STEPS: TourStep[] = [
     body: "Open the sample document to poke at real layers, groups and labels — or dive straight in. Help ▸ Getting started keeps the written walkthrough, and Ctrl+K finds anything.",
   },
 ];
+
+/**
+ * The phone's lap.
+ *
+ * Deliberately shorter, and every target is chrome that is always on screen:
+ * the top bar, the bottom bar, the options bar, the stage and the status
+ * readout. The tools sheet and the panels sheet are reached THROUGH the bottom
+ * bar, so the step points at the buttons that open them rather than at a
+ * drawer sitting off-screen — which is also the more useful thing to be shown.
+ */
+export const MOBILE_TOUR_STEPS: TourStep[] = [
+  {
+    id: "welcome",
+    title: "Welcome to Graphiq Studio",
+    body: "A quick lap around the workspace — half a minute, no commitment. You can re-run this any time from Help ▸ Interactive tour.",
+  },
+  {
+    id: "topbar",
+    target: "topbar",
+    title: "Menus & search",
+    body: "☰ opens the menus. Faster: tap Search and type what you want — “curves”, “flatten”, “export” — and every command and tool is one tap away.",
+  },
+  {
+    id: "mobilebar",
+    target: "mobilebar",
+    title: "Your main controls",
+    body: "Tools opens every tool, named. The button beside it shows the one you are using. Pan moves the picture without giving up your brush, and Panels slides the panels up from the bottom.",
+  },
+  {
+    id: "options",
+    target: "options",
+    title: "Tool settings",
+    body: "The current tool's settings live here. Tap Options for the full set — sliders the width of the screen — and anything you must not lose, like Crop's Apply, stays pinned to the bar.",
+  },
+  {
+    id: "canvas",
+    target: "canvas",
+    title: "The canvas",
+    body: "Pinch to zoom, and press and hold with the eyedropper, pen or clone stamp for a magnifier that shows the pixels under your fingertip. Photos you open land here at their own size.",
+  },
+  {
+    id: "status",
+    target: "mobilestatus",
+    title: "Where you are",
+    body: "The document's name and size, and whether your work is saved. The zoom controls sit just below — or pinch the canvas and watch the number follow.",
+  },
+  {
+    id: "finish",
+    title: "That's the lap",
+    body: "Open the sample document to poke at real layers and groups — or dive straight in. Help ▸ Getting started keeps the written walkthrough, and Search finds anything.",
+  },
+];
+
+/** The lap for this shell. */
+export const tourSteps = (mobile: boolean): TourStep[] =>
+  mobile ? MOBILE_TOUR_STEPS : TOUR_STEPS;

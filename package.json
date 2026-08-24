@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -48,6 +48,7 @@
     "test:stranded": "node tools/verify-stranded-panels.js",
     "test:palette": "node tools/verify-command-palette.js",
     "test:chrome": "node tools/verify-mobile-chrome.js",
+    "test:tour": "node tools/verify-tour.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

@@ -8074,6 +8074,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       )}
       {tourStep !== null && (
         <TourOverlay
+          mobile={mobile}
           step={tourStep}
           onStep={setTourStep}
           onClose={closeTour}
