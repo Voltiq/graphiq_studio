@@ -1,4 +1,5 @@
 import { downloadBlob } from "./project";
+import { browserShareDeps, shareOrDownload } from "./share";
 
 /** Whether this browser can use a wide-gamut Display-P3 canvas working space. */
 export function p3Supported(): boolean {
@@ -84,12 +85,35 @@ type ShowSaveFilePicker = (opts: {
   types?: { description: string; accept: Record<string, string[]> }[];
 }) => Promise<SaveHandle>;
 
-/** Save an exported image via the native picker (folder + name) or a download. */
+/**
+ * Save an exported image: the OS share sheet on a touch device, else the
+ * native save picker (folder + name), else a download.
+ *
+ * The share sheet goes FIRST on a phone because it is the only route that
+ * reaches the photo library — a download there lands in Downloads, which is not
+ * where anyone looks for a picture they just edited. It is also the only route
+ * most phone browsers have: `showSaveFilePicker` does not exist on Chrome for
+ * Android at all, so on a phone the old code went straight to the download.
+ *
+ * Ordering matters the other way round on a desktop, where the picker is what
+ * people expect and `shareOrDownload` declines to share anyway (see share.ts —
+ * `canShare({files})` is true on Chrome for Windows, and a share flyout in
+ * place of a download would be a regression).
+ *
+ * Returns false only when the user cancelled — the picker's dialog or the
+ * share sheet — so a caller can tell that from a completed save.
+ */
 export async function saveImageBlob(
   blob: Blob,
   filename: string,
   format: ExportFormat,
 ): Promise<boolean> {
+  const shareDeps = browserShareDeps(downloadBlob);
+  if (shareDeps.coarse) {
+    const outcome = await shareOrDownload(blob, filename, shareDeps);
+    return outcome !== "cancelled";
+  }
+
   const picker = (window as unknown as { showSaveFilePicker?: ShowSaveFilePicker }).showSaveFilePicker;
   if (picker) {
     try {

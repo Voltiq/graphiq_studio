@@ -15,7 +15,7 @@ import {
   sliderLutOps,
   type LutCollectResult,
 } from "../lib/lut-export";
-import { downloadBlob } from "../lib/project";
+import { saveExportBlob } from "../lib/share";
 
 /**
  * Export the document's colour adjustments as a 3D .cube LUT: either the
@@ -57,7 +57,7 @@ export default function ExportLutDialog({
     const table = captureLut(result.ops, size);
     const text = cubeText(table, size, title);
     const safe = (title.trim() || "graphiq-look").replace(/[\\/:*?"<>|]+/g, "-");
-    downloadBlob(new Blob([text], { type: "text/plain" }), `${safe}.cube`);
+    void saveExportBlob(new Blob([text], { type: "text/plain" }), `${safe}.cube`);
     onClose();
   };
 

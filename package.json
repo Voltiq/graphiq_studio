@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.17.0",
+  "version": "1.18.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -49,6 +49,7 @@
     "test:palette": "node tools/verify-command-palette.js",
     "test:chrome": "node tools/verify-mobile-chrome.js",
     "test:tour": "node tools/verify-tour.js",
+    "test:share": "node tools/verify-share.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

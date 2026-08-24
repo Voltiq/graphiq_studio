@@ -5,7 +5,7 @@ import { X } from "lucide-react";
 import styles from "./PasteDialog.module.scss";
 import { Segmented, Toggle } from "./Controls";
 import { encodeTiff } from "../lib/tiff";
-import { downloadBlob } from "../lib/project";
+import { saveExportBlob } from "../lib/share";
 
 /**
  * Export the flattened composite as a TIFF (little-endian, Deflate-compressed
@@ -50,7 +50,7 @@ export default function ExportTiffDialog({
       const rgba = ctx.getImageData(0, 0, c.width, c.height).data;
       const bytes = await encodeTiff(rgba, c.width, c.height, { bits, dpi, alpha });
       const safe = (docName.trim() || "graphiq").replace(/[\\/:*?"<>|]+/g, "-");
-      downloadBlob(new Blob([bytes], { type: "image/tiff" }), `${safe}.tif`);
+      void saveExportBlob(new Blob([bytes], { type: "image/tiff" }), `${safe}.tif`);
       onClose();
     } finally {
       setBusy(false);

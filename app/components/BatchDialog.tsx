@@ -13,7 +13,7 @@ import {
   type ExportPreset,
 } from "../lib/exportpresets";
 import { buildZip, type ZipEntry } from "../lib/zip";
-import { downloadBlob } from "../lib/project";
+import { saveExportBlob } from "../lib/share";
 import { formatBytes } from "../lib/metadata";
 import type { SavedAction } from "../lib/actions";
 
@@ -95,10 +95,10 @@ export default function BatchDialog({
       }
       const names = dedupeFilenames(blobs.map((b) => `${b.stem}.${fmt.ext}`));
       if (blobs.length === 1) {
-        downloadBlob(new Blob([blobs[0].data], { type: fmt.mime }), names[0]);
+        void saveExportBlob(new Blob([blobs[0].data], { type: fmt.mime }), names[0]);
       } else if (blobs.length) {
         const entries: ZipEntry[] = blobs.map((b, i) => ({ name: names[i], data: b.data }));
-        downloadBlob(buildZip(entries), `batch-${new Date().toISOString().slice(0, 10)}.zip`);
+        void saveExportBlob(buildZip(entries), `batch-${new Date().toISOString().slice(0, 10)}.zip`);
       }
       setReport({ ok: blobs.length, errors });
     } finally {

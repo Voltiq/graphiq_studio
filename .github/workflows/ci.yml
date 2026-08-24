@@ -265,6 +265,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: Export reaches the OS share sheet, and falls back intact
+        run: npm run test:share -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

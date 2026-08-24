@@ -218,6 +218,7 @@ import LevelsDialog, { type EyedropKind } from "./LevelsDialog";
 import Toast from "./Toast";
 import SaveAsDialog from "./SaveAsDialog";
 import RenameDocDialog from "./RenameDocDialog";
+import { saveExportBlob } from "../lib/share";
 import RecentsDialog from "./RecentsDialog";
 import ExportDialog, { type BatchRun } from "./ExportDialog";
 import ImportDialog, { type ImportItem, type ImportMode, type ImportOptions } from "./ImportDialog";
@@ -4694,7 +4695,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     }
     const unique = dedupeFilenames(names);
     const zip = buildZip(unique.map((name, i) => ({ name, data: datas[i] })));
-    downloadBlob(zip, `${(docName.trim() || "export").replace(/\.zip$/i, "")}.zip`);
+    void saveExportBlob(zip, `${(docName.trim() || "export").replace(/\.zip$/i, "")}.zip`);
     setExportComposite(null);
     showToast(
       failed
@@ -5075,7 +5076,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       showToast("Export frames failed — nothing could be encoded.");
       return;
     }
-    downloadBlob(buildZip(entries), `${base}-frames.zip`);
+    void saveExportBlob(buildZip(entries), `${base}-frames.zip`);
     showToast(
       `Exported ${entries.length} frame${entries.length === 1 ? "" : "s"} as .zip` +
         (skipped ? ` (${skipped} empty layer${skipped === 1 ? "" : "s"} skipped)` : ""),
@@ -5763,7 +5764,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       return;
     }
     const name = (d.name || "artwork").replace(/\.svg$/i, "");
-    downloadBlob(new Blob([svg], { type: "image/svg+xml" }), `${name}.svg`);
+    void saveExportBlob(new Blob([svg], { type: "image/svg+xml" }), `${name}.svg`);
     showToast(
       skipped
         ? `Exported ${vectorLayers} vector layer${vectorLayers === 1 ? "" : "s"} — ${skipped} without a vector source skipped`
@@ -5833,7 +5834,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       nodes,
       ctx.getImageData(0, 0, comp.width, comp.height),
     );
-    downloadBlob(new Blob([buf], { type: "image/vnd.adobe.photoshop" }), `${d.name || "artwork"}.psd`);
+    void saveExportBlob(new Blob([buf], { type: "image/vnd.adobe.photoshop" }), `${d.name || "artwork"}.psd`);
     showToast(
       skipped
         ? `Exported PSD — ${skipped} adjustment layer${skipped === 1 ? "" : "s"} skipped (no PSD equivalent)`

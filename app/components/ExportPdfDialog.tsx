@@ -5,7 +5,7 @@ import { X } from "lucide-react";
 import styles from "./PasteDialog.module.scss";
 import { Segmented, Select, Slider, Toggle } from "./Controls";
 import { buildPdf, layoutPage, PAPER_SIZES, type PdfLayoutOptions } from "../lib/pdf";
-import { downloadBlob } from "../lib/project";
+import { saveExportBlob } from "../lib/share";
 
 /**
  * Export the flattened composite as a single-page PDF (hand-written writer):
@@ -82,7 +82,7 @@ export default function ExportPdfDialog({
         { title: docName, author: author || undefined },
       );
       const safe = (docName.trim() || "graphiq").replace(/[\\/:*?"<>|]+/g, "-");
-      downloadBlob(new Blob([pdf], { type: "application/pdf" }), `${safe}.pdf`);
+      void saveExportBlob(new Blob([pdf], { type: "application/pdf" }), `${safe}.pdf`);
       onClose();
     } finally {
       setBusy(false);
