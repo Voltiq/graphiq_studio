@@ -208,6 +208,29 @@ const INSPECT = async (url) => {
       )
       .join(", "));
 
+  // ============================================= the icon in the browser tab ==
+  /* A DIFFERENT rule from the two above, and getting them confused is what went
+     wrong: a maskable icon must be fully opaque and the Apple icon must be too
+     (iOS paints transparency black), but the FAVICON must not be. The tab strip
+     supplies its own background — light in a light theme — so a filled ground
+     shows up as a dark box around the butterfly. It was filled, because the
+     Apple rule had been carried one block down in the generator. */
+  const declared = await page.evaluate(() =>
+    [...document.querySelectorAll('link[rel~="icon"]')].map((l) => l.getAttribute("href")),
+  );
+  check("the document names its tab icon rather than leaving it to a probe",
+    declared.some((h) => /favicon\.ico/.test(h)),
+    declared.length ? declared.join(", ") : "no rel=icon link — the browser falls back to /favicon.ico");
+
+  const fav = await page.evaluate(INSPECT, new URL("/favicon.ico", urlArg()).href);
+  check("…and it is served rather than 404ing on every load",
+    fav.ok, fav.ok ? `${fav.bytes} bytes, ${fav.w}x${fav.h}` : `status ${fav.status}`);
+  check("…with a transparent ground, unlike the Apple and maskable icons",
+    fav.ok && fav.transparentPx > 0,
+    fav.ok
+      ? `${fav.transparentPx} transparent px of ${fav.w * fav.h}`
+      : "not decoded");
+
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
   await context.close();

@@ -731,9 +731,15 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **A mutation aimed at the wrong token taught something.** Breaking `--chrome-top` changed nothing here: that is the derived offset for what sits BELOW the bar, and `verify-safe-area` already owns it. This rail measures the bar's own box, which is `--topbar-total`. A mutation that survives is sometimes a statement about the mutation.
 - **Mutation-tested six ways:** the capable tag removed, an opaque status bar, the label falling back to the document title, no apple-touch-icon, a transparent touch icon, and the top bar ignoring the inset.
 
+#### The favicon had the Apple icon's rule applied to it
+
+- **Reported as "the butterfly sits in a black box in the tab", and that is exactly what it was.** All three payloads in `favicon.ico` measured **0 transparent pixels**: the generator composited the glyph onto the opaque `#18191a` ground. The rule was right one block above — the apple-touch-icon *must* be opaque, because iOS paints transparency black — and carrying it down to the favicon was simply wrong. A tab strip paints its own background, and it is not always dark, so a filled ground shows as a box in every theme. Now **60–73% transparent** at 16, 32 and 48px, while the Apple and maskable icons stay fully opaque, as they have to.
+- **The document was not naming a tab icon at all.** Setting `icons.apple` in Next's metadata suppresses the file-convention link for `app/icon.png`, so the only declared icon was Apple's and the tab fell back to a bare `/favicon.ico` probe. Both tab icons are now declared explicitly — the .ico and the transparent 192px PNG — so which icon a browser shows is a decision rather than a guess.
+- **Guarded by the check that reproduces it.** `verify-manifest` now asserts the favicon is declared, served, and *not* opaque; putting the old composite back fails it with `0 transparent px of 2304`, which is the reported bug in one line.
+
 #### A 404 the rail found on the way
 
-- **`/favicon.ico` was 404ing on every load** — console noise for anyone with the tools open, a wasted request for everyone else. Nothing looked for it: the rail fails on console errors, and it turned up there. `app/icon.png` gives Next a `<link rel="icon">`, and browsers probe the classic path regardless.
+- **`/favicon.ico` was 404ing on every load** — console noise for anyone with the tools open, a wasted request for everyone else. Nothing looked for it: the rail fails on console errors, and it turned up there. Browsers probe the classic path regardless of what a page declares. *(Written believing `app/icon.png` also supplied a `<link rel="icon">`. It did not: declaring `icons.apple` in Next's metadata suppresses the file-convention link, so the probe was the only route — see *The favicon had the Apple icon's rule applied to it* above.)*
 - **The .ico is hand-packed.** It is a 6-byte ICONDIR, one 16-byte ICONDIRENTRY per image, then the images — and since Vista the payload may be a PNG rather than a DIB, which is what this writes at 16, 32 and 48px. No encoder needed beyond the PNGs already being generated, and pulling in a dependency to lay out 22 bytes of header would have been the larger cost. It is written by the same `npm run icons` that makes the rest.
 
 ### Installable, with icons a launcher will not letterbox

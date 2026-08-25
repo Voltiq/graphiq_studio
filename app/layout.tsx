@@ -96,6 +96,16 @@ export const metadata: Metadata = {
        maskable one (which would float small inside Apple's own inset). It is
        the full glyph on the opaque ground — see tools/build-pwa-icons.js. */
     apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+    /* Declaring ANY icon here suppresses Next's file-convention link for
+       `app/icon.png`, so before this the document named only the Apple icon and
+       the tab fell back to a bare `/favicon.ico` probe. Naming it explicitly
+       makes the tab icon a decision rather than a guess — and unlike the Apple
+       icon above, both of these are TRANSPARENT, because the tab strip paints
+       its own background and it is not always dark. */
+    icon: [
+      { url: "/favicon.ico", sizes: "16x16 32x32 48x48", type: "image/x-icon" },
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
   },
 
   // The app ships its own dark/light theme, so tell the Dark Reader extension

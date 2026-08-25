@@ -92,8 +92,10 @@ const SIZES = [192, 512];
   console.log(`  apple-touch-icon.png  ${(fs.statSync(apple).size / 1024).toFixed(1)} KB`);
 
   /* ---- favicon.ico ----
-     `app/icon.png` gives Next a `<link rel="icon">`, and browsers STILL probe
-     `/favicon.ico` — measured: a 404 on every load, which is console noise for
+     Browsers probe `/favicon.ico` whatever a page declares, and here it is the
+     PRIMARY route: declaring `icons.apple` in Next's metadata suppresses the
+     file-convention link for `app/icon.png`, so for a long time the document
+     named no tab icon at all. Both are declared explicitly now. Measured: a 404 on every load, which is console noise for
      anyone with the tools open and a wasted request for everyone else. It was
      found by a rail that fails on console errors rather than by looking for it.
 
@@ -102,19 +104,21 @@ const SIZES = [192, 512];
      than a DIB, which is what this writes — no encoder needed beyond the PNGs
      already being made. Hand-packed because the app hand-writes its own
      encoders, and because pulling in a dependency to lay out 22 bytes of
-     header would be the larger cost. */
+     header would be the larger cost.
+
+     TRANSPARENT, unlike the apple-touch-icon directly above — and that contrast
+     is the whole of it. The Apple icon MUST be opaque, because iOS paints
+     transparency black. A favicon must NOT be, because the tab strip supplies
+     its own background and it is not always dark. Filling the ground here (which
+     is what this did, by carrying the Apple rule one block down) put the
+     butterfly in a #18191a box: visible against a light tab strip, and against a
+     dark one too, since that is not the browser's own grey. */
   const ICO_SIZES = [16, 32, 48];
   const pngs = [];
   for (const s of ICO_SIZES) {
     pngs.push(
-      await sharp({ create: { width: s, height: s, channels: 4, background: GROUND } })
-        .composite([
-          {
-            input: await sharp(src)
-              .resize(s, s, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
-              .toBuffer(),
-          },
-        ])
+      await sharp(src)
+        .resize(s, s, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
         .png({ compressionLevel: 9 })
         .toBuffer(),
     );
