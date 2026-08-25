@@ -951,7 +951,12 @@ html[data-mobile="true"][data-commit] .gq-m-commit {
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: calc(var(--chrome-bottom) + var(--sp-3));
+  /* Above the keyboard, which is the only time it matters for TEXT: you are
+     typing, so the keyboard is up, and `--chrome-bottom` alone put the pair
+     **232px behind it** — Done and Cancel unreachable at exactly the moment
+     they are the way out. The MobileBar sits at `--kb-inset` for the same
+     reason, so this stacks on top of it. */
+  bottom: calc(var(--kb-inset, 0px) + var(--chrome-bottom) + var(--sp-3));
   z-index: 118;
   display: flex;
   gap: var(--sp-2);

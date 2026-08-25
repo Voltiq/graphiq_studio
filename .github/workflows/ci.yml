@@ -295,6 +295,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: A text session can be finished and abandoned by touch
+        run: npm run test:textsession -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

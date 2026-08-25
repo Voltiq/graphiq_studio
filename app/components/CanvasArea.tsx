@@ -4460,6 +4460,56 @@ export default function CanvasArea({
     refreshCommittable();
   }, [cropBox, showTransform, textSession, refreshCommittable]);
 
+  /**
+   * Pan so the text caret clears the keyboard.
+   *
+   * `keepFocusVisible` (useVisualViewport) handles a field inside a scroller by
+   * scrolling it; a text session has no scroller to scroll. The editable sits
+   * over the ARTWORK, in document space, so the way to lift the caret is to
+   * move the view — which also moves the text with it, exactly as dragging the
+   * picture would.
+   *
+   * Measured at 390×844 with a 300px keyboard: tapping in the bottom of the
+   * artwork and typing six lines left the caret **61px behind the keyboard**,
+   * which is to say you could not see the line you were on.
+   *
+   * The caret's own rect, not the editable's: a block of text can extend below
+   * the fold while the line being typed is perfectly visible, and the reverse
+   * is true the moment a new line is added.
+   */
+  const keepCaretVisible = useCallback(() => {
+    if (!textSessionRef.current) return;
+    const kb =
+      parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--kb-inset")) || 0;
+    if (kb <= 0) return;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    const r = sel.getRangeAt(0).getBoundingClientRect();
+    if (!r.height && !r.width) return;
+    const delta = Math.round(r.bottom + 12 - (window.innerHeight - kb));
+    if (delta <= 0) return; // already in view — never move for the sake of it
+    setPanRef.current((p) => ({ x: p.x, y: p.y - delta }));
+  }, []);
+
+  /* Watched while a session is live: the keyboard opening fires on
+     `visualViewport`, and typing a new line fires `selectionchange` — neither
+     one alone covers both. */
+  useEffect(() => {
+    if (!textSession) return;
+    const vv = window.visualViewport;
+    const run = () => keepCaretVisible();
+    vv?.addEventListener("resize", run);
+    document.addEventListener("selectionchange", run);
+    if (process.env.NODE_ENV !== "production") {
+      (window as unknown as { __gqKeepCaretVisible?: () => void }).__gqKeepCaretVisible = run;
+    }
+    return () => {
+      vv?.removeEventListener("resize", run);
+      document.removeEventListener("selectionchange", run);
+      delete (window as unknown as { __gqKeepCaretVisible?: () => void }).__gqKeepCaretVisible;
+    };
+  }, [textSession, keepCaretVisible]);
+
   // Report the viewport size up, and re-clamp the pan, on resize.
   useEffect(() => {
     const vp = viewportRef.current;

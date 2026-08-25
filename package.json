@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.23.0",
+  "version": "1.24.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -55,6 +55,7 @@
     "test:dialoginternals": "node tools/verify-dialog-internals.js",
     "test:dialogzoom": "node tools/verify-dialog-zoom.js",
     "test:keyboard": "node tools/verify-keyboard.js",
+    "test:textsession": "node tools/verify-text-session.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

@@ -561,6 +561,35 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   }, [drawerShell]);
   const toggleMobileDrawer = (d: "tools" | "panels") =>
     setMobileDrawer((cur) => (cur === d ? null : d));
+
+  /**
+   * The touch ✓/✕ pair, aimed at whatever is actually live.
+   *
+   * It works by synthesising the key the desktop uses, so that every existing
+   * handler stays as it is — and for a pen path, a crop and a transform those
+   * handlers are on `window`, so dispatching there reaches them.
+   *
+   * A TEXT session is not like that: its handlers live on the `contentEditable`
+   * itself and call `stopPropagation`, so a key dispatched at `window` never
+   * arrives. The pair was inert for text — visible, tappable, and doing
+   * nothing, which is worse than absent. Its contract differs too: plain Enter
+   * inserts a newline there, and committing is Ctrl+Enter.
+   *
+   * So: aim at the editable when there is one, and speak its language.
+   */
+  const finishTouchSession = (kind: "commit" | "cancel") => {
+    const editable = document.querySelector<HTMLElement>('[contenteditable="true"]');
+    const target: EventTarget = editable ?? window;
+    const init: KeyboardEventInit =
+      kind === "cancel"
+        ? { key: "Escape" }
+        : editable
+          ? { key: "Enter", ctrlKey: true }
+          : { key: "Enter" };
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true }),
+    );
+  };
   /* While a pointer is down on the canvas, mark it on <html> so the edge strips
      stand aside (globals.scss). An attribute rather than React state on
      purpose: this fires at the start of every stroke, and re-rendering the
@@ -7762,11 +7791,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
               type="button"
               aria-label="Cancel"
               title="Cancel (Escape)"
-              onClick={() =>
-                window.dispatchEvent(
-                  new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
-                )
-              }
+              onClick={() => finishTouchSession("cancel")}
             >
               <span aria-hidden>✕</span>
             </button>
@@ -7775,11 +7800,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
               aria-label="Commit"
               title="Finish (Enter)"
               data-primary
-              onClick={() =>
-                window.dispatchEvent(
-                  new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
-                )
-              }
+              onClick={() => finishTouchSession("commit")}
             >
               <span aria-hidden>✓</span>
             </button>
