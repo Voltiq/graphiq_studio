@@ -179,6 +179,7 @@ export const MENUS: Menu[] = [
       { label: "Gamut warning", shortcut: "Ctrl+Alt+Shift+Y", action: "view-gamut", separatorAfter: true },
       { label: "Compare color profiles…", separatorAfter: true, action: "color-compare" },
       { label: "Performance HUD", action: "view-perf-hud" },
+      { label: "More space…", action: "view-more-space" },
     ],
   },
   {

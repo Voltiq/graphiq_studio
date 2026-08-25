@@ -315,6 +315,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: "More space" offers only what the platform can actually do
+        run: npm run test:morespace -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

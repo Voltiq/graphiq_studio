@@ -218,6 +218,8 @@ import LevelsDialog, { type EyedropKind } from "./LevelsDialog";
 import Toast from "./Toast";
 import SaveAsDialog from "./SaveAsDialog";
 import RenameDocDialog from "./RenameDocDialog";
+import MoreSpaceDialog from "./MoreSpaceDialog";
+import type { BeforeInstallPromptEvent } from "../lib/space";
 import { saveExportBlob } from "../lib/share";
 import RecentsDialog from "./RecentsDialog";
 import ExportDialog, { type BatchRun } from "./ExportDialog";
@@ -818,6 +820,45 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
      desktop keyboard user never had one at all. */
   const [renameOpen, setRenameOpen] = useState(false);
   const [recentsOpen, setRecentsOpen] = useState(false);
+  const [moreSpaceOpen, setMoreSpaceOpen] = useState(false);
+  /* The install prompt has to be caught, not asked for. Chrome fires
+     `beforeinstallprompt` when it has decided the app is installable, and
+     that event IS the permission: calling `prompt()` on the stored copy is the
+     only way a page can open the install flow, and preventing its default is
+     what stops Chrome showing its own mini-infobar instead. It fires once, or —
+     on iOS, and on any Chrome without a service worker — never, which is why
+     "More space" treats a captured prompt as the whole test for offering to
+     install rather than guessing from the platform. */
+  const installEvent = useRef<BeforeInstallPromptEvent | null>(null);
+  const [installReady, setInstallReady] = useState(false);
+  useEffect(() => {
+    const onPrompt = (e: Event) => {
+      e.preventDefault();
+      installEvent.current = e as BeforeInstallPromptEvent;
+      setInstallReady(true);
+    };
+    /* Installed. The event will not fire again, and there is nothing to offer. */
+    const onInstalled = () => {
+      installEvent.current = null;
+      setInstallReady(false);
+    };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+  /* Spent either way: the spec allows one `prompt()` per event, whether the
+     user accepts or dismisses. Forgetting it is what keeps the button from
+     coming back as a no-op. */
+  const runInstall = useCallback(() => {
+    const e = installEvent.current;
+    if (!e) return;
+    installEvent.current = null;
+    setInstallReady(false);
+    void e.prompt();
+  }, []);
   const [panels, setPanelsState] = useState<PanelVisibility>(ALL_PANELS);
   const [showRulers, setShowRulers] = useState(true);
   const [showGrid, setShowGrid] = useState(false);
@@ -6650,6 +6691,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "save") saveProject();
     else if (actionId === "save-as") setSaveAsOpen(true);
     else if (actionId === "doc-rename") setRenameOpen(true);
+    else if (actionId === "view-more-space") setMoreSpaceOpen(true);
     else if (actionId === "import") openImport();
     else if (actionId === "export-as") openExport();
     else if (actionId === "export-svg") exportVectorSVG();
@@ -8249,6 +8291,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
       {recentsOpen && (
         <RecentsDialog onOpenText={loadProjectText} onClose={() => setRecentsOpen(false)} />
+      )}
+
+      {moreSpaceOpen && (
+        <MoreSpaceDialog
+          installPrompt={installReady}
+          onInstall={runInstall}
+          onClose={() => setMoreSpaceOpen(false)}
+        />
       )}
 
       {printOpen && (
