@@ -994,6 +994,67 @@ html[data-mobile="true"][data-drawer="panels"] .gq-m-scrim {
 }
 
 /* ==========================================================================
+   DIALOG CAPS THAT THE UI ZOOM CANNOT COMPOUND
+
+   `Editor.module.scss` puts `zoom: var(--ui-zoom)` on every dialog overlay so
+   the chrome scales without resampling the canvas. Inside a zoomed subtree a
+   viewport unit still resolves against the UNZOOMED viewport, and the zoom then
+   multiplies the result — so `max-height: calc(100dvh - 64px)` at Large scale
+   caps the dialog at 1.25 × (100dvh - 64px) on screen. The cap is 25% too
+   generous, which is to say it is not a cap.
+
+   Measured at Large on a 1280×620 laptop: Export ran **111px below the bottom
+   of the screen** with `elementFromPoint` on its Export button returning
+   nothing, and Preferences 75px below with the same result. On a 1400×700
+   desktop: 71px and 25px. The width axis fails the same way — a 900px-wide
+   Preferences in a 768px tablet viewport, from `max-width: calc(100vw - 32px)`
+   multiplied by 1.25.
+
+   Dividing by `--ui-zoom` puts the answer back in screen pixels: a local cap of
+   `(100dvh - 64px) / 1.25`, multiplied by the zoom, lands exactly on
+   `100dvh - 64px`.
+
+   This ALSO gives a cap to the 22 dialogs behind `PasteDialog.module.scss`,
+   which had none — Export at default scale already ran 27px past the bottom of
+   a 1280×620 laptop before any zoom was involved.
+
+   `html` prefixes the selector only to outrank the modules' own `.dialog`
+   rules; `:has(> header)` is the same title-bar scope the phone sheets use, so
+   the command palette, the colour popover and the tour keep their own sizing.
+   The phone's `max-height: none !important` still wins, which is intended: a
+   full-screen sheet is sized by its `inset`, not by a cap. */
+html [role="dialog"]:has(> header) {
+  max-width: calc((100vw - 32px) / var(--ui-zoom, 1));
+  max-height: calc((100dvh - 64px - var(--kb-inset, 0px)) / var(--ui-zoom, 1));
+
+  /* A cap on a dialog whose `overflow` is `hidden` does not save the footer —
+     it moves the clipping from the edge of the SCREEN to the edge of the
+     DIALOG, which is no better. Measured with the cap alone: Export fitted the
+     screen on every viewport and its Export button still returned nothing from
+     `elementFromPoint`, because the footer was past the bottom of the box.
+
+     So the same shape the phone sheets use, everywhere: the title bar and the
+     actions are pinned, and everything between them scrolls. These dialogs are
+     already a header, a body and a footer stacked, so a column flex lays them
+     out exactly as block flow did. */
+  display: flex;
+  flex-direction: column;
+}
+
+/* The middle scrolls, and that one rule is the whole mechanism. There is no
+   `flex: 0 0 auto` on the header and footer here: it was written, mutated, and
+   deleted when nothing could be made to fail without it — in a column flex,
+   `flex-basis: auto` with the default `flex-grow: 0` already holds them at
+   content height, and `min-height: auto` stops them shrinking below it. What
+   makes the footer survive a cap is `min-height: 0` on the MIDDLE, which is
+   what lets a scroll container give up space at all. */
+html [role="dialog"]:has(> header) > *:not(header):not(footer) {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* ==========================================================================
    DIALOGS ON A PHONE — full-screen sheets
 
    The mobile block never mentioned dialogs, so all 39 kept their desktop
@@ -1035,8 +1096,6 @@ html[data-mobile="true"] {
     border: 0;
     border-radius: 0;
     box-shadow: none;
-    display: flex;
-    flex-direction: column;
     padding-top: var(--safe-t);
     padding-bottom: var(--safe-b);
     /* The desktop `pop` scales up from the middle, which reads as a mistake at
@@ -1044,17 +1103,10 @@ html[data-mobile="true"] {
     animation: gqDialogUp var(--t-med) var(--ease-pop);
   }
 
-  /* The title bar and the actions are pinned; everything between them scrolls.
-     This is the half that matters — the footer is where Apply and Cancel live,
-     and clipping it is what made Export unusable on a short phone. */
-  [role="dialog"]:has(> header) > header,
-  [role="dialog"]:has(> header) > footer {
-    flex: 0 0 auto;
-  }
+  /* Pinning the title bar and the actions is now general — see the cap rule
+     above, which needs the same structure for the same reason. What is left
+     here is what only a phone wants. */
   [role="dialog"]:has(> header) > *:not(header):not(footer) {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
 

@@ -285,6 +285,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: Dialogs stay on screen at every interface scale
+        run: npm run test:dialogzoom -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log
