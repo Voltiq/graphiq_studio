@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { sharedCeiling } from "../lib/canvas-ceiling";
 import { X } from "lucide-react";
 import styles from "./CanvasSizeDialog.module.scss";
 
@@ -12,7 +13,12 @@ const PRESETS: { label: string; w: number; h: number }[] = [
   { label: "Story — 1080 × 1920", w: 1080, h: 1920 },
   { label: "A4 @ 300 dpi — 2480 × 3508", w: 2480, h: 3508 },
 ];
-const clampSize = (v: number) => Math.max(1, Math.min(8192, Math.round(v) || 0));
+/* 8192 is the product's own ceiling; the probed one is the browser's. Taking
+   the lower of the two means a browser that cannot hold 8192 on a side — which
+   is not hypothetical, WebKit's limits are far tighter than Chromium's — caps
+   the dialog rather than letting it offer a document that opens blank. */
+const sizeCap = () => Math.min(8192, sharedCeiling().maxSide || 8192);
+const clampSize = (v: number) => Math.max(1, Math.min(sizeCap(), Math.round(v) || 0));
 
 /** File ▸ New… — name + canvas size (presets or custom). Preferences can skip
  *  this dialog entirely and create with the stored defaults instead. */
@@ -107,14 +113,14 @@ export default function NewDocDialog({
           <div className={styles.row}>
             <span className={styles.rowLabel}>Width</span>
             <div className={styles.numBox}>
-              <input type="number" min={1} max={8192} value={w} onChange={(e) => setW(Number(e.target.value))} />
+              <input type="number" min={1} max={sizeCap()} value={w} onChange={(e) => setW(Number(e.target.value))} />
               <span className={styles.unit}>px</span>
             </div>
           </div>
           <div className={styles.row}>
             <span className={styles.rowLabel}>Height</span>
             <div className={styles.numBox}>
-              <input type="number" min={1} max={8192} value={h} onChange={(e) => setH(Number(e.target.value))} />
+              <input type="number" min={1} max={sizeCap()} value={h} onChange={(e) => setH(Number(e.target.value))} />
               <span className={styles.unit}>px</span>
             </div>
           </div>

@@ -220,6 +220,7 @@ import SaveAsDialog from "./SaveAsDialog";
 import RenameDocDialog from "./RenameDocDialog";
 import MoreSpaceDialog from "./MoreSpaceDialog";
 import { INSTALL_EVENT, INSTALL_SLOT } from "../lib/space";
+import { checkSize, sharedCeiling } from "../lib/canvas-ceiling";
 import { saveExportBlob } from "../lib/share";
 import RecentsDialog from "./RecentsDialog";
 import ExportDialog, { type BatchRun } from "./ExportDialog";
@@ -768,6 +769,20 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     window.clearTimeout(toastTimer.current);
     setToast(null);
   };
+  /* Asked wherever a document takes its size from something outside our
+     control — a file, a dialog, a saved project. Past the browser's canvas
+     limits nothing throws: the document opens with the right name, the right
+     tab and no pixels at all, and the console stays empty. Refusing with a
+     sentence is the entire difference between "this browser cannot do that"
+     and "this app ate my photo".
+
+     Free when the answer is no, which is the case that matters — see
+     lib/canvas-ceiling for why that decides the design. */
+  const acceptSize = (w: number, h: number, what = "image") => {
+    const r = checkSize(Math.round(w), Math.round(h), { what });
+    if (!r.ok) showToast(r.message);
+    return r.ok;
+  };
   const [blurFxOpen, setBlurFxOpen] = useState(false);
   const [blurFx, setBlurFx] = useState<BlurFxSettings>(DEFAULT_BLUR_FX);
   // The composited result of the live blur preview, shown inside the gallery dialog.
@@ -834,6 +849,24 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     window.addEventListener(INSTALL_EVENT, read);
     return () => window.removeEventListener(INSTALL_EVENT, read);
   }, []);
+  /* Dev-only handle, in the same family as `__gqFits` and `__gqPerf`. The rail
+     needs to see what was probed and what that probe cost — specifically that
+     `provenArea` is still 0 after boot, which is how "the boot probe allocated
+     nothing large" is asserted rather than assumed. */
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const w = window as unknown as {
+      __gqCeiling?: () => ReturnType<typeof sharedCeiling>;
+      __gqCheckSize?: (a: number, b: number) => ReturnType<typeof checkSize>;
+    };
+    w.__gqCeiling = () => sharedCeiling();
+    w.__gqCheckSize = (a: number, b: number) => checkSize(a, b);
+    return () => {
+      delete w.__gqCeiling;
+      delete w.__gqCheckSize;
+    };
+  }, []);
+
   /* Spent either way: the spec allows one `prompt()` per event, whether the
      user accepts or dismisses. Clearing the slot is what keeps the button from
      coming back as a no-op. */
@@ -1155,6 +1188,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   const setActiveSize = (s: CanvasSize) => {
     const d = activeDocRef.current;
+    if (!acceptSize(s.width, s.height, "canvas")) return;
     if (s.anchor !== undefined && (s.width !== d.width || s.height !== d.height)) {
       // Reframe with the chosen anchor BEFORE patching dims (the reactive
       // setDoc then no-ops) — this is what makes the anchor grid take effect.
@@ -1178,6 +1212,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // resizeImage runs first so the follow-up size change is a no-op for the engine.
   const applyImageSize = (s: CanvasSize) => {
     const d = activeDocRef.current;
+    if (!acceptSize(s.width, s.height, "image")) return;
     paintRef.current?.resizeImage(s.width, s.height, collectLeafIds(d.layers), true);
     setDocs((ds) =>
       ds.map((x) =>
@@ -3915,8 +3950,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   // New canvas — the New Document dialog, or the stored default size.
   const createDoc = (opts?: { name?: string; width?: number; height?: number; dpi?: number }) => {
-    const seq = (seqRef.current += 1);
     const p = prefsRef.current;
+    /* Before the sequence number moves, so a refusal does not burn a doc id. */
+    if (!acceptSize(opts?.width ?? p.newDocWidth, opts?.height ?? p.newDocHeight, "document")) return;
+    const seq = (seqRef.current += 1);
     const d = makeDoc(
       seq,
       { w: opts?.width ?? p.newDocWidth, h: opts?.height ?? p.newDocHeight },
@@ -4440,6 +4477,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // Rebuild a document from a parsed .gproj file. Layer ids are remapped to fresh
   // ones so a loaded project never collides with already-open documents.
   const loadProject = (p: ProjectFile, activate = true): string => {
+    /* A .gproj records its own dimensions, and nothing stops a file written on
+       one machine naming a size this browser cannot hold. */
+    if (!acceptSize(p.width, p.height, "document")) return "";
     commitFloatIfAny(); // merge any floating paste on the current doc first
     /* Open the file in the space it was WRITTEN in (v24), before its pixels are
        decoded. The layer PNGs carry the authoring space's profile, so decoding
@@ -4636,8 +4676,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         window.alert("This file isn't a valid Graphiq project (.gproj).");
         return false;
       }
-      loadProject(parsed as ProjectFile);
-      return true;
+      /* An empty id means the size was refused — so the caller must not go on
+         to file it under recents as though it had opened. */
+      return !!loadProject(parsed as ProjectFile);
     } catch {
       window.alert("Couldn't open the file — it may be corrupted.");
       return false;
@@ -4660,7 +4701,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         const parsed = JSON.parse(entry.json);
         const fmt = parsed?.format;
         if ((fmt === "graphiq-project" || fmt === "aperture-project") && Array.isArray(parsed.layers)) {
-          ids.push(loadProject(parsed as ProjectFile, false));
+          const id = loadProject(parsed as ProjectFile, false);
+          if (id) ids.push(id);
         }
       } catch {
         /* skip a corrupt entry, keep the rest */
@@ -5583,7 +5625,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     })();
   };
 
-  const importAsCanvases = (items: ImportItem[]) => {
+  const importAsCanvases = (itemsIn: ImportItem[]) => {
+    /* The path that made this necessary: a 20 KB file naming itself 70000×100
+       opened as a document with two canvases and not one pixel in it. Each
+       picture is judged on its own so one impossible file in a multi-select
+       does not take the rest down with it. */
+    const items = itemsIn.filter((it) => acceptSize(it.bitmap.width, it.bitmap.height));
+    if (!items.length) return;
     rememberRecent(items);
     const entries: PendingLoad[] = [];
     let firstId: string | null = null;

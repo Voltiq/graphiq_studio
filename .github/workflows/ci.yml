@@ -325,6 +325,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: Documents too big for the browser are refused, not opened blank
+        run: npm run test:ceiling -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

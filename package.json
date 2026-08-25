@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.29.0",
+  "version": "1.30.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -61,7 +61,9 @@
     "test:ioswebapp": "node tools/verify-ios-webapp.js",
     "test:morespace": "node tools/verify-more-space.js",
     "test:installable": "node tools/verify-installable.js",
+    "test:ceiling": "node tools/verify-canvas-ceiling.js",
     "icons": "node tools/build-pwa-icons.js",
+    "fixtures": "node tools/build-size-fixtures.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

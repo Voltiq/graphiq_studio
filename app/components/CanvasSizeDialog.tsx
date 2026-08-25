@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { sharedCeiling } from "../lib/canvas-ceiling";
 import { Link2, Link2Off, X } from "lucide-react";
 import styles from "./CanvasSizeDialog.module.scss";
 import { Select } from "./Select";
@@ -13,8 +14,12 @@ export interface CanvasSize {
 }
 
 const MIN = 1;
-const MAX = 10000;
-const clampDim = (n: number) => Math.min(MAX, Math.max(MIN, n));
+/* The product's ceiling, and the browser's, whichever is lower. See the same
+   pairing in NewDocDialog: a hard-coded cap that the browser cannot honour is
+   an offer to make a blank document. */
+const PRODUCT_MAX = 10000;
+const maxDim = () => Math.min(PRODUCT_MAX, sharedCeiling().maxSide || PRODUCT_MAX);
+const clampDim = (n: number) => Math.min(maxDim(), Math.max(MIN, n));
 
 const PRESETS: { label: string; w: number; h: number }[] = [
   { label: "Full HD — 1920 × 1080", w: 1920, h: 1080 },
@@ -149,7 +154,7 @@ export default function CanvasSizeDialog({
                     type="number"
                     inputMode="numeric"
                     min={MIN}
-                    max={MAX}
+                    max={maxDim()}
                     value={w}
                     onChange={(e) => onWidth(e.target.value)}
                   />
@@ -163,7 +168,7 @@ export default function CanvasSizeDialog({
                     type="number"
                     inputMode="numeric"
                     min={MIN}
-                    max={MAX}
+                    max={maxDim()}
                     value={h}
                     onChange={(e) => onHeight(e.target.value)}
                   />
