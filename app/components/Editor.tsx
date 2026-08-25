@@ -221,6 +221,7 @@ import RenameDocDialog from "./RenameDocDialog";
 import MoreSpaceDialog from "./MoreSpaceDialog";
 import { INSTALL_EVENT, INSTALL_SLOT } from "../lib/space";
 import { checkSize, sharedCeiling } from "../lib/canvas-ceiling";
+import { setCanvasFailureHandler } from "../lib/paint";
 import { saveExportBlob } from "../lib/share";
 import RecentsDialog from "./RecentsDialog";
 import ExportDialog, { type BatchRun } from "./ExportDialog";
@@ -849,6 +850,29 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     window.addEventListener(INSTALL_EVENT, read);
     return () => window.removeEventListener(INSTALL_EVENT, read);
   }, []);
+  /* An allocation that came back dead. There is nothing to recover to — the
+     buffer is transparent black and will stay that way — so the only thing that
+     matters is that the user is told what happened, because the alternative is
+     a photograph that silently turns blank and an app that looks like it
+     destroyed their work. Said once: fifty dead buffers are one event. */
+  useEffect(() => {
+    setCanvasFailureHandler(({ w, h }) => {
+      if (process.env.NODE_ENV !== "production") {
+        /* Counted, not just shown. The toast is a single slot — reporting five
+           times over-writes the same string — so the message on screen cannot
+           tell "said once" from "said five times". The count can. */
+        const dbg = window as unknown as { __gqCanvasFailures?: number };
+        dbg.__gqCanvasFailures = (dbg.__gqCanvasFailures ?? 0) + 1;
+      }
+      showToast(
+        `Your device ran out of memory for an image this size (${w.toLocaleString()} × ` +
+          `${h.toLocaleString()}). What is on screen may be incomplete — save a copy, then ` +
+          `close other tabs or documents and try again.`,
+      );
+    });
+    return () => setCanvasFailureHandler(null);
+  }, []);
+
   /* Dev-only handle, in the same family as `__gqFits` and `__gqPerf`. The rail
      needs to see what was probed and what that probe cost — specifically that
      `provenArea` is still 0 after boot, which is how "the boot probe allocated

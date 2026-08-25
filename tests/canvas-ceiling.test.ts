@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   ceilingWithSide,
+  sentinelPasses,
   checkSize,
   probeMaxSide,
   refusalMessage,
@@ -209,5 +210,92 @@ describe("the shared ceiling", () => {
     const r = checkSize(4000, 3000, { probe: CHROMIUM() });
     expect(r.ok).toBe(true);
     expect(r.message).toBe("");
+  });
+});
+
+/**
+ * A context that really stores what is written to it, so the sentinel can be
+ * driven without a browser. `dead` is the failure this exists for: every read
+ * comes back transparent black however much is drawn — which is exactly what a
+ * canvas whose backing store was never allocated does.
+ */
+function fakeCtx({ dead = false, throwOnRead = false } = {}) {
+  const store = new Map<string, Uint8ClampedArray>();
+  const key = (x: number, y: number) => `${x},${y}`;
+  let fill = "#000000";
+  const ctx = {
+    saved: 0,
+    restored: 0,
+    get fillStyle() {
+      return fill;
+    },
+    set fillStyle(v: string) {
+      fill = v;
+    },
+    globalCompositeOperation: "source-over",
+    save() {
+      ctx.saved++;
+    },
+    restore() {
+      ctx.restored++;
+    },
+    fillRect(x: number, y: number) {
+      store.set(key(x, y), new Uint8ClampedArray([255, 0, 0, 255]));
+    },
+    getImageData(x: number, y: number) {
+      if (throwOnRead) throw new Error("out of memory");
+      const px = dead ? new Uint8ClampedArray([0, 0, 0, 0]) : (store.get(key(x, y)) ?? new Uint8ClampedArray(4));
+      return { data: px } as ImageData;
+    },
+    putImageData(img: ImageData, x: number, y: number) {
+      store.set(key(x, y), img.data as Uint8ClampedArray);
+    },
+    peek: (x: number, y: number) => store.get(key(x, y)),
+  };
+  return ctx as unknown as CanvasRenderingContext2D & typeof ctx;
+}
+
+describe("the allocation sentinel", () => {
+  it("passes on a canvas that really holds pixels", () => {
+    expect(sentinelPasses(fakeCtx(), 100, 100)).toBe(true);
+  });
+
+  /* The whole point: a dead canvas is indistinguishable from an empty one by
+     reading alone, so the sentinel writes first. */
+  it("fails on a canvas that reads back transparent whatever is drawn", () => {
+    expect(sentinelPasses(fakeCtx({ dead: true }), 100, 100)).toBe(false);
+  });
+
+  it("treats a throw as a failure rather than letting it escape", () => {
+    expect(() => sentinelPasses(fakeCtx({ throwOnRead: true }), 100, 100)).not.toThrow();
+    expect(sentinelPasses(fakeCtx({ throwOnRead: true }), 100, 100)).toBe(false);
+  });
+
+  it("puts back whatever pixel it borrowed", () => {
+    const g = fakeCtx();
+    const artwork = new Uint8ClampedArray([9, 8, 7, 255]);
+    g.putImageData({ data: artwork } as ImageData, 99, 99);
+    expect(sentinelPasses(g, 100, 100)).toBe(true);
+    expect(Array.from(g.peek(99, 99) ?? [])).toEqual([9, 8, 7, 255]);
+  });
+
+  /* A browser that CLAMPS an over-large canvas rather than failing reports the
+     clamped size, and a read past the end comes back as zeros rather than
+     throwing — so the far corner catches a buffer that came back smaller than
+     asked for, where the origin would happily pass. */
+  it("checks the far corner, which is the pixel a short buffer would not have", () => {
+    const g = fakeCtx();
+    sentinelPasses(g, 640, 480);
+    expect(g.peek(639, 479)).toBeDefined();
+    expect(g.peek(0, 0)).toBeUndefined();
+  });
+
+  /* `copy` so the probe is not fooled by a canvas that ignores blending, and
+     save/restore so the caller's state survives. */
+  it("leaves the context state as it found it", () => {
+    const g = fakeCtx();
+    sentinelPasses(g, 10, 10);
+    expect(g.saved).toBe(1);
+    expect(g.restored).toBe(1);
   });
 });

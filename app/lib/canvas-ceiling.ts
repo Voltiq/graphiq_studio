@@ -163,13 +163,64 @@ export function refusalMessage(w: number, h: number, v: Verdict, c: Ceiling, wha
         `so Graphiq has not opened it.`
       );
     case "too-many-pixels":
+      /* Deliberately NOT "this browser cannot". A failed allocation of a size
+         within the probed side limits is ambiguous: it may be the browser's cap
+         on one canvas, or the device being short of memory this minute. The
+         first is permanent, the second clears when a few tabs close — and
+         telling someone their browser is incapable when they simply need to
+         close a document sends them away for good. The side-limit message above
+         can be definite because that limit IS decided without allocating. */
       return (
-        `This ${what} is ${size} — ${fmt(w * h)} pixels, which is more than this browser ` +
-        `will hold in one canvas. Opening it would give you a blank document, so Graphiq ` +
-        `has not opened it.`
+        `There is not enough room for ${what === "image" ? "an image" : `a ${what}`} this ` +
+        `size right now — ${size} is ${fmt(w * h)} pixels. That can be this browser's limit ` +
+        `for a single image, or your device being short of memory; closing other documents ` +
+        `or tabs may help. Graphiq has not opened it, because it would come out blank.`
       );
     default:
       return "";
+  }
+}
+
+/**
+ * Does this context's backing store actually hold a pixel?
+ *
+ * The ONLY way to tell. A canvas that was never allocated reads as transparent
+ * black — and so does a canvas that was allocated and is simply empty, which is
+ * every new canvas. So the test has to WRITE first: put a pixel at the far
+ * corner, read it back, and undo it. A read-only check cannot distinguish "this
+ * failed" from "this is blank", and blank is the normal case.
+ *
+ * The far corner rather than the origin: a browser that CLAMPS an over-large
+ * canvas reports the clamped size and serves reads past the end as zeros rather
+ * than throwing, so the last pixel is the one a short buffer would not have.
+ *
+ * Restores the pixel it borrowed, so it is safe on a canvas that already holds
+ * artwork — though at allocation time, which is where this is used, there is
+ * nothing there to disturb.
+ */
+export function sentinelPasses(
+  g: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  w: number,
+  h: number,
+): boolean {
+  try {
+    const x = w - 1;
+    const y = h - 1;
+    const before = g.getImageData(x, y, 1, 1);
+    g.save();
+    /* NOT `globalCompositeOperation = "copy"`, which was the first thing tried
+       here: `copy` replaces the WHOLE canvas with the drawn shape, clearing
+       every pixel outside it. On a canvas holding artwork that is a one-line
+       eraser. An opaque fill over source-over is already unambiguous. */
+    g.fillStyle = "#ff0000";
+    g.fillRect(x, y, 1, 1);
+    const d = g.getImageData(x, y, 1, 1).data;
+    g.putImageData(before, x, y);
+    g.restore();
+    return d[0] === 255 && d[3] === 255;
+  } catch {
+    /* A throw is a failure like any other. */
+    return false;
   }
 }
 
@@ -187,12 +238,7 @@ export const browserProbe: Probe = {
       if (c.width !== w || c.height !== h) return false;
       const g = c.getContext("2d", { willReadFrequently: true });
       if (!g) return false;
-      /* The FAR corner, not the origin: a partial allocation would still serve
-         pixel (0,0). */
-      g.fillStyle = "#ff0000";
-      g.fillRect(w - 1, h - 1, 1, 1);
-      const d = g.getImageData(w - 1, h - 1, 1, 1).data;
-      return d[0] === 255 && d[3] === 255;
+      return sentinelPasses(g, w, h);
     } catch {
       /* A throw is a refusal like any other — some engines do throw on
          `getImageData` for an over-large canvas. */
