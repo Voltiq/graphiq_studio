@@ -305,6 +305,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: The app is installable, with icons a launcher will not letterbox
+        run: npm run test:manifest -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

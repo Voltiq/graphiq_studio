@@ -624,6 +624,26 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Two rail bugs worth recording, both about measuring the wrong thing.** The first slider in the DOM sat at x=613 on a 390px phone — off the side of a bar that does not scroll — and every hit test against it missed, which reads as "covered" rather than "not on screen". And a loose `[class*="alpha"]` search matched `.alphaTrack`, an inner element that is not a hit target, reporting a 10px strip that does not exist.
 - **That off-screen slider is a finding in itself:** the brush's option sliders are past the right edge on a phone, in a bar that does not scroll, so they are unreachable regardless of how big their hit boxes are. That is the per-tool sheet item in M3, and this rail measures in the panels instead.
 
+### Installable, with icons a launcher will not letterbox
+
+- **The point is space.** Installed, the browser's ~110px of URL bar and toolbar goes away and the editor gets it. There was no manifest, no `public/` and no icons, so there was no install to have.
+- **Metadata only — no service worker.** One is *not* required to be installable; it is required for Chrome's `beforeinstallprompt`, which is a separate decision (TODO M5) with a cache-invalidation surface attached. Nothing here can serve a stale build.
+- **`any` and `maskable` are different PURPOSES, not different sizes**, and the platform picks by purpose first. Declaring one file as both is the usual shortcut and it is wrong in both directions at once: an edge-to-edge glyph loses its wingtips to the OS shape crop, and a padded one floats small and lost where no mask is applied. So two families come out of the one 865×865 source, whose butterfly runs **99.8% of the width** wingtip to wingtip:
+  - `icon-192/512` — the glyph as it is, transparent, edge to edge.
+  - `maskable-192/512` — scaled to the centre **80%** the shape crop leaves, on the app's own dark `--bg` so the launcher glyph sits on the same ground the editor does. A maskable icon must have **no transparency at all**, or the mask crops into nothing.
+- **Letterboxing is what happens when the maskable set is missing**: Android does not crop the `any` icon, it shrinks it and drops it on a white rounded square. The item asks that the launcher glyph not be letterboxed; providing a real maskable icon is the whole of it.
+- **`display_override` deliberately omits `window-controls-overlay`.** It hands the title-bar strip to the page, and a page that never reads `titlebarAreaRect` gets the OS window controls drawn straight over its own top bar. Asking for a mode the app does not implement is worse than not asking — so the chain is `standalone → minimal-ui → browser`, and the rail fails if `window-controls-overlay` appears.
+- **`fullscreen` is omitted for the mirror-image reason:** it removes the status bar, which zeroes `safe-area-inset-top` and undoes the notch handling the shell is built around. More space is not worth a top bar sliding under the clock.
+- **The icons are generated, not hand-cropped.** `tools/build-pwa-icons.js` (`npm run icons`) makes all five from the one source, so regenerating from a new glyph is one command rather than a memory of which sizes were used. The outputs are committed — they are static assets, not a build step.
+
+#### Checking installability without an installability report
+
+- **The item names DevTools' verdict, which a harness cannot read.** So the requirements behind that verdict are checked one by one — a linked manifest served as `application/manifest+json`, a name, a `start_url` inside its own scope, a display mode, icons at 192 and 512 that actually fetch and really are the size they claim.
+- **And the letterboxing property is checked as its cause.** Each maskable icon is decoded in the page and two things measured: that it contains **zero** transparent pixels, and that its glyph's bounding box lies inside the centre 80%. Both mutations land — a transparent ground shows as 26,531 see-through pixels, and a full-bleed glyph as `0..191 of 192` against a safe zone of `19..173`.
+- **Non-vacuity from the other side:** the `any` icons must still run edge to edge (they measure 99% and 100%), or "the glyph is inside the safe zone" would be passing on two copies of the same padded picture.
+- **Mutation-tested seven ways:** the maskable set deleted, one file declared as both purposes, `window-controls-overlay` requested, `display: browser`, an icon lying about its size, the safe zone removed from the generator, and the maskable ground made transparent.
+- **A mutation-harness rule, relearned:** a replacement must be UNIQUE in the file. `nomaskable` first substituted a line that already appeared above it, so the revert found two matches, refused, and left the manifest mutated for the next mutation to run against. Every mutation is now round-tripped before any of them is measured.
+
 ### Which keyboard opens, and whether it opens at all
 
 - **Three faults, and each had its own hiding place.** Measured across ten dialogs on a phone: **6 of 10** opened with a text field already focused, so the software keyboard covered them before a word had been read; `NumberField` offered **QWERTY for digits**; and **7 of 10** had fields at 12–14px, which makes Safari on iOS zoom the page.
