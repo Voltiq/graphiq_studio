@@ -300,6 +300,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: Dialogs do not summon the keyboard, and numeric fields get a keypad
+        run: npm run test:kbfields -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

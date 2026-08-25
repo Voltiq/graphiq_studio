@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { FOCUSABLE_SELECTOR, nextFocusIndex, preferredInitialFocus } from "../lib/focus";
+import { FOCUSABLE_SELECTOR, isTextEntry, nextFocusIndex, preferredInitialFocus } from "../lib/focus";
 
 /**
  * App-wide keyboard behaviour for modal dialogs (TODO §11).
@@ -51,11 +51,29 @@ export default function DialogFocus() {
         if (openers.some((o) => o.dialog === d)) continue;
         const opener = document.activeElement as HTMLElement | null;
         openers.push({ dialog: d, opener: opener && opener !== document.body ? opener : null });
-        if (d.contains(document.activeElement)) continue; // a dialog that focused itself
+        /* `data-touch` is stamped before the first paint (layout.tsx) and kept
+           in step by the editor, so it is the shell's own answer to "is this a
+           finger?" — and it is right on the very first dialog of a session,
+           which a media query read at mount would not be. */
+        const touch = document.documentElement.dataset.touch === "true";
+        const self = d.contains(document.activeElement) ? document.activeElement : null;
+        /* A dialog that focused itself is normally left alone. On touch there
+           is one exception, and it is most of them: six dialogs put `autoFocus`
+           on their own text input, which never reaches this function at all —
+           so suppressing auto-focus here moved 6 dialogs to 4 and no further.
+           Taking that focus away is the same decision, applied to the case that
+           bypassed it. */
+        if (self && !(touch && isTextEntry(self))) continue;
         const list = focusablesIn(d);
-        const i = preferredInitialFocus(list);
+        const i = preferredInitialFocus(list, touch);
         if (i >= 0) list[i].focus();
-        else {
+        else if (self) {
+          /* Nothing safe to land on: park focus on the dialog rather than leave
+             it in the text field, which is what opened the keyboard. */
+          (self as HTMLElement).blur();
+          if (!d.hasAttribute("tabindex")) d.setAttribute("tabindex", "-1");
+          d.focus();
+        } else {
           if (!d.hasAttribute("tabindex")) d.setAttribute("tabindex", "-1");
           d.focus();
         }

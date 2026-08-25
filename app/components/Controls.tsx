@@ -227,6 +227,19 @@ export function NumberField({
       {label && <span className={styles.label}>{label}</span>}
       <span className={styles.numBox} style={{ width }}>
         <input
+          /* A number, so ask for the number pad. Without it this input has no
+             `type` and no `inputMode`, so a phone offers QWERTY for a field
+             that only ever takes digits — New guide's position and every
+             NumberField in the options bar. `decimal` rather than `numeric`
+             because these take fractions, and it is what the sibling
+             click-to-type value input already asks for.
+
+             `data-numeric` says so out loud. The `numBox` wrapper cannot: New
+             document puts its NAME field in one for the layout, so a check that
+             read the wrapper called a text field numeric and asked why it
+             offered QWERTY — which it should. */
+          inputMode="decimal"
+          data-numeric
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onFocus={() => setEditing(true)}

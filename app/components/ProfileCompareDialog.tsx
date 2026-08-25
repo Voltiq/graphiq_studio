@@ -27,7 +27,9 @@ function Pane({
         style={{
           height: 30,
           padding: "0 8px",
-          fontSize: 12.5,
+          /* No inline font-size: Safari on iOS zooms the page for a field under
+       16px, and an inline value outranks the touch floor in globals.scss.
+       The stylesheet sizes this now. */
           fontWeight: 550,
           color: "var(--text)",
           background: "var(--surface-2)",

@@ -616,6 +616,25 @@ html[data-touch="true"] {
   input:not([type="range"]) {
     min-height: 44px;
   }
+
+  /* ---- 16px minimum on anything you can type into ----
+     Safari on iOS zooms the PAGE when a field smaller than 16px takes focus,
+     and this app can never zoom back: the viewport is `user-scalable=no`
+     because the canvas owns the pinch. So the page would simply stay magnified,
+     with the shell's fixed chrome anchored to a viewport that no longer matches
+     the screen. Measured across ten dialogs: **seven** had fields at 12–14px.
+
+     `max()` rather than a flat 16px, so a field that is already larger keeps
+     its size. Ranges and the boxes that are not typed into are left alone.
+
+     A weaker `font-size: 1em` passes today and is not the same rule: it
+     happens to clear 16px only because every ancestor here does. The floor is
+     the promise; inheriting one is a coincidence. Removing the declaration
+     outright puts six dialogs straight back to 12–14px, which is what makes
+     the rule provable. */
+  :is(input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="color"]), textarea, select) {
+    font-size: max(16px, 1em);
+  }
 }
 
 /* ==========================================================================

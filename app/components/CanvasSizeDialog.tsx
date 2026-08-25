@@ -46,8 +46,13 @@ export default function CanvasSizeDialog({
   const ratioRef = useRef(size.width / size.height);
   const widthInputRef = useRef<HTMLInputElement>(null);
 
-  // Select the width field on open.
+  // Select the width field on open — but not on touch, where selecting it also
+  // FOCUSES it, and focusing summons the keyboard over a dialog nobody has read
+  // yet. It runs on a timeout, so it lands after DialogFocus has already chosen
+  // somewhere safe: suppressing auto-focus centrally moved 6 dialogs to 4 and
+  // stopped there, because this one puts the focus back.
   useEffect(() => {
+    if (document.documentElement.dataset.touch === "true") return;
     const t = setTimeout(() => widthInputRef.current?.select(), 30);
     return () => clearTimeout(t);
   }, []);

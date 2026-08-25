@@ -34,7 +34,9 @@ export default function ColorDialog({
   const opt = (active: boolean): React.CSSProperties => ({
     flex: 1,
     padding: "10px 12px",
-    fontSize: 12.5,
+    /* No inline font-size: Safari on iOS zooms the page for a field under
+       16px, and an inline value outranks the touch floor in globals.scss.
+       The stylesheet sizes this now. */
     fontWeight: 550,
     textAlign: "center",
     borderRadius: "var(--r-sm)",

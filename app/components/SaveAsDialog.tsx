@@ -20,7 +20,9 @@ export default function SaveAsDialog({
     width: "100%",
     height: 34,
     padding: "0 10px",
-    fontSize: 13,
+    /* No inline font-size: Safari on iOS zooms the page for a field under
+       16px, and an inline value outranks the touch floor in globals.scss.
+       The stylesheet sizes this now. */
     color: "var(--text)",
     background: "var(--surface-2)",
     border: "1px solid var(--border)",
