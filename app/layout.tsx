@@ -50,6 +50,15 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: "cover",
+  /* Ask the browser to RESIZE the page when the keyboard opens rather than draw
+     it over the top. Without it the layout viewport does not move, so anything
+     anchored to the bottom — the MobileBar, a dialog's footer — sits behind the
+     keyboard: measured at 390×844 with a 300px keyboard, the bar was **300px
+     behind it**, i.e. entirely hidden.
+     Not a substitute for `--kb-inset`, which stays: `resizes-content` is
+     honoured by Chrome on Android and ignored by Safari on iOS, so the CSS
+     token driven from `visualViewport` is what makes the two behave alike. */
+  interactiveWidget: "resizes-content",
 };
 
 export const metadata: Metadata = {

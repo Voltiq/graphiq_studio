@@ -7,7 +7,13 @@
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 0;
+  /* Above the keyboard, not behind it. `position: fixed` anchors to the LAYOUT
+     viewport, which a keyboard does not move on iOS at all and only moves on
+     Android with `interactive-widget` — so the bar was 300px behind a 300px
+     keyboard, entirely hidden, on a phone where it is the only way to reach the
+     tools and the panels. `--kb-inset` is published from `visualViewport` by
+     `useVisualViewport`, and is 0 whenever there is no keyboard. */
+  bottom: var(--kb-inset, 0px);
   z-index: 130;
   height: var(--chrome-bottom);
   padding: 0 calc(var(--sp-2) + var(--safe-r)) var(--safe-b) calc(var(--sp-2) + var(--safe-l));
