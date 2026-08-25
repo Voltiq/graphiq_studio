@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { MOBILE_QUERY, TABLET_QUERY, TOUCH_QUERY } from "./lib/breakpoint";
+import { INSTALL_EVENT, INSTALL_SLOT } from "./lib/space";
 import localFont from "next/font/local";
 import { getServerAccent, getServerTheme, getServerUiScale } from "./lib/theme.server";
 import "./globals.scss";
@@ -171,6 +172,34 @@ export default async function RootLayout({
               `if(matchMedia(${JSON.stringify(TOUCH_QUERY)}).matches){var r=null;` +
               `try{r=JSON.parse(localStorage.getItem("pe-view")||"{}").rulers}catch(e2){}` +
               `if(typeof r!=="boolean")d.dataset.rulersDefault="off"}` +
+              `}catch(e){}})()`,
+          }}
+        />
+        {/* The install prompt is caught HERE, not in a React effect, because it
+            does not wait and it does not replay. `beforeinstallprompt` fires as
+            soon as the browser has finished judging the manifest — 308ms on a
+            cold load against 303ms for the editor's first paint — and an effect
+            attached after hydration lost that race on five cold loads out of
+            five. The symptom was the worst kind: a browser willing to install
+            the app, and a "More space" panel that never offered it, with
+            nothing anywhere saying why.
+
+            `preventDefault()` is what suppresses Chrome's own mini-infobar, and
+            it has to happen in the same tick as the event. The editor reads
+            what landed here and re-reads on INSTALL_EVENT; spending the prompt
+            clears the slot. Separate from the block above on purpose: if
+            matchMedia throws, the capture must still be installed. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              `(function(){try{var w=window;w.${INSTALL_SLOT}=null;` +
+              `var f=function(){w.dispatchEvent(new Event(${JSON.stringify(INSTALL_EVENT)}))};` +
+              `w.addEventListener("beforeinstallprompt",function(e){` +
+              `e.preventDefault();w.${INSTALL_SLOT}=e;f()});` +
+              /* Installed: the prompt will not fire again and there is nothing
+                 left to offer, so drop it rather than leaving a button that
+                 installs what the user is already running. */
+              `w.addEventListener("appinstalled",function(){w.${INSTALL_SLOT}=null;f()});` +
               `}catch(e){}})()`,
           }}
         />

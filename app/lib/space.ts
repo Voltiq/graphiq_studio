@@ -4,11 +4,12 @@
  * The browser's chrome is ~110px of a phone screen, and every route to getting
  * it back is available somewhere and not somewhere else:
  *
- *   INSTALLING gives a standalone window on Android and on iOS — but Android
- *   only lets a page ask (`beforeinstallprompt`) when the browser has decided
- *   the app is installable, and Chrome will not fire that event at all without
- *   a service worker. iOS never fires it: Add to Home Screen lives in Safari's
- *   own Share menu and no page can open it.
+ *   INSTALLING gives a standalone window on Android and on iOS — but a page can
+ *   only ASK where the browser has decided the app is installable and handed
+ *   over a `beforeinstallprompt`. On Chrome and Edge 151 that needs no service
+ *   worker (measured: zero installability errors with none registered), though
+ *   it never happens in an incognito window. iOS never fires it at all: Add to
+ *   Home Screen lives in Safari's own Share menu and no page can open it.
  *
  *   FULLSCREEN works on Android and on desktop. It does not work on iPhone
  *   Safari, which supports no element fullscreen at all — and says so, through
@@ -105,6 +106,30 @@ export function spaceOffer(env: SpaceEnv): SpaceOffer {
  */
 export interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<unknown>;
+}
+
+/**
+ * Where the pre-paint script parks a captured prompt, and the event it fires
+ * when that changes.
+ *
+ * The capture CANNOT wait for React. `beforeinstallprompt` fires as soon as the
+ * browser has finished judging the manifest — measured at 308ms on a cold load,
+ * against 303ms for the editor's first paint — and a `useEffect` listener lost
+ * that race on 5 cold loads out of 5. The event does not replay, so losing it
+ * means the Install button never appears at all, on a browser that was offering
+ * it the whole time. So the listener is installed in `<head>` before anything
+ * renders, and React reads what it caught.
+ *
+ * Named here so the inline script in layout.tsx and the editor cannot drift.
+ */
+export const INSTALL_SLOT = "__gqInstall";
+export const INSTALL_EVENT = "gq-install-change";
+
+declare global {
+  interface Window {
+    /** The captured install prompt, or null once it has been spent. */
+    __gqInstall?: BeforeInstallPromptEvent | null;
+  }
 }
 
 /** Read the live environment. Kept beside the model so both change together. */

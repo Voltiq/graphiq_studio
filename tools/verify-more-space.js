@@ -27,11 +27,13 @@
  *   pair of facts a real iPhone reports, and the one case where the honest
  *   answer is no buttons at all.
  *
- * The install prompt is the one thing that cannot be produced: Chrome fires
- * `beforeinstallprompt` only for an app it has decided is installable, which
- * needs a service worker this app does not have. So it is dispatched as a real
- * event into the real listener — the capture, the storage, the single use and
- * the disappearance afterwards are all the product's own code.
+ * The install prompt is the one thing that cannot be produced HERE: Chrome
+ * fires `beforeinstallprompt` only outside incognito, and every context in this
+ * file is one. (It fires perfectly well with no service worker — see
+ * `verify-installable.js`, which drives a real profile and watches the real
+ * event.) So it is dispatched as a real event into the real listener, and the
+ * capture, the storage, the single use and the disappearance afterwards are all
+ * the product's own code.
  *
  * Run: node tools/verify-more-space.js [--url ...] [--channel ...]
  */

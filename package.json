@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.28.0",
+  "version": "1.29.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -60,6 +60,7 @@
     "test:manifest": "node tools/verify-manifest.js",
     "test:ioswebapp": "node tools/verify-ios-webapp.js",
     "test:morespace": "node tools/verify-more-space.js",
+    "test:installable": "node tools/verify-installable.js",
     "icons": "node tools/build-pwa-icons.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",

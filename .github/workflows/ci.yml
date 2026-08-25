@@ -320,6 +320,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: Installable with no service worker, and the decision behind that
+        run: npm run test:installable -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log
