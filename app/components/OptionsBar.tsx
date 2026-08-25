@@ -42,7 +42,6 @@ import {
   ChevronRight,
   ChevronUp,
   RotateCcw,
-  SlidersHorizontal,
   Ruler,
   Square,
   Strikethrough,
@@ -1579,9 +1578,13 @@ export default function OptionsBar({
         data-sheet-open={sheetOpen || undefined}
       >
         <ModifierChips />
-        {/* No tool badge here: the bottom bar already names the current tool,
-            and at 390px it was the widest thing on this row — "Rectangular
-            marquee" alone left 38px for the controls. */}
+        {/* The tool's name lives on the button that opens the tool's options,
+            rather than on a badge of its own. A separate badge WAS tried and
+            measured badly: at 390px "Rectangular marquee" plus an Options
+            button left 38px for the controls between them. Folded into the one
+            control it costs nothing extra, because it replaces the word
+            "Options" rather than sitting beside it — and it reads better, since
+            the button now says what it will open. */}
         <div className={styles.controls}>
           {pinned}
           <button
@@ -1589,10 +1592,13 @@ export default function OptionsBar({
             className={styles.sheetToggle}
             data-options-open
             aria-expanded={sheetOpen}
+            /* The visible text is the tool's name, so the accessible name has to
+               supply what the label no longer says: that this opens options. */
+            aria-label={`${meta.name} options`}
             onClick={() => setSheetOpen((o) => !o)}
           >
-            <SlidersHorizontal size={15} />
-            Options
+            <Icon size={15} strokeWidth={1.9} />
+            <span className={styles.toggleName}>{meta.name}</span>
           </button>
         </div>
         {sheetOpen && (

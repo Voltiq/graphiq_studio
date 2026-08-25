@@ -7905,7 +7905,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             </button>
           </div>
           <MobileBar
-            tool={tool}
             drawer={mobileDrawer}
             onToggle={toggleMobileDrawer}
             panMode={panMode}

@@ -444,7 +444,12 @@
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
-  flex-shrink: 0;
+  /* Shrinkable, unlike every other control on this row. It now carries the
+     tool's NAME, and those run from "Pen" to "Rectangular marquee" — so the one
+     element whose content varies fivefold is the one that gives way, rather
+     than pushing the pinned controls off the end of a 390px row. */
+  flex-shrink: 1;
+  min-width: 0;
   min-height: 34px;
   padding: 0 var(--sp-3);
   border-radius: var(--r-md);
@@ -459,6 +464,15 @@
     background: var(--selected-bg);
     border-color: var(--accent);
   }
+}
+
+/* The name itself is what gets clipped, never the icon: an ellipsised word
+   still identifies the tool, and the icon identifies it even when the word is
+   gone entirely. The sheet's own header spells it out in full. */
+.toggleName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Tap-away, and something for the eye to read the sheet against. Below the

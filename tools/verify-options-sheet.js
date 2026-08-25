@@ -239,6 +239,81 @@ const { dismissStartCard, launchBrowser, urlArg } = require("./lib/launch");
     rail.badge && rail.controls > 3, `badge: ${rail.badge}, ${rail.controls} controls in the row`);
   await desk.context.close();
 
+  // ================== the toggle names the tool it will open the options for ==
+  /* It used to read "Options" while a chip on the BOTTOM bar named the tool —
+     218px of a 390px bar to say one word. The name moved onto the control that
+     opens that tool's settings, where it labels the button instead of standing
+     on its own. So the button has to track the tool, and it has to keep an
+     accessible name that still says what pressing it does. */
+  const named = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
+  const np = await named.newPage();
+  np.on("pageerror", (e) => errors.push("pageerror(named): " + String(e)));
+  np.on("console", (m) => m.type() === "error" && errors.push("console(named): " + m.text()));
+  await np.goto(urlArg(), { waitUntil: "domcontentloaded" });
+  await np.waitForSelector('[data-tour="canvas"]', { timeout: 90000 });
+  const nt = await np
+    .waitForSelector('div[aria-label="Interactive tour"]', { timeout: 6000 })
+    .catch(() => null);
+  if (nt) {
+    await np.keyboard.press("Escape");
+    await np.waitForTimeout(700);
+  }
+  await dismissStartCard(np);
+  await np.addStyleTag({ content: "nextjs-portal{display:none!important}" }).catch(() => {});
+  await np.waitForTimeout(800);
+
+  const READ = () => {
+    const row = document.querySelector("[data-mobile-options]");
+    const tg = document.querySelector("[data-options-open]");
+    if (!row || !tg) return null;
+    const rr = row.getBoundingClientRect();
+    const tr = tg.getBoundingClientRect();
+    const name = tg.querySelector("span");
+    return {
+      text: tg.textContent.trim(),
+      label: tg.getAttribute("aria-label") || "",
+      w: Math.round(tr.width),
+      h: Math.round(tr.height),
+      clipped: tr.right > rr.right + 0.5 || tr.left < rr.left - 0.5,
+      ellipsised: name ? name.scrollWidth > name.clientWidth + 1 : false,
+      rowOverflow: row.scrollWidth - row.clientWidth,
+    };
+  };
+
+  await np.keyboard.press("b");
+  await np.waitForTimeout(700);
+  const brush = await np.evaluate(READ);
+  check("the options button is named for the tool in hand", brush && brush.text === "Brush",
+    brush ? `reads "${brush.text}"` : "no toggle");
+  check("…and still says what it opens, for a screen reader",
+    !!brush && /options/i.test(brush.label), `aria-label "${brush?.label}"`);
+
+  await np.keyboard.press("m");
+  await np.waitForTimeout(700);
+  const marquee = await np.evaluate(READ);
+  check("…and follows the tool when it changes",
+    marquee && marquee.text !== brush.text && marquee.text.length > 0,
+    `"${brush?.text}" → "${marquee?.text}"`);
+
+  /* The longest name in the app, on the narrowest phone worth supporting. The
+     name gives way; nothing else on the row does. */
+  await np.setViewportSize({ width: 320, height: 568 });
+  await np.waitForTimeout(700);
+  const tight = await np.evaluate(READ);
+  check("the longest tool name shrinks rather than pushing the row off-screen",
+    tight && !tight.clipped && tight.rowOverflow <= 0,
+    `${tight?.w}px wide, row overflow ${tight?.rowOverflow}, ellipsised: ${tight?.ellipsised}`);
+  check("…and it is still a 44px target with the name cut down",
+    tight && tight.h >= 44, `${tight?.h}px tall`);
+
+  /* Behaviour unchanged: it is still the button that opens the sheet. */
+  await np.locator("[data-options-open]").click();
+  await np.waitForTimeout(600);
+  check("…and it still opens the options sheet",
+    await np.evaluate(() => !!document.querySelector("[data-options-sheet]")),
+    "pressing the named button opens the sheet");
+  await named.close();
+
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
   await browser.close();

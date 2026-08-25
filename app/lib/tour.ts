@@ -108,13 +108,13 @@ export const MOBILE_TOUR_STEPS: TourStep[] = [
     id: "mobilebar",
     target: "mobilebar",
     title: "Your main controls",
-    body: "Tools opens every tool, named. The button beside it shows the one you are using. Pan moves the picture without giving up your brush, and Panels slides the panels up from the bottom.",
+    body: "Three ways in, and that is the lot. Tools opens every tool, named. Pan moves the picture without giving up your brush. Panels slides the panels up from the bottom.",
   },
   {
     id: "options",
     target: "options",
     title: "Tool settings",
-    body: "The current tool's settings live here. Tap Options for the full set — sliders the width of the screen — and anything you must not lose, like Crop's Apply, stays pinned to the bar.",
+    body: "The button on the right names the tool you are holding — tap it for that tool's full settings, sliders the width of the screen. Anything you must not lose, like Crop's Apply, stays pinned to the bar.",
   },
   {
     id: "canvas",

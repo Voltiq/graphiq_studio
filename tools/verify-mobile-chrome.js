@@ -370,6 +370,35 @@ const READOUTS = () => {
   check("…and does not render the mobile readout", !dr.present, "phone-only, as intended");
   await desk.context.close();
 
+  // ============================ the bottom bar carries destinations, not labels ==
+  /* It used to hold four things: Tools, a chip naming the current tool, Pan and
+     Panels. The chip measured 218px of a 390px bar — wider than the three real
+     destinations put together — to display something the options row above was
+     better placed to display, since that row's button opens the settings for
+     the very tool it now names. Three destinations, sharing the row. */
+  const nav = await open(PHONE, true, "phone+bar");
+  const barItems = await nav.page.evaluate(() => {
+    const bar = document.querySelector('[data-tour="mobilebar"]');
+    if (!bar) return null;
+    return [...bar.children].map((c) => {
+      const r = c.getBoundingClientRect();
+      return { text: c.textContent.trim(), w: Math.round(r.width), h: Math.round(r.height) };
+    });
+  });
+  check("the bottom bar carries exactly three destinations",
+    barItems && barItems.length === 3,
+    barItems ? barItems.map((b) => b.text).join(", ") : "no bar");
+  check("…Tools, Pan and Panels, and nothing that only reports state",
+    !!barItems && ["Tools", "Pan", "Panels"].every((n) => barItems.some((b) => b.text === n)),
+    barItems ? barItems.map((b) => `${b.text}:${b.w}px`).join(", ") : "");
+  /* Three equal shares beats three huddled at the left edge, and the targets
+     grow from 44px to roughly a third of the bar in the process. */
+  check("…sharing the width evenly, so each is a large target",
+    !!barItems && barItems.every((b) => b.w >= 90 && b.h >= 44) &&
+      Math.max(...barItems.map((b) => b.w)) - Math.min(...barItems.map((b) => b.w)) <= 2,
+    barItems ? `widths ${barItems.map((b) => b.w).join("/")}, heights ${barItems.map((b) => b.h).join("/")}` : "");
+  await nav.context.close();
+
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
   await browser.close();

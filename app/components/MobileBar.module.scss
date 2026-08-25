@@ -25,7 +25,11 @@
 }
 
 .btn {
-  flex: 0 0 auto;
+  /* Equal thirds. With the tool chip gone the bar carries exactly three
+     destinations, so they share the row rather than huddling at the left edge
+     with two thirds of a 390px bar empty beside them — and each target grows
+     from 44px to roughly 120px in the process. */
+  flex: 1 1 0;
   min-width: 68px;
   height: 44px;
   display: flex;
@@ -49,30 +53,3 @@
   }
 }
 
-/* Centre chip: the active tool's icon + name; tapping it also opens Tools. */
-.tool {
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--sp-2);
-  padding: 0 var(--sp-3);
-  border-radius: var(--r-md);
-  background: var(--wash);
-  border: 1px solid var(--border);
-  color: var(--text);
-
-  &:active {
-    background: var(--wash-2);
-  }
-}
-
-.toolName {
-  font-size: 12.5px;
-  font-weight: var(--weight-medium);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
