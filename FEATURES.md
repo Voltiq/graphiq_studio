@@ -624,6 +624,25 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Two rail bugs worth recording, both about measuring the wrong thing.** The first slider in the DOM sat at x=613 on a 390px phone — off the side of a bar that does not scroll — and every hit test against it missed, which reads as "covered" rather than "not on screen". And a loose `[class*="alpha"]` search matched `.alphaTrack`, an inner element that is not a hit target, reporting a 10px strip that does not exist.
 - **That off-screen slider is a finding in itself:** the brush's option sliders are past the right edge on a phone, in a bar that does not scroll, so they are unreachable regardless of how big their hit boxes are. That is the per-tool sheet item in M3, and this rail measures in the panels instead.
 
+### The iOS home screen
+
+- **Safari ignores the manifest's `display` entirely.** Everything the manifest does for installability elsewhere, iOS does through four meta tags — so without them an installed copy on an iPhone is a browser tab with a URL bar, and the ~110px the previous item reclaimed stays lost.
+- **`black-translucent` is a layout decision, not a colour.** The three status-bar styles differ in where the page starts: `default` and `black` leave it below the status bar, while `black-translucent` puts it UNDER — and it is the only one of the three that makes `safe-area-inset-top` non-zero. That is what the shell's `--safe-t` has been reading since M0, and it is exactly why the item said this tag could not land before the top inset did: without the inset, a translucent status bar puts the top bar's controls under the clock.
+- **Next emits the STANDARD spelling, not Apple's.** `appleWebApp.capable` renders as `mobile-web-app-capable` — the name Chrome standardised and deprecated the Apple one in favour of. iOS has only ever been documented as honouring `apple-mobile-web-app-capable`, and whether Safari now also reads the unprefixed name is not something to establish from a device nobody here has. **Both** are emitted: one line, no uncertainty, and Chrome still sees the name it asks for.
+- **A short home-screen label.** iOS truncates rather than wraps, and the document title — *"Graphiq Studio — Photo Editor"* — is far too long for a springboard icon, so the label is *"Graphiq"*. The rail requires it to be ≤12 characters **and** different from the document title, because falling back to the title is the failure this prevents.
+- **A third icon, for a third set of rules.** iOS applies its own rounded-rect mask with no safe-zone allowance and renders transparency as **black** — so the apple-touch-icon is neither the `any` icon (a black square would show behind the glyph) nor the maskable one (which would float small inside Apple's own inset). It is the full glyph on the opaque ground, 180×180.
+
+#### Measuring an iPhone from a desktop
+
+- **The item's check begins "Add to Home Screen on iOS"**, which no harness can do. Two of its three clauses are about what Safari does with the tags, and reading the tags is the whole of what can be verified. The **third** — "no TopBar control intersects the status-bar region" — is the consequence rather than the declaration, and Chromium takes real notch insets over CDP, so it is measured for real: a 47px inset, applied and removed, with every control on the bar checked against it. The mutation that stops the bar reading the inset puts **all five controls at y=25**, under the clock, which is the failure the item warns about, reproduced.
+- **A mutation aimed at the wrong token taught something.** Breaking `--chrome-top` changed nothing here: that is the derived offset for what sits BELOW the bar, and `verify-safe-area` already owns it. This rail measures the bar's own box, which is `--topbar-total`. A mutation that survives is sometimes a statement about the mutation.
+- **Mutation-tested six ways:** the capable tag removed, an opaque status bar, the label falling back to the document title, no apple-touch-icon, a transparent touch icon, and the top bar ignoring the inset.
+
+#### A 404 the rail found on the way
+
+- **`/favicon.ico` was 404ing on every load** — console noise for anyone with the tools open, a wasted request for everyone else. Nothing looked for it: the rail fails on console errors, and it turned up there. `app/icon.png` gives Next a `<link rel="icon">`, and browsers probe the classic path regardless.
+- **The .ico is hand-packed.** It is a 6-byte ICONDIR, one 16-byte ICONDIRENTRY per image, then the images — and since Vista the payload may be a PNG rather than a DIB, which is what this writes at 16, 32 and 48px. No encoder needed beyond the PNGs already being generated, and pulling in a dependency to lay out 22 bytes of header would have been the larger cost. It is written by the same `npm run icons` that makes the rest.
+
 ### Installable, with icons a launcher will not letterbox
 
 - **The point is space.** Installed, the browser's ~110px of URL bar and toolbar goes away and the editor gets it. There was no manifest, no `public/` and no icons, so there was no install to have.

@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.26.0",
+  "version": "1.27.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -58,6 +58,7 @@
     "test:textsession": "node tools/verify-text-session.js",
     "test:kbfields": "node tools/verify-keyboard-fields.js",
     "test:manifest": "node tools/verify-manifest.js",
+    "test:ioswebapp": "node tools/verify-ios-webapp.js",
     "icons": "node tools/build-pwa-icons.js",
     "bench:autosave": "node tools/bench-autosave.js",
     "test:watch": "vitest",

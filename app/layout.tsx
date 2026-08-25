@@ -64,11 +64,52 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: "Graphiq Studio — Photo Editor",
   description: "A modern, clean photo editing studio built with Next.js.",
+
+  /* ---- iOS home screen ----
+     Safari ignores the manifest's `display` entirely, so an installed copy on
+     an iPhone is a browser tab with a URL bar unless these say otherwise. They
+     are the iOS half of the same job `app/manifest.ts` does everywhere else.
+
+     `black-translucent` is doing more than picking a colour. The three styles
+     differ in LAYOUT, not appearance: `default` and `black` leave the page
+     below the status bar, while `black-translucent` puts the page UNDER it —
+     which is the only one of the three that makes `safe-area-inset-top`
+     non-zero. That is what the shell's `--safe-t` has been reading since M0,
+     and it is why this tag could not land before the top inset did: without
+     the inset, a translucent status bar means the top bar slides under the
+     clock. With it, the bar grows by exactly the notch (verify-safe-area
+     measures the difference, 48 → 95px) and nothing on it is covered.
+
+     `title` is the home-screen label — the document title is far too long for
+     one, and iOS truncates rather than wraps. */
+  appleWebApp: {
+    capable: true,
+    title: "Graphiq",
+    statusBarStyle: "black-translucent",
+  },
+
+  icons: {
+    /* iOS applies its own rounded-rect mask with no safe-zone allowance and
+       renders transparency as BLACK, so this is neither the `any` icon (which
+       would show a black square behind the glyph on some backgrounds) nor the
+       maskable one (which would float small inside Apple's own inset). It is
+       the full glyph on the opaque ground — see tools/build-pwa-icons.js. */
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+
   // The app ships its own dark/light theme, so tell the Dark Reader extension
   // to leave the page alone — it otherwise rewrites SVG/inline styles before
   // hydration and triggers hydration-mismatch console errors.
   other: {
     "darkreader-lock": "true",
+    /* Next renders `appleWebApp.capable` as the STANDARDISED
+       `mobile-web-app-capable`, which is the name Chrome asks for and the one
+       it deprecated the Apple spelling in favour of. iOS has only ever been
+       documented as honouring `apple-mobile-web-app-capable`, and whether
+       Safari now also reads the unprefixed name is not something to find out
+       from a device nobody here has. Both are emitted: one line, no
+       uncertainty, and the standard name stays the one Chrome sees. */
+    "apple-mobile-web-app-capable": "yes",
   },
 };
 

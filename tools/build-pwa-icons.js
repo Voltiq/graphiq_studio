@@ -90,6 +90,58 @@ const SIZES = [192, 512];
     .png({ compressionLevel: 9 })
     .toFile(apple);
   console.log(`  apple-touch-icon.png  ${(fs.statSync(apple).size / 1024).toFixed(1)} KB`);
+
+  /* ---- favicon.ico ----
+     `app/icon.png` gives Next a `<link rel="icon">`, and browsers STILL probe
+     `/favicon.ico` — measured: a 404 on every load, which is console noise for
+     anyone with the tools open and a wasted request for everyone else. It was
+     found by a rail that fails on console errors rather than by looking for it.
+
+     An .ico is a tiny container: a 6-byte ICONDIR, one 16-byte ICONDIRENTRY
+     per image, then the images. Since Vista the payload may be a PNG rather
+     than a DIB, which is what this writes — no encoder needed beyond the PNGs
+     already being made. Hand-packed because the app hand-writes its own
+     encoders, and because pulling in a dependency to lay out 22 bytes of
+     header would be the larger cost. */
+  const ICO_SIZES = [16, 32, 48];
+  const pngs = [];
+  for (const s of ICO_SIZES) {
+    pngs.push(
+      await sharp({ create: { width: s, height: s, channels: 4, background: GROUND } })
+        .composite([
+          {
+            input: await sharp(src)
+              .resize(s, s, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+              .toBuffer(),
+          },
+        ])
+        .png({ compressionLevel: 9 })
+        .toBuffer(),
+    );
+  }
+  const dir = Buffer.alloc(6 + 16 * pngs.length);
+  dir.writeUInt16LE(0, 0); // reserved
+  dir.writeUInt16LE(1, 2); // 1 = icon
+  dir.writeUInt16LE(pngs.length, 4);
+  let offset = dir.length;
+  pngs.forEach((png, i) => {
+    const at = 6 + 16 * i;
+    const size = ICO_SIZES[i];
+    dir.writeUInt8(size === 256 ? 0 : size, at); // 0 means 256
+    dir.writeUInt8(size === 256 ? 0 : size, at + 1);
+    dir.writeUInt8(0, at + 2); // palette entries: 0 for true colour
+    dir.writeUInt8(0, at + 3); // reserved
+    dir.writeUInt16LE(1, at + 4); // colour planes
+    dir.writeUInt16LE(32, at + 6); // bits per pixel
+    dir.writeUInt32LE(png.length, at + 8);
+    dir.writeUInt32LE(offset, at + 12);
+    offset += png.length;
+  });
+  const icoPath = path.join(__dirname, "..", "public", "favicon.ico");
+  fs.writeFileSync(icoPath, Buffer.concat([dir, ...pngs]));
+  console.log(
+    `  favicon.ico  ${(fs.statSync(icoPath).size / 1024).toFixed(1)} KB  (${ICO_SIZES.join(", ")}px)`,
+  );
 })().catch((e) => {
   console.error(e);
   process.exit(1);
