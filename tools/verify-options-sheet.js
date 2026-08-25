@@ -314,6 +314,98 @@ const { dismissStartCard, launchBrowser, urlArg } = require("./lib/launch");
     "pressing the named button opens the sheet");
   await named.close();
 
+  // ================================ the sheet is a column, laid out like one ==
+  /* The controls in here were written for a horizontal bar, and the first pass
+     at a sheet only changed the direction. What was left behind measured badly:
+     dividers still standing up at 1×22px, 44px icon buttons each claiming a
+     whole line, and every labelled control sizing its own label to its own word
+     so nothing lined up with anything. */
+  const LAYOUT = () => {
+    const sh = document.querySelector("[data-options-sheet]");
+    if (!sh) return null;
+    const body = sh.children[1];
+    const br = body.getBoundingClientRect();
+    const kids = [...body.children];
+    const at = (e) => Math.round(e.getBoundingClientRect().y);
+    const dividers = kids
+      .filter((c) => /divider/.test(c.className))
+      .map((c) => {
+        const r = c.getBoundingClientRect();
+        return { w: Math.round(r.width), h: Math.round(r.height) };
+      });
+    /* Where the control beside each label begins. One column = one number. */
+    const starts = kids
+      .map((c) => {
+        const lbl = c.querySelector(":scope > [class*='label']");
+        const next = lbl && lbl.nextElementSibling;
+        return next ? Math.round(next.getBoundingClientRect().x) : null;
+      })
+      .filter((x) => x !== null && x > 0);
+    const trackStarts = [...body.querySelectorAll("input[type=range]")].map((e) =>
+      Math.round(e.getBoundingClientRect().x),
+    );
+    return {
+      height: Math.round(body.scrollHeight),
+      children: kids.length,
+      rows: new Set(kids.map(at)).size,
+      dividers,
+      columns: [...new Set([...starts, ...trackStarts])],
+      overflowX: body.scrollWidth - body.clientWidth,
+      clipped: [...body.querySelectorAll("*")].filter((e) => {
+        const r = e.getBoundingClientRect();
+        return r.width > 0 && r.right > br.right + 1;
+      }).length,
+    };
+  };
+
+  const layout = await open({ width: 390, height: 844 }, true, "phone+layout");
+  const layoutPage = layout.page;
+  await layoutPage.keyboard.press("b");
+  await layoutPage.waitForTimeout(700);
+  await layoutPage.locator("[data-options-open]").click();
+  await layoutPage.waitForTimeout(800);
+  const brushLayout = await layoutPage.evaluate(LAYOUT);
+
+  check("the dividers lie down instead of standing up",
+    brushLayout && brushLayout.dividers.length > 0 &&
+      brushLayout.dividers.every((d) => d.h <= 2 && d.w > 100),
+    brushLayout ? brushLayout.dividers.map((d) => `${d.w}x${d.h}`).join(", ") : "no sheet");
+
+  check("…and the small square buttons share a row rather than taking one each",
+    brushLayout && brushLayout.rows < brushLayout.children,
+    `${brushLayout?.children} controls in ${brushLayout?.rows} rows`);
+
+  /* The whole point of a shared column: one x for every control on the sheet. */
+  check("…every labelled control starts on the same column",
+    brushLayout && brushLayout.columns.length === 1,
+    `controls begin at x = ${brushLayout?.columns.join(", ")}`);
+
+  check("…and nothing runs off the side of it",
+    brushLayout && brushLayout.overflowX <= 0 && brushLayout.clipped === 0,
+    `overflow ${brushLayout?.overflowX}px, ${brushLayout?.clipped} clipped`);
+
+  /* A slider is the height of its track, not its track plus a line of label.
+     The track keeps the 44px touch floor either way. */
+  const sliders = await layoutPage.evaluate(() =>
+    [...document.querySelectorAll("[data-options-sheet] [class*='slider']")]
+      .filter((e) => e.querySelector("input[type=range]"))
+      .map((e) => Math.round(e.getBoundingClientRect().height)),
+  );
+  check("…a slider costs one row, not two",
+    sliders.length > 0 && sliders.every((h) => h <= 52),
+    `slider rows: ${[...new Set(sliders)].join(", ")}px`);
+  const trackH = await layoutPage.evaluate(() =>
+    [...new Set(
+      [...document.querySelectorAll("[data-options-sheet] input[type=range]")].map((e) =>
+        Math.round(e.getBoundingClientRect().height),
+      ),
+    )],
+  );
+  check("…without giving up the 44px the finger needs",
+    trackH.length > 0 && trackH.every((h) => h >= 44), `track heights: ${trackH.join(", ")}px`);
+
+  await layout.context.close();
+
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
   await browser.close();

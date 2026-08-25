@@ -526,30 +526,61 @@
   color: var(--text);
 }
 
-/* The controls were written for a ROW. Down a column they need to stretch,
-   and the vertical rules that separated them need to lie down. */
+/* The controls were written for a ROW. Down a column they need to stretch, the
+   vertical rules that separated them need to lie down, and the small square
+   buttons need to stop claiming a whole line each.
+
+   A WRAPPING ROW rather than a column, because the sheet holds two kinds of
+   control and they want opposite things. Sliders, selects and colour wells are
+   useless narrow, so they take the full width. Icon buttons are 44px squares —
+   a column gave each of them its own line, so four of them cost four rows to
+   show 176px of content. Here they sit together and the row breaks when it
+   runs out, which is what a toolbar does anyway. */
 .sheetBody {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--sp-3);
+  flex-flow: row wrap;
+  align-items: center;
+  /* Roomy between rows, tight between neighbours on one row. */
+  gap: var(--sp-3) var(--sp-2);
+  /* The label column every labelled control shares, so tracks and dropdowns
+     start on the same line down the sheet instead of wherever their own words
+     happen to end. Wide enough for "Smoothing 20%", the longest pairing in the
+     app at 107px. */
+  --sheet-label: 7.25rem;
   padding: var(--sp-3) var(--sp-4) var(--sp-4);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 
-  /* A divider between rows, not beside them. */
-  > .divider {
-    width: 100%;
-    height: 1px;
-    margin: 0;
+  /* Full width is the DEFAULT, and the small controls opt out below. That way a
+     control nobody anticipated gets the safe treatment rather than the clever
+     one. */
+  > * {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: 100%;
   }
 
-  /* Anything that was an inline cluster becomes a full-width row that wraps
-     rather than running off the side — which is the whole complaint. */
-  > * {
-    flex-shrink: 0;
-    max-width: 100%;
+  /* A rule across the sheet, not a tick beside a control.
+     `[class*="divider"]`, not `.divider`: the dividers come from
+     Controls.module.scss, so a bare `.divider` here compiles to OptionsBar's
+     own hashed name and matches nothing — which is exactly why they were still
+     standing up at 1×22px. The same reason `[class*="slider"]` is written that
+     way ten lines down. */
+  > [class*="divider"] {
+    flex: 1 1 100%;
+    width: 100%;
+    height: 1px;
+    /* Pulled into the row gap on both sides: a separator should mark a boundary
+       between groups, not add a band of empty space to the sheet. */
+    margin: calc(var(--sp-2) * -1) 0;
+  }
+
+  /* Squares stay squares, side by side. */
+  > button,
+  > [class*="iconBtn"] {
+    flex: 0 0 auto;
+    max-width: none;
   }
 
   /* Sliders are the common case and the reason the bar was two metres wide.
@@ -575,13 +606,38 @@
     justify-content: space-between;
     gap: 4px 8px;
 
+    /* Head BESIDE the track, not above it. Stacked, a slider costs 66px — a
+       16px head, a 4px gap and a 46px track — and the track is 46px because the
+       touch floor says so, which leaves the head as the only 20px worth having.
+       Five sliders is a hundred pixels of label doing nothing but sit there.
+       Side by side the row is the height of the track alone.
+
+       The head keeps its natural width and the track takes what is left, with
+       `min-width: 0` so a long label shortens the track rather than pushing it
+       off. If it ever gets too tight the `wrap` above puts the track back on its
+       own line, which is the old layout — so the failure mode is the previous
+       design rather than a broken one. */
     > [class*="sliderHead"] {
-      flex: 1 0 100%;
+      flex: 0 0 auto;
+      /* A COLUMN, not a shrink-wrap. Left to their content the heads measured
+         73px ("Flow 100%") to 107px ("Smoothing 20%"), so five tracks started at
+         five different x positions — and worse, each one moved as its own value
+         changed, so dragging one slider twitched the row. A fixed column lines
+         every track up and holds still while the numbers change. */
+      min-width: var(--sheet-label);
+      /* `width: auto` is doing the work, not the flex line. Both the head and
+         the track carry `width: 100%` from Controls.module.scss, and with a
+         basis of `auto` that width IS the basis — so `flex: 0 0 auto` alone left
+         both of them 358px wide and stacked, looking for all the world like the
+         rule had not applied at all. */
+      width: auto;
+      max-width: 100%;
+      gap: var(--sp-2);
     }
 
     input[type="range"] {
-      flex: 1 0 100%;
-      width: 100%;
+      flex: 1 1 140px;
+      width: auto;
       min-width: 0;
     }
   }
@@ -595,6 +651,38 @@
   [class*="hint"],
   [class*="muted"] {
     white-space: normal;
+  }
+
+  /* ONE column for every labelled row, whatever sits beside the label. The
+     sheet holds four shapes of labelled control — a dropdown, a number field, a
+     font picker and a slider — each of which sized its own label to its own
+     word, so nothing on the sheet lined up with anything else. Matching on the
+     label rather than on each control means a fifth shape gets the same
+     treatment without anyone remembering to add it. */
+  > * > [class*="label"]:first-child {
+    flex: 0 0 auto;
+    min-width: var(--sheet-label);
+  }
+
+  /* Dropdowns take the same two columns as the sliders: label on the left, the
+     control filling the rest. Sized by their own value they were 140px and
+     120px wide, starting at two different x positions and resizing whenever the
+     value changed — and the tap target changed size with it.
+
+     `:not([class*="selectBox"])` because the wrapper is `…__select` and the
+     button inside it is `…__selectBox`, so a plain `[class*="select"]` matches
+     both and styles the control as though it were the row. */
+  > [class*="select"]:not([class*="selectBox"]) {
+    justify-content: flex-start;
+    gap: var(--sp-2);
+
+    /* `width: auto` for the same reason as the slider track: the explicit width
+       is the flex basis until it is cleared. */
+    > [class*="selectBox"] {
+      flex: 1 1 auto;
+      width: auto;
+      min-width: 0;
+    }
   }
 
   /* Anything else that was a row of chips wraps instead of running off. */

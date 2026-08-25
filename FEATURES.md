@@ -624,6 +624,20 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Two rail bugs worth recording, both about measuring the wrong thing.** The first slider in the DOM sat at x=613 on a 390px phone — off the side of a bar that does not scroll — and every hit test against it missed, which reads as "covered" rather than "not on screen". And a loose `[class*="alpha"]` search matched `.alphaTrack`, an inner element that is not a hit target, reporting a 10px strip that does not exist.
 - **That off-screen slider is a finding in itself:** the brush's option sliders are past the right edge on a phone, in a bar that does not scroll, so they are unreachable regardless of how big their hit boxes are. That is the per-tool sheet item in M3, and this rail measures in the panels instead.
 
+### The options sheet laid out as a column, not a bar turned sideways
+
+The controls in the sheet were written for a horizontal toolbar, and the first pass at a phone sheet only changed the direction. Three things were left behind, all measurable.
+
+- **The dividers were still standing up — 1×22px.** There WAS a rule to lay them down, and it never matched: it was written `> .divider` inside `OptionsBar.module.scss`, which compiles to *OptionsBar's own* hashed class, while the dividers come from `Controls.module.scss`. The file already used `[class*="slider"]` ten lines further down for exactly this reason. They are now **358×1**, pulled into the row gap so a separator marks a boundary instead of adding a band of empty space.
+- **Every 44px icon button claimed a whole line.** Five formatting buttons cost five rows to show 220px of content. The sheet is now a **wrapping row** rather than a column: full width is the default and small buttons opt out, so a control nobody anticipated still gets the safe treatment. Text's five B/I/U/S/AB buttons now sit on one line.
+- **A slider cost 66px to show 46px of slider.** Stacked, it was a 16px head, a 4px gap and a 46px track — and the track is 46px because the touch floor says so, which leaves the head as the only part worth reclaiming. Head beside track instead of above it: **46px**, with the track still 46px tall and 176–280px wide depending on the phone.
+- **Nothing lined up with anything.** Four shapes of labelled control — dropdown, number field, font picker, slider — each sized its own label to its own word, so five tracks began at five different x positions (94, 124, 114, 97, 131) and *moved as their own values changed*, twitching the row while you dragged. They now share one **7.25rem** column, matched on the label rather than on each control so a fifth shape gets the alignment without anyone remembering to add it. Measured: every control on the sheet begins at **x = 140**, at 390px and at 320px alike.
+
+**The result, measured per tool:** Brush **822 → 578px**, Text **866 → 590px**, Crop **812 → 628px**, Marquee **438 → 352px** — between a fifth and a third shorter, with no horizontal overflow and nothing clipped at either width.
+
+- **`width: auto` was the load-bearing line, twice.** Both the slider track and the dropdown carry `width: 100%` from Controls, and with a flex-basis of `auto` that width IS the basis — so `flex: 0 0 auto` alone left them full-width and stacked, looking exactly as though the rule had not applied. The same trap caught the dropdowns an hour later.
+- **Guarded by four checks that reproduce the report.** Against the previous stylesheet they fail with `1x22`, `14 controls in 14 rows`, `controls begin at x = 60, 56, 16` and `slider rows: 66px` — which is the complaint, in four lines.
+
 ### The bottom bar carries destinations; the options button carries the tool
 
 - **The bottom bar had four things on it, and only three of them went anywhere.** Tools, a chip naming the current tool, Pan, Panels. The chip measured **218px of a 390px bar** — wider than the three real destinations put together — to display one word. It is gone, and the three that remain share the row: **119px each** at 390px, against 44px before, so every target grew by more than a factor of two.
