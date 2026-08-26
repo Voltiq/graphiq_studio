@@ -390,6 +390,58 @@ const RAIL_TAIL = () => {
     `"${pr?.head?.text}" → "${after?.head?.text}"`);
   await prefs.context.close();
 
+  const prefs2 = await openDialog(PHONE, true, "Settings", "Preferences", "preferences footer");
+
+  // ============================== the footer, which had run into itself =======
+  /* The three secondary actions are `flex: 0 1 auto`, so on a 390px screen they
+     shrank BELOW their own labels — and with `overflow: visible` the words ran
+     straight into one another: "Restore defaultsExport settingsImport settings…".
+     The boxes never overlapped, which is why nothing that measured boxes ever
+     complained; what overlapped was the text inside them.
+
+     So the check is on the text, not the box: no button may need more width
+     than it has. */
+  const foot = await prefs2.page.evaluate(() => {
+    const f = document.querySelector('[role="dialog"][aria-label="Preferences"] footer');
+    if (!f) return null;
+    const fr = f.getBoundingClientRect();
+    const btns = [...f.querySelectorAll("button")].map((e) => {
+      const r = e.getBoundingClientRect();
+      return {
+        text: e.innerText.trim(),
+        /* The accessible name must survive the shortening. */
+        name: e.getAttribute("aria-label") || e.innerText.trim(),
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        y: Math.round(r.y),
+        right: Math.round(r.right),
+        cramped: e.scrollWidth > e.clientWidth + 1,
+      };
+    });
+    return {
+      rows: new Set(btns.map((b) => b.y)).size,
+      btns,
+      cramped: btns.filter((b) => b.cramped).map((b) => b.text),
+      past: btns.filter((b) => b.right > fr.right + 1).map((b) => b.text),
+      shortest: Math.min(...btns.map((b) => b.h)),
+    };
+  });
+
+  check("no footer button is squeezed narrower than its own label",
+    foot && foot.cramped.length === 0,
+    foot ? (foot.cramped.join(", ") || foot.btns.map((b) => `${b.text}:${b.w}`).join(" ")) : "no footer");
+  check("…none of them hangs past the edge",
+    foot && foot.past.length === 0, foot ? foot.past.join(", ") || "all inside" : "");
+  check("…they still fit on one row at 390px",
+    foot && foot.rows === 1, `${foot?.rows} row(s)`);
+  check("…each is still a 44px target",
+    foot && foot.shortest >= 44, `${foot?.shortest}px`);
+  /* Shortened on screen, unabbreviated to a screen reader. */
+  check("…and shortening the words did not shorten their meaning",
+    foot && foot.btns.every((b) => b.name.length >= b.text.replace(/…/g, "").length),
+    foot ? foot.btns.map((b) => `"${b.text}"=${b.name}`).join(", ") : "");
+  await prefs2.context.close();
+
   /* Desktop keeps the labelled 168px rail and shows no heading, because the
      rail already names every section beside it. */
   const dPrefs = await openDialog(DESKTOP, false, "Settings", "Preferences", "desktop preferences");

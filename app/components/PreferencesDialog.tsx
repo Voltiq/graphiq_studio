@@ -1637,30 +1637,44 @@ export default function PreferencesDialog({
           </div>
         </div>
 
-        <footer className={styles.foot} style={{ justifyContent: "flex-start" }}>
+        {/* Each of the three secondary actions carries BOTH its full name and a
+            short one, and the stylesheet shows whichever fits. The buttons are
+            `flex: 0 1 auto`, so on a 390px screen they shrank below their own
+            labels and — with `overflow: visible` — the words simply ran into one
+            another: "Restore defaultsExport settingsImport settings…". Wrapping
+            to a second row would have fixed the collision by spending 44px,
+            which is the opposite of what a full-screen sheet can afford. The
+            full name stays the accessible name in both cases. */}
+        <footer className={styles.foot} style={{ justifyContent: "flex-start" }} data-prefs-foot>
           <button
             type="button"
             className={styles.btn}
+            aria-label="Restore defaults"
             title="Reset every preference, tool option, panel layout and theme to its default"
             onClick={() => setConfirmReset(true)}
           >
-            Restore defaults…
+            <span className={styles.footLong}>Restore defaults…</span>
+            <span className={styles.footShort}>Reset…</span>
           </button>
           <button
             type="button"
             className={styles.btn}
+            aria-label="Export settings"
             title="Download every setting as graphiq-settings.json"
             onClick={() => downloadSettings()}
           >
-            Export settings
+            <span className={styles.footLong}>Export settings</span>
+            <span className={styles.footShort}>Export</span>
           </button>
           <button
             type="button"
             className={styles.btn}
+            aria-label="Import settings"
             title="Load a graphiq-settings.json export (reloads to apply)"
             onClick={() => importInputRef.current?.click()}
           >
-            Import settings…
+            <span className={styles.footLong}>Import settings…</span>
+            <span className={styles.footShort}>Import…</span>
           </button>
           <input
             ref={importInputRef}

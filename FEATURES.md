@@ -633,6 +633,15 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Hidden from the eye, not from the accessibility tree.** The label stays in the DOM with `display: none` and each button carries an explicit `aria-label`, because an accessible name inferred from text that is no longer rendered is no accessible name at all. Every item is still a 44px target with the words gone.
 - **Desktop keeps exactly what it had** — the labelled 168px rail and no heading, since the rail already names every section beside it. Asserted, so this cannot drift into a redesign of the desktop dialog.
 
+#### The footer that ran into itself
+
+- **The boxes never overlapped; the text did.** The three secondary actions are `flex: 0 1 auto`, so on a 390px screen they shrank **below their own labels** — 98px of button holding 112px of "Restore defaults…" — and with `overflow: visible` the words simply ran on into the next button: *"Restore defaultsExport settingsImport settings…"*. That is why nothing measuring geometry ever complained: no rectangle overlapped another, and none hung past the edge.
+- **Shorter names, not a taller footer.** Wrapping to a second row would have fixed the collision by spending 44px, which is the opposite of what a full-screen sheet can afford. Each button now carries **both** its full name and a short one and the stylesheet shows whichever fits: *Reset… · Export · Import… · Done*, **260px of a 358px row**, one line, every one still a 44px target.
+- **Shortened on screen, unabbreviated to a screen reader.** Each keeps an explicit `aria-label` with the full name, so this is a visual economy and not a loss of meaning — asserted, not assumed.
+- **Wrapping is the safety net rather than the plan.** At 390px and 360px it never fires; at 320px, where the four genuinely do not fit, the row wraps instead of hanging 37px past the edge. The row gets taller only on a screen that cannot hold it.
+- **Desktop is untouched:** the full names, on one row, as before.
+- **The check is on the text, not the box**, because that is where the fault was: no button may need more width than it has. Against the previous build it fails naming all three — `Restore defaults…, Export settings, Import settings…`.
+
 #### The rail that asserted the old behaviour
 
 - **`verify-dialog-internals` asserted "each side rail becomes a strip along the top" for all three rail dialogs**, Preferences included. That check was correct when it was written and became wrong the moment the requirement changed, so Preferences moved out of that group and got checks on the terms it actually has: a column, all twelve on screen, 44px targets, labels hidden but named, the pane beside the rail rather than under it, and the heading following the selection.

@@ -1228,3 +1228,43 @@ html[data-mobile="true"] {
 .prefsPaneHead {
   display: none;
 }
+
+/* ---- the Preferences footer ---------------------------------------------
+   Long name by default, short name where the row cannot hold it. Whichever is
+   showing, the button keeps its full `aria-label`, so the shortening is a
+   visual economy and not a loss of meaning. */
+.footShort {
+  display: none;
+}
+
+html[data-mobile="true"] {
+  .footLong {
+    display: none;
+  }
+
+  .footShort {
+    display: inline;
+  }
+
+  /* Squeezing below the label is what let the words collide, so the buttons
+     stop shrinking and the row is sized to hold them. With the short names the
+     four together come to roughly 280px of a 358px row, so there is slack
+     rather than a fight. */
+  [data-prefs-foot] {
+    gap: var(--sp-2);
+    /* The safety net, not the plan. At 390px the four short names come to 260px
+       of a 358px row and this never fires; at 320px they came to 292 and the
+       last one hung 37px past the edge. Wrapping means the row gets taller only
+       on a screen that genuinely cannot hold it, instead of spilling on one
+       that nearly can. */
+    flex-wrap: wrap;
+
+    .btn {
+      /* Not `0 1 auto`: shrinking below the label is what let the words run into
+         one another in the first place. */
+      flex: 0 0 auto;
+      white-space: nowrap;
+      padding: 0 var(--sp-2);
+    }
+  }
+}
