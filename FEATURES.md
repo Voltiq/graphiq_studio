@@ -624,6 +624,22 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Two rail bugs worth recording, both about measuring the wrong thing.** The first slider in the DOM sat at x=613 on a 390px phone — off the side of a bar that does not scroll — and every hit test against it missed, which reads as "covered" rather than "not on screen". And a loose `[class*="alpha"]` search matched `.alphaTrack`, an inner element that is not a hit target, reporting a 10px strip that does not exist.
 - **That off-screen slider is a finding in itself:** the brush's option sliders are past the right edge on a phone, in a bar that does not scroll, so they are unreachable regardless of how big their hit boxes are. That is the per-tool sheet item in M3, and this rail measures in the panels instead.
 
+### The document strip, drawn for a mouse
+
+Two faults in one strip, and underneath them the same fault: it was designed against a pointer that hovers.
+
+- **The tab was taller than the strip holding it.** The strip is 36px and the tab 27px — until the 44px touch floor raises the tab and leaves it **8px taller than its own container**. Measured on a phone: a **116×44 tab in a 36px strip**. On touch the strip is now sized from its contents (**53px**), with room below for the active tab's underline, which hangs 5px past the tab.
+- **The close cross was `opacity: 0` until hover, and nothing on a touch screen hovers.** So it was simply not there. It reads as *"not visible initially"* rather than *"not visible"* because a tap leaves `:hover` stuck, so it appears after you have already touched the tab. It is always shown on touch now, and widened from a 16×16 mark to a **32×44** target.
+- **The target is generous but deliberately contained.** Closing a document is destructive, so the cross stops at its own tab's edge rather than spilling into the neighbouring one — asserted both ways: the cross answers at its centre, and the tab still answers at its left edge.
+- **The cost is only paid when the strip is on screen**, which is never at one document — it hides itself entirely at `data-count="1"`.
+- **Desktop keeps exactly what it had:** a 36px strip, a 27px tab, and the cross on hover. Asserted, so this cannot quietly become a redesign.
+
+#### Why the rail that owns this fault did not find it
+
+- **`verify-hover-affordances` exists for precisely this bug** — its header opens *"the things you could only reach by hovering"* — and it walked straight past this one. It checks seven classes of reveal-on-hover delete button by computed style, and the document close is an eighth it had never been told about.
+- **A list of seven classes cannot find the eighth.** What actually hid it is that the tab strip **hides itself at one document**, and nothing in the rail had ever opened a second — so the screen carrying the fault was never on screen. The rail now opens a second document and checks it end to end, including that pressing the cross really closes a document.
+- Against the previous stylesheet the three checks fail with `116×44 tab in a 36px strip`, `visible: false` and `16×16` — the report, in three lines.
+
 ### Sliders with round ends, and a knob worth aiming at
 
 - **The pointed ends were arithmetic, not art.** `border-radius` describes the **border** box, and `background-clip: content-box` re-uses that curve *reduced by the padding on each axis*. The touch rule grows a slider's hit area with 21px of vertical padding, so a `999px` pill radius on a 46px-tall box, clipped down to a 4px track, resolved to a corner roughly **32px wide and 2px tall**. Four of those on a thin bar is a spindle — sharp at both ends, which is exactly what it looked like.

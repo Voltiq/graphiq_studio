@@ -331,6 +331,102 @@ const OPACITIES = (kinds) => {
     hovered === deskTip.tip, `showed ${JSON.stringify(hovered)}, expected ${JSON.stringify(deskTip.tip)}`);
   await desk.context.close();
 
+  // ================= the eighth kind, which this rail was not looking at ======
+  /* The document tab's close button is the same fault as the seven above —
+     `opacity: 0` until its row is hovered — and this rail walked straight past
+     it for one reason: the tab strip HIDES ITSELF at one document, and nothing
+     here had ever opened a second. A list of seven classes cannot find the
+     eighth; only visiting the screen can.
+
+     The strip has a second, unrelated fault worth measuring in the same place:
+     it is 36px tall and the tab inside it is 27px until the 44px touch floor
+     raises the tab, at which point the tab is taller than the strip holding
+     it. */
+  const two = await open({ width: 390, height: 844 }, true, "phone+2docs");
+  await two.page.keyboard.press("Control+n");
+  await two.page.waitForTimeout(900);
+  await two.page
+    .locator('[role="dialog"] button', { hasText: /^Create$/ })
+    .first()
+    .click()
+    .catch(() => {});
+  await two.page.waitForTimeout(2000);
+
+  const strip = await two.page.evaluate(() => {
+    const el = document.querySelector("[data-tabs]");
+    if (!el) return null;
+    const sr = el.getBoundingClientRect();
+    const tab = el.querySelector("button");
+    const tr = tab.getBoundingClientRect();
+    const close = el.querySelector('[role="button"][aria-label^="Close"]');
+    if (!close) return { noClose: true };
+    const cr = close.getBoundingClientRect();
+    const cx = Math.round(cr.x + cr.width / 2);
+    const cy = Math.round(cr.y + cr.height / 2);
+    const hit = (x, y) => {
+      const e = document.elementFromPoint(x, y);
+      if (!e) return "none";
+      if (e.closest('[role="button"][aria-label^="Close"]')) return "close";
+      return e.closest("[data-tabs] button") ? "tab" : "other";
+    };
+    return {
+      stripH: Math.round(sr.height),
+      tab: { w: Math.round(tr.width), h: Math.round(tr.height) },
+      /* The tab must sit INSIDE the strip: the fault was the reverse. */
+      fits: tr.top >= sr.top - 0.5 && tr.bottom <= sr.bottom + 0.5,
+      close: { w: Math.round(cr.width), h: Math.round(cr.height) },
+      visible: close.checkVisibility({ opacityProperty: true, visibilityProperty: true }),
+      /* It must not reach past its own tab into the neighbouring one. */
+      contained: cr.right <= tr.right + 0.5,
+      hits: { close: hit(cx, cy), tab: hit(Math.round(tr.x + 20), cy) },
+    };
+  });
+
+  check("the tab strip is tall enough for the tab inside it",
+    strip && strip.fits && strip.stripH >= strip.tab.h,
+    strip ? `${strip.tab.w}×${strip.tab.h} tab in a ${strip.stripH}px strip` : "no strip");
+  check("a document's close button is visible without hovering",
+    strip && strip.visible === true,
+    strip ? `visible: ${strip.visible}` : "");
+  check("…and is a target rather than a 16px mark",
+    strip && strip.close.w >= 28 && strip.close.h >= 40,
+    strip ? `${strip.close.w}×${strip.close.h}` : "");
+  check("…without reaching past its own tab into the next one",
+    strip && strip.contained && strip.hits.tab === "tab",
+    strip ? `contained: ${strip.contained}, tab still answers at its left edge: ${strip.hits.tab}` : "");
+
+  /* And it closes a document, which is the only claim that matters. */
+  const wasOpen = await two.page.evaluate(() => document.querySelectorAll("[data-tabs] button[class*='tab']").length);
+  await two.page.locator('[data-tabs] [role="button"][aria-label^="Close"]').first().click();
+  await two.page.waitForTimeout(1200);
+  const nowOpen = await two.page.evaluate(() => document.querySelectorAll("[data-tabs] button[class*='tab']").length);
+  check("…and pressing it closes that document", nowOpen === wasOpen - 1,
+    `${wasOpen} tabs → ${nowOpen}`);
+  await two.context.close();
+
+  /* Desktop keeps the quiet strip it always had. */
+  const deskTabs = await open({ width: 1400, height: 900 }, false, "desktop+2docs");
+  await deskTabs.page.keyboard.press("Control+n");
+  await deskTabs.page.waitForTimeout(900);
+  await deskTabs.page
+    .locator('[role="dialog"] button', { hasText: /^Create$/ })
+    .first()
+    .click()
+    .catch(() => {});
+  await deskTabs.page.waitForTimeout(2000);
+  const deskStrip = await deskTabs.page.evaluate(() => {
+    const el = document.querySelector("[data-tabs]");
+    const close = el.querySelector('[role="button"][aria-label^="Close"]');
+    return {
+      stripH: Math.round(el.getBoundingClientRect().height),
+      opacity: getComputedStyle(close).opacity,
+    };
+  });
+  check("…while a mouse still gets the 36px strip and the cross on hover",
+    deskStrip.stripH === 36 && deskStrip.opacity === "0",
+    `${deskStrip.stripH}px strip, close opacity ${deskStrip.opacity}`);
+  await deskTabs.context.close();
+
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
   await browser.close();

@@ -576,3 +576,44 @@ $ruler: 22px;
      and blur the very pixel edges the loupe exists to show. */
   image-rendering: pixelated;
 }
+
+/* ---- the document strip, on a finger ------------------------------------
+   Two faults, both of them the same fault: this strip was drawn for a mouse.
+
+   HEIGHT. The strip is 36px and the tab inside it is 27px — until the 44px
+   touch floor raises the tab and leaves it 8px taller than the box holding it.
+   Measured on a phone: a 116×44 tab in a 36px strip. So on touch the strip is
+   sized from its contents instead of from a number chosen against a 27px chip,
+   with room below for the active tab's underline (it hangs 5px past the tab).
+   The cost is only paid when it is on screen at all — the strip hides itself
+   entirely at one document.
+
+   THE CLOSE BUTTON. `opacity: 0` until the tab is hovered, which on a touch
+   screen means never: there is no gesture that hovers, so the cross was simply
+   not there. (It appears after a tap, because a tap leaves :hover stuck — which
+   is why it reads as "not visible initially" rather than "not visible".) It is
+   always shown here, and widened to a real target: 32px across and the full
+   height of the tab, which is ~32×44 without spilling past the tab's own edge
+   into the neighbouring one. Closing a document is destructive, so the target
+   is generous but deliberately contained. */
+html[data-touch="true"] {
+  .tabs {
+    height: auto;
+    min-height: 52px;
+    padding: 2px var(--sp-2) 6px;
+  }
+
+  .tabClose {
+    opacity: 1;
+    width: 32px;
+    height: auto;
+    align-self: stretch;
+
+    /* 12px is a mouse-sized glyph; the box around it grew, so the mark in it
+       should too. */
+    svg {
+      width: 16px;
+      height: 16px;
+    }
+  }
+}
