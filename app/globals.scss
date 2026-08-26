@@ -606,9 +606,43 @@ html[data-touch="true"] {
      enough is left exactly as it was. Every text control (tabs, presets,
      selects, chips) is already wider than 44px, so in practice min-width
      only reaches the square icon buttons. */
-  :is(button, select, [role="menuitem"]) {
+  :is(button, select, [role="menuitem"]):not([role="switch"]) {
     min-width: 44px;
     min-height: 44px;
+  }
+
+  /* ---- switches take the floor as REACH, not as paint ----
+     A switch is a track, not a box: 32×16 with a thumb positioned 2px inside
+     it. Given the blanket floor above it became 44×44 — and a pill radius on a
+     square is a CIRCLE, with the thumb still pinned 2px from a corner it was
+     never going to be in. That is what it looked like: a big green disc with a
+     dot in the top-left.
+
+     So the 44px is spent on an invisible pseudo-element centred over the track,
+     and the track keeps the size, radius and colour its own module gives it.
+     Deliberately `::before`: of the three switches in the app one draws its
+     thumb with a child span, one with `::after`, and one is a checkbox with a
+     child box — `::before` is the only hook free on all three, and the point of
+     doing it here is to leave all three designs alone.
+
+     `elementFromPoint` is what verifies this, not `getBoundingClientRect`: the
+     button's own box stays 32×16 and a finger 18px above its centre still
+     lands on it. Same principle as the sliders, whose hit area is padding while
+     the painted track never moves. */
+  [role="switch"] {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+
+    &::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: max(44px, 100%);
+      height: 44px;
+      transform: translate(-50%, -50%);
+    }
   }
   /* Ranges are excluded: their hit area is grown by padding instead — see
      Controls.module.scss — because a range's box IS its track, and a 44px

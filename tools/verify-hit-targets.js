@@ -358,6 +358,92 @@ const REACH = (scope) => {
   );
   await desk.context.close();
 
+  // ============================ a switch takes the floor as reach, not as paint ==
+  /* The 44px floor is applied to boxes, and a switch is not a box — it is a
+     32×16 track with a thumb positioned 2px inside it. Given a 44px minimum it
+     became 44×44, and a pill radius on a square is a CIRCLE, with the thumb
+     still pinned 2px from a corner: a big green disc with a dot in the top
+     left. Reported as "the toggle looks broken", and it was.
+
+     So the floor is spent on an invisible pseudo-element instead. Which means
+     the two halves have to be checked separately: the PAINT is the track's own
+     32×16 pill, and the REACH is 44px, and only `elementFromPoint` can see the
+     second one. */
+  const sw = await open({ width: 390, height: 844 }, true);
+  await sw.page.locator('button[aria-label="Open the command palette"]').click();
+  await sw.page.waitForTimeout(500);
+  await sw.page.locator('input[aria-label="Search commands"]').fill("Preferences");
+  await sw.page.waitForTimeout(500);
+  await sw.page.locator('[role="option"]').first().click();
+  await sw.page.waitForTimeout(1600);
+  await sw.page.locator('[role="switch"]').first().scrollIntoViewIfNeeded().catch(() => {});
+  await sw.page.waitForTimeout(400);
+
+  const swState = await sw.page.evaluate(() => {
+    const e = [...document.querySelectorAll('[role="switch"]')].find(
+      (x) => x.getBoundingClientRect().width > 0,
+    );
+    if (!e) return null;
+    const r = e.getBoundingClientRect();
+    const thumb = e.firstElementChild ? e.firstElementChild.getBoundingClientRect() : null;
+    const cx = Math.round(r.x + r.width / 2);
+    const cy = Math.round(r.y + r.height / 2);
+    const lands = (dx, dy) => {
+      const el = document.elementFromPoint(cx + dx, cy + dy);
+      return !!el && (el === e || e.contains(el));
+    };
+    /* Would this switch swallow a tap meant for something else? */
+    const stolen = [...document.querySelectorAll('[role="dialog"] button, [role="dialog"] select, [role="dialog"] input')]
+      .filter((c) => c.getAttribute("role") !== "switch")
+      .filter((c) => {
+        const b = c.getBoundingClientRect();
+        if (b.width <= 0 || b.height <= 0) return false;
+        const hit = document.elementFromPoint(Math.round(b.x + b.width / 2), Math.round(b.y + b.height / 2));
+        return !!(hit && hit.closest && hit.closest('[role="switch"]'));
+      }).length;
+    return {
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+      thumbInside: thumb
+        ? thumb.x >= r.x - 0.5 && thumb.right <= r.right + 0.5 &&
+          thumb.y >= r.y - 0.5 && thumb.bottom <= r.bottom + 0.5
+        : null,
+      /* "Inside" is not enough on its own: a 12px thumb 2px from the corner of
+         a 44px square is inside it too, which is precisely what the bug looked
+         like. What was actually wrong is that it stopped being CENTRED on the
+         track, so that is what gets measured. */
+      thumbOffCentre: thumb
+        ? Math.round(Math.abs(thumb.y + thumb.height / 2 - (r.y + r.height / 2)))
+        : null,
+      reach: { up: lands(0, -18), down: lands(0, 18), left: lands(-20, 0), right: lands(20, 0), centre: lands(0, 0) },
+      stolen,
+    };
+  });
+
+  check("a switch is still painted as a track, not blown up into a square",
+    swState && swState.w >= swState.h * 1.5,
+    swState ? `${swState.w}×${swState.h}` : "no switch found");
+  check("…with its thumb centred on the track rather than in a corner",
+    swState && swState.thumbInside === true && swState.thumbOffCentre <= 1,
+    swState ? `inside: ${swState.thumbInside}, ${swState.thumbOffCentre}px off centre` : "");
+  check("…and a finger still lands on it from 18px above and below",
+    swState && Object.values(swState.reach).every(Boolean),
+    swState ? Object.entries(swState.reach).map(([k, v]) => `${k}:${v ? "hit" : "MISS"}`).join(" ") : "");
+  check("…without swallowing a tap meant for anything else",
+    swState && swState.stolen === 0, `${swState?.stolen} controls covered by a switch`);
+
+  /* And it still works. */
+  const before = await sw.page.evaluate(() =>
+    [...document.querySelectorAll('[role="switch"]')].find((x) => x.getBoundingClientRect().width > 0)?.getAttribute("aria-checked"),
+  );
+  await sw.page.locator('[role="switch"]').first().click();
+  await sw.page.waitForTimeout(500);
+  const after = await sw.page.evaluate(() =>
+    [...document.querySelectorAll('[role="switch"]')].find((x) => x.getBoundingClientRect().width > 0)?.getAttribute("aria-checked"),
+  );
+  check("…and pressing it still flips it", before !== after, `aria-checked ${before} → ${after}`);
+  await sw.context.close();
+
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
   await browser.close();
