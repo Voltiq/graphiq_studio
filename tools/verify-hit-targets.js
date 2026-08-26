@@ -444,6 +444,99 @@ const REACH = (scope) => {
   check("…and pressing it still flips it", before !== after, `aria-checked ${before} → ${after}`);
   await sw.context.close();
 
+  // ================================= sliders: round ends, and worth aiming at ==
+  /* Reported as "the sliders have very pointy tips". They did, and the cause was
+     arithmetic rather than art: `border-radius` describes the BORDER box, and
+     `background-clip: content-box` re-uses that curve reduced by the padding on
+     each axis — so a 999px pill radius on a 46px-tall box, clipped to a 4px
+     track, gave a corner about 32px wide and 2px tall. Four of those on a thin
+     bar is a spindle.
+
+     Both halves are measured: the RADIUS is now written for the content box
+     (`4px / 23px`, the two halves being half the track and the padding plus
+     half the track), and the track and thumb are big enough to aim at. */
+  const sd = await open({ width: 390, height: 844 }, true);
+  await sd.page.keyboard.press("b");
+  await sd.page.waitForTimeout(600);
+  await sd.page.locator("[data-options-open]").click();
+  await sd.page.waitForTimeout(900);
+
+  const slid = await sd.page.evaluate(() => {
+    const els = [...document.querySelectorAll('input[type="range"]')].filter(
+      (e) => e.getBoundingClientRect().width > 0,
+    );
+    if (!els.length) return null;
+    const cs = getComputedStyle(els[0]);
+    const track = parseFloat(cs.height);
+    const pad = parseFloat(cs.paddingTop);
+    /* The radius as the browser resolved it, per axis. A pill on the CONTENT
+       box needs the horizontal half to be half the track, and the vertical half
+       to be the padding plus that — anything else tapers. */
+    const radius = cs.borderTopLeftRadius; // "4px 23px" once it has two axes
+    const [rh, rv] = radius.split(/\s+/).map(parseFloat);
+    return {
+      count: els.length,
+      track,
+      pad,
+      box: Math.round(els[0].getBoundingClientRect().height),
+      rh,
+      rv: Number.isFinite(rv) ? rv : rh,
+      clip: cs.backgroundClip,
+      /* Every visible slider agrees, not just the first. */
+      uniform: els.every((e) => {
+        const c = getComputedStyle(e);
+        return c.height === cs.height && c.borderTopLeftRadius === radius;
+      }),
+    };
+  });
+
+  check("a touch slider's ends are round, not pointed",
+    slid && Math.abs(slid.rh - slid.track / 2) < 0.6 &&
+      Math.abs(slid.rv - (slid.pad + slid.track / 2)) < 0.6,
+    slid
+      ? `radius ${slid.rh}px / ${slid.rv}px against a ${slid.track}px track and ${slid.pad}px of padding`
+      : "no slider found");
+  check("…the track is thick enough to see and aim at",
+    slid && slid.track >= 8, `${slid?.track}px track`);
+  check("…the box is still the 44px a finger needs",
+    slid && slid.box >= 44, `${slid?.box}px`);
+  check("…and every slider on the device agrees",
+    slid && slid.uniform, `${slid?.count} sliders, ${slid?.uniform ? "all alike" : "MIXED"}`);
+
+  /* The thumb is what you actually grab, and it is the one part of a range
+     input script cannot see: it is a pseudo-element, `getComputedStyle` on it
+     returns the INPUT's box (measured: 234×8), and `elementFromPoint` answers
+     for the whole control. So it is measured in pixels — the knob is white on a
+     dark track, so the run of near-white along the centre line IS its diameter.
+     The first attempt at this walked `elementFromPoint` outwards and reported
+     39px, which was the input answering for its own box: a check that would
+     have passed with no thumb at all. */
+  await sd.page.evaluate(() => {
+    const e = [...document.querySelectorAll('input[type="range"]')].find(
+      (x) => x.getBoundingClientRect().width > 0,
+    );
+    e.value = e.min || 0;
+    e.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await sd.page.waitForTimeout(300);
+  const knobBox = await sd.page.locator('input[type="range"]').first().boundingBox();
+  const shot = await sd.page.screenshot({
+    clip: { x: knobBox.x - 4, y: knobBox.y + knobBox.height / 2 - 16, width: 64, height: 32 },
+  });
+  const { data, info } = await require("sharp")(shot).raw().toBuffer({ resolveWithObject: true });
+  let run = 0;
+  const midY = Math.floor(info.height / 2);
+  for (let x = 0; x < info.width; x++) {
+    const i = (midY * info.width + x) * info.channels;
+    const white = data[i] > 225 && data[i + 1] > 225 && data[i + 2] > 225;
+    if (white) run++;
+    else if (run) break;
+  }
+  check("…with a knob big enough to grab, not a mouse-sized dot",
+    run >= 16, `knob measures ${run}px across, up from 12px`);
+
+  await sd.context.close();
+
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 
   await browser.close();

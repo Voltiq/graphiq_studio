@@ -463,11 +463,51 @@
    of the 23 control kinds a tablet got at mouse size. */
 html[data-touch="true"] input[type="range"] {
   box-sizing: content-box;
-  /* 21, not 20: the padding is added to whatever the track already is, and the
-     tracks are not all the same — a 3px one in the Layers panel came out at
-     43px on 20 and missed the 44px floor by a pixel. The floor was 24px when
-     this rule was written; the sweep that raised every other control to 44
-     raised it too, since a slider is no easier to hit than a button. */
-  padding: 21px 0;
+  /* One track height for every slider on a touch device, rather than whatever
+     each call site happened to pick. 8px instead of 3–4px: twice the line to
+     aim at, and it makes the geometry below exact rather than approximate. */
+  height: 8px;
+  /* 19 + 8 + 19 = 46, comfortably over the 44px floor. (It was 21px against a
+     4px track for the same reason: the padding is added to whatever the track
+     already is, and a 3px one in the Layers panel came out at 43px on 20 and
+     missed the floor by a pixel. With the height now fixed, the sum is fixed
+     too and no call site can fall short.) */
+  padding: 19px 0;
   background-clip: content-box;
+
+  /* ---- why the radius is a fraction, and why it is not `--r-pill` ----
+     This is what made the ends POINTY. `border-radius` describes the BORDER
+     box, and `background-clip: content-box` re-uses that curve reduced by the
+     padding on each axis — so a 999px pill radius on a 46px-tall box, clipped
+     down to a 4px track, produced a corner roughly 32px wide and 2px tall. Four
+     of those on a thin bar is a spindle: sharp at both ends, which is exactly
+     what it looked like.
+
+     So the radius is written for the CONTENT box and back-calculated:
+
+       horizontal  4px  = half the track height, unreduced (no side padding)
+       vertical   23px  = 19px of padding + half the track height
+
+     which leaves the clipped corner a true 4×4 quarter-circle, and the track a
+     proper pill. The two values are the two halves of `4px / 23px`. */
+  border-radius: 4px / 23px;
+}
+
+/* ---- a thumb a fingertip can actually find ----
+   12px is a mouse-sized target on a bar that is now 8px thick. 20px reads at
+   arm's length and still leaves the track visible either side of it.
+
+   `[type="range"][type="range"]` is not a typo: the per-module thumb rules
+   (`.slider`, the Layers opacity, the zoom bar) each score the same specificity
+   as a plain `html[data-touch] input[type="range"]`, so which one won would be
+   decided by the order the modules happen to be bundled in. Repeating the
+   attribute buys one point and settles it everywhere, in every build. */
+html[data-touch="true"] input[type="range"][type="range"]::-webkit-slider-thumb {
+  width: 20px;
+  height: 20px;
+}
+
+html[data-touch="true"] input[type="range"][type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
 }

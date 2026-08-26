@@ -624,6 +624,20 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Two rail bugs worth recording, both about measuring the wrong thing.** The first slider in the DOM sat at x=613 on a 390px phone — off the side of a bar that does not scroll — and every hit test against it missed, which reads as "covered" rather than "not on screen". And a loose `[class*="alpha"]` search matched `.alphaTrack`, an inner element that is not a hit target, reporting a 10px strip that does not exist.
 - **That off-screen slider is a finding in itself:** the brush's option sliders are past the right edge on a phone, in a bar that does not scroll, so they are unreachable regardless of how big their hit boxes are. That is the per-tool sheet item in M3, and this rail measures in the panels instead.
 
+### Sliders with round ends, and a knob worth aiming at
+
+- **The pointed ends were arithmetic, not art.** `border-radius` describes the **border** box, and `background-clip: content-box` re-uses that curve *reduced by the padding on each axis*. The touch rule grows a slider's hit area with 21px of vertical padding, so a `999px` pill radius on a 46px-tall box, clipped down to a 4px track, resolved to a corner roughly **32px wide and 2px tall**. Four of those on a thin bar is a spindle — sharp at both ends, which is exactly what it looked like.
+- **So the radius is written for the content box and back-calculated:** `4px / 23px`, the two halves being *half the track* horizontally (no side padding to reduce it) and *the padding plus half the track* vertically. That leaves the clipped corner a true quarter-circle and the track a proper pill. The old value was not too big or too small; it was describing the wrong box.
+- **Bigger, on touch only.** The track goes from 3–4px to a uniform **8px** — one height for every slider in the app rather than whatever each call site picked — and the knob from 12px to **20px**. The row does not get taller: the box stays **46px** because the padding absorbs the change, so the options sheet is exactly as tall as it was.
+- **`[type="range"][type="range"]` is not a typo.** The per-module thumb rules — `.slider`, the Layers opacity, the zoom bar — each score the same specificity as a plain `html[data-touch] input[type="range"]`, so which one won would be decided by whatever order the modules happened to be bundled in. Repeating the attribute buys one point and settles it in every build.
+- **Desktop is untouched**, and asserted so: still a 4px track at `999px`, where a mouse can hit 4px and the padding would make every row containing a slider 20px taller.
+
+#### Measuring a knob that nothing can see
+
+- **The thumb is the one part of a range input script cannot reach.** It is a pseudo-element: `getComputedStyle(el, "::-webkit-slider-thumb")` returns the **input's** box (measured: 234×8), and `elementFromPoint` answers for the whole control.
+- **The first check written for it was vacuous and passed against the bug.** It walked `elementFromPoint` outwards from the left edge and reported "39px", which was the input answering for its own box — a check that would have passed with no thumb at all.
+- **It is measured in pixels instead.** The knob is white on a dark track, so the run of near-white along the centre line *is* its diameter: **20px**, against 12px before. Against the previous stylesheet the three checks fail with `radius 999px / 999px against a 4px track`, `4px track`, and `knob measures 12px across` — the report, in three lines.
+
 ### The 44px floor met a control that is not a box
 
 - **Reported as "the toggle looks broken: a huge circle with the head off-centre", and that is exactly what it measured.** The switch is a **32×16** track with a 12px thumb sitting 2px inside it. The touch floor — `min-width: 44px; min-height: 44px` on every button — made it **44×44**, and a pill radius on a square is a **circle**, with the thumb still pinned 2px from a corner it was never meant to occupy.
