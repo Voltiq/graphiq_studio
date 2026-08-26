@@ -624,6 +624,21 @@ All tree edits are **pure functions returning a new tree** (find, update, remove
 - **Two rail bugs worth recording, both about measuring the wrong thing.** The first slider in the DOM sat at x=613 on a 390px phone — off the side of a bar that does not scroll — and every hit test against it missed, which reads as "covered" rather than "not on screen". And a loose `[class*="alpha"]` search matched `.alphaTrack`, an inner element that is not a hit target, reporting a 10px strip that does not exist.
 - **That off-screen slider is a finding in itself:** the brush's option sliders are past the right edge on a phone, in a bar that does not scroll, so they are unreachable regardless of how big their hit boxes are. That is the per-tool sheet item in M3, and this rail measures in the panels instead.
 
+### Preferences on a phone: an icon column, not a filmstrip
+
+- **Twelve sections do not fit a strip.** The mobile sheet rules lay a dialog's side rail down as a horizontal band along the top, which is right for Layer Style's nine effects and Smart Filter's stack. Preferences carried the same marker and got the same treatment, and it did not fit: measured at 390×844, a **390×44 strip whose contents ran to 1,124px** — four sections visible, eight behind a sideways scroll, and a full 44px band spent to show four.
+- **Down the left as icons, all twelve are on screen at once** in a **56px** column, leaving 334px for the pane beside it. The rail opts out of the generic rule with `data-rail-mode="icons"` rather than by name, so the exception describes a *kind* of rail rather than one dialog.
+- **The layout had to be told to stay a row.** The same mobile block stacks a dialog's middle section into a column — correct for Blur Gallery and Liquify, where a fixed 500px preview beside a controls column pushes the controls off a 390px screen, and wrong here, where the rail is 56px. The exception is tied to `:has([data-rail-mode="icons"])` for the same reason.
+- **Dropping the labels is what buys the width, so the heading pays for it.** The rail now says *where you can go*; the heading above the pane says *where you are* — the section's icon and name, following the selection. Without it an icons-only rail leaves you guessing which of two similar glyphs you pressed.
+- **Hidden from the eye, not from the accessibility tree.** The label stays in the DOM with `display: none` and each button carries an explicit `aria-label`, because an accessible name inferred from text that is no longer rendered is no accessible name at all. Every item is still a 44px target with the words gone.
+- **Desktop keeps exactly what it had** — the labelled 168px rail and no heading, since the rail already names every section beside it. Asserted, so this cannot drift into a redesign of the desktop dialog.
+
+#### The rail that asserted the old behaviour
+
+- **`verify-dialog-internals` asserted "each side rail becomes a strip along the top" for all three rail dialogs**, Preferences included. That check was correct when it was written and became wrong the moment the requirement changed, so Preferences moved out of that group and got checks on the terms it actually has: a column, all twelve on screen, 44px targets, labels hidden but named, the pane beside the rail rather than under it, and the heading following the selection.
+- Against the previous build those checks fail with `390px column of 12`, `every item still named: false`, `no heading` and `"undefined" → "undefined"`.
+- **One of them crashed instead of failing**, on markup with no label span — `getComputedStyle(null)`. A check that throws tells you less than one that reports, so it is null-safe now.
+
 ### The document strip, drawn for a mouse
 
 Two faults in one strip, and underneath them the same fault: it was designed against a pointer that hovers.

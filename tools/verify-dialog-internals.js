@@ -34,10 +34,14 @@ const PREVIEWS = [
   ["Effects", "Warp"],
   ["Select", "Refine edge"],
 ];
+/* The rails that lie DOWN into a strip along the top. Preferences used to be
+   the third and no longer is: a filmstrip works for nine effects and does not
+   for twelve preference sections, which it showed four of at a time behind a
+   sideways scroll. That one is now an icon column down the left and is checked
+   separately, further down, on the terms it actually has. */
 const RAILS = [
   ["Layer", "Layer style"],
   ["Effects", "Smart filters"],
-  ["Settings", "Preferences"],
 ];
 
 /** Everything the item cares about, plus what makes each claim non-vacuous. */
@@ -239,7 +243,7 @@ const RAIL_TAIL = () => {
     if (m) rails.push([item, m, tail]);
     await s.context.close();
   }
-  check("all three rail dialogs open on a phone", rails.length === RAILS.length,
+  check("both strip-rail dialogs open on a phone", rails.length === RAILS.length,
     `${rails.length} of ${RAILS.length}`);
 
   const notStrips = rails.filter(([, m]) => !m.rail || !m.rail.row || m.rail.h > 120);
@@ -312,6 +316,101 @@ const RAIL_TAIL = () => {
   check("…and its rails as vertical columns", !!dlm && dlm.rail && !dlm.rail.row && dlm.rail.h > 200,
     dlm?.rail ? `${dlm.rail.w}×${dlm.rail.h}, ${dlm.rail.row ? "row" : "column"}` : "no rail");
   await dLs.context.close();
+
+  // ===================== Preferences: an icon column, not a filmstrip =========
+  /* Twelve sections. Laid down as a strip they cost a full 44px band across the
+     sheet and showed FOUR at a time, with the other eight behind a sideways
+     scroll — measured before this changed: a 390×44 strip whose contents ran to
+     1,124px. Down the left as icons all twelve are on screen at once in 56px,
+     and the pane keeps the remaining 334.
+
+     Dropping the labels is what buys the width, so the heading above the pane is
+     not decoration: the rail says where you can go, the heading says where you
+     ARE. Both halves are checked, including that the heading follows the
+     selection — a heading stuck on "Appearance" would be worse than none. */
+  const prefs = await openDialog(PHONE, true, "Settings", "Preferences", "preferences");
+  const READ_PREFS = () => {
+    const d = document.querySelector('[role="dialog"][aria-label="Preferences"]');
+    if (!d) return null;
+    const rail = d.querySelector("[data-dialog-rail]");
+    const head = d.querySelector("[data-pane-head]");
+    if (!rail) return { noRail: true };
+    const rr = rail.getBoundingClientRect();
+    const items = [...rail.children].map((c) => {
+      const r = c.getBoundingClientRect();
+      return { y: Math.round(r.y), h: Math.round(r.height), w: Math.round(r.width), label: c.getAttribute("aria-label") };
+    });
+    const pane = head ? head.parentElement.getBoundingClientRect() : null;
+    return {
+      railW: Math.round(rr.width),
+      /* A column, not a row: the second item sits BELOW the first. */
+      column: items.length > 1 && items[1].y > items[0].y,
+      total: items.length,
+      /* On screen without scrolling — the whole point of the change. */
+      onScreen: items.filter((i) => i.y >= rr.top - 1 && i.y + i.h <= rr.bottom + 1).length,
+      /* Every one still a 44px target, labels or no labels. */
+      undersized: items.filter((i) => i.h < 44).length,
+      /* Labels hidden from the eye but not from the accessibility tree. */
+      labelsHidden: [...rail.querySelectorAll("button > span")].every(
+        (e) => getComputedStyle(e).display === "none",
+      ),
+      named: items.every((i) => !!i.label),
+      head: head ? { text: head.innerText.trim(), shown: getComputedStyle(head).display !== "none" } : null,
+      besidePane: pane ? pane.x >= rr.right - 1 : false,
+      scrollsX: d.scrollWidth - d.clientWidth,
+    };
+  };
+  const pr = await prefs.page.evaluate(READ_PREFS);
+
+  check("Preferences puts its sections down the left as icons",
+    pr && pr.column && pr.railW <= 72,
+    pr ? `${pr.railW}px column of ${pr.total}` : "no dialog");
+  check("…with every one of them on screen at once",
+    pr && pr.onScreen === pr.total && pr.total >= 12,
+    pr ? `${pr.onScreen} of ${pr.total} visible without scrolling` : "");
+  check("…each still a 44px target once the words are gone",
+    pr && pr.undersized === 0, `${pr?.undersized} under 44px`);
+  check("…the words hidden from the eye, not from a screen reader",
+    pr && pr.labelsHidden && pr.named,
+    `labels hidden: ${pr?.labelsHidden}, every item still named: ${pr?.named}`);
+  check("…and the pane sits beside the rail rather than under it",
+    pr && pr.besidePane && pr.scrollsX <= 0,
+    pr ? `pane starts at the rail's right edge, dialog scrollX ${pr.scrollsX}` : "");
+
+  check("the open section is named in a heading above its settings",
+    pr && pr.head && pr.head.shown && pr.head.text.length > 0,
+    pr?.head ? `"${pr.head.text}"` : "no heading");
+
+  /* …and follows the selection. */
+  await prefs.page.locator("[data-dialog-rail] button").nth(10).click();
+  await prefs.page.waitForTimeout(700);
+  const after = await prefs.page.evaluate(READ_PREFS);
+  check("…and it changes with the section you pick",
+    after && after.head && after.head.text !== pr.head.text,
+    `"${pr?.head?.text}" → "${after?.head?.text}"`);
+  await prefs.context.close();
+
+  /* Desktop keeps the labelled 168px rail and shows no heading, because the
+     rail already names every section beside it. */
+  const dPrefs = await openDialog(DESKTOP, false, "Settings", "Preferences", "desktop preferences");
+  const dp = await dPrefs.page.evaluate(() => {
+    const d = document.querySelector('[role="dialog"][aria-label="Preferences"]');
+    const rail = d.querySelector("[data-dialog-rail]");
+    const head = d.querySelector("[data-pane-head]");
+    /* Null-safe on purpose: against markup without the label span this threw
+       instead of failing, and a check that crashes tells you less than one that
+       reports. */
+    const span = rail && rail.querySelector("button > span");
+    return {
+      railW: rail ? Math.round(rail.getBoundingClientRect().width) : 0,
+      labelled: span ? getComputedStyle(span).display !== "none" : false,
+      headShown: head ? getComputedStyle(head).display !== "none" : false,
+    };
+  });
+  check("…while a desktop keeps the labelled rail and needs no heading",
+    dp.railW >= 160 && dp.labelled && dp.headShown === false,
+    `${dp.railW}px rail, labels ${dp.labelled ? "shown" : "hidden"}, heading ${dp.headShown ? "shown" : "hidden"}`);
+  await dPrefs.context.close();
 
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");
 

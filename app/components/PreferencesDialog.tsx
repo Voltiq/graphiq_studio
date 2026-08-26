@@ -593,25 +593,57 @@ export default function PreferencesDialog({
         </header>
 
         <div className={styles.prefsLayout}>
-          <nav className={styles.prefsNav} aria-label="Preference sections" data-dialog-rail>
+          {/* `data-rail-mode="icons"` opts this nav OUT of the generic rule that
+              lays a dialog's side rail down as a strip along the top. That rule
+              was written for Layer Style's nine effects and Smart Filter's
+              stack, where a horizontal filmstrip works. Twelve sections do not
+              fit one: the strip showed four and hid the rest behind a sideways
+              scroll, and every one of them cost a full 44px band across the
+              sheet. Down the left as icons, all twelve are on screen at once. */}
+          <nav
+            className={styles.prefsNav}
+            aria-label="Preference sections"
+            data-dialog-rail
+            data-rail-mode="icons"
+          >
             {TABS.map((t) => (
               <button
                 key={t.id}
                 type="button"
                 className={styles.prefsNavItem}
                 data-active={tab === t.id}
+                /* The label is hidden when the rail is icons-only, so the
+                   accessible name has to be stated rather than inferred from
+                   text that is no longer on screen. */
+                aria-label={t.label}
                 onClick={() => {
                   setTab(t.id);
                   onTabChange?.(t.id);
                 }}
               >
                 <t.icon size={15} />
-                {t.label}
+                <span className={styles.prefsNavLabel}>{t.label}</span>
               </button>
             ))}
           </nav>
 
           <div className={styles.prefsPane}>
+            {/* Which section you are in, once the rail stops spelling it out.
+                Shown only where the rail is icons-only — on a desktop the nav
+                already names every section, and a heading would just repeat the
+                highlighted row next to it. */}
+            <div className={styles.prefsPaneHead} data-pane-head>
+              {(() => {
+                const active = TABS.find((t) => t.id === tab) ?? TABS[0];
+                const ActiveIcon = active.icon;
+                return (
+                  <>
+                    <ActiveIcon size={16} />
+                    <h3>{active.label}</h3>
+                  </>
+                );
+              })()}
+            </div>
             {tab === "appearance" && (
               <>
                 <p className={styles.paneIntro}>

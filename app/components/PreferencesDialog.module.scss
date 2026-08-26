@@ -1157,3 +1157,74 @@
   line-height: 1.6;
   color: var(--text-2);
 }
+
+/* ---- Preferences on a phone: an icon rail down the left ------------------
+   Twelve sections. As a strip along the top they showed four at a time behind a
+   sideways scroll, and cost a 44px band to do it. As icons down the left every
+   one is on screen at once, in a 56px column, and the pane keeps the rest.
+
+   The heading below is what pays for dropping the labels: the rail says WHERE
+   you can go, the heading says where you ARE. Without it an icons-only rail
+   leaves you guessing which of two similar glyphs you pressed. */
+html[data-mobile="true"] {
+  /* Stay a ROW. The mobile sheet rules stack a dialog's middle section into a
+     column, which is right for Blur Gallery and Liquify — a fixed 500px preview
+     beside a controls column pushes the controls off a 390px screen. It is
+     wrong here: the rail is 56px, so beside the pane it costs a seventh of the
+     width and saves the whole 44px band the strip used to take. The `:has()`
+     ties the exception to the icons rail rather than to Preferences by name,
+     so it applies to whatever else adopts one. */
+  .prefsLayout:has([data-rail-mode="icons"]) {
+    flex-direction: row;
+  }
+
+  .prefsNav[data-rail-mode="icons"] {
+    flex: 0 0 auto;
+    width: 56px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    padding: var(--sp-2) var(--sp-1);
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+    border-right: 1px solid var(--border);
+    border-bottom: 0;
+  }
+
+  .prefsNav[data-rail-mode="icons"] .prefsNavItem {
+    /* Square-ish and centred: with no text there is nothing to left-align to. */
+    justify-content: center;
+    gap: 0;
+    min-height: 44px;
+    padding: 0;
+  }
+
+  /* Hidden, not removed: `aria-label` carries the accessible name, and keeping
+     the node in the tree means nothing downstream has to know it is gone. */
+  .prefsNav[data-rail-mode="icons"] .prefsNavLabel {
+    display: none;
+  }
+
+  .prefsPaneHead {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding-bottom: var(--sp-2);
+    margin-bottom: var(--sp-1);
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+
+    h3 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: var(--weight-semibold);
+    }
+  }
+}
+
+/* Desktop names every section in the rail itself, so a heading would only
+   repeat the highlighted row beside it. */
+.prefsPaneHead {
+  display: none;
+}

@@ -1202,9 +1202,15 @@ html[data-mobile="true"] {
      `[data-dialog-rail]` rather than `[role="listbox"]`, which was the first
      hook and was wrong: `Select.tsx` gives every dropdown popup that role, so
      the rule turned each `<select>` opened inside a dialog into a horizontal
-     strip of options. The attribute marks the two things that really are side
-     rails — Layer Style's effects and Smart Filter's stack. */
-  [role="dialog"]:has(> header) [data-dialog-rail] {
+     strip of options. The attribute marks the three things that really are side
+     rails — Layer Style's effects, Smart Filter's stack and Preferences.
+
+     Preferences then opted back OUT, with `data-rail-mode="icons"`. A filmstrip
+     works for nine effects; it does not for twelve preference sections, where it
+     showed four and hid the rest behind a sideways scroll while costing a full
+     44px band. That one runs down the left as icons instead — see
+     PreferencesDialog.module.scss. */
+  [role="dialog"]:has(> header) [data-dialog-rail]:not([data-rail-mode="icons"]) {
     width: auto;
     flex: 0 0 auto;
     flex-direction: row;
@@ -1215,7 +1221,7 @@ html[data-mobile="true"] {
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
-  [role="dialog"]:has(> header) [data-dialog-rail] > * {
+  [role="dialog"]:has(> header) [data-dialog-rail]:not([data-rail-mode="icons"]) > * {
     flex: 0 0 auto;
     white-space: nowrap;
   }
