@@ -340,6 +340,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: Performance budgets follow the device, not the desktop
+        run: npm run test:budgets -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

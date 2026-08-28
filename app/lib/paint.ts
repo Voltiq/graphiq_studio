@@ -27,6 +27,7 @@ import {
 import type { Rect } from "./view";
 import { blendInto } from "./blend";
 import { sentinelPasses } from "./canvas-ceiling";
+import { budgets } from "./budgets";
 import { blendOp, clipGroupsOf, filterMaskKey, findNode, type ClipGroup } from "./layers";
 import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers";
 import { applyAdjustments, applyAdjustments16, isDefaultAdjust, type Adjustments } from "./adjust";
@@ -9635,16 +9636,28 @@ export class PaintEngine {
 
   /** Working scale for live filter frames: enough of a reduction to keep the
    *  pass under a per-frame pixel budget, never below a quarter (past that the
-   *  preview stops resembling the result). 1 = compute at full size. */
-  private draftScale(): number {
+   *  preview stops resembling the result). 1 = compute at full size.
+   *
+   *  Public because it is the only way to observe that the pixel budget is
+   *  actually being APPLIED. A harness can read the derived budget easily
+   *  enough; that it reaches the engine is a separate claim, and a mutation
+   *  that reverted the budget to its desktop constant went undetected until
+   *  this was checkable. */
+  draftScale(): number {
     const px = this.w * this.h;
     if (px <= PaintEngine.DRAFT_MAX_PIXELS) return 1;
     return Math.max(0.25, Math.sqrt(PaintEngine.DRAFT_MAX_PIXELS / px));
   }
 
   /** Pixel budget for one live filter frame. A gaussian blur runs at roughly
-   *  100 MP/s here, so ~0.5 MP keeps a frame near 5 ms rather than 200. */
-  private static DRAFT_MAX_PIXELS = 500_000;
+   *  100 MP/s here, so ~0.5 MP keeps a frame near 5 ms rather than 200 — on a
+   *  desktop. That figure was measured on one, and a phone does not run this
+   *  stack at the same rate, so the budget comes from the device rather than
+   *  from a constant. `budgets()` returns 500_000 on a desktop, so nothing
+   *  changes there. */
+  private static get DRAFT_MAX_PIXELS(): number {
+    return budgets().draftPixels;
+  }
 
   /**
    * Run the filter stack at `scale` and upscale the result to document size.

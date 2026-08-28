@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
 import { ArrowLeftRight, Maximize2, Minus, Plus, X } from "lucide-react";
 import styles from "./CanvasArea.module.scss";
 import type { WorkingSpace } from "../lib/colorspace";
+import { budgets, overlayDpr } from "../lib/budgets";
 import { checkerCSS, type CheckerColors, type CheckerSize, type MeasureUnit } from "../lib/prefs";
 import { buildEdgeField, snapPoint, type EdgeField } from "../lib/magnetic";
 import type { StrokeStep } from "../lib/actions";
@@ -2109,10 +2110,19 @@ export default function CanvasArea({
     const w = window as unknown as {
       __gqRenderCache?: object;
       __gqMemory?: () => unknown;
+      __gqBudgets?: () => unknown;
       __gqGPU?: object;
       __gqPerf?: object;
     };
     w.__gqMemory = () => engineRef.current?.memoryReport() ?? null;
+    /* All four derived numbers in one place, so a harness can check the
+       three that are not already in `renderCacheStats().budget`. */
+    w.__gqBudgets = () => ({
+      ...budgets(),
+      /* What the engine is actually working at, as against what the model
+         says it should. The two agreeing is the claim worth checking. */
+      draftScale: engineRef.current?.draftScale() ?? null,
+    });
     w.__gqRenderCache = {
       enable: () => engine.setRenderCacheEnabled(true),
       disable: () => engine.setRenderCacheEnabled(false),
@@ -2137,6 +2147,7 @@ export default function CanvasArea({
     };
     return () => {
       delete w.__gqMemory;
+      delete w.__gqBudgets;
       delete w.__gqRenderCache;
       delete w.__gqGPU;
       delete w.__gqPerf;
@@ -2233,8 +2244,13 @@ export default function CanvasArea({
     const vp = viewportRef.current;
     const ctx = ov?.getContext("2d");
     if (!ov || !vp || !ctx) return;
-    // Render at the device pixel ratio so thin strokes / the anchor stay crisp.
-    const dpr = window.devicePixelRatio || 1;
+    /* Render above CSS resolution so thin strokes and the anchor stay crisp —
+       but CAPPED. The overlays draw in screen space, so their cost is the
+       viewport times the ratio SQUARED: at dpr 3 a 390×844 viewport is 2.96 MP
+       of overlay for 0.33 MP of screen, nine times the area for a 1px dashed
+       line that does not read any better for it. Two is where the returns stop.
+       See lib/budgets. */
+    const dpr = overlayDpr(window.devicePixelRatio || 1);
     const cw = vp.clientWidth;
     const ch = vp.clientHeight;
     if (ov.width !== Math.round(cw * dpr) || ov.height !== Math.round(ch * dpr)) {
@@ -4876,9 +4892,18 @@ export default function CanvasArea({
     const vp = viewportRef.current;
     const ctx = ov?.getContext("2d");
     if (!ov || !vp || !ctx) return;
-    if (ov.width !== vp.clientWidth || ov.height !== vp.clientHeight) {
-      ov.width = vp.clientWidth;
-      ov.height = vp.clientHeight;
+    /* The SAME ratio as the ants overlay above. These two canvases sit on top
+       of one another and disagreed: the ants drew at full device ratio and the
+       grid at CSS pixels flat, so on any hidpi screen one was crisp and the
+       other soft, and on a phone the pair cost 3² + 1² times the viewport
+       between them. */
+    const gdpr = overlayDpr(window.devicePixelRatio || 1);
+    if (
+      ov.width !== Math.round(vp.clientWidth * gdpr) ||
+      ov.height !== Math.round(vp.clientHeight * gdpr)
+    ) {
+      ov.width = Math.round(vp.clientWidth * gdpr);
+      ov.height = Math.round(vp.clientHeight * gdpr);
     }
     ctx.clearRect(0, 0, ov.width, ov.height);
     const pan = panR.current;

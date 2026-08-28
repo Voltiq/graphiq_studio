@@ -2,6 +2,7 @@
 
 import type { CvdType } from "./cvd";
 import type { PressureCurve } from "./pointer";
+import { budgets } from "./budgets";
 
 /** Measurement unit for rulers and size readouts. */
 export type MeasureUnit = "px" | "in" | "cm";
@@ -154,6 +155,12 @@ export interface Preferences {
   nonLinearHistory: boolean;
 }
 
+/* The two memory budgets are DERIVED, not written down: 256 MB of render cache
+   and 512 MB of history are desktop numbers, and a phone tab is allowed a few
+   hundred MB in total. `budgets()` returns the desktop figures unchanged on a
+   desktop, so this is a new default for small devices rather than a change for
+   everyone. A stored preference still wins — an explicit choice outranks a
+   derivation, and `loadPrefs` spreads the stored object over this one. */
 export const DEFAULT_PREFS: Preferences = {
   defaultPaste: "ask",
   pasteOversize: "ask",
@@ -164,11 +171,11 @@ export const DEFAULT_PREFS: Preferences = {
   newDocWidth: 1920,
   newDocHeight: 1080,
   autosaveMinutes: 2,
-  cacheBudgetMB: 256,
+  cacheBudgetMB: budgets().cacheMB,
   unit: "px",
   defaultDpi: 300,
   historyLimit: 60,
-  historyBudgetMB: 512,
+  historyBudgetMB: budgets().historyMB,
   useWorkers: true,
   reduceMotion: false,
   checkerSize: "medium",

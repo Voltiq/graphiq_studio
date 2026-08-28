@@ -710,6 +710,42 @@ The controls in the sheet were written for a horizontal toolbar, and the first p
 - **The accessible name had to be put back by hand.** With the visible text now reading "Brush", `aria-label="Brush options"` is what still tells a screen-reader user that the button opens something.
 - **Both halves are guarded.** `verify-options-sheet` asserts the button names the tool, follows it when it changes, keeps a 44px target with the label cut down, and still opens the sheet; `verify-mobile-chrome` asserts the bar holds exactly three destinations, that they are Tools/Pan/Panels, and that they share the width evenly. The tour copy for both steps was rewritten to match, since it described the chip that no longer exists.
 
+### Budgets that follow the device, not the machine they were tuned on
+
+Four numbers were desktop constants shipped everywhere: a **256 MB** render cache, a **512 MB** history, a **0.5 MP** live-filter frame, and overlays drawn at whatever `devicePixelRatio` the screen reports.
+
+| | desktop | tablet | phone |
+| --- | --- | --- | --- |
+| render cache | 256 MB | 128 MB | **64 MB** |
+| history | 512 MB | 256 MB | **128 MB** |
+| live-filter frame | 500k px | 350k px | **250k px** |
+| overlay ratio | 1× | capped at 2 | capped at **2**, from 3 |
+
+#### Why `deviceMemory` alone cannot do this
+
+The item asks for the budgets to be derived from `deviceMemory` / `hardwareConcurrency`. Measured, that fails twice over:
+
+- **It does not exist on the device that needs it most.** `navigator.deviceMemory` is Chromium-only — Safari has never shipped it — so on an **iPhone it is `undefined`**, and a budget derived from it alone leaves iOS on the desktop numbers. iOS has the tightest budget of any platform the app runs on.
+- **It reports the host, not the emulated device.** An emulated phone profile at 390×844, dpr 3, coarse pointer, reports **`deviceMemory: 32` and `hardwareConcurrency: 32`** — this machine's. Playwright emulates neither. A budget consulting only those would be desktop-sized on every phone a harness can produce, and therefore **unfalsifiable here** — which, for an item about a harness that can actually fail, is the whole point.
+
+So the **device class leads** — a coarse pointer on a small screen is a phone, which is both true in the world and reproducible in a harness — and the hardware hints **refine** it where a browser supplies them. A 3 GB Android phone and a 12 GB one are both phones; only one should be offered 64 MB.
+
+- **The hints may only ever shrink a budget, never raise one.** A browser that lies about its memory, or stays silent, cannot talk the app into spending more than its class allows. That is the safe direction to be wrong in, and the direction an unknown device should default to.
+- **A stored preference still wins.** Deriving a *default* is not the same as overruling a person: someone who has set 512 MB on their phone has said something the device cannot, and `loadPrefs` spreads their choice over the derived default. Asserted, because a "smart" default that quietly ignores an explicit setting is a bug wearing a feature's clothes.
+- **The desktop is unchanged**, and that is checked in both directions — including that a 1× display is **not scaled up** to meet the cap. It is a cap, not a constant.
+
+#### The two overlays disagreed with each other
+
+- The ants overlay drew at the screen's **full** ratio and the grid at **CSS pixels flat**, so on any hidpi screen one was crisp and the other soft. They now share one capped ratio.
+- **Capping is worth (2/dpr)² — 44% of the uncapped area at dpr 3** — so each overlay costs 4× the viewport rather than 9×.
+- **Stated honestly: the pair only improves from 10× the viewport to 8×,** because bringing the grid *up* from 1× to 2× spends most of what capping the ants saved. That is the item's instruction — the two must agree — and it buys a crisp grid. The win is per-overlay, not in the total.
+
+#### The two survivors, and what each one taught
+
+- **Mutation-tested nine ways.** Eight caught by the rail; the ninth deliberately not.
+- **"A small-memory device is given MORE cache" survives the browser rail** and cannot do otherwise: the harness reports 32 GB, so the refinement branch never executes there. `tests/budgets.test.ts` drives the hints directly and fails two tests on it. The browser owns the classes; the unit tests own the hints.
+- **"The filter budget is a desktop constant again" survived at first, and that was a real gap.** The rail was reading the derived *model* — `budgets().draftPixels` — which stays correct even when the engine ignores it. `draftScale()` is public now so the rail can read what the engine actually works at, on a document sized to tell the two budgets apart: at 12 MP both clamp to 0.25 and prove nothing, so it uses **2 MP**, where they are 0.50 and 0.354.
+
 ### What an open document costs before you have edited it
 
 Measured on a 12 MP photograph opened and left alone — **five** document-sized buffers, **229 MB**:
