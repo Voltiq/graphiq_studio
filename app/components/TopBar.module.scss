@@ -298,6 +298,22 @@
   white-space: nowrap;
 }
 
+/* …but not when the word costs another control its place on the bar.
+ *
+ * MEASURED on a 320×568 phone, which no driver in tools/ had ever launched:
+ * the actions row ran 98..335 inside a 320px viewport, `overflow-x: visible`
+ * and `flex-wrap: nowrap`, so "Switch to light mode" sat at 291..335 — clipped
+ * off the screen with no scroll to reach it. The theme toggle was simply
+ * unreachable on an iPhone SE. Dropping the 50px word is the cheapest of the
+ * available losses: the magnifier still reads as search, and the same button is
+ * labelled in words at the top of the menu sheet.
+ */
+@media (max-width: 360px) {
+  .searchLabel {
+    display: none;
+  }
+}
+
 /* Search as the menu sheet's first row. Styled to sit slightly proud of the
    ten menu names under it: same metrics, accent-tinted, so the eye lands on it
    first without it shouting. */

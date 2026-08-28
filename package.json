@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.37.0",
+  "version": "1.38.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -66,6 +66,7 @@
     "test:memfloor": "node tools/verify-memory-floor.js",
     "test:budgets": "node tools/verify-budgets.js",
     "test:ants": "node tools/verify-ants-idle.js",
+    "test:mobile": "node tools/mobile.js --self-test",
     "icons": "node tools/build-pwa-icons.js",
     "fixtures": "node tools/build-size-fixtures.js",
     "bench:autosave": "node tools/bench-autosave.js",

@@ -7205,8 +7205,20 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         e.preventDefault();
         doRedo();
       } else if (e.code === "Escape") {
-        // Exiting the selection merges a floating paste down.
-        if (paintRef.current?.isFloating()) {
+        /* The touch shells' drawers and sheets stand in front of everything
+           else, so Escape closes the topmost one before it touches the
+           document.
+
+           MEASURED, by tools/mobile.js: open the mobile tools drawer, press
+           Escape, and the drawer stayed open with its scrim over the canvas —
+           after which the document could not be painted on at all, and nothing
+           on screen said why. Tapping Tools again, or tapping the canvas,
+           closed it correctly; only the keyboard route was dead. The back
+           gesture has consumed this stack since it was written, and Escape is
+           the same intent from a keyboard, so it consumes it too. */
+        if (dismissTop()) {
+          e.preventDefault();
+        } else if (paintRef.current?.isFloating()) {
           e.preventDefault();
           paintRef.current.commitFloat();
           setSelection([]);
