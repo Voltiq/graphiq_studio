@@ -335,6 +335,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: An open document holds only the buffers it actually needs
+        run: npm run test:memfloor -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

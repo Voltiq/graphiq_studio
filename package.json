@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "1.34.1",
+  "version": "1.35.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -63,6 +63,7 @@
     "test:installable": "node tools/verify-installable.js",
     "test:ceiling": "node tools/verify-canvas-ceiling.js",
     "test:canvasmem": "node tools/verify-canvas-memory.js",
+    "test:memfloor": "node tools/verify-memory-floor.js",
     "icons": "node tools/build-pwa-icons.js",
     "fixtures": "node tools/build-size-fixtures.js",
     "bench:autosave": "node tools/bench-autosave.js",

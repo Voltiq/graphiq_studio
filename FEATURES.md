@@ -710,6 +710,30 @@ The controls in the sheet were written for a horizontal toolbar, and the first p
 - **The accessible name had to be put back by hand.** With the visible text now reading "Brush", `aria-label="Brush options"` is what still tells a screen-reader user that the button opens something.
 - **Both halves are guarded.** `verify-options-sheet` asserts the button names the tool, follows it when it changes, keeps a 44px target with the label cut down, and still opens the sheet; `verify-mobile-chrome` asserts the bar holds exactly three destinations, that they are Tools/Pan/Panels, and that they share the width evenly. The tour copy for both steps was rewritten to match, since it described the chip that no longer exists.
 
+### What an open document costs before you have edited it
+
+Measured on a 12 MP photograph opened and left alone — **five** document-sized buffers, **229 MB**:
+
+| buffer | what it is for | needed by an untouched photo? |
+| --- | --- | --- |
+| `view` | the picture on screen | yes |
+| `layer` | the pixels themselves | yes |
+| `stroke` | the live brush dab | **no** — there is no stroke |
+| `scratch` | layer + live dab, composed for display | **no** — same |
+| `textPreview` | live text rendering | **no** — there is no text |
+
+- **Three of the five were for edits that had not happened.** `stroke` and `scratch` were allocated by `setDoc`, so they arrived with the *document* rather than with the first stroke. They are made by `ensureOpBuffers()` now, at the three places an operation begins — and every consumer already coped with their absence, because the reads are `this.scratch?.ctx` and `this.stroke && …`: both were null before the first `setDoc` anyway.
+- **`display: none` hides a canvas without freeing one.** The text preview was rendered always and hidden, and a hidden canvas still holds `w×h×4` — 45.8 MB of a 12 MP document spent previewing text nobody had typed. `display` is a painting instruction, not an allocation one. It is mounted only while it is showing, exactly like the compare pane beside it, and the effect that draws into it already returned early on an empty ref.
+- **The result: two buffers, 92 MB.** The picture and the pixels. A blank document holds **nothing** document-sized at all until something is drawn on it — the layer canvas was already lazy.
+- **Lazy means later, not never, and that is asserted.** The same buffers must appear the moment a stroke needs them, and having been made they are kept: freeing after every stroke would trade 45 MB of residency for a 45 MB allocation between one brush stroke and the next, which is the wrong bargain on the device this is for.
+
+#### A number nobody could obtain
+
+- **Only two of the five were in the DOM.** The other three are private fields on the engine that are never appended anywhere, so `document.querySelectorAll("canvas")` — the obvious instrument, and the one the item names — misses precisely the buffers the item is about. `engine.memoryReport()` names them; the rail then checks **both** halves, because either one alone can be wrong in a way the other catches.
+- **The item's arithmetic was right and my first instrument was not.** A `document.createElement` wrapper counted 3 where the truth was 5, and reported canvases that were plainly in the DOM as detached. Rather than publish a number I could not explain, I grafted `memoryReport()` onto the *old* engine and measured the before state directly: `layer + stroke + scratch = 137.3 MB`, plus `view + textPreview = 91.6 MB` in the DOM. Five buffers, 229 MB, exactly as the item said.
+- **Mutation-tested six ways** — the buffers eager again, only one of the two deferred, the preview hidden instead of unmounted, the allocation never happening at all, and the report omitting first the operation buffers and then the layers. All six caught.
+- **The mutation harness itself had to be fixed first.** It reverted by searching for the replacement text, and the eager two-liner appears three times in `paint.ts`, so the revert found three matches, refused, and left the file mutated mid-run. Reverting is now a write of the original bytes, which cannot fail on a search.
+
 ### Running out of canvas memory is reported, not composited as a blank photograph
 
 - **The failure has no error attached to it.** WebKit enforces a per-page canvas memory budget and, past it, hands back a canvas that draws, composites and reads perfectly — as transparent black, for ever. No throw, no null context, no console warning. The user does not see *"your device ran out of room"*; they see the photo they just opened turn into nothing, which reads as this app having destroyed it.

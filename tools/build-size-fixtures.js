@@ -80,6 +80,11 @@ const FIXTURES = [
   { name: "size-65535x1.png", w: 65535, h: 1, rgb: [0x33, 0x88, 0xcc] },
   { name: "size-65536x1.png", w: 65536, h: 1, rgb: [0xcc, 0x44, 0x33] },
   { name: "size-70000x100.png", w: 70000, h: 100, rgb: [0x33, 0x88, 0xcc] },
+  /* A 12 MP photograph — the size the allocation-floor item is written about,
+     and the size at which a document-sized buffer is 45.8 MB. Solid colour, so
+     36 MB of pixels deflate to 41 KB: the fixture is about what the app is asked
+     to HOLD, never about what it has to decode. */
+  { name: "photo-4000x3000.png", w: 4000, h: 3000, rgb: [0x44, 0x88, 0xbb] },
 ];
 
 fs.mkdirSync(OUT, { recursive: true });

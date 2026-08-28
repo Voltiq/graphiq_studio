@@ -856,6 +856,56 @@ export class PaintEngine {
   private layers = new Map<string, Layer>();
   private stroke: Layer | null = null;
   private scratch: Layer | null = null;
+  /** Has a document size been applied? Replaces `stroke` as that sentinel. */
+  private sized = false;
+
+  /**
+   * Make the buffers an edit needs, at the moment it needs them.
+   *
+   * `stroke` holds the live brush dab before it is committed; `scratch` composes
+   * the layer plus that live stroke for display. Neither means anything to a
+   * document nobody has drawn on, so neither is allocated until the first
+   * stroke, move or float begins.
+   */
+  private ensureOpBuffers(): void {
+    if (!this.w || !this.h) return;
+    if (!this.stroke) this.stroke = makeCanvas(this.w, this.h); // sRGB: brush colours are authored from sRGB hex
+    if (!this.scratch) this.scratch = this.mk(this.w, this.h);
+  }
+
+  /**
+   * Every document-sized buffer the engine is holding, by name and by bytes.
+   *
+   * Exists because "how much does an open document cost" had no answer that did
+   * not involve reading the source: the layer canvases are in a Map, the
+   * operation buffers are private fields, and none of them is in the DOM where a
+   * harness could see them. A number nobody can obtain is a number nobody
+   * checks.
+   */
+  memoryReport(): {
+    w: number;
+    h: number;
+    docBytes: number;
+    total: number;
+    buffers: { name: string; w: number; h: number; bytes: number }[];
+  } {
+    const buffers: { name: string; w: number; h: number; bytes: number }[] = [];
+    const add = (name: string, c: HTMLCanvasElement | null | undefined) => {
+      if (!c) return;
+      buffers.push({ name, w: c.width, h: c.height, bytes: c.width * c.height * 4 });
+    };
+    for (const [id, l] of this.layers) add(`layer:${id}`, l.c);
+    for (const [id, m] of this.masks) add(`mask:${id}`, m.c);
+    add("stroke", this.stroke?.c);
+    add("scratch", this.scratch?.c);
+    return {
+      w: this.w,
+      h: this.h,
+      docBytes: this.w * this.h * 4,
+      total: buffers.reduce((n, b) => n + b.bytes, 0),
+      buffers,
+    };
+  }
   private measureCtx: CanvasRenderingContext2D | null = null; // throwaway ctx for text measuring
   // Working colour space. Layer/scratch/float/export buffers use it (wide-gamut
   // preserved); the stroke buffer + brush tip stay sRGB so brush colours, which
@@ -1957,13 +2007,32 @@ export class PaintEngine {
   }
 
   setDoc(w: number, h: number, ownLayerIds?: string[]) {
-    if (this.w === w && this.h === h && this.stroke) return;
+    /* `this.sized` rather than `this.stroke`, which used to stand in for "have
+       we been sized" only because it was allocated here. It is not any more. */
+    if (this.w === w && this.h === h && this.sized) return;
     this.wandSrc = null;
     this.invalidateStyled();
     this.w = w;
     this.h = h;
-    this.stroke = makeCanvas(w, h); // sRGB (brush colours authored from sRGB hex)
-    this.scratch = this.mk(w, h);
+    this.sized = true;
+    /* NOT allocated here. `stroke` and `scratch` are each a full w×h×4 buffer —
+       48 MB apiece for a 12 MP photo — and neither is read except during a
+       stroke, a move or a float. Allocating them with the document meant a
+       picture you had merely OPENED cost two buffers for edits you had not made
+       yet. They are made on the first operation that needs them instead, by
+       `ensureOpBuffers()`, and every consumer already handled their being
+       absent: the reads are `this.scratch?.ctx` and `this.stroke && …` because
+       both were null before the first `setDoc` anyway.
+
+       Kept once made, deliberately. Freeing after every stroke would trade
+       48 MB of residency for a 48 MB allocation between one brush stroke and
+       the next, which is the wrong trade on the device this is for. */
+    if (this.stroke && (this.stroke.c.width !== w || this.stroke.c.height !== h)) {
+      this.stroke = makeCanvas(w, h);
+    }
+    if (this.scratch && (this.scratch.c.width !== w || this.scratch.c.height !== h)) {
+      this.scratch = this.mk(w, h);
+    }
     for (const [id, l] of this.layers) {
       // Only resize the active document's layers; leave other docs' layers alone.
       if (ownLayerIds && !ownLayerIds.includes(id)) continue;
@@ -5749,6 +5818,7 @@ export class PaintEngine {
     linkedMask = false,
     linked: { id: string; maskLinked: boolean }[] = [],
   ) {
+    this.ensureOpBuffers();
     if (!this.stroke) return;
     this.moving = true;
     this.moveMaskLinked = linkedMask && !rects;
@@ -6919,6 +6989,7 @@ export class PaintEngine {
     label: string = mode === "erase" ? "Erase" : "Brush",
     pressure = 1,
   ) {
+    this.ensureOpBuffers();
     if (!this.stroke) return;
     this.layer(layerId); // ensure the target layer has a canvas so the live stroke composites
     this.painting = true;
@@ -7153,6 +7224,7 @@ export class PaintEngine {
     clipAngle = 0,
     clipPivot: { x: number; y: number } | null = null,
   ) {
+    this.ensureOpBuffers();
     if (!this.stroke) return;
     this.layer(layerId);
     this.painting = true;

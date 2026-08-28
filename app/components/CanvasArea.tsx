@@ -2108,9 +2108,11 @@ export default function CanvasArea({
     if (process.env.NODE_ENV === "production") return;
     const w = window as unknown as {
       __gqRenderCache?: object;
+      __gqMemory?: () => unknown;
       __gqGPU?: object;
       __gqPerf?: object;
     };
+    w.__gqMemory = () => engineRef.current?.memoryReport() ?? null;
     w.__gqRenderCache = {
       enable: () => engine.setRenderCacheEnabled(true),
       disable: () => engine.setRenderCacheEnabled(false),
@@ -2134,6 +2136,7 @@ export default function CanvasArea({
       stats: () => engine.perfStats(),
     };
     return () => {
+      delete w.__gqMemory;
       delete w.__gqRenderCache;
       delete w.__gqGPU;
       delete w.__gqPerf;
@@ -8828,17 +8831,25 @@ export default function CanvasArea({
               }}
             />
             {/* Live warp/gradient text preview — doc-sized, stacked exactly on
-                the artwork (same box), click-through so the editor keeps focus. */}
-            <canvas
-              ref={textPreviewRef}
-              className={styles.textPreview}
-              width={width}
-              height={height}
-              style={{
-                display: showTextPreview ? "block" : "none",
-                imageRendering: zoom >= 100 ? "pixelated" : "auto",
-              }}
-            />
+                the artwork (same box), click-through so the editor keeps focus.
+
+                MOUNTED ONLY WHILE IT IS SHOWING. It used to be rendered always
+                and hidden with `display: none`, which hides a canvas without
+                freeing one: the backing store is w×h×4 whether or not anything
+                looks at it — 48 MB of a 12 MP document spent on a preview of
+                text nobody had typed. `display` is a painting instruction, not
+                an allocation one. Conditional, exactly like the compare pane
+                below it, and the effect that draws into it already returns
+                early when the ref is empty. */}
+            {showTextPreview && (
+              <canvas
+                ref={textPreviewRef}
+                className={styles.textPreview}
+                width={width}
+                height={height}
+                style={{ imageRendering: zoom >= 100 ? "pixelated" : "auto" }}
+              />
+            )}
             {/* Before/after: the pre-adjustment composite, clipped to the split
                 (or fully revealed while the peek key is held). */}
             {compareOn && (
