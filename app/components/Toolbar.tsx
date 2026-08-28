@@ -22,6 +22,16 @@ interface Props {
   onSwap: () => void;
   /** Touch layout: six tools up front, the rest in a labelled grid. */
   mobile?: boolean;
+  /**
+   * Parked off-screen, so nothing in here should be reachable by anything.
+   *
+   * The phone's rail lives at x:-320 when its drawer is shut. It was still in
+   * the tab order: measured, 46 of 59 tab stops on a phone were controls no
+   * finger could touch, most of them these. `inert` takes the whole subtree out
+   * of the tab order, out of hit-testing and out of the accessibility tree at
+   * once, which is exactly what "parked" means.
+   */
+  parked?: boolean;
 }
 
 export default function Toolbar({
@@ -33,6 +43,7 @@ export default function Toolbar({
   onBackground,
   onSwap,
   mobile = false,
+  parked = false,
 }: Props) {
   /* One button, rendered the same way in the rail and in the grid — the label
      is what differs, and it is what the phone came for. The keyboard shortcut
@@ -65,7 +76,13 @@ export default function Toolbar({
 
   if (mobile) {
     return (
-      <aside className={styles.toolbar} aria-label="Tools" data-tour="toolbar" data-mobile-rail>
+      <aside
+        className={styles.toolbar}
+        aria-label="Tools"
+        data-tour="toolbar"
+        data-mobile-rail
+        inert={parked || undefined}
+      >
         <div className={styles.tools}>
           <div className={styles.sheetGroup} data-tool-section="primary">
             <span className={styles.sheetLabel}>Tools</span>

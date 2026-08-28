@@ -7552,6 +7552,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       <div className={styles.body}>
         <Toolbar
           mobile={mobile}
+          parked={mobile && mobileDrawer !== "tools"}
           tool={tool}
           onToolChange={(id) => {
             setTool(id);
@@ -7746,6 +7747,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             :last-child that the UI-scale zoom selector targets. */}
         <div className={`${styles.floatHost} gq-m-floathost-hidden`} ref={setFloatHost} />
         <RightDock
+          parked={mobile && mobileDrawer !== "panels"}
           mobile={mobile}
           tablet={tablet}
           detent={sheetDetent}

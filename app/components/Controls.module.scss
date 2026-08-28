@@ -511,3 +511,34 @@ html[data-touch="true"] input[type="range"][type="range"]::-moz-range-thumb {
   width: 20px;
   height: 20px;
 }
+
+/* ---- the value readout is a control, and a finger has to be able to hit it ----
+ *
+ * `.valueClickable` is the number beside a slider: tap it and you can type an
+ * exact value instead of dragging for it. It is a `span[role="button"]`, and
+ * the 44px touch floor in globals.scss is written as
+ * `:is(button, select, [role="menuitem"])` — element names, deliberately, so it
+ * needs no per-module upkeep — which a span slips straight through. Measured on
+ * a phone: 50×16 for "300 ppi" in Export PDF, 34×16 for the quality readout,
+ * 36×16 for "10 mm" in Print. Sixteen pixels is about a third of what a
+ * fingertip lands on.
+ *
+ * Grown the way the switches are, and for the same reason: the number sits in a
+ * tight row beside its slider, so making the BOX 44px would push that row
+ * apart. The reach is an invisible centred pseudo-element and the text does not
+ * move at all. Verified with elementFromPoint rather than a box measurement —
+ * see tools/verify-mobile-invariants.js.
+ */
+html[data-touch="true"] .valueClickable {
+  position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(44px, 100%);
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+}

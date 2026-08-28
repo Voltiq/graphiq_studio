@@ -276,6 +276,8 @@ function loadOpen(): Record<PanelId, boolean> {
 }
 
 interface Props {
+  /** Parked below the fold on a phone — see the note on Toolbar's `parked`. */
+  parked?: boolean;
   foreground: string;
   background: string;
   onForeground: (c: string) => void;
@@ -407,6 +409,7 @@ const IconBtn = ({
 );
 
 export default function RightDock({
+  parked = false,
   mobile = false,
   tablet = false,
   detent,
@@ -1198,7 +1201,12 @@ export default function RightDock({
 
   return (
     <>
-      <aside className={styles.dock} aria-label="Panels" data-tour="dock">
+      <aside
+        className={styles.dock}
+        aria-label="Panels"
+        data-tour="dock"
+        inert={parked || undefined}
+      >
         {/* Touch only: the dock is a bottom sheet there, and a sheet needs
             something to take hold of. */}
         {mobile && detent && onDetent && <SheetHandle detent={detent} onDetent={onDetent} />}
