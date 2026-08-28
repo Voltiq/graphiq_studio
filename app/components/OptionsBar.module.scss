@@ -734,3 +734,67 @@
   position: relative;
   z-index: 120;
 }
+
+/* ---- the touch options row: identity first, modifiers grouped at the end ----
+ *
+ * MEASURED BEFORE, on a 390px phone: Shift/Alt/Ctrl held x12–152 — 38% of the
+ * row — for every tool, then a 24px dead gap, then the tool button, then a
+ * right margin that ran from 40px (marquee) to 146px (text). A third of the bar
+ * was empty on most tools while the least-used control had the best position.
+ * At 320px it was worse than untidy: the row had 4px of slack on Crop, and what
+ * gave way was always the tool button — the marquee's name clipped 174→128px
+ * and Crop's disappeared, leaving an unlabelled icon.
+ *
+ * So the order is reversed IN THE MARKUP and the slack is collected in one
+ * place. No alignment rule is needed for that half: `.controls` is already
+ * `flex: 1`, so once it comes first it takes the slack itself and the chips
+ * land against the right edge. A `margin-right: auto` was written here first
+ * and a mutation caught it doing nothing — removing it changed no measurement
+ * on any tool, because the base rule had already done the work.
+ *
+ * The chips also stop being three separate buttons and become one segmented
+ * control — which is what they are — recovering the 8px of gaps between them
+ * and reading as a single group rather than three loose keys.
+ */
+[data-mobile-options] .modifierChips {
+  /* `sticky` dates from a bar that scrolled sideways past a row of options.
+     That bar is now a sheet and `.optionsbar` is `overflow: hidden`, so there
+     is nothing to stay stuck to — but it stays POSITIONED, because the rule
+     below needs it to sit above the sheet's own scrim. */
+  position: relative;
+  flex: none;
+  gap: 0;
+  padding-right: 0;
+}
+
+/* One control, not three. Square off the inner corners and collapse the shared
+   borders so the group reads as a single segmented switch — the hit areas are
+   untouched at 46×44 each. */
+[data-mobile-options] .modifierChip {
+  border-radius: 0;
+
+  &:first-child {
+    border-start-start-radius: var(--r-md);
+    border-end-start-radius: var(--r-md);
+  }
+  &:last-child {
+    border-start-end-radius: var(--r-md);
+    border-end-end-radius: var(--r-md);
+  }
+  & + & {
+    margin-left: -1px;
+  }
+  /* A lit chip has to own the shared edge, or its border is half drawn. */
+  &[data-mode="armed"],
+  &[data-mode="locked"] {
+    z-index: 1;
+  }
+}
+
+/* With the sheet open the chips must stay tappable above its scrim: arming Alt
+   and then changing a setting is one thought, and the scrim swallowed the tap.
+   `.controls` already says this for itself; the chips are a sibling and need
+   saying separately. */
+.optionsbar[data-mobile-options][data-sheet-open] .modifierChips {
+  z-index: 120;
+}

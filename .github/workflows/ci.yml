@@ -360,6 +360,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: A committed bucket fill keeps its colour
+        run: npm run test:bucket -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

@@ -404,6 +404,62 @@ const { dismissStartCard, launchBrowser, urlArg } = require("./lib/launch");
   check("…without giving up the 44px the finger needs",
     trackH.length > 0 && trackH.every((h) => h >= 44), `track heights: ${trackH.join(", ")}px`);
 
+  // ============== the row itself: identity first, modifiers at the end =======
+  /* MEASURED BEFORE this layout: Shift/Alt/Ctrl held x12–152 of a 390px row —
+     38% of it — for every tool, then a 24px dead gap, then the tool button, and
+     then a right margin that ran from 40px on the marquee to 146px on Text. The
+     row opened on three keys borrowed from a keyboard the device does not have,
+     and what shrank when space ran out was always the tool: at 320px the
+     marquee's name was clipped 174→128px and Crop's vanished altogether.
+
+     Asserted across several tools rather than one, because the whole point is
+     that the two ends stay anchored whatever the tool is called. */
+  await layoutPage.keyboard.press("Escape").catch(() => {});
+  await layoutPage.waitForTimeout(500);
+  const ROW = () => {
+    const bar = document.querySelector("[data-mobile-options]");
+    const br = bar.getBoundingClientRect();
+    const toggle = bar.querySelector("[data-options-open]");
+    const chips = [...bar.querySelectorAll("button[data-mode]")].map((c) =>
+      c.getBoundingClientRect(),
+    );
+    if (!toggle || chips.length !== 3) return null;
+    const t = toggle.getBoundingClientRect();
+    const pad = parseFloat(getComputedStyle(bar).paddingRight);
+    return {
+      toolLeft: Math.round(t.left),
+      toolRight: Math.round(t.right),
+      chipsLeft: Math.round(chips[0].left),
+      rightGap: Math.round(br.right - chips[2].right),
+      pad: Math.round(pad),
+      /* Gaps BETWEEN the chips: a segmented group has none. */
+      seams: [
+        Math.round(chips[1].left - chips[0].right),
+        Math.round(chips[2].left - chips[1].right),
+      ],
+      minChip: Math.round(Math.min(...chips.map((c) => Math.min(c.width, c.height)))),
+    };
+  };
+  const rows = [];
+  for (const [name, key] of [["brush", "b"], ["marquee", "m"], ["crop", "c"], ["text", "t"]]) {
+    await layoutPage.keyboard.press(key);
+    await layoutPage.waitForTimeout(650);
+    rows.push([name, await layoutPage.evaluate(ROW)]);
+  }
+  check("the tool and its options come before the modifier chips, on every tool",
+    rows.every(([, r]) => r && r.toolRight <= r.chipsLeft),
+    rows.map(([n, r]) => `${n} tool ends ${r?.toolRight}, chips start ${r?.chipsLeft}`).join("; "));
+  check("…and the chips sit against the right edge whatever the tool is called",
+    rows.every(([, r]) => r && r.rightGap === r.pad),
+    `right gap ${[...new Set(rows.map(([, r]) => r?.rightGap))].join("/")}px against the bar's own ` +
+      `${rows[0][1]?.pad}px padding — it used to run from 40px to 146px`);
+  check("…the three chips read as one segmented control, not three loose keys",
+    rows.every(([, r]) => r && r.seams.every((g) => g <= 0)),
+    `seams between chips: ${rows[0][1]?.seams.join(" and ")}px`);
+  check("…and each is still a 44px target",
+    rows.every(([, r]) => r && r.minChip >= 44),
+    `smallest chip side ${Math.min(...rows.map(([, r]) => r?.minChip ?? 0))}px`);
+
   await layout.context.close();
 
   check("no console errors throughout", errors.length === 0, errors.slice(0, 3).join(" | ") || "clean");

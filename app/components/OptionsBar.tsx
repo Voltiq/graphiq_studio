@@ -1577,7 +1577,6 @@ export default function OptionsBar({
         data-mobile-options
         data-sheet-open={sheetOpen || undefined}
       >
-        <ModifierChips />
         {/* The tool's name lives on the button that opens the tool's options,
             rather than on a badge of its own. A separate badge WAS tried and
             measured badly: at 390px "Rectangular marquee" plus an Options
@@ -1601,6 +1600,17 @@ export default function OptionsBar({
             <span className={styles.toggleName}>{meta.name}</span>
           </button>
         </div>
+        {/* AFTER the tool, not before it. The chips are a fixed 3×44px whatever
+            the tool is, and leading with them meant the row opened on three
+            keys borrowed from a keyboard this device does not have, with the
+            thing you are actually holding — the tool, and the way into its
+            settings — pushed to the right and shrinking to fit. Measured at
+            320px: the marquee's name was clipped from 174px to 128px and
+            Crop's vanished entirely, leaving a bare icon, while Shift/Alt/Ctrl
+            kept every one of their 148px. Identity first, as on the desktop
+            bar; the modifiers group at the far end and the slack collects in
+            one deliberate gap between them instead of a ragged right margin. */}
+        <ModifierChips />
         {sheetOpen && (
           <>
             <div

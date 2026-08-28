@@ -1466,13 +1466,23 @@ export default function CanvasArea({
     slot: "primary" | "secondary"; // chosen at press: left = primary, right = secondary
   } | null>(null);
   // Committed-but-still-editable bucket fill: re-runs the flood + fill from the
-  // same seed when the options change, until the next action. `raf` coalesces.
+  // same seed when the OPTIONS change, until the next action. `raf` coalesces.
+  //
+  // `color` is frozen at the moment of the commit, and that is the whole point
+  // of it being here rather than read from the colour refs at render time. The
+  // re-run exists so tolerance, contiguity and opacity can be auditioned after
+  // the click; it must not be a second chance at the colour. Reading the live
+  // foreground meant that picking a new colour with the bucket still selected
+  // silently repainted a fill you had already committed — no click, no history
+  // step, and one Undo then removed the whole fill rather than the change you
+  // did not ask for.
   const liveBucketRef = useRef<{
     seedX: number;
     seedY: number;
     sampleLayerId: string | null;
     fillLayerId: string;
-    slot: "primary" | "secondary";
+    /** The slot's colour AS IT WAS when the fill was committed. */
+    color: string;
     shift: boolean;
   } | null>(null);
   const liveBucketRaf = useRef(0);
@@ -4072,12 +4082,14 @@ export default function CanvasArea({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tool, engine]);
 
-  // Re-run the live bucket fill when its options (tolerance / opacity /
-  // contiguous) or the fill colours change — coalesced to one run per frame.
+  // Re-run the live bucket fill when its OPTIONS change (tolerance / opacity /
+  // contiguous / antialias) — coalesced to one run per frame. The fill colours
+  // are deliberately absent: the fill keeps the colour it was committed with,
+  // and re-running on a colour change is what used to repaint it.
   useEffect(() => {
     if (liveBucketRef.current) scheduleLiveBucket();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bucket.tolerance, bucket.opacity, bucket.contiguous, bucket.antialias, foreground, background]);
+  }, [bucket.tolerance, bucket.opacity, bucket.contiguous, bucket.antialias]);
 
   // Commit the live bucket fill when leaving the bucket tool.
   useEffect(() => {
@@ -6052,7 +6064,9 @@ export default function CanvasArea({
       null,
     );
     const rects = region?.rects ?? [{ x: 0, y: 0, w: widthRef.current, h: heightRef.current }];
-    const c = parseColor(lb.slot === "secondary" ? bgRef.current : fgRef.current);
+    /* The frozen colour, not the current one. Opacity is still read live from
+       the options above — it is one of the things this re-run exists for. */
+    const c = parseColor(lb.color);
     engine.liveFill(
       lb.fillLayerId,
       rects,
@@ -8362,7 +8376,7 @@ export default function CanvasArea({
           seedY: Math.floor(p.y),
           sampleLayerId: seed.layerId,
           fillLayerId: seed.layerId ?? ensureLayer(),
-          slot: seed.slot,
+          color: seed.slot === "secondary" ? bgRef.current : fgRef.current,
           shift: seed.shift,
         };
         renderLiveBucket();

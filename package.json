@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "2.0.0",
+  "version": "2.0.2",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -68,6 +68,7 @@
     "test:ants": "node tools/verify-ants-idle.js",
     "test:mobile": "node tools/mobile.js --self-test",
     "test:invariants": "node tools/verify-mobile-invariants.js",
+    "test:bucket": "node tools/verify-bucket-commit.js",
     "icons": "node tools/build-pwa-icons.js",
     "fixtures": "node tools/build-size-fixtures.js",
     "bench:autosave": "node tools/bench-autosave.js",
