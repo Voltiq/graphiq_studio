@@ -710,6 +710,27 @@ The controls in the sheet were written for a horizontal toolbar, and the first p
 - **The accessible name had to be put back by hand.** With the visible text now reading "Brush", `aria-label="Brush options"` is what still tells a screen-reader user that the button opens something.
 - **Both halves are guarded.** `verify-options-sheet` asserts the button names the tool, follows it when it changes, keeps a 44px target with the label cut down, and still opens the sheet; `verify-mobile-chrome` asserts the bar holds exactly three destinations, that they are Tools/Pan/Panels, and that they share the width evenly. The tour copy for both steps was rewritten to match, since it described the chip that no longer exists.
 
+### The overlay stops animating when nobody is looking
+
+- **Measured before: a selection left alone re-armed `requestAnimationFrame` 722 times in three seconds** — 241 a second — and did it again for the next three, and would have done it for as long as the selection existed. The ants really were marching: the painted pattern drifted as the dashes moved. On a phone that is a frame of work every four milliseconds to animate a dashed line, and the heat it makes is repaid by the next edit running slower.
+- **After two seconds without input the loop parks: 0 callbacks over three seconds**, and over the three after that. One pointer move or keystroke brings it straight back — measured at 194 and 196 callbacks in the following 800ms.
+- **Parked is not stopped, and that distinction is the whole design.** The loop's existing exit **clears** the overlay, which is right when there is nothing to show and would erase the selection outline when there is. Parking leaves the last frame exactly where it is: the outline stays on screen, frozen mid-march. Both halves are asserted, because a "fix" that merely stopped the loop would pass a frame count and lose the user's selection.
+- **Two seconds, not less.** Long enough not to interrupt someone thinking mid-edit; short enough to matter. The ants have made their point by then, and a static dashed outline says *"there is a selection here"* as well as a moving one — for free.
+- **Waking is listened for on the window, not wired through the several dozen existing handlers.** "Has this person done anything" is a property of the session, not of any one control. Passive and capturing, so it sees the event whatever else consumes it, and it costs a timestamp.
+- **The Perf HUD's dirty-region flash is exempt**, because it fades on a timer rather than on input — the one thing that legitimately needs frames while nobody is touching anything.
+
+#### A branch that was written, then deleted for not doing anything
+
+- **The item asks to pause when the tab is hidden as well, and a `document.hidden` branch was written for it.** A mutation that deleted that branch changed **nothing** — every check still passed.
+- **That is not a gap in the checks; it is the truth about the code.** Browsers already stop calling `requestAnimationFrame` in a background tab, and a hidden tab receives no input either, so the idle rule covers it within two seconds regardless. The branch could only ever have mattered during the first two seconds of a tab that was not being called anyway.
+- **So it is gone.** Unfalsifiable code that reads as though it were doing something is worse than no code, because the next person to touch this will believe it. Returning to the tab is deliberately *not* treated as activity either: coming back to a still outline is right, and restarting the animation for someone who has not yet touched anything is the exact loop this item exists to stop.
+- **Mutation-tested five ways** — never parking, parking but clearing the overlay, input never waking it, keys not counting as input, and parking so eagerly the ants never animate at all. All five caught.
+
+#### Counting pixels cannot see motion
+
+- The first version of the check asserted that the ants had resumed by comparing the **number** of painted pixels, and reported *"1317 px → 1317 px, so the dashes have moved"* — self-contradictory, and wrong. Marching ants shift the phase of a 4-on-4-off dash, and the lit-pixel count is identical at most phases.
+- It compares a **position-weighted checksum** now, so a pattern that has shifted by one pixel cannot collide with itself. That also strengthens the frozen check: parked means the same pixels in the same places, not merely the same number of them.
+
 ### Budgets that follow the device, not the machine they were tuned on
 
 Four numbers were desktop constants shipped everywhere: a **256 MB** render cache, a **512 MB** history, a **0.5 MP** live-filter frame, and overlays drawn at whatever `devicePixelRatio` the screen reports.

@@ -2096,6 +2096,23 @@ export default function CanvasArea({
    *  destination-out, which must not touch the shared overlay. */
   const featherLayerRef = useRef<HTMLCanvasElement | null>(null);
   const antsRaf = useRef(0);
+  /* When the user last did anything. The overlay loop re-arms for as long as
+     there is something standing on it — a selection's ants, the transform box,
+     the quick mask — which measured 722 rAF callbacks over three seconds on a
+     document nobody was touching, and the same again for as long as it was left
+     alone. On a phone that is a frame of work every 4ms for a dashed line, and
+     the heat it makes is paid back by the next edit running slower. */
+  const lastInput = useRef(0);
+  /* Parked, not stopped. The two differ in one important way: stopping CLEARS
+     the overlay, which is right when there is nothing to show and would erase
+     the selection outline when there is. Parking leaves the last frame exactly
+     where it is. */
+  const antsParked = useRef(false);
+  /* Long enough not to interrupt someone thinking mid-edit, short enough to
+     matter. The ants have already made their point by two seconds; a static
+     dashed outline says "there is a selection here" just as well as a moving
+     one, and says it for free. */
+  const ANTS_IDLE_MS = 2000;
 
   // Paint engine (created once; constructor is SSR-safe — no DOM access).
   const engineRef = useRef<PaintEngine | null>(null);
@@ -3787,6 +3804,29 @@ export default function CanvasArea({
       // Keep the loop alive while a dirty-region flash is still fading.
       (perfHudRef.current && performance.now() - engine.perfStats().dirtyAt < 520)
     ) {
+      /* Something wants the overlay. Whether it wants it ANIMATED is a second
+         question, and the answer is no once the user has stopped interacting.
+         Note this leaves the canvas untouched: the branch below is the one that
+         clears, and clearing here would take the selection outline with it.
+
+         NO `document.hidden` TEST, deliberately. The item asks to pause when the
+         tab is hidden as well, and a branch for it was written — then a mutation
+         that deleted it changed nothing at all, because browsers already stop
+         calling `requestAnimationFrame` in a background tab. A hidden tab also
+         receives no input, so the idle rule below covers it within two seconds
+         regardless. The branch could only ever have mattered in the first two
+         seconds of a tab that was not being called anyway: unfalsifiable code
+         that reads as though it were doing something. */
+      /* The Perf HUD's dirty-region flash fades on a timer rather than on
+         input, so it is the one thing that legitimately needs frames while
+         nobody is touching anything. */
+      const flashing =
+        perfHudRef.current && performance.now() - engine.perfStats().dirtyAt < 520;
+      if (!flashing && performance.now() - lastInput.current > ANTS_IDLE_MS) {
+        antsRaf.current = 0;
+        antsParked.current = true;
+        return;
+      }
       antsRaf.current = requestAnimationFrame(tickAnts);
     } else {
       antsRaf.current = 0;
@@ -3796,8 +3836,44 @@ export default function CanvasArea({
   }, [drawAnts, engine, transformBox]);
 
   const ensureAnts = useCallback(() => {
+    antsParked.current = false;
     if (!antsRaf.current) antsRaf.current = requestAnimationFrame(tickAnts);
   }, [tickAnts]);
+
+  /**
+   * Anything the user does restarts the overlay, and nothing else has to know
+   * about it.
+   *
+   * Listened for on the window rather than wired through the several dozen
+   * handlers that already exist: the question is "has this person done
+   * anything", which is a property of the session and not of any one control.
+   * Passive and capturing, so it sees the event whatever else consumes it, and
+   * it costs a timestamp.
+   */
+  useEffect(() => {
+    const wake = () => {
+      lastInput.current = performance.now();
+      if (antsParked.current) ensureAntsRef.current?.();
+    };
+    wake(); // an arriving document counts as activity
+    const events = [
+      "pointerdown",
+      "pointermove",
+      "pointerup",
+      "wheel",
+      "keydown",
+      "touchstart",
+      "touchmove",
+    ] as const;
+    for (const e of events) window.addEventListener(e, wake, { passive: true, capture: true });
+    /* Returning to the tab is deliberately NOT treated as activity. Coming back
+       and finding a still outline is right; restarting the animation for someone
+       who has not yet touched anything is the loop this item exists to stop, and
+       the first pointer move brings it back anyway. */
+    return () => {
+      for (const e of events) window.removeEventListener(e, wake, { capture: true });
+    };
+  }, []);
   ensureAntsRef.current = ensureAnts;
 
   // Start the overlay loop when the Perf HUD turns on so any recent dirty region
