@@ -288,7 +288,22 @@ export function layoutRuns(
           maxSize = Math.max(maxSize, p.style.fontSize);
         }
       if (!toks.length) {
-        const st = styleAt(runs, Math.min(offset, Math.max(0, text.length - 1)));
+        /* An EMPTY paragraph still needs a height, and with no runs there is no
+           run to take it from. `styleAt` walks the run list and falls off the
+           end as `runs[runs.length - 1]` — which for an empty list is
+           `undefined`, in spite of a return type that promises otherwise, so
+           the measurer is handed nothing and throws.
+
+           NOT REACHABLE FROM THE UI TODAY, and the honest version of that was
+           measured rather than assumed: with this guard removed, selecting
+           justify and opening an empty text session raises nothing, because no
+           caller reaches layout with empty text. It is a landmine rather than a
+           bug — and it sits exactly where the run model is about to grow, which
+           is the wrong place to leave a function whose type lies. The block's
+           own style is the right answer here and the only one that exists. */
+        const st = runs.length
+          ? styleAt(runs, Math.min(offset, Math.max(0, text.length - 1)))
+          : base;
         const met = measure("Mg", st);
         ascent = met.ascent;
         descent = met.descent;
