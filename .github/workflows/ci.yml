@@ -365,6 +365,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: Gradient text exports as a gradient, not a flat colour
+        run: npm run test:svggrad -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

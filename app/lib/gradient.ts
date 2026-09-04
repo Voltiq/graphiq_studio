@@ -36,6 +36,103 @@ type ConicCtx = CanvasRenderingContext2D & {
   createConicGradient?: (startAngle: number, x: number, y: number) => CanvasGradient;
 };
 
+/** One sampled stop of a flattened ramp: `offset` 0..1, `color` an 8-digit hex. */
+export interface RampStop {
+  offset: number;
+  color: string;
+}
+
+/** How many samples a ramp is flattened to. Every consumer must use the same
+ *  number or two renderings of one gradient stop agreeing. */
+export const RAMP_SAMPLES = 64;
+
+/**
+ * A gradient flattened to evenly-spaced samples — the ONE definition of what a
+ * gradient's colours are.
+ *
+ * `buildCanvasGradient` has always resampled to 65 stops rather than handing the
+ * author's stops to canvas directly, because the midpoint power curve, the
+ * reflected fold and the conic seam blend are all things `addColorStop` cannot
+ * express. That resampling was inline, which was fine while canvas was the only
+ * consumer. It is not: SVG export needs the same ramp, and an SVG that computed
+ * its own would be a second implementation free to drift from the pixels it is
+ * supposed to match. So the loop lives here and both callers consume it.
+ *
+ * Pure — no canvas, no DOM — which is also what makes it testable.
+ */
+export function gradientRamp(
+  type: GradientType,
+  stops: GradientStop[],
+  smooth = false,
+  midpoint = 0.5,
+  n: number = RAMP_SAMPLES,
+): RampStop[] {
+  const sorted = [...stops].sort((a, b) => a.pos - b.pos);
+  const k = Math.log(0.5) / Math.log(clamp(midpoint, 0.02, 0.98));
+  const out: RampStop[] = [];
+
+  // Angle gradients wrap from the last colour back to the first at the start
+  // line, leaving a hard seam. "Smooth" squeezes the band into [eps, 1-eps] and
+  // fills the wrap with a blend that meets the same colour on both sides, so the
+  // seam becomes continuous instead of a sharp edge.
+  if (type === "angle" && smooth) {
+    const eps = 0.05;
+    const startCol = sampleGradient(sorted, 0);
+    const endCol = sampleGradient(sorted, 1);
+    const seam = mix(endCol, startCol, 0.5);
+    for (let i = 0; i <= n; i++) {
+      const v = i / n;
+      let color: string;
+      if (v <= eps) color = mix(seam, startCol, v / eps);
+      else if (v >= 1 - eps) color = mix(endCol, seam, (v - (1 - eps)) / eps);
+      else color = sampleGradient(sorted, Math.pow((v - eps) / (1 - 2 * eps), k));
+      out.push({ offset: v, color });
+    }
+    return out;
+  }
+
+  for (let i = 0; i <= n; i++) {
+    const v = i / n;
+    // Reflected runs the ramp out from the middle in both directions, so the
+    // band is a palindrome over a span twice as wide (see the geometry below).
+    const natural = type === "reflected" ? Math.abs(2 * v - 1) : v;
+    out.push({ offset: v, color: sampleGradient(sorted, Math.pow(natural, k)) });
+  }
+  return out;
+}
+
+/**
+ * Where a gradient sits over a box, in that box's own coordinates.
+ *
+ * Lifted out of the text renderer so SVG export can place a `<linearGradient>`
+ * on exactly the line the raster ramps along. Two implementations of this would
+ * be two answers to "where does the colour start", and the whole point of
+ * exporting vector text is that it matches the pixels.
+ *
+ * Pure, and independent of both canvas and SVG.
+ */
+export function gradientGeometry(
+  g: { type: GradientType; angle: number; scale: number },
+  b: { x: number; y: number; w: number; h: number },
+): { start: { x: number; y: number }; end: { x: number; y: number }; radialish: boolean } {
+  const cx = b.x + b.w / 2;
+  const cy = b.y + b.h / 2;
+  const rad = (g.angle * Math.PI) / 180;
+  const dir = { x: Math.cos(rad), y: Math.sin(rad) };
+  const scale = g.scale || 1;
+  // Linear/reflected: span the bounds ALONG the gradient direction (the box's
+  // support function), so scale 1 uses the full colour range whatever the
+  // block's aspect — a vertical gradient on a wide, short line still ramps
+  // top-to-bottom. Radial/angle keep the corner-reaching diagonal radius.
+  const halfLinear = Math.max(1, scale * ((Math.abs(dir.x) * b.w) / 2 + (Math.abs(dir.y) * b.h) / 2));
+  const halfRadial = Math.max(1, (scale * Math.hypot(b.w, b.h)) / 2);
+  const radialish = g.type === "radial" || g.type === "angle";
+  const half = radialish ? halfRadial : halfLinear;
+  // Radial/angle grow from the centre; linear/reflected run through it.
+  const start = radialish ? { x: cx, y: cy } : { x: cx - dir.x * half, y: cy - dir.y * half };
+  return { start, end: { x: cx + dir.x * half, y: cy + dir.y * half }, radialish };
+}
+
 /**
  * Build a CanvasGradient for the given type between `start` and `end`. `midpoint`
  * (0..1) biases where the colours' halfway point sits (a power curve), and the
@@ -50,7 +147,6 @@ export function buildCanvasGradient(
   stops: GradientStop[],
   smooth = false,
 ): CanvasGradient {
-  const sorted = [...stops].sort((a, b) => a.pos - b.pos);
   let g: CanvasGradient;
   if (type === "radial") {
     const radius = Math.max(1, Math.hypot(end.x - start.x, end.y - start.y));
@@ -67,34 +163,9 @@ export function buildCanvasGradient(
   } else {
     g = ctx.createLinearGradient(start.x, start.y, end.x, end.y);
   }
-  const k = Math.log(0.5) / Math.log(clamp(midpoint, 0.02, 0.98));
-  const N = 64;
-
-  // Angle gradients wrap from the last colour back to the first at the start
-  // line, leaving a hard seam. "Smooth" squeezes the band into [eps, 1-eps] and
-  // fills the wrap with a blend that meets the same colour on both sides, so the
-  // seam becomes continuous instead of a sharp edge.
-  if (type === "angle" && smooth) {
-    const eps = 0.05;
-    const startCol = sampleGradient(sorted, 0);
-    const endCol = sampleGradient(sorted, 1);
-    const seam = mix(endCol, startCol, 0.5);
-    for (let i = 0; i <= N; i++) {
-      const v = i / N;
-      let color: string;
-      if (v <= eps) color = mix(seam, startCol, v / eps);
-      else if (v >= 1 - eps) color = mix(endCol, seam, (v - (1 - eps)) / eps);
-      else color = sampleGradient(sorted, Math.pow((v - eps) / (1 - 2 * eps), k));
-      g.addColorStop(v, color);
-    }
-    return g;
-  }
-
-  for (let i = 0; i <= N; i++) {
-    const v = i / N;
-    const natural = type === "reflected" ? Math.abs(2 * v - 1) : v;
-    g.addColorStop(v, sampleGradient(sorted, Math.pow(natural, k)));
-  }
+  /* The ramp itself is `gradientRamp` — shared with SVG export so the two can
+     never disagree about a colour. Only the GEOMETRY differs between them. */
+  for (const st of gradientRamp(type, stops, smooth, midpoint)) g.addColorStop(st.offset, st.color);
   return g;
 }
 

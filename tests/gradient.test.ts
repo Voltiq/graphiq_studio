@@ -8,7 +8,14 @@
  * gradient wrap smoothly — becomes ordinary arithmetic to check.
  */
 import { describe, expect, it } from "vitest";
-import { buildCanvasGradient, resolveStops, sampleGradient } from "@/app/lib/gradient";
+import {
+  RAMP_SAMPLES,
+  buildCanvasGradient,
+  gradientGeometry,
+  gradientRamp,
+  resolveStops,
+  sampleGradient,
+} from "@/app/lib/gradient";
 import type { GradientStop } from "@/app/lib/tools";
 
 /** A CanvasGradient stand-in that just records the stops it is given. */
@@ -275,5 +282,124 @@ describe("buildCanvasGradient", () => {
     expect(colorAt(g, 0)).toBe("#000000ff");
     expect(colorAt(g, 1)).toBe("#ffffffff");
     expect(unsorted[0].pos).toBe(1); // and does not reorder the caller's array
+  });
+});
+
+/**
+ * The shared ramp and geometry, extracted so SVG export can reproduce a
+ * gradient rather than approximate it.
+ *
+ * These two functions are the ONE definition of a gradient's colours and of
+ * where it sits over a box. `buildCanvasGradient` and the SVG `<linearGradient>`
+ * emitter both consume them, which is the only reason an exported file can be
+ * expected to match the pixels: the previous export read the block's solid
+ * colour and never looked at the gradient at all, and a fix that computed its
+ * own ramp would have been a second opinion free to drift from the first.
+ */
+describe("gradientRamp", () => {
+  const two: GradientStop[] = [
+    { color: "#000000ff", pos: 0 },
+    { color: "#ffffffff", pos: 1 },
+  ];
+
+  it("flattens to a fixed number of evenly spaced samples", () => {
+    const r = gradientRamp("linear", two);
+    expect(r).toHaveLength(RAMP_SAMPLES + 1);
+    expect(r[0].offset).toBe(0);
+    expect(r[r.length - 1].offset).toBe(1);
+    for (let i = 1; i < r.length; i++)
+      expect(r[i].offset - r[i - 1].offset).toBeCloseTo(1 / RAMP_SAMPLES, 10);
+  });
+
+  it("runs the first colour to the last", () => {
+    const r = gradientRamp("linear", two);
+    expect(r[0].color.slice(0, 7)).toBe("#000000");
+    expect(r[r.length - 1].color.slice(0, 7)).toBe("#ffffff");
+  });
+
+  /* Reflected folds the band: the ramp is a palindrome, so both ENDS are the
+     last colour and the MIDDLE is the first. That is what lets the SVG emit a
+     plain linear gradient over a doubled span and still match the canvas. */
+  it("makes a reflected ramp symmetric about its middle", () => {
+    const r = gradientRamp("reflected", two);
+    expect(r[0].color).toBe(r[r.length - 1].color);
+    const mid = r[RAMP_SAMPLES / 2];
+    expect(mid.color.slice(0, 7)).toBe("#000000");
+    expect(r[0].color.slice(0, 7)).toBe("#ffffff");
+  });
+
+  it("mirrors sample for sample", () => {
+    const r = gradientRamp("reflected", two);
+    for (let i = 0; i <= RAMP_SAMPLES; i++) expect(r[i].color).toBe(r[RAMP_SAMPLES - i].color);
+  });
+
+  /* An angle gradient wraps back to its first colour, leaving a hard seam.
+     "Smooth" meets the same blend from both sides instead. */
+  it("closes the seam of a smoothed angle gradient", () => {
+    const hard = gradientRamp("angle", two, false);
+    const soft = gradientRamp("angle", two, true);
+    expect(hard[0].color).not.toBe(hard[hard.length - 1].color);
+    expect(soft[0].color).toBe(soft[soft.length - 1].color);
+  });
+
+  it("is what buildCanvasGradient hands the canvas, sample for sample", () => {
+    // The point of extracting it: the two can no longer disagree.
+    const { ctx } = stubCtx();
+    const rec = buildCanvasGradient(ctx, "reflected", { x: 0, y: 0 }, { x: 10, y: 0 }, 0.5, two) as
+      unknown as { stops: [number, string][] };
+    const ramp = gradientRamp("reflected", two);
+    expect(rec.stops).toHaveLength(ramp.length);
+    rec.stops.forEach(([offset, color], i) => {
+      expect(offset).toBeCloseTo(ramp[i].offset, 10);
+      expect(color).toBe(ramp[i].color);
+    });
+  });
+});
+
+describe("gradientGeometry", () => {
+  const box = { x: 0, y: 0, w: 100, h: 40 };
+
+  it("runs a horizontal linear gradient across the box through its centre", () => {
+    const g = gradientGeometry({ type: "linear", angle: 0, scale: 1 }, box);
+    expect(g.radialish).toBe(false);
+    expect(g.start.x).toBeCloseTo(0);
+    expect(g.end.x).toBeCloseTo(100);
+    expect(g.start.y).toBeCloseTo(20);
+    expect(g.end.y).toBeCloseTo(20);
+  });
+
+  /* The span follows the DIRECTION, not the width — a vertical gradient on a
+     wide, short block still ramps over the block's height. */
+  it("spans the height when pointed down, not the width", () => {
+    const g = gradientGeometry({ type: "linear", angle: 90, scale: 1 }, box);
+    expect(g.start.y).toBeCloseTo(0);
+    expect(g.end.y).toBeCloseTo(40);
+    expect(g.end.x).toBeCloseTo(50);
+  });
+
+  it("grows a radial gradient from the centre to the corner-reaching radius", () => {
+    const g = gradientGeometry({ type: "radial", angle: 0, scale: 1 }, box);
+    expect(g.radialish).toBe(true);
+    expect(g.start).toEqual({ x: 50, y: 20 });
+    expect(Math.hypot(g.end.x - g.start.x, g.end.y - g.start.y)).toBeCloseTo(
+      Math.hypot(100, 40) / 2,
+    );
+  });
+
+  it("scales the span about the centre", () => {
+    const one = gradientGeometry({ type: "linear", angle: 0, scale: 1 }, box);
+    const half = gradientGeometry({ type: "linear", angle: 0, scale: 0.5 }, box);
+    expect(half.end.x - half.start.x).toBeCloseTo((one.end.x - one.start.x) / 2);
+    expect((half.start.x + half.end.x) / 2).toBeCloseTo(50);
+  });
+
+  it("never collapses to a zero-length span on a degenerate box", () => {
+    const g = gradientGeometry({ type: "linear", angle: 0, scale: 1 }, { x: 0, y: 0, w: 0, h: 0 });
+    expect(Math.hypot(g.end.x - g.start.x, g.end.y - g.start.y)).toBeGreaterThan(0);
+  });
+
+  it("treats a missing scale as 1 rather than collapsing", () => {
+    const g = gradientGeometry({ type: "linear", angle: 0, scale: 0 }, box);
+    expect(g.end.x - g.start.x).toBeCloseTo(100);
   });
 });

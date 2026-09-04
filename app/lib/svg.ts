@@ -25,6 +25,7 @@ import {
   layoutRuns,
   stretchKeyword,
 } from "./richtext";
+import { gradientGeometry, gradientRamp } from "./gradient";
 import { insetPoly, polyInradius, trapPoints, triPoints } from "./shapes";
 import type {
   VectorData,
@@ -546,6 +547,86 @@ function splitPaint(hex: string): { color: string; opacity: number } | null {
   return { color: `#${[c.r, c.g, c.b].map((v) => clamp(Math.round(v), 0, 255).toString(16).padStart(2, "0")).join("")}`, opacity: c.a };
 }
 
+/* Gradient defs are referenced by id, so the ids have to be unique within one
+   document. Reset at the top of `exportSVG` rather than being a global counter
+   that climbs forever, so the same document exports byte-identically twice. */
+let gradSeq = 0;
+
+/**
+ * A text block's gradient fill as an SVG paint server, or null when there is
+ * nothing to emit.
+ *
+ * WHY THIS EXISTED AS A BUG: `emitText` read `splitPaint(v.color)` — the block's
+ * SOLID colour — and never looked at `v.fill`. A gradient-filled heading
+ * therefore rasterized correctly and exported as flat colour, silently, with
+ * the SVG claiming to be the same artwork.
+ *
+ * The colours are `gradientRamp` and the placement is `gradientGeometry`, both
+ * shared with the canvas renderer — so this is a transcription of what the
+ * pixels do, not a second opinion about it. `buildCanvasGradient` has always
+ * flattened to 65 evenly-spaced samples (the midpoint curve, the reflected fold
+ * and the conic seam blend are not things `addColorStop` can express), which is
+ * precisely why an SVG can match it exactly rather than approximately.
+ *
+ * ANGLE (CONIC) IS NOT EXPRESSIBLE AND IS NOT FAKED. Neither SVG 1.1 nor SVG 2
+ * has a conic paint server; only CSS does, and CSS gradients cannot fill an SVG
+ * `<text>`. The honest options were a linear stand-in that looks nothing like
+ * the raster, or the flat colour the export already produced. This returns null
+ * — the caller keeps the solid fill — and `exportSVG` reports it as a skipped
+ * feature rather than letting the file quietly disagree with the canvas.
+ */
+function textGradientDef(v: VectorText, indent: string): { defs: string; ref: string } | null {
+  const fill = v.fill;
+  if (!fill || fill.kind !== "gradient") return null;
+  const g = fill.gradient;
+  if (!g.stops.length) return null;
+  if (g.type === "angle") return null; // see the note above
+  const b = v.bbox;
+  if (!b || b.w < 1 || b.h < 1) return null;
+
+  /* Reverse flips the stop POSITIONS before the ramp is sampled, exactly as the
+     renderer does — not the sampled ramp afterwards, which for a non-linear
+     midpoint would not be the same thing. */
+  const stops = g.reverse ? g.stops.map((st) => ({ color: st.color, pos: 1 - st.pos })) : g.stops;
+  const { start, end } = gradientGeometry(g, b);
+  const id = `gqTextGrad${++gradSeq}`;
+
+  let head: string;
+  if (g.type === "radial") {
+    const r = Math.max(1, Math.hypot(end.x - start.x, end.y - start.y));
+    head =
+      `<radialGradient id="${id}" gradientUnits="userSpaceOnUse"` +
+      ` cx="${f(start.x)}" cy="${f(start.y)}" r="${f(r)}">`;
+  } else {
+    // Reflected is symmetric about the centre, so its band runs from the mirror
+    // of `end` through to `end` — twice the span, with a palindromic ramp.
+    const x1 = g.type === "reflected" ? 2 * start.x - end.x : start.x;
+    const y1 = g.type === "reflected" ? 2 * start.y - end.y : start.y;
+    head =
+      `<linearGradient id="${id}" gradientUnits="userSpaceOnUse"` +
+      ` x1="${f(x1)}" y1="${f(y1)}" x2="${f(end.x)}" y2="${f(end.y)}">`;
+  }
+  const tag = g.type === "radial" ? "radialGradient" : "linearGradient";
+  let body = "";
+  for (const st of gradientRamp(g.type, stops, g.smooth)) {
+    const p = splitPaint(st.color);
+    if (!p) continue;
+    body +=
+      `${indent}  <stop offset="${f(st.offset)}" stop-color="${p.color}"` +
+      (p.opacity < 1 ? ` stop-opacity="${f(p.opacity)}"` : "") +
+      `/>
+`;
+  }
+  return {
+    defs: `${indent}<defs>
+${indent}${head}
+${body}${indent}</${tag}>
+${indent}</defs>
+`,
+    ref: `url(#${id})`,
+  };
+}
+
 /** Shared node attributes: name, layer opacity, blend. */
 function layerAttrs(name: string, opacity: number, blend: string): string {
   let s = ` data-name="${escapeXml(name)}"`;
@@ -749,6 +830,12 @@ function otStyle(v: VectorText): string {
 function emitTextInner(v: VectorText, indent: string): string {
   const layout = textLayout(v);
   if (!layout) return "";
+  /* One paint server for the whole block, referenced by every <text> it emits.
+     The gradient is a property of the BLOCK — it is placed over the block's
+     bounds — so per-run segments share it rather than each minting their own,
+     which is what keeps a rich block's ramp continuous across runs instead of
+     restarting at every style change. */
+  const grad = textGradientDef(v, indent);
   // Rich runs / justification: lay out with the shared engine and emit one
   // absolutely-positioned <text> per segment (per-run style).
   if ((v.runs?.length ?? 0) > 0 || v.align === "justify") {
@@ -794,12 +881,14 @@ function emitTextInner(v: VectorText, indent: string): string {
         const decoS = [st.underline ? "underline" : "", st.strike ? "line-through" : ""].filter(Boolean).join(" ");
         if (decoS) styleAttr += `;text-decoration:${decoS}`;
         let attrs = ` x="${f(v.x + seg.x)}" y="${f(v.y + line.baseline)}" style="${escapeXml(styleAttr)}"`;
-        attrs += fillP ? ` fill="${fillP.color}"` : ` fill="none"`;
-        if (fillP && fillP.opacity < 1) attrs += ` fill-opacity="${f(fillP.opacity)}"`;
+        attrs += grad ? ` fill="${grad.ref}"` : fillP ? ` fill="${fillP.color}"` : ` fill="none"`;
+        /* The ramp's own stops carry the alpha, so a fill-opacity beside a
+           gradient would apply it a second time. */
+        if (!grad && fillP && fillP.opacity < 1) attrs += ` fill-opacity="${f(fillP.opacity)}"`;
         out += `${indent}<text${attrs}>${escapeXml(seg.text)}</text>\n`;
       }
     }
-    return out;
+    return out ? (grad ? grad.defs + out : out) : "";
   }
   const fill = splitPaint(v.color);
   let style = `font-family:${v.fontFamily.includes(" ") ? `'${v.fontFamily}'` : v.fontFamily};font-size:${f(v.fontSize)}px`;
@@ -815,11 +904,11 @@ function emitTextInner(v: VectorText, indent: string): string {
     if (!line.text) continue;
     let attrs = ` x="${f(line.x)}" y="${f(line.y)}" style="${escapeXml(style)}"`;
     if (layout.anchor !== "start") attrs += ` text-anchor="${layout.anchor}"`;
-    attrs += fill ? ` fill="${fill.color}"` : ` fill="none"`;
-    if (fill && fill.opacity < 1) attrs += ` fill-opacity="${f(fill.opacity)}"`;
+    attrs += grad ? ` fill="${grad.ref}"` : fill ? ` fill="${fill.color}"` : ` fill="none"`;
+    if (!grad && fill && fill.opacity < 1) attrs += ` fill-opacity="${f(fill.opacity)}"`;
     out += `${indent}<text${attrs}>${escapeXml(line.text)}</text>\n`;
   }
-  return out;
+  return out ? (grad ? grad.defs + out : out) : "";
 }
 
 function emitVectorLayer(name: string, opacity: number, blend: string, v: VectorData, indent: string): string {
@@ -839,6 +928,7 @@ function emitVectorLayer(name: string, opacity: number, blend: string, v: Vector
  * layer effects have no vector source and are skipped (counted).
  */
 export function exportSVG(nodes: LayerNode[], w: number, h: number): SVGExportResult {
+  gradSeq = 0; // ids restart per document, so two exports of one file match
   let vectorLayers = 0;
   let skipped = 0;
   const emitNodes = (list: LayerNode[], indent: string): string => {

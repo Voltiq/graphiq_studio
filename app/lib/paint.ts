@@ -117,7 +117,7 @@ import {
   seedFromEdges,
   sourceQuad,
 } from "./crop-gaps";
-import { buildCanvasGradient } from "./gradient";
+import { buildCanvasGradient, gradientGeometry } from "./gradient";
 import { solveHomography } from "./homography";
 import { buildEdgeField, type EdgeField } from "./magnetic";
 import { warpActive, warpPoint, type TextWarp } from "./textwarp";
@@ -7851,27 +7851,11 @@ export class PaintEngine {
     const g = fill.gradient;
     const stops = g.reverse ? g.stops.map((s) => ({ color: s.color, pos: 1 - s.pos })) : g.stops;
     if (!stops.length) return;
-    const cx = b.x + b.w / 2;
-    const cy = b.y + b.h / 2;
-    const rad = (g.angle * Math.PI) / 180;
-    const dir = { x: Math.cos(rad), y: Math.sin(rad) };
-    const scale = g.scale || 1;
-    // Linear/reflected: span the bounds ALONG the gradient direction (the box's
-    // support function), so scale 1 uses the full colour range whatever the
-    // block's aspect — a vertical gradient on a wide, short line still ramps
-    // top-to-bottom. Radial/angle keep the corner-reaching diagonal radius.
-    const halfLinear = Math.max(
-      1,
-      scale * ((Math.abs(dir.x) * b.w) / 2 + (Math.abs(dir.y) * b.h) / 2),
-    );
-    const halfRadial = Math.max(1, (scale * Math.hypot(b.w, b.h)) / 2);
-    const radialish = g.type === "radial" || g.type === "angle";
-    const half = radialish ? halfRadial : halfLinear;
-    // Radial/angle grow from the centre; linear/reflected run through it.
-    const start = radialish
-      ? { x: cx, y: cy }
-      : { x: cx - dir.x * half, y: cy - dir.y * half };
-    const end = { x: cx + dir.x * half, y: cy + dir.y * half };
+    /* The placement lives in gradient.ts, shared with SVG export: exporting
+       vector text is only worth anything if the `<linearGradient>` lands on the
+       same line the pixels ramp along, and two copies of this arithmetic would
+       be two answers to that. */
+    const { start, end } = gradientGeometry(g, b);
     ctx.save();
     ctx.globalCompositeOperation = "source-in"; // keep the glyph alpha, swap colour
     ctx.fillStyle = buildCanvasGradient(ctx, g.type, start, end, 0.5, stops, g.smooth);
