@@ -6,12 +6,14 @@
 // in strips or tiles, followed by a develop pass: black/white-level
 // normalization → as-shot white balance → camera→sRGB matrix (from
 // ColorMatrix2/1, dcraw-style normalization) → baseline exposure → sRGB gamma,
-// with bilinear demosaic for CFA mosaics, ActiveArea/DefaultCrop and the
+// with Malvar-He-Cutler demosaic for CFA mosaics, ActiveArea/DefaultCrop and the
 // common orientations. Anything outside the subset (lossy-JPEG/JXL DNGs,
 // floating-point HDR data, other RAW containers) returns null and the caller
 // falls back to the embedded JPEG preview exactly as before.
 //
 // Everything is bounds-checked and wrapped — decodeDNG never throws.
+
+import { demosaicMHC, type CFAColor, type RGBOut } from "./demosaic";
 
 export interface RawDecodeResult {
   width: number;
@@ -673,11 +675,26 @@ function decodeDNGInner(buffer: ArrayBuffer): RawDecodeResult | null {
         }
   }
 
-  // Demosaic (bilinear) + matrix + exposure + gamma → 8-bit RGBA, cropped.
+  // Demosaic + matrix + exposure + gamma → 8-bit RGBA, cropped.
+  /* Malvar-He-Cutler rather than bilinear. Bilinear averages the nearest
+     same-colour sites, which is right on flat areas and wrong at every edge:
+     green is sampled twice as densely as red and blue, so those two lag behind
+     it across a boundary and leave the coloured fringing that RAW converters
+     are judged on. MHC adds a correction taken from the gradient of the channel
+     that IS measured at each site. Measured against a mosaiced test image with
+     known ground truth: 1.74x less mean absolute error, and the gain is largest
+     on detail near the sampling limit — see tests/demosaic.test.ts, which also
+     records the one case it loses (strongly anti-correlated channels). */
   const rot = orientation === 3 ? 2 : orientation === 6 ? 1 : orientation === 8 ? 3 : 0;
   const finalW = rot % 2 ? outH : outW;
   const finalH = rot % 2 ? outW : outH;
   const out = new Uint8ClampedArray(finalW * finalH * 4);
+
+  /* One output object for the whole image: the demosaic writes into it rather
+     than returning a fresh triple per pixel, which on a 24-megapixel file is
+     24 million allocations avoided. */
+  const rgb: RGBOut = { r: 0, g: 0, b: 0 };
+  const cfaColorTyped = (x: number, y: number) => cfaColor(x, y) as CFAColor;
 
   const at = (x: number, y: number) => {
     const xx = x < 0 ? 0 : x >= w ? w - 1 : x;
@@ -698,34 +715,10 @@ function decodeDNGInner(buffer: ArrayBuffer): RawDecodeResult | null {
         cg = norm[i + 1];
         cb = norm[i + 2];
       } else {
-        const c = cfaColor(x, y);
-        const v = at(x, y);
-        // Bilinear neighbours per Bayer geometry.
-        const hAvg = (at(x - 1, y) + at(x + 1, y)) / 2;
-        const vAvg = (at(x, y - 1) + at(x, y + 1)) / 2;
-        const xAvg = (at(x - 1, y - 1) + at(x + 1, y - 1) + at(x - 1, y + 1) + at(x + 1, y + 1)) / 4;
-        const plusAvg = (hAvg + vAvg) / 2;
-        if (c === 1) {
-          // Green site: neighbours along row/col alternate between R and B
-          // depending on the row's pattern.
-          const rowHasR = cfaColor(x - 1, y) === 0 || cfaColor(x + 1, y) === 0;
-          cg = v;
-          if (rowHasR) {
-            cr = hAvg;
-            cb = vAvg;
-          } else {
-            cr = vAvg;
-            cb = hAvg;
-          }
-        } else if (c === 0) {
-          cr = v;
-          cg = plusAvg;
-          cb = xAvg;
-        } else {
-          cb = v;
-          cg = plusAvg;
-          cr = xAvg;
-        }
+        demosaicMHC(at, cfaColorTyped, x, y, rgb);
+        cr = rgb.r;
+        cg = rgb.g;
+        cb = rgb.b;
       }
       let R = (matrix[0] * cr + matrix[1] * cg + matrix[2] * cb) * exposure;
       let G = (matrix[3] * cr + matrix[4] * cg + matrix[5] * cb) * exposure;
