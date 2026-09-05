@@ -118,6 +118,8 @@ import {
   sourceQuad,
 } from "./crop-gaps";
 import { buildCanvasGradient, gradientGeometry } from "./gradient";
+import { flattenPath, layoutTextOnPath, type PathTextSpec } from "./textpath";
+import { parsePath } from "./svgpath";
 import { solveHomography } from "./homography";
 import { buildEdgeField, type EdgeField } from "./magnetic";
 import { warpActive, warpPoint, type TextWarp } from "./textwarp";
@@ -764,6 +766,9 @@ export interface TextRenderSpec {
   /** Non-solid fill (gradient) painted through the glyph coverage; absent =
    *  the solid `color`. Block-level (per-run fills are a follow-on). */
   fill?: TextFill;
+  /** Set along a path, one placement per glyph, instead of on lines. Takes
+   *  precedence over `runs`/`align`, which describe a block that has lines. */
+  onPath?: PathTextSpec;
 }
 
 /** Pre-crop layer pixels + document size, captured so a crop can be undone. */
@@ -7640,6 +7645,51 @@ export class PaintEngine {
     ctx: CanvasRenderingContext2D,
     spec: TextRenderSpec,
   ): { x: number; y: number; w: number; h: number } {
+    /* Text on a path has no lines to measure, and its bounds are wherever the
+       glyphs ended up — which the layout already knows. Taken from the
+       placements rather than from the path's own box: a short word on a long
+       curve occupies a fraction of it, and a box the size of the path would
+       give the re-edit hit test a target far larger than the type, and the
+       gradient fill a span the colours never reach the ends of. */
+    if (spec.onPath) {
+      const flat = flattenPath(parsePath(spec.onPath.d));
+      const measure = this.richMeasurer(ctx, spec.tracking, spec.axes);
+      const { glyphs } = layoutTextOnPath(
+        spec.text,
+        spec.runs,
+        baseRunStyle(spec),
+        flat,
+        { ...spec.onPath, tracking: spec.tracking },
+        measure,
+      );
+      if (!glyphs.length) return { x: spec.x, y: spec.y, w: 0, h: 0 };
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const g of glyphs) {
+        const met = measure(g.ch, g.style);
+        const cos = Math.cos(g.angle);
+        const sin = Math.sin(g.angle);
+        /* The glyph's own box, rotated: (0,-ascent)…(width,descent) in the
+           glyph's frame, all four corners taken so a turned glyph is not
+           measured by its unrotated extent. */
+        for (const [lx, ly] of [
+          [0, -met.ascent],
+          [met.width, -met.ascent],
+          [0, met.descent],
+          [met.width, met.descent],
+        ]) {
+          const px = g.x + lx * cos - ly * sin;
+          const py = g.y + lx * sin + ly * cos;
+          if (px < minX) minX = px;
+          if (px > maxX) maxX = px;
+          if (py < minY) minY = py;
+          if (py > maxY) maxY = py;
+        }
+      }
+      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
     if (PaintEngine.isRichSpec(spec)) {
       const layout = layoutRuns(
         spec.text,
@@ -7796,7 +7846,8 @@ export class PaintEngine {
     // Non-default OpenType features need the canvas mounted (hidden) so its
     // font-feature-settings CSS reaches the canvas text pipeline.
     PaintEngine.withTextFeatures(tmp ? tmp.c : host, spec.features, () => {
-      if (PaintEngine.isRichSpec(spec)) this.drawRichText(target, spec);
+      if (spec.onPath) this.drawPathText(target, spec, spec.onPath);
+      else if (PaintEngine.isRichSpec(spec)) this.drawRichText(target, spec);
       else this.drawUniformText(target, spec);
     });
     target.restore();
@@ -8081,6 +8132,47 @@ export class PaintEngine {
 
   /** The rich path: mixed-style runs and/or justification, laid out by
    *  richtext.ts and painted segment by segment. */
+  /**
+   * Text set along a path: one glyph, turned, at a time.
+   *
+   * The other two text paths hand canvas a whole string and let it advance the
+   * pen. Here every character has its own origin and its own rotation, so the
+   * loop does the advancing and canvas draws single characters — which is also
+   * why kerning between adjacent glyphs is lost, and why that is stated in
+   * FEATURES rather than left to be discovered. `layoutTextOnPath` decides all
+   * the geometry; this function only turns placements into draw calls.
+   */
+  private drawPathText(
+    ctx: CanvasRenderingContext2D,
+    spec: TextRenderSpec,
+    onPath: PathTextSpec,
+  ) {
+    const flat = flattenPath(parsePath(onPath.d));
+    if (flat.pts.length < 2) return;
+    const measure = this.richMeasurer(ctx, spec.tracking, spec.axes);
+    const { glyphs } = layoutTextOnPath(
+      spec.text,
+      spec.runs,
+      baseRunStyle(spec),
+      flat,
+      { ...onPath, tracking: spec.tracking },
+      measure,
+    );
+    ctx.textBaseline = "alphabetic";
+    ctx.textAlign = "left";
+    for (const g of glyphs) {
+      ctx.save();
+      ctx.translate(g.x, g.y);
+      ctx.rotate(g.angle);
+      ctx.font = cssFontString(g.style, spec.axes);
+      ctx.fillStyle = g.style.color;
+      /* The run's baseline shift is a lift off the BASELINE, which here is the
+         rotated one — so it is applied inside the rotation, not before it. */
+      ctx.fillText(g.ch, 0, -(g.style.baseline ?? 0));
+      ctx.restore();
+    }
+  }
+
   private drawRichText(ctx: CanvasRenderingContext2D, spec: TextRenderSpec) {
     const measure = this.richMeasurer(ctx, spec.tracking, spec.axes);
     const layout = layoutRuns(

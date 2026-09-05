@@ -478,6 +478,7 @@ export interface TextAxes {
 }
 
 import type { LayerEffects } from "./effects";
+import type { PathTextSpec } from "./textpath";
 
 export interface TextSettings {
   fontFamily: string;
@@ -591,6 +592,8 @@ export interface VectorText {
   warp?: TextWarp;
   /** Non-solid fill (gradient); absent = the solid `color`. */
   fill?: TextFill;
+  /** Set along a path instead of on lines; absent = ordinary block text. */
+  onPath?: PathTextSpec;
   /** Rasterized bounds (doc px), for hit-testing the re-edit double-click. */
   bbox: { x: number; y: number; w: number; h: number };
 }

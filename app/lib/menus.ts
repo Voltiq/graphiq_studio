@@ -96,6 +96,8 @@ export const MENUS: Menu[] = [
       { label: "Apply layer mask", action: "mask-apply" },
       { label: "Mask to selection", action: "mask-to-sel" },
       { label: "Vector mask from path", action: "vmask-add" },
+      { label: "Text on path", action: "text-on-path" },
+      { label: "Take text off its path", action: "text-off-path" },
       { label: "Invert vector mask", action: "vmask-invert" },
       { label: "Delete vector mask", separatorAfter: true, action: "vmask-delete" },
       { label: "Adjustment: brightness / contrast", action: "adj-brightness-contrast" },

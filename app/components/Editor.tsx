@@ -85,6 +85,8 @@ import {
 import { registerRecovery } from "../lib/crash";
 import { dismissTop, registerDismissible } from "../lib/dismiss";
 import { installModifierInjection } from "../lib/modifiers";
+import { DEFAULT_PATH_TEXT } from "../lib/textpath";
+import { anchorsToPathData } from "../lib/paths";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
 import {
   cleanChannelName,
@@ -3264,6 +3266,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     axes: v.axes,
     warp: v.warp,
     fill: v.fill,
+    onPath: v.onPath,
+    /* `baseline` and `caps` were absent from this list. `textVectorOf` spreads
+       the whole spec, so they are stored; only the way BACK dropped them, which
+       is the direction undo re-renders in. Added while adding `onPath` rather
+       than left as a difference between what is saved and what is restored. */
+    baseline: v.baseline,
+    caps: v.caps,
   });
 
   // Commit a NEW text block: add a layer named after the text, rasterize it, and
@@ -3328,6 +3337,67 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     };
     redo();
     eng.pushStructural("Edit Text", undo, redo);
+  };
+
+  /**
+   * Put the active text layer on the Work Path, or take it off again.
+   *
+   * The Work Path is whatever the Pen last committed — the same path
+   * "Vector mask from path" uses, and the one the Paths panel shows at the top,
+   * so "on path" means the path on screen.
+   *
+   * The path is stored RESOLVED on the layer, as path data, rather than as a
+   * reference to the Work Path. The Work Path is replaced by the next pen
+   * stroke; text that silently re-flowed onto an unrelated curve, or lost its
+   * shape when someone drew somewhere else, would be worse than text that keeps
+   * the curve it was given.
+   */
+  const setTextPath = (attach: boolean) => {
+    const eng = paintRef.current;
+    const docId = activeIdRef.current;
+    const treeBefore = activeDocRef.current.layers;
+    const layerId = activeDocRef.current.activeLayerId;
+    const node = layerId ? findNode(treeBefore, layerId) : null;
+    if (!eng || !layerId || !node || node.type !== "layer" || node.vector?.type !== "text") {
+      showToast("Select a text layer first.");
+      return;
+    }
+    const oldVec = node.vector;
+    if (!attach && !oldVec.onPath) {
+      showToast("This text is not on a path.");
+      return;
+    }
+    let onPath: VectorText["onPath"];
+    if (attach) {
+      const p =
+        (activeDocRef.current.paths ?? []).find((x) => x.id === WORK_PATH_ID) ??
+        (activeDocRef.current.paths ?? [])[0];
+      if (!p || p.anchors.length < MIN_ANCHORS) {
+        showToast(`Draw a path with the Pen tool first (at least ${MIN_ANCHORS} points).`);
+        return;
+      }
+      const d = anchorsToPathData(p.anchors, p.closed);
+      if (!d) {
+        showToast("That path is too short to set type on.");
+        return;
+      }
+      onPath = { ...DEFAULT_PATH_TEXT, d };
+    }
+    const newSpec = { ...specFromTextVector(oldVec), onPath };
+    const newVec = textVectorOf(newSpec);
+    const treeAfter = updateNode(treeBefore, layerId, { vector: newVec });
+    const setLayers = (tree: LayerNode[]) =>
+      setDocs((ds) => ds.map((d) => (d.id === docId ? { ...d, layers: tree } : d)));
+    const redo = () => {
+      eng.renderText(layerId, newSpec);
+      setLayers(treeAfter);
+    };
+    const undo = () => {
+      eng.renderText(layerId, specFromTextVector(oldVec));
+      setLayers(treeBefore);
+    };
+    redo();
+    eng.pushStructural(attach ? "Text on Path" : "Text off Path", undo, redo);
   };
 
   const removeSelected = () => {
@@ -6730,6 +6800,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "select-reselect") reselect();
     else if (actionId === "select-inverse") invertSelection();
     else if (actionId === "vmask-add") addVectorMask();
+    else if (actionId === "text-on-path") setTextPath(true);
+    else if (actionId === "text-off-path") setTextPath(false);
     else if (actionId === "vmask-invert") invertVectorMask();
     else if (actionId === "vmask-delete") deleteVectorMask();
     else if (actionId === "select-refine") openRefineEdge();

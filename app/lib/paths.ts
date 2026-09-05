@@ -145,3 +145,29 @@ export interface PathsApi {
   rename: (id: string, name: string) => void;
   remove: (id: string) => void;
 }
+
+/**
+ * Pen anchors as SVG path data.
+ *
+ * Anchors already carry their incoming and outgoing handles, so every span
+ * between two of them is exactly one cubic — no fitting, no approximation, and
+ * the `d` this returns describes the same curve the Pen drew. That matters for
+ * text on a path, which measures arc length along it: a polyline approximation
+ * here would be a second, coarser flattening on top of the one `flattenPath`
+ * already does, and the two would disagree about where the middle of a word is.
+ *
+ * Pure, so `tests/paths.test.ts` can check the emitted string directly.
+ */
+export function anchorsToPathData(anchors: PenAnchor[], closed: boolean): string {
+  if (anchors.length < 2) return "";
+  const n = (v: number) => (Number.isFinite(v) ? +v.toFixed(3) : 0);
+  let d = `M ${n(anchors[0].x)} ${n(anchors[0].y)}`;
+  const span = (a: PenAnchor, b: PenAnchor) =>
+    ` C ${n(a.ox)} ${n(a.oy)} ${n(b.ix)} ${n(b.iy)} ${n(b.x)} ${n(b.y)}`;
+  for (let i = 1; i < anchors.length; i++) d += span(anchors[i - 1], anchors[i]);
+  if (closed) {
+    d += span(anchors[anchors.length - 1], anchors[0]);
+    d += " Z";
+  }
+  return d;
+}
