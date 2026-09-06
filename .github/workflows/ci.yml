@@ -375,6 +375,11 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: The pattern library, its picker, and a pattern fill
+        run: npm run test:patterns -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

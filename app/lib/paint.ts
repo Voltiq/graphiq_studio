@@ -119,6 +119,7 @@ import {
 } from "./crop-gaps";
 import { buildCanvasGradient, gradientGeometry } from "./gradient";
 import { flattenPath, layoutTextOnPath, type PathTextSpec } from "./textpath";
+import type { PatternPlacement } from "./patterns";
 import { parsePath } from "./svgpath";
 import { solveHomography } from "./homography";
 import { buildEdgeField, type EdgeField } from "./magnetic";
@@ -294,7 +295,8 @@ export interface EngineHandle {
   fillSelection: (
     layerId: string,
     rects: Rect[],
-    colorHex: string,
+    /** A colour, or a tile to repeat — see the implementation. */
+    colorHex: string | PatternFill,
     angle?: number,
     pivot?: { x: number; y: number } | null,
     feather?: number,
@@ -769,6 +771,14 @@ export interface TextRenderSpec {
   /** Set along a path, one placement per glyph, instead of on lines. Takes
    *  precedence over `runs`/`align`, which describe a block that has lines. */
   onPath?: PathTextSpec;
+}
+
+/** A tile to repeat, and where it sits, for `fillSelection`. */
+export interface PatternFill {
+  tile: CanvasImageSource;
+  width: number;
+  height: number;
+  placement: PatternPlacement;
 }
 
 /** Pre-crop layer pixels + document size, captured so a crop can be undone. */
@@ -3112,7 +3122,11 @@ export class PaintEngine {
   fillSelection(
     layerId: string,
     rects: Rect[],
-    colorHex: string,
+    /* A colour, or a tile to repeat. The PATTERN is built here rather than
+       handed in ready-made: a CanvasPattern belongs to the context that created
+       it, and the context that matters is the layer's, which only the engine
+       has. The caller supplies the picture and where it sits. */
+    colorHex: string | PatternFill,
     angle = 0,
     pivot: { x: number; y: number } | null = null,
     feather = 0,
@@ -3127,7 +3141,7 @@ export class PaintEngine {
       // Lay the colour down only where a feathered mask is opaque (soft edges).
       const mask = this.selectionMask(rects, angle, pivot, feather);
       const tmp = this.mk(this.w, this.h);
-      tmp.ctx.fillStyle = colorHex;
+      tmp.ctx.fillStyle = PaintEngine.paintStyle(tmp.ctx, colorHex);
       tmp.ctx.fillRect(bounds.x, bounds.y, bounds.w, bounds.h);
       tmp.ctx.globalCompositeOperation = "destination-in";
       tmp.ctx.drawImage(mask, 0, 0);
@@ -3137,7 +3151,7 @@ export class PaintEngine {
       this.clipTo(l.ctx, rects, angle, pivot);
       l.ctx.globalAlpha = 1;
       l.ctx.globalCompositeOperation = "source-over";
-      l.ctx.fillStyle = colorHex;
+      l.ctx.fillStyle = PaintEngine.paintStyle(l.ctx, colorHex);
       l.ctx.fillRect(bounds.x, bounds.y, bounds.w, bounds.h);
       l.ctx.restore();
     }
@@ -3145,6 +3159,30 @@ export class PaintEngine {
     this.pushEntry(mid, bounds, before, after, "Fill", undefined, onMask ? "mask" : "layer");
     if (onMask) this.deriveMaskAlpha(mid, bounds);
     this.emitChange();
+  }
+
+  /**
+   * A fill's paint: a colour string as-is, or a repeating tile.
+   *
+   * The transform is set on the PATTERN rather than on the context, so the
+   * clip, the bounds and the history rectangle all stay in document
+   * coordinates — transforming the context instead would move the rectangle
+   * being filled as well as the paint inside it.
+   */
+  private static paintStyle(
+    ctx: CanvasRenderingContext2D,
+    fill: string | PatternFill,
+  ): string | CanvasPattern {
+    if (typeof fill === "string") return fill;
+    const pat = ctx.createPattern(fill.tile, "repeat");
+    if (!pat) return "#00000000";
+    const p = fill.placement;
+    const m = new DOMMatrix()
+      .translate(p.offsetX * fill.width * p.scale, p.offsetY * fill.height * p.scale)
+      .rotate((p.rotate * 180) / Math.PI)
+      .scale(p.scale || 1);
+    pat.setTransform(m);
+    return pat;
   }
 
   /** Expand a selection bounds by a feather radius (3σ reach), clamped to canvas. */

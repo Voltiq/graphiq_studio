@@ -51,6 +51,7 @@ import { downloadSettings, importSettings, resetSettings } from "../lib/settings
 import { availableFormats } from "../lib/imageio";
 import { clearAutosave } from "../lib/autosave";
 import { clearRecents, listRecents } from "../lib/recents";
+import { clearPatterns, patternStoreInfo } from "../lib/patterns";
 import {
   autosaveInfo,
   clearPresets,
@@ -554,6 +555,7 @@ export default function PreferencesDialog({
     persisted: boolean | null;
     autosave: { savedAt: number; docs: number; bytes: number } | null;
     recents: number;
+    patterns: { count: number; bytes: number };
     settings: number;
     presets: number;
   }
@@ -561,13 +563,14 @@ export default function PreferencesDialog({
   // Restore-defaults confirmation (custom modal, not window.confirm).
   const [confirmReset, setConfirmReset] = useState(false);
   const loadStore = async () => {
-    const [estimate, persisted, autosave, recents] = await Promise.all([
+    const [estimate, persisted, autosave, recents, patterns] = await Promise.all([
       estimateStorage(),
       isPersisted(),
       autosaveInfo(),
       listRecents().then((l) => l.length).catch(() => 0),
+      patternStoreInfo().catch(() => ({ count: 0, bytes: 0 })),
     ]);
-    setStore({ estimate, persisted, autosave, recents, settings: settingsBytes(), presets: presetsBytes() });
+    setStore({ estimate, persisted, autosave, recents, patterns, settings: settingsBytes(), presets: presetsBytes() });
   };
   useEffect(() => {
     if (tab === "storage") void loadStore();
@@ -1574,6 +1577,36 @@ export default function PreferencesDialog({
                       }}
                     >
                       Delete
+                    </button>
+                  </div>
+                  {/* Its OWN row and its OWN clear, because the tiles live in
+                      IndexedDB: `presetsBytes` sums localStorage keys and
+                      `clearPresets` removes them, so a pattern library counted
+                      with the other presets would be invisible in the total and
+                      would silently survive "Clear presets". Recent files are
+                      here for the same reason. */}
+                  <div className={styles.row}>
+                    <div className={styles.rowText}>
+                      <strong>Pattern tiles</strong>
+                      <em>
+                        {store
+                          ? store.patterns.count
+                            ? `${store.patterns.count} saved tile${store.patterns.count === 1 ? "" : "s"}, ${fmtBytes(store.patterns.bytes)} (the built-in tiles are drawn, and store nothing)`
+                            : "No saved tiles — the built-in ones are drawn, not stored"
+                          : "…"}
+                      </em>
+                    </div>
+                    <button
+                      type="button"
+                      className={styles.btn}
+                      disabled={!store?.patterns.count}
+                      onClick={async () => {
+                        if (!window.confirm("Delete every pattern tile you have added?\n\nThe built-in tiles are drawn by the app and are not affected.")) return;
+                        await clearPatterns();
+                        void loadStore();
+                      }}
+                    >
+                      Clear
                     </button>
                   </div>
                   <div className={styles.row}>

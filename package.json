@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -71,6 +71,7 @@
     "test:bucket": "node tools/verify-bucket-commit.js",
     "test:svggrad": "node tools/verify-svg-text-gradient.js",
     "test:textpath": "node tools/verify-text-on-path.js",
+    "test:patterns": "node tools/verify-pattern-fill.js",
     "icons": "node tools/build-pwa-icons.js",
     "fixtures": "node tools/build-size-fixtures.js",
     "bench:autosave": "node tools/bench-autosave.js",

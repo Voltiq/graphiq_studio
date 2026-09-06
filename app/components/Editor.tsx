@@ -88,6 +88,7 @@ import { installModifierInjection } from "../lib/modifiers";
 import { DEFAULT_PATH_TEXT } from "../lib/textpath";
 import { registerRawDeveloper, type RawSession } from "../lib/rawdev";
 import RawDevelopDialog from "./RawDevelopDialog";
+import PatternFillDialog, { type PatternFillResult } from "./PatternFillDialog";
 import type { RawDevelopOptions } from "../lib/dng";
 import { anchorsToPathData } from "../lib/paths";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
@@ -6615,6 +6616,30 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // allocMask("selection") and loading is maskSelectionRects() — the same two
   // calls the quick mask and "Load mask as selection" already use.
   const [channelDialog, setChannelDialog] = useState<"save" | "load" | null>(null);
+  const [patternFill, setPatternFill] = useState(false);
+
+  /**
+   * Fill the selection with a repeating tile — or the whole layer when there is
+   * no selection, which is what "fill" means with nothing selected everywhere
+   * else in the app.
+   */
+  const fillWithPattern = (r: PatternFillResult) => {
+    setPatternFill(false);
+    const eng = paintRef.current;
+    if (!eng) return;
+    const d = activeDocRef.current;
+    const rects = selRef.current.length
+      ? selRef.current
+      : [{ x: 0, y: 0, w: d.width, h: d.height }];
+    eng.fillSelection(
+      ensureLayer(),
+      rects,
+      { tile: r.tile, width: r.width, height: r.height, placement: r.placement },
+      selRef.current.length ? d.selectionAngle : 0,
+      selRef.current.length ? d.selectionPivot : null,
+      selRef.current.length ? selectionFeatherRef.current : 0,
+    );
+  };
 
   /* Developing a RAW is a QUESTION, and a question needs somewhere to put the
      answer. `imageio` cannot import a dialog — it runs in the worker too — so
@@ -6824,6 +6849,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     else if (actionId === "select-reselect") reselect();
     else if (actionId === "select-inverse") invertSelection();
     else if (actionId === "vmask-add") addVectorMask();
+    else if (actionId === "pattern-fill") setPatternFill(true);
     else if (actionId === "text-on-path") setTextPath(true);
     else if (actionId === "text-off-path") setTextPath(false);
     else if (actionId === "vmask-invert") invertVectorMask();
@@ -8093,6 +8119,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
       {helpOpen && <HelpDialog start={helpOpen} onClose={() => setHelpOpen(null)} />}
 
+      {patternFill && (
+        <PatternFillDialog onFill={fillWithPattern} onClose={() => setPatternFill(false)} />
+      )}
       {rawAsk && (
         <RawDevelopDialog
           session={rawAsk.session}

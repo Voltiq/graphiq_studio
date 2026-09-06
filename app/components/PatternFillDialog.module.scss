@@ -1,0 +1,115 @@
+.overlay {
+  position: fixed;
+  inset: 0 0 var(--kb-inset, 0px);
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: var(--blanket);
+  animation: fade var(--t-med) var(--ease);
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dialog {
+  width: min(460px, calc(100vw - 32px));
+  max-height: calc(100svh - 32px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+
+  h2 {
+    font-size: 14px;
+    font-weight: var(--weight-semibold);
+  }
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-md);
+  color: var(--text-2);
+
+  &:hover {
+    background: var(--wash);
+    color: var(--text);
+  }
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  overflow-y: auto;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 4rem 1fr 3.5rem;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: 13px;
+
+  output {
+    text-align: right;
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+
+  button {
+    min-height: 32px;
+    padding: 0 var(--sp-3);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    font-size: 13px;
+    color: var(--text);
+
+    &:hover:not(:disabled) {
+      background: var(--wash);
+    }
+
+    &:disabled {
+      opacity: 0.5;
+    }
+
+    &[data-primary] {
+      color: var(--accent-contrast);
+      background: var(--accent);
+      border-color: var(--accent);
+
+      &:hover:not(:disabled) {
+        filter: brightness(1.06);
+      }
+    }
+  }
+}
