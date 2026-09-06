@@ -1,5 +1,6 @@
 import { downloadBlob } from "./project";
 import { browserShareDeps, shareOrDownload } from "./share";
+import { developWithDialog, hasRawDeveloper } from "./rawdev";
 
 /** Whether this browser can use a wide-gamut Display-P3 canvas working space. */
 export function p3Supported(): boolean {
@@ -213,7 +214,24 @@ function looksLikeTIFF(b: Uint8Array): boolean {
 /** Run the hand-written DNG decoder in a throwaway worker (decodes are rare
  *  and heavy — ~a second for 24 MP); falls back to decoding on this thread
  *  when workers are unavailable. Null = not a supported DNG. */
-async function decodeRawDNG(buffer: ArrayBuffer): Promise<ImageBitmap | null> {
+async function decodeRawDNG(buffer: ArrayBuffer, name = ""): Promise<ImageBitmap | null> {
+  /* Offer the file to a develop dialog first, if the editor registered one.
+     Exposure and white balance belong here rather than on the imported layer:
+     they are operations on LINEAR sensor data, and the same sliders applied to
+     an 8-bit sRGB layer afterwards are a coarser, lossier thing. With nothing
+     registered — a test, the worker, a headless render — this is a single
+     null check and the decode below is exactly what it always was. */
+  if (hasRawDeveloper()) {
+    const outcome = await developWithDialog(buffer, name);
+    if (outcome.handled) {
+      if (outcome.cancelled) return null; // Cancel abandons the import
+      try {
+        return await createImageBitmap(outcome.image);
+      } catch {
+        return null;
+      }
+    }
+  }
   let result: { width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> } | null = null;
   if (rawWorkerEnabled && typeof Worker !== "undefined") {
     result = await new Promise<{ width: number; height: number; data: Uint8ClampedArray<ArrayBuffer> } | null>((resolve) => {
@@ -237,7 +255,7 @@ async function decodeRawDNG(buffer: ArrayBuffer): Promise<ImageBitmap | null> {
             : null,
         );
       };
-      worker.postMessage({ buf: buffer }, [buffer]);
+      worker.postMessage({ id: 1, kind: "decode", buf: buffer }, [buffer]);
     });
   } else {
     const { decodeDNG } = await import("./dng");
@@ -272,7 +290,7 @@ export async function decodeImageFile(file: File): Promise<ImageBitmap | null> {
     if (looksLikeTIFF(head)) {
       // decodeRawDNG transfers its buffer to the worker — read the file again
       // for the plain-TIFF attempt.
-      const developed = await decodeRawDNG(await file.arrayBuffer());
+      const developed = await decodeRawDNG(await file.arrayBuffer(), file.name);
       if (developed) return developed;
       const { decodeTiff } = await import("./tiff");
       const tiff = await decodeTiff(await file.arrayBuffer());

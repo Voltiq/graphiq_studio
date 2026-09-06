@@ -1,0 +1,161 @@
+.overlay {
+  position: fixed;
+  /* Ends above a keyboard, so the dialog centres in what is visible. */
+  inset: 0 0 var(--kb-inset, 0px);
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  background: var(--blanket);
+  animation: fade var(--t-med) var(--ease);
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dialog {
+  /* Wider than a settings dialog because the preview is the point of it, and
+     capped against the visible viewport so a phone gets a sheet rather than
+     something taller than the screen. */
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100svh - 32px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+
+  h2 {
+    font-size: 14px;
+    font-weight: var(--weight-semibold);
+  }
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-md);
+  color: var(--text-2);
+
+  &:hover {
+    background: var(--wash);
+    color: var(--text);
+  }
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  overflow-y: auto;
+}
+
+/* A fixed frame so the dialog does not resize as the preview arrives, and a
+   chequerboard behind it so a blown-out develop still reads as an image. */
+.previewWrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+  max-height: 46vh;
+  background:
+    repeating-conic-gradient(var(--wash) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+
+  /* Developing: dim rather than blank, so the previous frame stays readable
+     and the panel does not flash between drags. */
+  &[data-busy] .preview {
+    opacity: 0.72;
+  }
+}
+
+.preview {
+  display: block;
+  max-width: 100%;
+  max-height: 46vh;
+  object-fit: contain;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+.meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.asShot {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr 5rem;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: 13px;
+
+  output {
+    text-align: right;
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+
+  button {
+    min-height: 32px;
+    padding: 0 var(--sp-3);
+    border-radius: var(--r-md);
+    border: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text);
+
+    &:hover {
+      background: var(--wash);
+    }
+
+    &[data-primary] {
+      color: var(--accent-contrast);
+      background: var(--accent);
+      border-color: var(--accent);
+
+      &:hover {
+        filter: brightness(1.06);
+      }
+    }
+  }
+}
+
+.spacer {
+  flex: 1;
+}

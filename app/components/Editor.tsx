@@ -86,6 +86,9 @@ import { registerRecovery } from "../lib/crash";
 import { dismissTop, registerDismissible } from "../lib/dismiss";
 import { installModifierInjection } from "../lib/modifiers";
 import { DEFAULT_PATH_TEXT } from "../lib/textpath";
+import { registerRawDeveloper, type RawSession } from "../lib/rawdev";
+import RawDevelopDialog from "./RawDevelopDialog";
+import type { RawDevelopOptions } from "../lib/dng";
 import { anchorsToPathData } from "../lib/paths";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
 import {
@@ -6612,6 +6615,27 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // allocMask("selection") and loading is maskSelectionRects() — the same two
   // calls the quick mask and "Load mask as selection" already use.
   const [channelDialog, setChannelDialog] = useState<"save" | "load" | null>(null);
+
+  /* Developing a RAW is a QUESTION, and a question needs somewhere to put the
+     answer. `imageio` cannot import a dialog — it runs in the worker too — so
+     it asks through a registry, and this holds the asking open until the person
+     answers. The promise's `resolve` is the whole state: no dialog is mounted
+     unless a RAW is waiting on one. */
+  const [rawAsk, setRawAsk] = useState<{
+    session: RawSession;
+    name: string;
+    resolve: (o: RawDevelopOptions | null) => void;
+  } | null>(null);
+  useEffect(
+    () =>
+      registerRawDeveloper(
+        (session, name) =>
+          new Promise<RawDevelopOptions | null>((resolve) =>
+            setRawAsk({ session, name, resolve }),
+          ),
+      ),
+    [],
+  );
   const channelsOf = (): SavedChannel[] => activeDocRef.current.channels ?? [];
   const setChannels = (docId: string, next: SavedChannel[]) =>
     setDocs((ds) => ds.map((d) => (d.id === docId ? { ...d, channels: next } : d)));
@@ -8069,6 +8093,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
       {helpOpen && <HelpDialog start={helpOpen} onClose={() => setHelpOpen(null)} />}
 
+      {rawAsk && (
+        <RawDevelopDialog
+          session={rawAsk.session}
+          fileName={rawAsk.name}
+          onDone={(opts) => {
+            rawAsk.resolve(opts);
+            setRawAsk(null);
+          }}
+        />
+      )}
       {channelDialog && (
         <SelectionChannelDialog
           mode={channelDialog}

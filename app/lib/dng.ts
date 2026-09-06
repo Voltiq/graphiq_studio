@@ -22,6 +22,65 @@ export interface RawDecodeResult {
   data: Uint8ClampedArray;
 }
 
+/**
+ * A parsed RAW, before it is developed.
+ *
+ * THE REASON THIS TYPE EXISTS: developing is cheap and parsing is not. Reaching
+ * `norm` means walking the IFDs, decompressing (lossless JPEG, in strips or
+ * tiles) and normalizing every photosite — on the order of a second for a 24
+ * megapixel file. Turning that plane into pixels is one pass. A develop dialog
+ * that re-ran the whole decode on every drag of an exposure slider would be
+ * unusable, so the two are separable and only the second half repeats.
+ *
+ * `plane` is deliberately WITHOUT white balance folded in, which is where it
+ * used to be applied. WB is a per-photosite multiply that has to happen BEFORE
+ * demosaicing — demosaicing mixes colours, so scaling afterwards is a different
+ * (and wrong) answer — so `developRaw` applies it inside the sampler rather
+ * than by making a scaled copy of a plane that can be 96 MB.
+ */
+export interface RawImage {
+  /** Black/white-normalized photosites, 0..1. CFA: one per site. Linear: three. */
+  plane: Float32Array;
+  /** Full sensor dimensions of `plane`. */
+  width: number;
+  height: number;
+  isCFA: boolean;
+  /** CFA colour per site within the repeating pattern. */
+  pattern: number[];
+  patW: number;
+  patH: number;
+  /** The crop the camera asks for, within the sensor. */
+  cropX: number;
+  cropY: number;
+  cropW: number;
+  cropH: number;
+  /** 0/90/180/270 as a quarter-turn count. */
+  rot: number;
+  /** Camera → sRGB, row-major 3×3. */
+  matrix: number[];
+  /** Baseline exposure from the file, as a linear multiplier. */
+  exposure: number;
+  /** As-shot white balance, as per-channel multipliers. */
+  asShot: [number, number, number];
+}
+
+/** What a develop dialog can change before the pixels land. */
+export interface RawDevelopOptions {
+  /** Stops of exposure ON TOP of the file's baseline. 0 = as the camera meant. */
+  exposureEV?: number;
+  /**
+   * White balance multipliers RELATIVE to as-shot, so `[1,1,1]` is as-shot and
+   * the dialog's neutral position needs no knowledge of the camera.
+   */
+  wb?: [number, number, number];
+  /**
+   * Longest edge of the output, for a preview. The develop pass then samples
+   * every Nth photosite — nearest-neighbour, which is honest for judging
+   * exposure and colour and is not what the final import uses.
+   */
+  maxEdge?: number;
+}
+
 // ---- TIFF / IFD parsing ------------------------------------------------------
 
 interface Tag {
@@ -526,16 +585,37 @@ function srgbEncode(v: number): number {
   return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
 }
 
-/** Decode + develop a DNG. Null = not a DNG / outside the supported subset. */
-export function decodeDNG(buffer: ArrayBuffer): RawDecodeResult | null {
+/**
+ * Parse a DNG to the point where it can be developed, without developing it.
+ * Null = not a DNG, or outside the supported subset.
+ *
+ * Split from `decodeDNG` so a develop dialog can pay the expensive half once
+ * and then re-develop as fast as a slider moves. Never throws — the importer
+ * calls it speculatively on any TIFF-shaped file.
+ */
+export function parseRawDNG(buffer: ArrayBuffer): RawImage | null {
   try {
-    return decodeDNGInner(buffer);
+    return parseRawInner(buffer);
   } catch {
     return null;
   }
 }
 
-function decodeDNGInner(buffer: ArrayBuffer): RawDecodeResult | null {
+/** Decode + develop a DNG. Null = not a DNG / outside the supported subset. */
+export function decodeDNG(
+  buffer: ArrayBuffer,
+  opts: RawDevelopOptions = {},
+): RawDecodeResult | null {
+  const img = parseRawDNG(buffer);
+  if (!img) return null;
+  try {
+    return developRaw(img, opts);
+  } catch {
+    return null;
+  }
+}
+
+function parseRawInner(buffer: ArrayBuffer): RawImage | null {
   const dv = new DataView(buffer);
   if (dv.byteLength < 16) return null;
   const b0 = dv.getUint16(0, false);
@@ -649,9 +729,10 @@ function decodeDNGInner(buffer: ArrayBuffer): RawDecodeResult | null {
   const outW = Math.max(1, cx1 - cx0);
   const outH = Math.max(1, cy1 - cy0);
 
-  // Normalize (black/white + WB folded per site) into a float plane (CFA) or
-  // triplets (LinearRaw).
-  const cfaColor = (x: number, y: number) => pattern[(y % patH) * patW + (x % patW)];
+  /* Normalize black/white into a float plane (CFA) or triplets (LinearRaw).
+     White balance is NOT folded in here any more — see `RawImage`: it has to be
+     applied before demosaicing but after this, so `developRaw` does it in its
+     sampler and this plane stays reusable across develops. */
   const norm = new Float32Array(w * h * (isCFA ? 1 : 3));
   const rangeInv = (blk: number) => 1 / Math.max(1, white - blk);
   if (isCFA) {
@@ -661,7 +742,7 @@ function decodeDNGInner(buffer: ArrayBuffer): RawDecodeResult | null {
         const blk = blackAt(x, y, 0);
         let v = (grid.data[i] - blk) * rangeInv(blk);
         v = v < 0 ? 0 : v;
-        norm[i] = v * gain[cfaColor(x, y)];
+        norm[i] = v;
       }
   } else {
     for (let y = 0; y < h; y++)
@@ -671,49 +752,105 @@ function decodeDNGInner(buffer: ArrayBuffer): RawDecodeResult | null {
           const blk = blackAt(x, y, s);
           let v = (grid.data[spp === 3 ? i : y * w + x] - blk) * rangeInv(blk);
           v = v < 0 ? 0 : v;
-          norm[i] = v * gain[s];
+          norm[i] = v;
         }
   }
 
-  // Demosaic + matrix + exposure + gamma → 8-bit RGBA, cropped.
-  /* Malvar-He-Cutler rather than bilinear. Bilinear averages the nearest
-     same-colour sites, which is right on flat areas and wrong at every edge:
-     green is sampled twice as densely as red and blue, so those two lag behind
-     it across a boundary and leave the coloured fringing that RAW converters
-     are judged on. MHC adds a correction taken from the gradient of the channel
-     that IS measured at each site. Measured against a mosaiced test image with
-     known ground truth: 1.74x less mean absolute error, and the gain is largest
-     on detail near the sampling limit — see tests/demosaic.test.ts, which also
-     records the one case it loses (strongly anti-correlated channels). */
-  const rot = orientation === 3 ? 2 : orientation === 6 ? 1 : orientation === 8 ? 3 : 0;
-  const finalW = rot % 2 ? outH : outW;
-  const finalH = rot % 2 ? outW : outH;
+  return {
+    plane: norm,
+    width: w,
+    height: h,
+    isCFA,
+    pattern,
+    patW,
+    patH,
+    cropX: cx0,
+    cropY: cy0,
+    cropW: outW,
+    cropH: outH,
+    rot: orientation === 3 ? 2 : orientation === 6 ? 1 : orientation === 8 ? 3 : 0,
+    matrix,
+    exposure,
+    asShot: [gain[0], gain[1], gain[2]],
+  };
+}
+
+/**
+ * Turn a parsed RAW into sRGB pixels: white balance → demosaic → camera matrix
+ * → exposure → gamma, cropped and rotated.
+ *
+ * Pure and repeatable — this is the half a develop dialog runs on every change,
+ * and the half that is cheap enough to.
+ */
+export function developRaw(img: RawImage, opts: RawDevelopOptions = {}): RawDecodeResult {
+  const {
+    plane,
+    width: w,
+    height: h,
+    isCFA,
+    pattern,
+    patW,
+    patH,
+    cropX: cx0,
+    cropY: cy0,
+    cropW: outW,
+    cropH: outH,
+    rot,
+    matrix,
+  } = img;
+
+  const wb = opts.wb ?? [1, 1, 1];
+  /* As-shot times the dialog's relative adjustment, so `wb: [1,1,1]` reproduces
+     the file exactly and a dialog's neutral position needs no knowledge of the
+     camera's own numbers. */
+  const gain = [img.asShot[0] * wb[0], img.asShot[1] * wb[1], img.asShot[2] * wb[2]];
+  const exposure = img.exposure * Math.pow(2, opts.exposureEV ?? 0);
+
+  /* A preview skips output pixels rather than shrinking the source: the
+     demosaic still reads the true neighbourhood of each site it visits, so what
+     is lost is resolution, not correctness. Nearest-neighbour, and only ever
+     used for the dialog — the import develops at step 1. */
+  const step =
+    opts.maxEdge && opts.maxEdge > 0
+      ? Math.max(1, Math.ceil(Math.max(outW, outH) / opts.maxEdge))
+      : 1;
+  const sw = Math.max(1, Math.ceil(outW / step));
+  const sh = Math.max(1, Math.ceil(outH / step));
+  const finalW = rot % 2 ? sh : sw;
+  const finalH = rot % 2 ? sw : sh;
   const out = new Uint8ClampedArray(finalW * finalH * 4);
 
+  const cfaColor = (x: number, y: number) => pattern[(y % patH) * patW + (x % patW)];
   /* One output object for the whole image: the demosaic writes into it rather
      than returning a fresh triple per pixel, which on a 24-megapixel file is
      24 million allocations avoided. */
   const rgb: RGBOut = { r: 0, g: 0, b: 0 };
   const cfaColorTyped = (x: number, y: number) => cfaColor(x, y) as CFAColor;
 
+  /* White balance rides on the SAMPLER. It has to be applied per photosite
+     before demosaicing, and doing it here costs one multiply per tap but avoids
+     allocating a scaled copy of a plane that is 96 MB on a 24-megapixel file —
+     once per slider drag. */
   const at = (x: number, y: number) => {
     const xx = x < 0 ? 0 : x >= w ? w - 1 : x;
     const yy = y < 0 ? 0 : y >= h ? h - 1 : y;
-    return norm[yy * w + xx];
+    return plane[yy * w + xx] * gain[cfaColor(xx, yy)];
   };
 
-  for (let oy = 0; oy < outH; oy++) {
+  for (let sy = 0; sy < sh; sy++) {
+    const oy = sy * step;
     const y = cy0 + oy;
-    for (let ox = 0; ox < outW; ox++) {
+    for (let sx = 0; sx < sw; sx++) {
+      const ox = sx * step;
       const x = cx0 + ox;
       let cr: number;
       let cg: number;
       let cb: number;
       if (!isCFA) {
         const i = (y * w + x) * 3;
-        cr = norm[i];
-        cg = norm[i + 1];
-        cb = norm[i + 2];
+        cr = plane[i] * gain[0];
+        cg = plane[i + 1] * gain[1];
+        cb = plane[i + 2] * gain[2];
       } else {
         demosaicMHC(at, cfaColorTyped, x, y, rgb);
         cr = rgb.r;
@@ -730,17 +867,17 @@ function decodeDNGInner(buffer: ArrayBuffer): RawDecodeResult | null {
       let dx: number;
       let dy: number;
       if (rot === 0) {
-        dx = ox;
-        dy = oy;
+        dx = sx;
+        dy = sy;
       } else if (rot === 1) {
-        dx = finalW - 1 - oy;
-        dy = ox;
+        dx = finalW - 1 - sy;
+        dy = sx;
       } else if (rot === 2) {
-        dx = finalW - 1 - ox;
-        dy = finalH - 1 - oy;
+        dx = finalW - 1 - sx;
+        dy = finalH - 1 - sy;
       } else {
-        dx = oy;
-        dy = finalH - 1 - ox;
+        dx = sy;
+        dy = finalH - 1 - sx;
       }
       const di = (dy * finalW + dx) * 4;
       out[di] = R * 255;
