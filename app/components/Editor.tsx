@@ -418,10 +418,6 @@ interface Doc {
   /** What was done to this document BEFORE this session — read from the file's
    *  history labels. A record, not a navigable stack (see history-log.ts). */
   historyLog?: string[];
-  /** How many live history steps already existed when this document opened.
-   *  The engine's undo stack is GLOBAL, so without this a file opened into a
-   *  busy session would claim the steps that came before it as its own. */
-  historyBase?: number;
   /** 32-bit float radiance source (Merge to HDR) — IN MEMORY only, never
    *  serialized (.gproj/autosave keep the tone-mapped pixels instead). */
   hdr?: HdrImage | null;
@@ -819,21 +815,32 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   });
   // Any history movement means unsaved work (autosave + status-bar indicator).
   const historyInitRef = useRef(true);
+  // Each tab has its own history, so switching tabs hands over a different
+  // summary — that is not an edit, and must not read as one.
+  const historyDocRef = useRef<string | null>(null);
   useEffect(() => {
+    const docId = activeIdRef.current;
+    const switched = historyDocRef.current !== docId;
+    historyDocRef.current = docId;
     if (historyInitRef.current) {
       historyInitRef.current = false;
       return;
     }
+    // Still dirty on a switch: one can land in the same render as an edit (a
+    // paste into a new canvas switches and journals back to back), and an
+    // extra autosave is cheap where a missed one is not.
     autosaveDirtyRef.current = true;
+    if (switched) return;
     /* Deliberately NOT the same as the flag above, twice over. An autosave
        clears that one, and "your snapshot is recoverable" is not the promise
        "your work is saved" — only writing a file clears this. And it asks
        whether the user has actually DONE anything: a freshly opened editor
        already reads "Unsaved changes", because its blank document has never
        been written to a file, and prompting on the way out of an untouched app
-       would be nagging about nothing. Index 0 is the synthetic origin row, so
-       anything past the document's own base is a real edit. */
-    unsavedRef.current = history.index > (activeDocRef.current?.historyBase ?? 0);
+       would be nagging about nothing. Index 0 is the synthetic origin row.
+       Only ever SET here: undoing this tab back to its start says nothing about
+       the edits sitting in another tab. */
+    if (history.index > 0) unsavedRef.current = true;
     setSaveState((s) => (s.label === "Unsaved changes" ? s : { label: "Unsaved changes", ok: false }));
   }, [history]);
   const [saveAsOpen, setSaveAsOpen] = useState(false);
@@ -4076,6 +4083,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const next = docs.filter((d) => d.id !== id);
     setDocs(next);
     docJsonCache.current.delete(id);
+    paintRef.current?.discardHistoryDocument(id);
     if (id === activeId) setActiveId(next[Math.min(idx, next.length - 1)].id);
   };
 
@@ -4100,15 +4108,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // Serialize ANY open document to `.gproj` JSON. The engine keeps every
   // materialized document's layer + mask canvases (globally-unique ids, sized
   // per-document), so pixels resolve for inactive tabs too — which is what
-  // lets autosave snapshot all of them. History labels are engine-global, so
-  // only the active document carries them (the rest get empty display-only
-  // metadata; the undo stack was never file-replayable regardless).
+  // lets autosave snapshot all of them. History labels are display-only
+  // metadata — the undo stack was never file-replayable.
   /** `encoded` lets a caller supply images it has already encoded — autosave
    *  does that from a worker, so the 1 s of PNG encoding this used to do on the
    *  main thread happens off it. Absent, every image is encoded here as before,
    *  which is what the crash path and the file export need: neither can await. */
   const serializeDocToJSON = (d: Doc, encoded?: ReadonlyMap<string, Blob>): string => {
-    const isActive = d.id === activeIdRef.current;
+    const live = paintRef.current?.historyOf(d.id) ?? null;
     /* A reference, not the pixels: the Blob travels beside the JSON rather than
        inside it. Anything not in the map is encoded here, as before. */
     const pre = (key: string, encode: () => string | null) =>
@@ -4139,20 +4146,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         comps: d.comps ?? [],
       },
       { foreground: fgRef.current, background: bgRef.current },
-      // The log a file carries = what it already had + what this session did,
-      // capped. Only the ACTIVE document has live history (it is engine-global),
-      // so an inactive tab just re-writes the log it was loaded with.
+      // The log a file carries = what it already had + what this session did
+      // to THIS document (every tab has its own history), capped.
       {
-        // Only the steps taken since THIS document opened: index 0 is the
-        // synthetic origin row, and anything before `historyBase` belonged to
-        // whatever was open before it.
-        labels: isActive
-          ? mergeLog(
-              d.historyLog ?? [],
-              historyRef.current.items.map((i) => i.label).slice(1 + (d.historyBase ?? 0)),
-            )
-          : (d.historyLog ?? []),
-        index: isActive ? historyRef.current.index : 0,
+        labels: mergeLog(d.historyLog ?? [], live?.labels ?? []),
+        index: live?.index ?? 0,
       },
       (id) => pre(`layer:${id}`, () => paintRef.current?.getLayerImage(id) ?? null),
       (id) => pre(`mask:${id}`, () => paintRef.current?.getMaskImage(id) ?? null),
@@ -4745,7 +4743,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       comps: remapComps(sanitizeComps((p as { comps?: unknown }).comps), idMap),
       // Present in every .gproj ever written — nothing read it back until now.
       historyLog: sanitizeLog(p.history?.labels),
-      historyBase: Math.max(0, historyRef.current.items.length - 1),
     };
     setDocs((ds) => [...ds, doc]);
     if (activate) setActiveId(docId);
@@ -7993,7 +7990,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             !restoreSnap &&
             docs.length === 1 &&
             !active?.layers.length &&
-            history.index <= (active?.historyBase ?? 0) && (
+            history.index === 0 && (
               <StartCard
                 onOpen={() => photoInputRef.current?.click()}
                 onCapture={() => cameraInputRef.current?.click()}

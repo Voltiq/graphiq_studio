@@ -608,6 +608,10 @@ export interface EngineHandle {
   setHistoryBudgetMB: (mb: number) => void;
   /** Photoshop-style non-linear history (branch instead of truncating). */
   setNonLinearHistory: (on: boolean) => void;
+  /** Let go of a closed document's history. */
+  discardHistoryDocument: (docId: string) => void;
+  /** Any open document's history labels + position (for writing its file). */
+  historyOf: (docId: string) => { labels: string[]; index: number } | null;
   setWorkersEnabled: (on: boolean) => void;
 }
 
@@ -827,6 +831,25 @@ interface Entry {
   // Which surface the pixel payload patches; absent ⇒ "layer" (back-compat).
   surface?: "layer" | "mask";
 }
+
+/** One document's undo state. The engine is shared by every open tab, so the
+ *  active document's slot lives in the engine's own fields and the others are
+ *  parked — see `setHistoryDocument`. */
+interface HistorySlot {
+  entries: Entry[];
+  cur: number;
+  sourceIndex: number;
+  snapshots: DocSnapshot[];
+  sourceSnap: string | null;
+}
+
+const emptyHistorySlot = (): HistorySlot => ({
+  entries: [],
+  cur: ROOT,
+  sourceIndex: 0,
+  snapshots: [],
+  sourceSnap: null,
+});
 
 // (premultChannels + computeBlurFx moved to filters.ts — shared by the Blur
 // Gallery and the blur smart-filter type.)
@@ -1503,17 +1526,44 @@ export class PaintEngine {
     this.trimHistory();
   }
 
-  /** Bytes currently held by the undo stack's pixel patches. */
+  /** Bytes held by the undo stacks' pixel patches, across every open document. */
   historyBytes(): number {
-    return totalBytes(this.entries);
+    return totalBytes(this.entries) + this.parkedHistoryBytes();
   }
 
+  private parkedHistoryBytes(): number {
+    let n = 0;
+    for (const s of this.parkedHistory.values()) n += totalBytes(s.entries);
+    return n;
+  }
+
+  /** The step cap is per document (each tab keeps its own N states, as in
+   *  Photoshop); the memory cap is for the whole session, since it is what
+   *  bounds RAM. Parked documents give up their steps first — the ones you are
+   *  most likely to want back are in the document in front of you. */
   private trimHistory(): void {
+    const budget = this.historyBudgetMB;
+    for (const [id, slot] of this.parkedHistory) {
+      const others = totalBytes(this.entries) + this.parkedHistoryBytes() - totalBytes(slot.entries);
+      if (!overBudget(others + totalBytes(slot.entries), budget)) break;
+      const trimmed = this.withHistorySlot(slot, () =>
+        this.dropTrimVictims(() => overBudget(others + totalBytes(this.entries), budget)),
+      );
+      this.parkedHistory.set(id, trimmed);
+    }
+    const parked = this.parkedHistoryBytes();
+    const dropped = this.dropTrimVictims(
+      () =>
+        this.entries.length > this.historyLimit ||
+        overBudget(totalBytes(this.entries) + parked, budget),
+    );
+    if (dropped) this.emitHistory();
+  }
+
+  /** Drop states from the CURRENT slot while `over()` holds; returns how many. */
+  private dropTrimVictims(over: () => boolean): number {
     let dropped = 0;
-    while (
-      this.entries.length > this.historyLimit ||
-      overBudget(this.historyBytes(), this.historyBudgetMB)
-    ) {
+    while (over()) {
       // `trimVictim` picks a state nothing still depends on — an abandoned
       // branch tip first, otherwise the oldest step when it is the only branch
       // off the original. It returns -1 when every remaining state is load-
@@ -1523,7 +1573,92 @@ export class PaintEngine {
       this.dropNodes([victim]);
       dropped++;
     }
-    if (dropped) this.emitHistory();
+    return dropped;
+  }
+
+  private takeHistorySlot(): HistorySlot {
+    return {
+      entries: this.entries,
+      cur: this.cur,
+      sourceIndex: this.historySourceIndex,
+      snapshots: this.snapshots,
+      sourceSnap: this.historySourceSnap,
+    };
+  }
+
+  private putHistorySlot(s: HistorySlot): void {
+    this.entries = s.entries;
+    this.cur = s.cur;
+    this.historySourceIndex = s.sourceIndex;
+    this.snapshots = s.snapshots;
+    this.historySourceSnap = s.sourceSnap;
+  }
+
+  /** Run tree bookkeeping (trim / prune — never pixel work) on a parked slot by
+   *  borrowing the live fields, and hand back the slot as it was left. */
+  private withHistorySlot(slot: HistorySlot, fn: () => void): HistorySlot {
+    const live = this.takeHistorySlot();
+    this.putHistorySlot(slot);
+    try {
+      fn();
+      return this.takeHistorySlot();
+    } finally {
+      this.putHistorySlot(live);
+    }
+  }
+
+  /** Finish whatever live session is open, so its commit lands in the history
+   *  of the document it was started in. */
+  private endLiveSessions(): void {
+    this.endAdjust();
+    this.endShape();
+    this.endGradient();
+    this.endPath();
+    this.endFill();
+  }
+
+  /**
+   * Make `docId`'s history the one undo/redo/History act on. The engine is
+   * shared by every open tab, and with one stack between them Ctrl+Z in an
+   * untouched tab undid another tab's last edit, off-screen. Call this BEFORE
+   * anything journals into the newly active document.
+   */
+  setHistoryDocument(docId: string): void {
+    if (docId === this.historyDoc) return;
+    if (this.historyDoc !== null) {
+      this.endLiveSessions();
+      this.parkedHistory.set(this.historyDoc, this.takeHistorySlot());
+      this.putHistorySlot(emptyHistorySlot());
+    }
+    // With no document named yet, the first one adopts what is already here.
+    const next = this.parkedHistory.get(docId);
+    if (next) {
+      this.parkedHistory.delete(docId);
+      this.putHistorySlot(next);
+    }
+    this.historyDoc = docId;
+    this.trimHistory();
+    this.emitHistory();
+  }
+
+  /** A closed document's history (and its snapshots' canvases) is let go. */
+  discardHistoryDocument(docId: string): void {
+    if (docId !== this.historyDoc) {
+      this.parkedHistory.delete(docId);
+      return;
+    }
+    this.endLiveSessions();
+    this.putHistorySlot(emptyHistorySlot());
+    this.historyDoc = null;
+    this.emitHistory();
+  }
+
+  /** Any document's history labels (creation order) and position — so a file
+   *  written from an inactive tab still carries what was done to it. */
+  historyOf(docId: string): { labels: string[]; index: number } | null {
+    const slot = docId === this.historyDoc ? this.takeHistorySlot() : this.parkedHistory.get(docId);
+    if (!slot) return null;
+    return { labels: slot.entries.map((e) => e.label), index: slot.cur + 1 };
   }
 
   /** Route heavy compute through workers (on) or the synchronous fallbacks
@@ -1887,6 +2022,10 @@ export class PaintEngine {
   private snapSeq = 0;
   /** When set, the History brush sources from this snapshot instead of a step. */
   private historySourceSnap: string | null = null;
+  /** The document whose history the fields above hold (null until the editor
+   *  names one), and every other open document's history, parked. */
+  private historyDoc: string | null = null;
+  private parkedHistory = new Map<string, HistorySlot>();
 
   onChange: () => void = () => {};
   onHistory: (s: HistorySummary) => void = () => {};
@@ -10347,8 +10486,14 @@ export class PaintEngine {
     if (this.nonLinear === on) return;
     this.nonLinear = on;
     if (!on) {
-      const stale = offPath(this.parents(), this.cur);
-      if (stale.length) this.dropNodes(stale);
+      const prune = () => {
+        const stale = offPath(this.parents(), this.cur);
+        if (stale.length) this.dropNodes(stale);
+      };
+      prune();
+      for (const [id, slot] of this.parkedHistory) {
+        this.parkedHistory.set(id, this.withHistorySlot(slot, prune));
+      }
     }
     this.emitHistory();
   }

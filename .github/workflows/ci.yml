@@ -315,7 +315,7 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
-      - name: "More space" offers only what the platform can actually do
+      - name: '"More space" offers only what the platform can actually do'
         run: npm run test:morespace -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
@@ -377,6 +377,11 @@ jobs:
 
       - name: The pattern library, its picker, and a pattern fill
         run: npm run test:patterns -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
+      - name: Every tab has its own undo history
+        run: npm run test:dochistory -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
