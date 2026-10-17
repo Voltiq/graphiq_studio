@@ -548,6 +548,8 @@ export interface EngineHandle {
   applyMaskToLayer: (id: string) => void;
   offsetMask: (id: string, dx: number, dy: number) => void;
   maskSelectionRects: (id: string) => Rect[];
+  /** Does this selection carry partial coverage beyond its ≥50% rects? */
+  isSoftSelection: (rects: Rect[]) => boolean;
   /** Small grayscale PNG of a mask raster (Channels-panel thumbnails). */
   maskPreviewURL: (id: string, maxW?: number) => string | null;
   /** Tight bounds of a layer's non-transparent pixels (null = empty layer). */
@@ -841,6 +843,24 @@ interface HistorySlot {
   sourceIndex: number;
   snapshots: DocSnapshot[];
   sourceSnap: string | null;
+}
+
+/**
+ * A selection's soft coverage — the 8-bit truth behind its rects, which are
+ * only the ≥50% outline (what the ants trace and the tools reason about).
+ *
+ * Keyed by the rects ARRAY: that object is the selection's identity as it
+ * travels unchanged through React state, undo and Reselect. So a selection made
+ * from a grayscale source (Quick Mask, a channel, a layer mask) keeps its soft
+ * edge everywhere it becomes pixels. An operation that builds a NEW array
+ * (modify, combine, nudge) gives a hard selection, as every selection used to be.
+ * Cropped to its bounds; one byte per pixel.
+ */
+interface SelectionCoverage {
+  w: number;
+  h: number;
+  bounds: Rect;
+  alpha: Uint8Array;
 }
 
 const emptyHistorySlot = (): HistorySlot => ({
@@ -1698,6 +1718,22 @@ export class PaintEngine {
   private clip: Rect[] | null = null;
   private clipAngle = 0;
   private clipPivot: { x: number; y: number } | null = null;
+  /** A stroke inside a soft selection is masked through this each frame. */
+  private softStrokeBuf: Layer | null = null;
+  private coverage = new WeakMap<Rect[], SelectionCoverage>();
+  /** Last soft selection mask built, reused while nothing it depends on moves —
+   *  a live gradient or brush asks for it every frame. */
+  private softMaskMemo: {
+    rects: Rect[];
+    angle: number;
+    px: number | null;
+    py: number | null;
+    feather: number;
+    refine: RefineEdge;
+    w: number;
+    h: number;
+    c: HTMLCanvasElement;
+  } | null = null;
   private col = { r: 0, g: 0, b: 0, a: 1 };
   // Pre-baked brush tip for the current stroke (rebuilt per beginStroke). Hard
   // tips are stamped crisp on the integer grid; soft tips at sub-pixel with
@@ -2931,11 +2967,25 @@ export class PaintEngine {
     if (!cache) return [];
     const d = cache.ctx.getImageData(0, 0, this.w, this.h).data;
     const out: Rect[] = [];
+    // The rects are the ≥50% outline; anything in between is kept as coverage.
+    let soft = false;
+    let bx0 = this.w;
+    let by0 = this.h;
+    let bx1 = -1;
+    let by1 = -1;
     for (let y = 0; y < this.h; y++) {
       let x0 = -1;
       const row = y * this.w;
       for (let x = 0; x < this.w; x++) {
-        const on = d[(row + x) * 4 + 3] >= 128;
+        const a = d[(row + x) * 4 + 3];
+        if (a) {
+          if (a < 255) soft = true;
+          if (x < bx0) bx0 = x;
+          if (x > bx1) bx1 = x;
+          if (y < by0) by0 = y;
+          by1 = y;
+        }
+        const on = a >= 128;
         if (on && x0 < 0) x0 = x;
         else if (!on && x0 >= 0) {
           out.push({ x: x0, y, w: x - x0, h: 1 });
@@ -2944,7 +2994,30 @@ export class PaintEngine {
       }
       if (x0 >= 0) out.push({ x: x0, y, w: this.w - x0, h: 1 });
     }
+    /* Only a mask that is actually soft is worth a byte a pixel — a hard one is
+       exactly its rects. And a selection with no pixel at 50% or more has no
+       rects for the rest of the editor to hold on to, so it stays empty. */
+    if (soft && out.length) {
+      const bounds = { x: bx0, y: by0, w: bx1 - bx0 + 1, h: by1 - by0 + 1 };
+      const alpha = new Uint8Array(bounds.w * bounds.h);
+      for (let y = 0; y < bounds.h; y++) {
+        const src = ((bounds.y + y) * this.w + bounds.x) * 4 + 3;
+        for (let x = 0; x < bounds.w; x++) alpha[y * bounds.w + x] = d[src + x * 4];
+      }
+      this.coverage.set(out, { w: this.w, h: this.h, bounds, alpha });
+    }
     return out;
+  }
+
+  /** The coverage behind a selection, if it has one that still fits the canvas. */
+  private coverageOf(rects: Rect[] | null | undefined): SelectionCoverage | null {
+    const c = rects ? this.coverage.get(rects) : undefined;
+    return c && c.w === this.w && c.h === this.h ? c : null;
+  }
+
+  /** Does this selection carry partial coverage (not just its ≥50% rects)? */
+  isSoftSelection(rects: Rect[]): boolean {
+    return !!this.coverageOf(rects);
   }
 
   /** Translate a mask's pixels by (dx,dy) for an unlinked mask move; re-derives. */
@@ -3059,17 +3132,73 @@ export class PaintEngine {
     pivot: { x: number; y: number } | null,
     feather = 0,
   ): HTMLCanvasElement {
+    const cov = this.coverageOf(rects);
+    const memo = this.softMaskMemo;
+    if (
+      cov &&
+      memo &&
+      memo.rects === rects &&
+      memo.angle === angle &&
+      memo.px === (pivot?.x ?? null) &&
+      memo.py === (pivot?.y ?? null) &&
+      memo.feather === feather &&
+      memo.refine === this.refine &&
+      memo.w === this.w &&
+      memo.h === this.h
+    ) {
+      return memo.c; // callers only ever read it or draw from it
+    }
+    const out = this.buildSelectionMask(rects, cov, angle, pivot, feather);
+    if (cov) {
+      this.softMaskMemo = {
+        rects,
+        angle,
+        px: pivot?.x ?? null,
+        py: pivot?.y ?? null,
+        feather,
+        refine: this.refine,
+        w: this.w,
+        h: this.h,
+        c: out,
+      };
+    }
+    return out;
+  }
+
+  /** The shape of a selection, unrotated: its coverage if it is soft, else its rects. */
+  private paintSelectionShape(ctx: CanvasRenderingContext2D, rects: Rect[], cov: SelectionCoverage | null) {
+    if (!cov) {
+      this.pathOf(ctx, rects, 0, null);
+      ctx.fill();
+      return;
+    }
+    const { bounds: b, alpha } = cov;
+    const img = new ImageData(b.w, b.h, { colorSpace: this.cs });
+    const d = img.data;
+    for (let i = 0; i < alpha.length; i++) {
+      const o = i * 4;
+      d[o] = d[o + 1] = d[o + 2] = 255;
+      d[o + 3] = alpha[i];
+    }
+    ctx.putImageData(img, b.x, b.y);
+  }
+
+  private buildSelectionMask(
+    rects: Rect[],
+    cov: SelectionCoverage | null,
+    angle: number,
+    pivot: { x: number; y: number } | null,
+    feather: number,
+  ): HTMLCanvasElement {
     const base = this.mk(this.w, this.h);
     base.ctx.fillStyle = "#fff";
     if (!angle) {
-      this.pathOf(base.ctx, rects, 0, null);
-      base.ctx.fill();
+      this.paintSelectionShape(base.ctx, rects, cov);
     } else {
       // Solid axis-aligned shape (abutting upright rects fill without seams)…
       const flat = this.mk(this.w, this.h);
       flat.ctx.fillStyle = "#fff";
-      this.pathOf(flat.ctx, rects, 0, null);
-      flat.ctx.fill();
+      this.paintSelectionShape(flat.ctx, rects, cov);
       // …then rotate that bitmap about the same pivot as the content.
       const c = pivot ?? this.centerOf(rects);
       base.ctx.save();
@@ -3105,7 +3234,24 @@ export class PaintEngine {
   /** Draw the current stroke buffer onto a context, clipped to the selection. */
   private drawStroke(ctx: CanvasRenderingContext2D) {
     ctx.save();
-    this.clipTo(ctx, this.clip, this.clipAngle, this.clipPivot);
+    let src: HTMLCanvasElement = this.stroke!.c;
+    if (this.clip && this.coverageOf(this.clip)) {
+      // A clip path is all-or-nothing; a soft selection masks the stroke instead.
+      // The mask is memoized, so this is two blits a frame, not a rebuild.
+      const m = this.selectionMask(this.clip, this.clipAngle, this.clipPivot);
+      let buf = this.softStrokeBuf;
+      if (!buf || buf.c.width !== this.w || buf.c.height !== this.h) {
+        buf = this.softStrokeBuf = this.mk(this.w, this.h);
+      }
+      buf.ctx.globalCompositeOperation = "copy";
+      buf.ctx.drawImage(src, 0, 0);
+      buf.ctx.globalCompositeOperation = "destination-in";
+      buf.ctx.drawImage(m, 0, 0);
+      buf.ctx.globalCompositeOperation = "source-over";
+      src = buf.c;
+    } else {
+      this.clipTo(ctx, this.clip, this.clipAngle, this.clipPivot);
+    }
     ctx.globalAlpha = this.strokeAlpha();
     // On a transparency-locked layer, paint clips to the existing opacity live via
     // source-atop so the preview matches the alpha-frozen commit (freezeAlpha).
@@ -3116,7 +3262,7 @@ export class PaintEngine {
       !!this.layerLocks.get(this.strokeLayer)?.transparency;
     ctx.globalCompositeOperation =
       transpLock && this.mode !== "erase" ? "source-atop" : this.strokeComposite();
-    ctx.drawImage(this.stroke!.c, 0, 0);
+    ctx.drawImage(src, 0, 0);
     ctx.restore();
   }
 
@@ -3129,8 +3275,11 @@ export class PaintEngine {
     let y0 = Infinity;
     let x1 = -Infinity;
     let y1 = -Infinity;
+    // Soft coverage reaches past the ≥50% rects; the pivot stays the rects'.
+    const cov = this.coverageOf(rects);
+    const extent = cov ? [cov.bounds] : rects;
     if (!angle) {
-      for (const r of rects) {
+      for (const r of extent) {
         x0 = Math.min(x0, r.x);
         y0 = Math.min(y0, r.y);
         x1 = Math.max(x1, r.x + r.w);
@@ -3140,7 +3289,7 @@ export class PaintEngine {
       const c = pivot ?? this.centerOf(rects);
       const cos = Math.cos(angle);
       const sin = Math.sin(angle);
-      for (const r of rects) {
+      for (const r of extent) {
         for (const [x, y] of [
           [r.x, r.y],
           [r.x + r.w, r.y],
@@ -3276,7 +3425,7 @@ export class PaintEngine {
     const mid = onMask ? this.maskKeyOf(layerId) : layerId; // history/derive key
     const l = onMask ? this.masks.get(mid)! : this.layer(layerId);
     const before = l.ctx.getImageData(bounds.x, bounds.y, bounds.w, bounds.h);
-    if (feather > 0) {
+    if (feather > 0 || this.coverageOf(rects)) {
       // Lay the colour down only where a feathered mask is opaque (soft edges).
       const mask = this.selectionMask(rects, angle, pivot, feather);
       const tmp = this.mk(this.w, this.h);
@@ -3496,14 +3645,24 @@ export class PaintEngine {
     l.ctx.save();
     l.ctx.globalAlpha = 1;
     l.ctx.globalCompositeOperation = "source-over";
-    if (sel && sel.length) this.clipTo(l.ctx, sel, selAngle, selPivot);
-    else {
-      l.ctx.beginPath();
-      l.ctx.rect(b.x, b.y, b.w, b.h);
-      l.ctx.clip();
+    if (sel && sel.length && this.coverageOf(sel)) {
+      // A soft selection fades the gradient in, like a feathered fill.
+      const g = this.mk(this.w, this.h);
+      g.ctx.fillStyle = buildCanvasGradient(g.ctx, type, start, end, midpoint, stops, smooth);
+      g.ctx.fillRect(b.x, b.y, b.w, b.h);
+      g.ctx.globalCompositeOperation = "destination-in";
+      g.ctx.drawImage(this.selectionMask(sel, selAngle, selPivot), 0, 0);
+      l.ctx.drawImage(g.c, 0, 0);
+    } else {
+      if (sel && sel.length) this.clipTo(l.ctx, sel, selAngle, selPivot);
+      else {
+        l.ctx.beginPath();
+        l.ctx.rect(b.x, b.y, b.w, b.h);
+        l.ctx.clip();
+      }
+      l.ctx.fillStyle = buildCanvasGradient(l.ctx, type, start, end, midpoint, stops, smooth);
+      l.ctx.fillRect(b.x, b.y, b.w, b.h);
     }
-    l.ctx.fillStyle = buildCanvasGradient(l.ctx, type, start, end, midpoint, stops, smooth);
-    l.ctx.fillRect(b.x, b.y, b.w, b.h);
     l.ctx.restore();
     const after = l.ctx.getImageData(b.x, b.y, b.w, b.h);
     if (!this.gradEntry) {
@@ -3750,7 +3909,7 @@ export class PaintEngine {
     l.ctx.save();
     l.ctx.globalAlpha = 1;
     l.ctx.globalCompositeOperation = "destination-out";
-    if (feather > 0) {
+    if (feather > 0 || this.coverageOf(rects)) {
       // The mask's (feathered) alpha removes the layer's alpha proportionally.
       l.ctx.drawImage(this.selectionMask(rects, angle, pivot, feather), 0, 0);
     } else {
@@ -4219,6 +4378,19 @@ export class PaintEngine {
     out.ctx.putImageData(before, 0, 0); // original everywhere
     const tmp = this.mk(this.w, this.h);
     tmp.ctx.putImageData(res, 0, 0);
+    if (this.coverageOf(this.adjSel)) {
+      // Soft selection: before·(1−m) + after·m — a true lerp, so a partly
+      // transparent pixel blends as well as an opaque one does.
+      const m = this.selectionMask(this.adjSel, this.adjSelAngle, this.adjSelPivot);
+      tmp.ctx.globalCompositeOperation = "destination-in";
+      tmp.ctx.drawImage(m, 0, 0);
+      out.ctx.globalCompositeOperation = "destination-out";
+      out.ctx.drawImage(m, 0, 0);
+      out.ctx.globalCompositeOperation = "lighter";
+      out.ctx.drawImage(tmp.c, 0, 0);
+      out.ctx.globalCompositeOperation = "source-over";
+      return out.ctx.getImageData(0, 0, this.w, this.h);
+    }
     out.ctx.save();
     this.clipTo(out.ctx, this.adjSel, this.adjSelAngle, this.adjSelPivot);
     out.ctx.clearRect(0, 0, this.w, this.h); // clear the selection region only
@@ -6012,7 +6184,19 @@ export class PaintEngine {
     this.moveOrig = this.mk(this.w, this.h, true);
     this.moveOrig.ctx.drawImage(l.c, 0, 0);
     this.moveFloat = this.mk(this.w, this.h);
-    if (rects && rects.length) {
+    if (rects && rects.length && this.coverageOf(rects)) {
+      // Soft lift: the float takes each pixel in proportion to its coverage,
+      // and exactly the rest stays behind.
+      this.moveSrc = this.boundsOf(rects);
+      const m = this.selectionMask(rects, 0, null);
+      this.moveFloat.ctx.drawImage(l.c, 0, 0);
+      this.moveFloat.ctx.globalCompositeOperation = "destination-in";
+      this.moveFloat.ctx.drawImage(m, 0, 0);
+      this.moveFloat.ctx.globalCompositeOperation = "source-over";
+      l.ctx.globalCompositeOperation = "destination-out";
+      l.ctx.drawImage(m, 0, 0);
+      l.ctx.globalCompositeOperation = "source-over";
+    } else if (rects && rects.length) {
       this.moveSrc = this.boundsOf(rects);
       this.moveFloat.ctx.save();
       this.clipTo(this.moveFloat.ctx, rects);
@@ -6478,6 +6662,14 @@ export class PaintEngine {
     const octx = out.getContext("2d");
     if (!octx) return null;
     checkAllocation(octx, bounds.w, bounds.h);
+    if (rects && rects.length && this.coverageOf(rects)) {
+      // A soft selection copies each pixel at its coverage.
+      octx.drawImage(this.view, -bounds.x, -bounds.y);
+      octx.globalCompositeOperation = "destination-in";
+      octx.drawImage(this.selectionMask(rects, angle, pivot), -bounds.x, -bounds.y);
+      octx.globalCompositeOperation = "source-over";
+      return { canvas: out, x: bounds.x, y: bounds.y };
+    }
     if (rects && rects.length) {
       octx.save();
       octx.translate(-bounds.x, -bounds.y); // clip + draw in document coordinates

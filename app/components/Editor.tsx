@@ -2268,8 +2268,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       const d = activeDocRef.current;
       const rects = eng.quickMaskRects();
       const covered = rects.reduce((n, r) => n + r.w * r.h, 0);
+      // Fully covered = no selection — unless it is soft, where the rects only
+      // say "at least 50%" and the partial pixels are the point.
       const after: SelState =
-        covered >= d.width * d.height ? { rects: [], angle: 0, pivot: null } : { rects, angle: 0, pivot: null };
+        covered >= d.width * d.height && !eng.isSoftSelection(rects)
+          ? { rects: [], angle: 0, pivot: null }
+          : { rects, angle: 0, pivot: null };
       eng.setQuickMask(null);
       markQuickMask(docId, false);
       setSelState(docId, after);

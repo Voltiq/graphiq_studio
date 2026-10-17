@@ -4808,6 +4808,7 @@ export default function CanvasArea({
       applyMaskToLayer: (id) => engine.applyMaskToLayer(id),
       offsetMask: (id, dx, dy) => engine.offsetMask(id, dx, dy),
       maskSelectionRects: (id) => engine.maskSelectionRects(id),
+      isSoftSelection: (rects) => engine.isSoftSelection(rects),
       maskPreviewURL: (id, maxW) => engine.maskPreviewURL(id, maxW),
       layerContentBounds: (id) => engine.layerContentBounds(id),
       offsetLayerPixels: (id, dx, dy, alsoMask) => engine.offsetLayerPixels(id, dx, dy, alsoMask),
