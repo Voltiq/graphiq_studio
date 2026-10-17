@@ -345,12 +345,6 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
-      - name: Every dialog is a usable full-screen sheet on a phone
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:dialogsheets -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
       - name: Dialog previews and rails fit a phone
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:dialoginternals -- --url http://localhost:3000

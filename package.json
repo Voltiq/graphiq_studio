@@ -50,7 +50,6 @@
     "test:tour": "node tools/verify-tour.js",
     "test:share": "node tools/verify-share.js",
     "test:tablet": "node tools/verify-tablet.js",
-    "test:dialogsheets": "node tools/verify-dialog-sheets.js",
     "test:dialoginternals": "node tools/verify-dialog-internals.js",
     "test:dialogzoom": "node tools/verify-dialog-zoom.js",
     "test:keyboard": "node tools/verify-keyboard.js",

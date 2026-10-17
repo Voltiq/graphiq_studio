@@ -326,6 +326,11 @@ test("live frame: the region-patched filter frame matches a full-res frame", asy
     return { px, pre, hits: s1.liveRegionHits - s0.liveRegionHits, rpx: s1.liveRegionPx - s0.liveRegionPx };
   };
   const liveLeg = async (name: string, fy: number, expectRegion = true) => {
+    // Does the worker's settled product match an inline render right now?
+    const ab = await page.evaluate(() => {
+      const r = (window.__gqRenderCache as unknown as { filterAB(): { differing: number; worst: number; quality: string } | null }).filterAB();
+      return r ? `${r.differing} bytes, worst Δ${r.worst}, ${r.quality}` : "no settled product";
+    });
     const on = await liveArm(true, fy);
     const off = await liveArm(false, fy);
     expect(on.px && off.px, `${name}: the document canvas was found`).toBeTruthy();
@@ -341,12 +346,21 @@ test("live frame: the region-patched filter frame matches a full-res frame", asy
     let outN = 0;
     let outWorst = 0;
     let painted = 0;
+    /* Diagnostics, reported in the failure message — CI annotations are public
+       where its logs are not, and this leg fails on Linux only:
+       - preDiff: did the two arms START from the same frame? (If not, the undo
+         between them did not restore the pixels — a different bug entirely.)
+       - box: where the seeded differences are (along the stroke, or everywhere).
+       - ab: worker product vs inline render, compared directly. */
+    let preDiff = 0;
+    let bx = [LW, LH, -1, -1];
     for (let i = 0; i < on.px!.length; i++) {
       const pix = i >> 2;
       const x = pix % LW;
       const y = (pix - x) / LW;
       const band = x >= bx0 && x < bx1 && y >= by0 && y < by1;
       if (band && on.pre && on.pre[i] !== on.px![i]) painted++;
+      if (on.pre && off.pre && on.pre[i] !== off.pre[i]) preDiff++;
       const d = Math.abs(on.px![i] - off.px![i]);
       if (!d) continue;
       if (band) {
@@ -355,12 +369,15 @@ test("live frame: the region-patched filter frame matches a full-res frame", asy
       } else {
         outN++;
         if (d > outWorst) outWorst = d;
+        bx = [Math.min(bx[0], x), Math.min(bx[1], y), Math.max(bx[2], x), Math.max(bx[3], y)];
       }
     }
-    expect.soft(inN, `${name}: PATCHED pixels byte-identical to the full-res frame (worst Δ ${inWorst})`).toBe(0);
+    const where = bx[2] < 0 ? "none" : `x ${bx[0]}–${bx[2]}, y ${bx[1]}–${bx[3]} of ${LW}×${LH}`;
+    const diag = `preDiff ${preDiff} bytes; seeded diffs: ${where} (stroke row y≈${Math.round(LH * fy)}); filterAB ${ab}`;
+    expect.soft(inN, `${name}: PATCHED pixels byte-identical to the full-res frame (worst Δ ${inWorst}) — ${diag}`).toBe(0);
     // "Identical" over a band the stroke never reached would prove nothing.
     expect.soft(painted, `${name}: the band is pixels the stroke actually repainted`).toBeGreaterThan(500);
-    expect.soft(outN, `${name}: SEEDED pixels byte-identical too (worst Δ ${outWorst})`).toBe(0);
+    expect.soft(outN, `${name}: SEEDED pixels byte-identical too (worst Δ ${outWorst}) — ${diag}`).toBe(0);
     if (expectRegion) {
       expect.soft(on.hits > 0 && on.rpx > 0 && off.hits === 0,
         `…and the live region path ran for ${name} (on +${on.hits} / ${on.rpx} px, off +${off.hits})`).toBe(true);

@@ -42,7 +42,7 @@ export class App {
     await this.settle(600);
   }
 
-  async boot(): Promise<void> {
+  async boot(opts: { keepStartCard?: boolean } = {}): Promise<void> {
     const { page } = this;
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.waitForSelector('[data-tour="canvas"]', { timeout: 60_000 });
@@ -56,6 +56,10 @@ export class App {
       await page.waitForSelector('div[aria-label="Interactive tour"]', { state: "detached", timeout: 5_000 });
     }
     await page.addStyleTag({ content: "nextjs-portal{display:none!important}" });
+    /* A fresh phone opens on the start card, which covers the canvas. Start
+       blank, as a user would — unless the spec is about the card itself. */
+    const blank = page.locator('[data-start="blank"]');
+    if (!opts.keepStartCard && (await blank.count())) await blank.first().click();
     await this.settle(600);
   }
 
@@ -212,14 +216,20 @@ export class App {
   }
 }
 
-export const test = base.extend<{ app: App }>({
+export const test = base.extend<{ app: App; keepStartCard: boolean }>({
+  /** `test.use({ keepStartCard: true })` for a spec about the phone's start card. */
+  keepStartCard: [false, { option: true }],
   // `provide` is Playwright's `use` — renamed, or the React-hooks lint takes it for a hook.
-  app: async ({ page }, provide) => {
+  app: async ({ page, keepStartCard }, provide) => {
     const app = new App(page);
-    await app.boot();
+    await app.boot({ keepStartCard });
     await provide(app);
     expect(app.errors, "page errors during the test").toEqual([]);
   },
 });
+
+/** Device profiles for `test.use(...)`: the ones the mobile rails are written against. */
+export const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true };
+export const SHORT_PHONE = { viewport: { width: 375, height: 667 }, hasTouch: true, isMobile: true };
 
 export { expect };

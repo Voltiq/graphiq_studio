@@ -145,7 +145,7 @@ const faultsOf = (m) => {
        already expanded one the first click closes that instead — this walk lost
        exactly one of thirty-two combinations to it, and the symptom was "Export
        will not open at Compact scale on a phone", which was never true. The
-       same fix as `verify-dialog-sheets.js`, for the same reason. */
+       same fix as `e2e/dialog-sheets.spec.ts`, for the same reason. */
     const clickMenu = async () => {
       await page
         .locator("[data-menubar] > div > button", { hasText: new RegExp(`^${menu}$`) })

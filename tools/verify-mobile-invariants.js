@@ -4,7 +4,7 @@
  * nothing". Nothing here screenshots. Five rails already assert most of these
  * geometrically — `verify-hit-targets` (23 checks), `verify-touch-targets` (8),
  * `verify-safe-area` (42, with real CDP notch insets), `verify-viewport` (17)
- * and `verify-dialog-sheets` (14) — 104 checks, all green before this file
+ * and `e2e/dialog-sheets.spec.ts` (14) — 104 checks, all green before this file
  * existed. So this rail is NOT a rewrite of them, and duplicating them would be
  * worse than useless: it states the five invariants in one place, on the full
  * device profile the others mostly do not use, and in the states they do not
@@ -17,7 +17,7 @@
  *      accepts touch. Everything here runs on `DEVICES.phone` from
  *      tools/mobile.js: dpr 3, isMobile, an iPhone user agent.
  *
- *   2. HIT-TESTED, NOT MEASURED. `verify-dialog-sheets` walks all 54 dialogs and
+ *   2. HIT-TESTED, NOT MEASURED. `e2e/dialog-sheets.spec.ts` walks all 54 dialogs and
  *      checks their footers are inside the visible area — then drives them with
  *      `element.click()`, which reaches a button that is completely covered.
  *      `verify-viewport` does hit-test a primary button with `elementFromPoint`,
@@ -71,7 +71,7 @@ const SWEEP = (floor) => {
     const cs = getComputedStyle(el);
     if (cs.visibility === "hidden" || cs.display === "none" || +cs.opacity === 0) continue;
     /* ON SCREEN MEANS ITS CENTRE IS, not that its box grazes the edge. Dialogs
-       taller than the phone scroll their contents — `verify-dialog-sheets`
+       taller than the phone scroll their contents — `e2e/dialog-sheets.spec.ts`
        asserts exactly that — so a control straddling the fold is reached by
        scrolling and is not a layout fault. Measured while getting this wrong:
        the Warp and Liquify dialogs put controls at y=841, 917 and 1001 in an

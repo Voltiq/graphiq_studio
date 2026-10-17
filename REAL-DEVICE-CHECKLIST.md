@@ -147,4 +147,4 @@ were controls no finger could reach — but assistive tech is its own stack.
 `visualViewport.height`, no control under a simulated notch, and every dialog's
 primary button touchable where it sits. Behind it sit `verify-hit-targets`,
 `verify-touch-targets`, `verify-safe-area`, `verify-viewport` and
-`verify-dialog-sheets` — 104 further checks.
+`e2e/dialog-sheets.spec.ts` — 104 further checks.
