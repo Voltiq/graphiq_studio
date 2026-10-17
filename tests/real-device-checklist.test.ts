@@ -20,7 +20,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const DOC = "REAL-DEVICE-CHECKLIST.md";
-const text = readFileSync(resolve(process.cwd(), DOC), "utf8");
+/* CRLF → LF: a Windows clone (core.autocrlf) checks the file out with CRLF, and
+   the paragraph-end match below is "\n\n" — without this it reads past the
+   `Covers:` paragraph into prose and trips over filenames mentioned there. */
+const text = readFileSync(resolve(process.cwd(), DOC), "utf8").replace(/\r\n/g, "\n");
 
 /** Each numbered section, with the prose that follows it up to the next one. */
 const sections = text

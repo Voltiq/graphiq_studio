@@ -29,6 +29,11 @@
 # baseline, and on a runner it always would be. Performance is tracked locally,
 # in one sitting, with interleaved arms.
 #
+# EVERY HARNESS RUNS, even after one fails (`!cancelled()` + the dev server
+# having come up), so one run reports every broken rail rather than the first.
+# `tests/ci-workflow.test.ts` parses this file under `npm run check`: from
+# 2026-08-25 to 2026-10-16 it did not parse, and no check ran at all.
+#
 # LINT gates on warnings too: `npm run lint` is `eslint --max-warnings 0`, and the
 # tree is clean of both. That is only worth doing once the count is zero — a gate
 # that is red on arrival teaches everyone to ignore it — which is why it arrived
@@ -88,6 +93,7 @@ jobs:
           google-chrome-stable --version || google-chrome --version
 
       - name: Start the dev server
+        id: server
         run: |
           npm run dev > dev-server.log 2>&1 &
           echo "waiting for the dev server..."
@@ -105,282 +111,363 @@ jobs:
       # Each harness exits non-zero on failure and prints its own PASS/FAIL lines.
       # They are separate steps so the summary names which one broke.
       - name: Smoke (31 checks)
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run smoke -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Pixel identity — cached render == uncached render
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:pixel -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Golden layer effects
+        id: goldens
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:fx -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
+      # The goldens are recorded on the software rasterizer, which is what this
+      # runner has — but Windows-recorded and Linux-rendered have never been
+      # compared directly. If they disagree, record what Linux produced and keep
+      # it, so the difference can be inspected (and committed, if it is only
+      # rasterizer rounding) without needing a Linux machine.
+      - name: Record this runner's goldens for inspection
+        if: ${{ !cancelled() && steps.goldens.outcome == 'failure' }}
+        run: node tools/golden-effects.js --update --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+          GQ_GOLDEN_DIR: ci-golden
+      - name: Upload this runner's goldens
+        if: ${{ !cancelled() && steps.goldens.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-effects-${{ runner.os }}
+          path: ci-golden
       - name: Region-scoped rendering is byte-identical
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:region -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Smart-filter worker agrees with the inline path
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:blend -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: React state sync (render-time adjusts, dock handle)
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:react -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Projects reopen byte-identically in any colour space
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:colorspace -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Tabbed panel groups
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:panels -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Print layout
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:print -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Safe-area insets reach the layout
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:safearea -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: The shell fills the visible viewport
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:viewport -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Each device gets the right shell
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:breakpoint -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: The browser's own gestures stay out of the way
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:gestures -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Work survives the tab going away
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:autosave -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Back closes what is in front, not the app
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:back -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Edge strips stand aside for the canvas
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:edge -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Latched modifiers reach the canvas
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:modifiers -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: A session can be finished or cancelled by touch
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:commit -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Layers reorder by touch, and still by mouse
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:reorder -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Pan mode takes the drag without taking the tool
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:pan -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: A pinch abandons the gesture it interrupts
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:pinch -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Sliders and colour strips are finger-sized
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:targets -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Every control is a 44px hit target on touch
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:hittargets -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: On-canvas handles are catchable by a finger
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:grab -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: The loupe shows the pixels a finger is covering
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:loupe -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: A point placed by tap can be dragged before it counts
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:twostage -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: The clone source can be seen and moved with a finger
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:clonesrc -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Hover-only affordances are reachable without a hover
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:hoveronly -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: The phone opens on a photo-first start card
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:startcard -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Recent pictures are remembered, listed and re-openable
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:recents -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: The tools drawer is a labelled sheet on touch
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:toolsheet -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Every tool's options fit, in a sheet rather than a scrolling bar
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:optionsheet -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: Nothing in the panels drawer is out of reach
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:dockreach -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: The panels are a bottom sheet with three detents
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:panelsheet -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
       - name: One panel open at a time, and the sheet grows to fit it
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:accordion -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: No panel is stranded outside the phone's one dock
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:stranded -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: The command palette is the phone's primary menu
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:palette -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: The phone's chrome, and the readouts it used to drop
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:chrome -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Every tour spotlight lands on chrome that exists
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:tour -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Export reaches the OS share sheet, and falls back intact
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:share -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: The tablet tier — persistent rail, collapsible dock, touch targets
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:tablet -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Every dialog is a usable full-screen sheet on a phone
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:dialogsheets -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Dialog previews and rails fit a phone
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:dialoginternals -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Dialogs stay on screen at every interface scale
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:dialogzoom -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: The software keyboard moves the bar and the focused field
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:keyboard -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: A text session can be finished and abandoned by touch
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:textsession -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Dialogs do not summon the keyboard, and numeric fields get a keypad
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:kbfields -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: The app is installable, with icons a launcher will not letterbox
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:manifest -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: The iOS home-screen tags, and the notch they make real
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:ioswebapp -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: '"More space" offers only what the platform can actually do'
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:morespace -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Installable with no service worker, and the decision behind that
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:installable -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Documents too big for the browser are refused, not opened blank
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:ceiling -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Running out of canvas memory is reported, not composited blank
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:canvasmem -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: An open document holds only the buffers it actually needs
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:memfloor -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Performance budgets follow the device, not the desktop
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:budgets -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: The overlay loop stops animating when nobody is looking
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:ants -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: The mobile shell, on a real device profile (self-testing)
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:mobile -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: The five mobile invariants, on a real device profile
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:invariants -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: A committed bucket fill keeps its colour
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:bucket -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Gradient text exports as a gradient, not a flat colour
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:svggrad -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Type set along a path, and taken off it
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:textpath -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: The pattern library, its picker, and a pattern fill
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:patterns -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: Every tab has its own undo history
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:dochistory -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome

@@ -47,7 +47,38 @@ const URL = (() => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : "http://localhost:3000";
 })();
 
-const BASELINE = join(__dirname, "golden", "effects.json");
+/* GQ_GOLDEN_DIR exists for experiments (record a scratch baseline on one
+   rasterizer, compare on another) without touching the committed one. */
+const GOLDEN_DIR = process.env.GQ_GOLDEN_DIR || join(__dirname, "golden");
+const BASELINE = join(GOLDEN_DIR, "effects.json");
+const PNG_DIR = join(GOLDEN_DIR, "effects");
+const pngPath = (key) => join(PNG_DIR, key.replace(/^fx\//, "").replace(/[^\w-]+/g, "-") + ".png");
+
+/* WHY THE SOFTWARE RASTERIZER, AND NOT A TOLERANCE.
+ *
+ * Effects composite through canvas (tint, destination-in, blend modes) with
+ * fractional alpha, and the GPU and software rasterizers round premultiplied
+ * values differently. The goldens were recorded on a GPU; CI is headless with
+ * no GPU. So on the first CI run in seven weeks (the workflow file had not
+ * parsed since 2026-08-25) Bevel, Inner Shadow, Inner Glow and all-eight failed
+ * on rounding alone. Measured, GPU vs software, same machine:
+ *
+ *   single inner effects   max Δ1, on ~6% of pixels
+ *   all-eight              max Δ5 (Δ1 5569 · Δ2 783 · Δ3-4 12 · Δ5-8 2 px)
+ *
+ * A tolerance was the obvious fix and measuring the mutations killed it: the
+ * gradient-angle +0.5% mutation (one of the four below) is ONLY Δ1, on 12% of
+ * pixels — the same signature as the noise, so any threshold that forgives
+ * the rasterizer forgives that regression too. The other three are loud
+ * (shadow +1px: max Δ9 / Δ127 in all-eight; blurs ×1.4: max Δ20 and Δ255).
+ *
+ * So the noise is removed at its source instead: this harness always renders
+ * on the software rasterizer (--disable-gpu), which is what CI has anyway. It
+ * is deterministic run to run and identical between Chrome and Edge, and the
+ * goldens stop depending on whichever GPU and driver recorded them. Hashes
+ * stay exact, so the Δ1 mutation is still caught. On a failure the stored PNG
+ * is diffed per pixel to say how far it moved. */
+const LAUNCH = { args: ["--disable-gpu"] };
 const DOC_W = 320;
 const DOC_H = 200;
 /** Order matches FX_ORDER in effects.ts (render stack, top → bottom). */
@@ -63,7 +94,7 @@ const EFFECTS = [
 ];
 
 (async () => {
-  const browser = await launchBrowser();
+  const browser = await launchBrowser(LAUNCH);
   const page = await (await browser.newContext({ viewport: { width: 1500, height: 950 } })).newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -133,12 +164,44 @@ const EFFECTS = [
         if (d[i + 3] > 0) ink++;
       }
       const n = d.length / 4;
+      let bin = "";
+      for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
       return {
         hash: (a >>> 0).toString(36) + "." + (b >>> 0).toString(36),
         mean: sum.map((s) => Math.round((s / n) * 100) / 100),
         ink,
+        png: btoa(bin),
       };
     });
+  /** Per-pixel distance between two PNGs (base64), decoded the same way. */
+  const diff = (gotB64, wantB64) =>
+    page.evaluate(async ([g, w]) => {
+      const decode = async (b64) => {
+        const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+        const bmp = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+        const c = new OffscreenCanvas(bmp.width, bmp.height);
+        const ctx = c.getContext("2d");
+        ctx.drawImage(bmp, 0, 0);
+        return ctx.getImageData(0, 0, bmp.width, bmp.height);
+      };
+      const [A, B] = await Promise.all([decode(g), decode(w)]);
+      if (A.width !== B.width || A.height !== B.height) return { size: false };
+      let max = 0;
+      let off = 0;
+      // Pixels by their worst channel's distance: 1, 2, 3–4, 5–8, 9–16, 17+.
+      const hist = [0, 0, 0, 0, 0, 0];
+      const bucket = (m) => (m === 1 ? 0 : m === 2 ? 1 : m <= 4 ? 2 : m <= 8 ? 3 : m <= 16 ? 4 : 5);
+      for (let i = 0; i < A.data.length; i += 4) {
+        let m = 0;
+        for (let k = 0; k < 4; k++) m = Math.max(m, Math.abs(A.data[i + k] - B.data[i + k]));
+        if (m) {
+          off++;
+          hist[bucket(m)]++;
+        }
+        if (m > max) max = m;
+      }
+      return { size: true, max, off, hist, total: A.data.length / 4 };
+    }, [gotB64, wantB64]);
 
   // ---- the fixture ----------------------------------------------------------
   await menu("File", "New…");
@@ -198,30 +261,41 @@ const EFFECTS = [
       await page.waitForTimeout(500);
     }
   };
-  const check = (key, got, note) => {
-    produced[key] = got;
+  const check = async (key, got, note) => {
+    const { png, ...summary } = got;
+    produced[key] = summary;
     if (UPDATE) {
+      mkdirSync(PNG_DIR, { recursive: true });
+      writeFileSync(pngPath(key), Buffer.from(png, "base64"));
       console.log(`rec   ${key}  ${got.hash}  ${note}`);
       return;
     }
     const want = recorded[key];
-    if (!want) {
+    if (!want || !existsSync(pngPath(key))) {
       fail++;
       console.log(`FAIL  ${key} — no golden recorded (re-run with --update)`);
       return;
     }
-    const ok = want.hash === got.hash;
-    ok ? pass++ : fail++;
+    if (want.hash === got.hash) {
+      pass++;
+      console.log(`PASS  ${key}  ${got.hash}  ${note}`);
+      return;
+    }
+    fail++;
+    const d = await diff(png, readFileSync(pngPath(key)).toString("base64"));
+    const dist = d.size
+      ? `max Δ ${d.max}, ${d.off} of ${d.total} px differ (${((100 * d.off) / d.total).toFixed(2)}%)` +
+        ` [Δ1 ${d.hist[0]} · Δ2 ${d.hist[1]} · Δ3-4 ${d.hist[2]} · Δ5-8 ${d.hist[3]} · Δ9-16 ${d.hist[4]} · Δ17+ ${d.hist[5]}]`
+      : "SIZE CHANGED";
     console.log(
-      `${ok ? "PASS" : "FAIL"}  ${key}  ${got.hash}  ${note}` +
-        (ok
-          ? ""
-          : `\n        was  ${want.hash}  mean ${want.mean.join(", ")}  ink ${want.ink}` +
-            `\n        now  ${got.hash}  mean ${got.mean.join(", ")}  ink ${got.ink}`),
+      `FAIL  ${key}  ${got.hash}  ${note}` +
+        `\n        was  ${want.hash}  mean ${want.mean.join(", ")}  ink ${want.ink}` +
+        `\n        now  ${got.hash}  mean ${got.mean.join(", ")}  ink ${got.ink}` +
+        `\n        ${dist}`,
     );
   };
 
-  check("fixture/bare", bare, `${bare.ink}px`);
+  await check("fixture/bare", bare, `${bare.ink}px`);
 
   for (const label of EFFECTS) {
     await run("fx-open");
@@ -230,7 +304,7 @@ const EFFECTS = [
     const got = await shoot();
     // An effect that rendered nothing would match its own golden for ever.
     const moved = got.hash !== bare.hash;
-    check(`fx/${label}`, got, moved ? `${got.ink}px` : "!! IDENTICAL TO THE BARE LAYER — not applied");
+    await check(`fx/${label}`, got, moved ? `${got.ink}px` : "!! IDENTICAL TO THE BARE LAYER — not applied");
     if (!moved && !UPDATE) fail++;
     if (!moved) console.log(`        (${label} changed nothing — the toggle did not take)`);
     await run("fx-open");
@@ -242,7 +316,7 @@ const EFFECTS = [
   for (const label of EFFECTS) await toggle(label, true);
   await closeDialogs();
   const all = await shoot();
-  check("fx/all-eight", all, `${all.ink}px`);
+  await check("fx/all-eight", all, `${all.ink}px`);
 
   if (UPDATE) {
     mkdirSync(dirname(BASELINE), { recursive: true });

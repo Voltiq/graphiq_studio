@@ -10,11 +10,11 @@
   "ink": 18000
  },
  "fx/Bevel & Emboss": {
-  "hash": "1rly7l6.1bgf7kz",
+  "hash": "93g61b.1lssqm4",
   "mean": [
-   16.99,
-   44.67,
-   70.47,
+   17.03,
+   44.66,
+   70.45,
    71.72
   ],
   "ink": 18000
@@ -50,20 +50,20 @@
   "ink": 18000
  },
  "fx/Inner Glow": {
-  "hash": "1tbux2f.1qds2ou",
+  "hash": "srrrwj.1t5wtmc",
   "mean": [
-   19.89,
-   46.64,
+   19.93,
+   46.67,
    71.72,
    71.72
   ],
   "ink": 18000
  },
  "fx/Inner Shadow": {
-  "hash": "t7ouc6.u8z3oh",
+  "hash": "1u26cu6.sjnlff",
   "mean": [
-   15.48,
-   42.69,
+   15.51,
+   42.67,
    68.01,
    71.72
   ],
@@ -90,11 +90,11 @@
   "ink": 18744
  },
  "fx/all-eight": {
-  "hash": "17sze5m.1nkirb7",
+  "hash": "1sqmdbd.7eizvm",
   "mean": [
-   73.05,
-   70.01,
-   58.81,
+   73.08,
+   70.05,
+   58.83,
    81.84
   ],
   "ink": 33280
