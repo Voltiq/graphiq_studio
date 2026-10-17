@@ -153,11 +153,6 @@ jobs:
         with:
           name: golden-effects-${{ runner.os }}
           path: ci-golden
-      - name: Region-scoped rendering is byte-identical
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:region -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
       - name: Smart-filter worker agrees with the inline path
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:blend -- --url http://localhost:3000

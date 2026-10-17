@@ -39,7 +39,7 @@
  * Companion tools that ATTRIBUTE cost rather than gate it:
  *   tools/bench-blur.js       kernel size vs fixed setup (C vs D)
  *   tools/bench-selection.js  wand flood+trace vs combineSelection (C0 vs C)
- *   tools/verify-region-scope.js  byte-identity rail for region-scoped renders
+ *   e2e/region-scope.spec.ts      byte-identity rail for region-scoped renders
  */
 const { launchBrowser } = require("./lib/launch");
 

@@ -23,9 +23,23 @@ export interface Census {
 
 export class App {
   readonly errors: string[] = [];
+  /** console.error output. Recorded, not asserted by default — a spec that
+   *  promises a clean console says so (`expect(app.consoleErrors)…`). */
+  readonly consoleErrors: string[] = [];
 
   constructor(readonly page: Page) {
     page.on("pageerror", (e) => this.errors.push(String(e)));
+    page.on("console", (m) => {
+      if (m.type() === "error") this.consoleErrors.push(m.text());
+    });
+  }
+
+  /** Click through the menu bar: `menu("Layer", "New layer")`. */
+  async menu(top: string, item: string): Promise<void> {
+    await this.page.getByText(top, { exact: true }).first().click();
+    await this.settle(200);
+    await this.page.getByText(item, { exact: true }).first().click();
+    await this.settle(600);
   }
 
   async boot(): Promise<void> {

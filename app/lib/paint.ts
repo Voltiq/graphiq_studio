@@ -1470,6 +1470,10 @@ export class PaintEngine {
     liveRegionHits: number;
     liveRegionPx: number;
     liveDraftFrames: number;
+    /** Worker renders still in flight (filters, heal, blur). A harness waits for
+     *  0 before comparing pixels: a stale or draft product draws while a job is
+     *  out, and a fixed sleep cannot know how long a slow machine takes. */
+    workerJobs: number;
   } {
     let tiles = 0;
     for (const t of this.tiledAdj.values()) for (const tile of t.tiles) if (tile) tiles++;
@@ -1479,6 +1483,7 @@ export class PaintEngine {
       liveRegionHits: this.liveRegionHits,
       liveRegionPx: this.liveRegionPx,
       liveDraftFrames: this.liveDraftFrames,
+      workerJobs: this.filterPending.size + this.healPending.size + this.blurPending.size,
       enabled: this.renderCacheOn,
       entries: this.renderCache.size + this.tiledAdj.size,
       bytes: this.renderBytes,

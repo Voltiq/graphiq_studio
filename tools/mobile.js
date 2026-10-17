@@ -300,7 +300,11 @@ if (require.main === module) {
     const results = [];
     const check = (name, ok, detail = "") => {
       results.push({ name, ok: !!ok });
-      console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? "  — " + detail : ""}`);
+      /* XFAIL in the deliberately broken run: those failures are the self-test
+         working. CI turns every "FAIL" line into an annotation on the run, and
+         these two showed up there as false alarms on a passing step. */
+      const verdict = ok ? "PASS" : breakLayout ? "XFAIL" : "FAIL";
+      console.log(`${verdict}  ${name}${detail ? "  — " + detail : ""}`);
     };
 
     const context = await deviceContext(browser, DEVICES.phone);

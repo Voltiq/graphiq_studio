@@ -15,7 +15,7 @@
  * therefore INTERLEAVED, stroke by stroke, through the dev A/B toggle, and only
  * medians are compared.
  *
- * NON-VACUITY. Byte-identity is proved elsewhere (tools/verify-region-scope.js).
+ * NON-VACUITY. Byte-identity is proved elsewhere (e2e/region-scope.spec.ts).
  * What this tool has to prove is that the region arm ACTUALLY TOOK the region
  * path: liveRegionHits must move in arm A and stay put in arm B, and arm B must
  * report the draft frames arm A avoided. All three are asserted; a run that fails

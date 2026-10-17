@@ -5,7 +5,7 @@
       "severity": "error",
       "pattern": [
         {
-          "regexp": "^\\s*(?:FAIL|HARNESS FAILURE:)\\s+(.+)$",
+          "regexp": "^\\s*(?:[A-Z]+ )?FAIL(?:URE|ED)?:?\\s+(.+)$",
           "message": 1
         }
       ]
