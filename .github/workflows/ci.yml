@@ -75,7 +75,10 @@ jobs:
   browser:
     name: browser harnesses
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Measured 2026-10-17: with every rail running (not stopping at the first
+    # failure) the job reached rail 66 of 79 at 40 min and was cut off. The cure
+    # is parallel shards (TODO 2.1); until then, room for all of them.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

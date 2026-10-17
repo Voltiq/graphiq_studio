@@ -68,8 +68,30 @@ const skipTour = async (page) => {
       for (let i = 0; i < d.length; i += 4) sum = (sum + d[i] * 3 + d[i + 1] * 5 + d[i + 2] * 7 + d[i + 3] * 11) >>> 0;
       return { sum, bytes: Array.from(d.slice(0, 0)) };
     });
+  /** Wait for the composite to stop changing: no blit for 300ms AND the same
+   *  digest twice running. Fixed sleeps held on a fast machine but not on a CI
+   *  runner (reproduced at 8× CPU throttle): a worker's settled filter render
+   *  could land after the snapshot, and the diff then compared two moments, not
+   *  two render paths. */
+  const settled = async () => {
+    let prev = null;
+    for (let i = 0; i < 40; i++) {
+      await page.waitForTimeout(250);
+      const s = await page.evaluate(() => {
+        const st = window.__gqPerf && window.__gqPerf.stats();
+        const cv = document.querySelector('canvas[width="1920"]');
+        const d = cv.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, cv.width, cv.height).data;
+        let sum = 0;
+        for (let k = 0; k < d.length; k += 4) sum = (sum + d[k] * 3 + d[k + 1] * 5 + d[k + 2] * 7 + d[k + 3] * 11) >>> 0;
+        return { quiet: st ? performance.now() - st.dirtyAt > 300 : true, sum };
+      });
+      if (s.quiet && prev && prev.sum === s.sum) return;
+      prev = s;
+    }
+  };
   /** Pixel-diff the live composite against a freshly forced full recompute. */
   const diffAgainstFullRecompute = async () => {
+    await settled();
     const before = await page.evaluate(() => {
       const cv = document.querySelector('canvas[width="1920"]');
       const g = cv.getContext("2d", { willReadFrequently: true });
@@ -84,6 +106,7 @@ const skipTour = async (page) => {
     await page.waitForTimeout(500);
     await page.keyboard.press("Control+Shift+z");
     await page.waitForTimeout(900);
+    await settled();
     const diff = await page.evaluate(() => {
       const cv = document.querySelector('canvas[width="1920"]');
       const g = cv.getContext("2d", { willReadFrequently: true });

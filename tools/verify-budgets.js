@@ -67,6 +67,16 @@ const READ = () => {
 
 async function open(browser, opts, seedPrefs) {
   const context = await browser.newContext(opts);
+  /* Pin the hardware hints to a roomy machine, so this file tests the CLASSES
+     and nothing else. Left to the host, they shrink budgets on their own: a
+     GitHub runner has 4 cores, and `cores <= 4` correctly halves the live-filter
+     frame — which failed "a desktop still gets the same budgets" on CI with the
+     product doing exactly what it should. The hints have their own tests
+     (tests/budgets.test.ts), where they can be driven to any value. */
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "hardwareConcurrency", { get: () => 16, configurable: true });
+    Object.defineProperty(navigator, "deviceMemory", { get: () => 8, configurable: true });
+  });
   if (seedPrefs) {
     await context.addInitScript((p) => {
       try {
