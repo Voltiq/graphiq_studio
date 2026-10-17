@@ -266,8 +266,9 @@ For a deep, no‑code‑required explanation of exactly what exists and how it w
 | `npm run dev` | Start the development server at `localhost:3000`. |
 | `npm run build` | Production build. |
 | `npm start` | Serve the production build. |
-| `npm run check` | Type‑check with `tsc --noEmit`. |
+| `npm run check` | Generate Next's types, type‑check, and run the unit tests. |
 | `npm run lint` | Run ESLint. |
+| `npm run test:e2e` | Browser tests (Playwright Test, `e2e/`) — reuses the dev server on `:3000`, or starts one. |
 
 ---
 

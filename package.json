@@ -72,12 +72,10 @@
     "test:svggrad": "node tools/verify-svg-text-gradient.js",
     "test:textpath": "node tools/verify-text-on-path.js",
     "test:patterns": "node tools/verify-pattern-fill.js",
-    "test:dochistory": "node tools/verify-doc-history.js",
-    "test:softsel": "node tools/verify-soft-selection.js",
-    "test:tabswitch": "node tools/verify-tab-switch-commit.js",
     "icons": "node tools/build-pwa-icons.js",
     "fixtures": "node tools/build-size-fixtures.js",
     "bench:autosave": "node tools/bench-autosave.js",
+    "test:e2e": "playwright test",
     "test:watch": "vitest",
     "typecheck": "next typegen && tsc --noEmit",
     "check": "next typegen && tsc --noEmit && vitest run"
@@ -90,6 +88,7 @@
     "sass": "^1.80.4"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

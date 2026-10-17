@@ -1,0 +1,14 @@
+{
+  "problemMatcher": [
+    {
+      "owner": "rail-fail",
+      "severity": "error",
+      "pattern": [
+        {
+          "regexp": "^\\s*(?:FAIL|HARNESS FAILURE:)\\s+(.+)$",
+          "message": 1
+        }
+      ]
+    }
+  ]
+}

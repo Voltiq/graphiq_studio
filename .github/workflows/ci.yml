@@ -90,6 +90,13 @@ jobs:
       - run: npm ci
 
       # Fail here, loudly and early, rather than inside a harness timeout.
+      # Every "FAIL  <check>" / "HARNESS FAILURE: …" line a harness prints becomes
+      # an annotation on the run. Annotations are readable through the public
+      # API; raw job logs need admin rights — which is how two weeks of CI
+      # failures went undiagnosed.
+      - name: Turn harness FAIL lines into annotations
+        run: echo "::add-matcher::.github/matchers/rail-fail.json"
+
       - name: Check the browser this runner provides
         run: |
           which google-chrome-stable google-chrome || true
@@ -469,24 +476,39 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
-      - name: Every tab has its own undo history
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:dochistory -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: A soft selection stays soft
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:softsel -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Switching tabs finishes open work in the tab you leave
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:tabswitch -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
       - name: Dev server log
         if: failure()
         run: cat dev-server.log
+
+  # The rails that have moved to Playwright Test (e2e/, TODO 2.1). Sharded, so
+  # the suite's wall time divides as it grows instead of adding to the job
+  # above; each shard starts its own dev server (playwright.config.ts
+  # webServer). On a failure the HTML report and per-test traces are uploaded —
+  # a trace replays the run step by step, which raw logs cannot.
+  e2e:
+    name: e2e ${{ matrix.shard }}/2
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Playwright Test
+        run: npm run test:e2e -- --shard=${{ matrix.shard }}/2
+        env:
+          GQ_CHANNEL: chrome
+      - name: Upload report and traces
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report-${{ matrix.shard }}
+          path: |
+            playwright-report
+            test-results
