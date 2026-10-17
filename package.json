@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "2.6.0",
+  "version": "2.6.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -74,6 +74,7 @@
     "test:patterns": "node tools/verify-pattern-fill.js",
     "test:dochistory": "node tools/verify-doc-history.js",
     "test:softsel": "node tools/verify-soft-selection.js",
+    "test:tabswitch": "node tools/verify-tab-switch-commit.js",
     "icons": "node tools/build-pwa-icons.js",
     "fixtures": "node tools/build-size-fixtures.js",
     "bench:autosave": "node tools/bench-autosave.js",

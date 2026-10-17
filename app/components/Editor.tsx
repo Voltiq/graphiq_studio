@@ -1183,7 +1183,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   // Open documents. Starts with a single, unnamed canvas.
   const [docs, setDocs] = useState<Doc[]>(() => [makeDoc(1)]);
-  const [activeId, setActiveId] = useState("doc-1");
+  const [activeId, setActiveIdState] = useState("doc-1");
+  /* EVERY tab switch goes through here. Work still open in the tab being left
+     — a text edit typed into it — is committed into THAT tab first; the commit
+     targets whichever document is active, so after the switch it would be too
+     late (it used to be dropped). The engine's own sessions, a floating paste
+     included, are finished when it swaps histories (setHistoryDocument). */
+  const setActiveId = (id: string) => {
+    if (id !== activeIdRef.current) paintRef.current?.commitPendingEdits();
+    setActiveIdState(id);
+  };
   const seqRef = useRef(1);
   const layerSeqRef = useRef(0);
 
@@ -4083,6 +4092,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   const closeDoc = (id: string) => {
     if (docs.length <= 1) return; // always keep one canvas open
+    // Finish open edits while this tab's history still exists to take them.
+    if (id === activeId) paintRef.current?.commitPendingEdits();
     const idx = docs.findIndex((d) => d.id === id);
     const next = docs.filter((d) => d.id !== id);
     setDocs(next);

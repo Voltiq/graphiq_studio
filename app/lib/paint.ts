@@ -612,6 +612,9 @@ export interface EngineHandle {
   setNonLinearHistory: (on: boolean) => void;
   /** Let go of a closed document's history. */
   discardHistoryDocument: (docId: string) => void;
+  /** Finish edits that live in the canvas UI rather than the engine (a text
+   *  session) — call BEFORE the active document changes, so they land in it. */
+  commitPendingEdits: () => void;
   /** Any open document's history labels + position (for writing its file). */
   historyOf: (docId: string) => { labels: string[]; index: number } | null;
   setWorkersEnabled: (on: boolean) => void;
@@ -1635,6 +1638,9 @@ export class PaintEngine {
     this.endGradient();
     this.endPath();
     this.endFill();
+    // A pending paste / transform is committed like before any other operation;
+    // left floating, it would draw over the next tab and commit into its history.
+    if (this.isFloating) this.commitFloat();
   }
 
   /**

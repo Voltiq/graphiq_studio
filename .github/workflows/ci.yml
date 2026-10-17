@@ -478,6 +478,12 @@ jobs:
         env:
           GQ_CHANNEL: chrome
 
+      - name: Switching tabs finishes open work in the tab you leave
+        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
+        run: npm run test:tabswitch -- --url http://localhost:3000
+        env:
+          GQ_CHANNEL: chrome
+
       - name: Dev server log
         if: failure()
         run: cat dev-server.log

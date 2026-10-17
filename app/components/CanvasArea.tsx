@@ -2035,7 +2035,8 @@ export default function CanvasArea({
   useEffect(() => {
     if (tool !== "text") commitText();
   }, [tool, commitText]);
-  // Drop a pending text edit when the document changes (coords belong to it).
+  // A text edit belongs to its document. The editor commits it BEFORE switching
+  // (commitPendingEdits); this only clears anything that slipped past that.
   useEffect(() => {
     setTextSession(null);
   }, [activeId]);
@@ -4841,6 +4842,7 @@ export default function CanvasArea({
       setHistoryBudgetMB: (mb) => engine.setHistoryBudgetMB(mb),
       setNonLinearHistory: (on) => engine.setNonLinearHistory(on),
       discardHistoryDocument: (docId) => engine.discardHistoryDocument(docId),
+      commitPendingEdits: () => commitText(),
       historyOf: (docId) => engine.historyOf(docId),
       setWorkersEnabled: (on) => engine.setWorkersEnabled(on),
     };
