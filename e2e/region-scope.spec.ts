@@ -334,58 +334,65 @@ test("live frame: the region-patched filter frame matches a full-res frame", asy
     const on = await liveArm(true, fy);
     const off = await liveArm(false, fy);
     expect(on.px && off.px, `${name}: the document canvas was found`).toBeTruthy();
-    /* PATCHED = a band along the stroke inside the dirty rect (the region maths);
-       SEEDED = everything else, copied from the settled product. Kept apart
-       because they have failed for different reasons before. */
-    const bx0 = Math.round(LW * 0.32);
-    const bx1 = Math.round(LW * 0.58);
-    const by0 = Math.round(LH * fy) - 4;
-    const by1 = Math.round(LH * fy) + 4;
+    /* NEAR = the stroke's whole footprint plus a blur margin: what the region
+       path re-renders. FAR = everything else, seeded from the settled product.
+       Kept apart because they have failed for different reasons.
+
+       NEAR used to be a ±4px band down the stroke's centre line — the one place
+       a blur gives the same answer on any path (it is a solid colour there), so
+       it could not fail; the real region-render differences at the stroke's
+       soft edges were counted as "seeded" instead, which sent the diagnosis the
+       wrong way for two rounds. Stroke: x 0.25–0.65 of the width, 160px brush
+       (radius 80), plus 30px for the blur's reach. */
+    const R = 80 + 30;
+    const bx0 = Math.round(LW * 0.25) - R;
+    const bx1 = Math.round(LW * 0.65) + R;
+    const by0 = Math.round(LH * fy) - R;
+    const by1 = Math.round(LH * fy) + R;
     let inN = 0;
     let inWorst = 0;
     let outN = 0;
     let outWorst = 0;
     let painted = 0;
-    /* Diagnostics, reported in the failure message — CI annotations are public
-       where its logs are not, and this leg fails on Linux only:
+    /* Diagnostics, carried in the failure message — CI annotations are public
+       where its logs are not, and this leg once failed on Linux only. They are
+       what found that bug, so they stay:
        - preDiff: did the two arms START from the same frame? (If not, the undo
          between them did not restore the pixels — a different bug entirely.)
-       - box: where the seeded differences are (along the stroke, or everywhere).
-       - ab: worker product vs inline render, compared directly. */
+       - box: where the differences are.
+       - ab: worker product vs inline render, compared directly.
+       - samples: the first differing pixels, whole (on / off / pre RGBA). */
     let preDiff = 0;
     let bx = [LW, LH, -1, -1];
-    /* The first few differing pixels, whole: low alpha with a large RGB gap
-       would mean un-premultiplying amplified a 1-level difference; high alpha
-       with a 1-level RGB gap would mean plain rounding in a different place. */
     const samples: string[] = [];
     const rgba = (a: number[] | null, p: number) => (a ? a.slice(p * 4, p * 4 + 4).join(",") : "-");
     for (let i = 0; i < on.px!.length; i++) {
       const pix = i >> 2;
       const x = pix % LW;
       const y = (pix - x) / LW;
-      const band = x >= bx0 && x < bx1 && y >= by0 && y < by1;
-      if (band && on.pre && on.pre[i] !== on.px![i]) painted++;
+      const near = x >= bx0 && x < bx1 && y >= by0 && y < by1;
+      if (near && on.pre && on.pre[i] !== on.px![i]) painted++;
       if (on.pre && off.pre && on.pre[i] !== off.pre[i]) preDiff++;
       const d = Math.abs(on.px![i] - off.px![i]);
       if (!d) continue;
-      if (band) {
+      bx = [Math.min(bx[0], x), Math.min(bx[1], y), Math.max(bx[2], x), Math.max(bx[3], y)];
+      if (samples.length < 3 && (i & 3) === 0) {
+        samples.push(`(${x},${y}) on ${rgba(on.px, pix)} off ${rgba(off.px, pix)} pre ${rgba(on.pre, pix)}`);
+      }
+      if (near) {
         inN++;
         if (d > inWorst) inWorst = d;
       } else {
         outN++;
         if (d > outWorst) outWorst = d;
-        bx = [Math.min(bx[0], x), Math.min(bx[1], y), Math.max(bx[2], x), Math.max(bx[3], y)];
-        if (samples.length < 3 && (i & 3) === 0) {
-          samples.push(`(${x},${y}) on ${rgba(on.px, pix)} off ${rgba(off.px, pix)} pre ${rgba(on.pre, pix)}`);
-        }
       }
     }
     const where = bx[2] < 0 ? "none" : `x ${bx[0]}–${bx[2]}, y ${bx[1]}–${bx[3]} of ${LW}×${LH}`;
-    const diag = `preDiff ${preDiff} bytes; seeded diffs: ${where} (stroke row y≈${Math.round(LH * fy)}); filterAB ${ab}; samples ${samples.join(" | ") || "none"}`;
-    expect.soft(inN, `${name}: PATCHED pixels byte-identical to the full-res frame (worst Δ ${inWorst}) — ${diag}`).toBe(0);
-    // "Identical" over a band the stroke never reached would prove nothing.
-    expect.soft(painted, `${name}: the band is pixels the stroke actually repainted`).toBeGreaterThan(500);
-    expect.soft(outN, `${name}: SEEDED pixels byte-identical too (worst Δ ${outWorst}) — ${diag}`).toBe(0);
+    const diag = `preDiff ${preDiff} bytes; diffs at ${where} (stroke row y≈${Math.round(LH * fy)}); filterAB ${ab}; samples ${samples.join(" | ") || "none"}`;
+    expect.soft(inN, `${name}: near the stroke (region-rendered) byte-identical to the full-res frame (worst Δ ${inWorst}) — ${diag}`).toBe(0);
+    // "Identical" over pixels the stroke never reached would prove nothing.
+    expect.soft(painted, `${name}: the near region is pixels the stroke actually repainted`).toBeGreaterThan(500);
+    expect.soft(outN, `${name}: away from the stroke (seeded) byte-identical too (worst Δ ${outWorst}) — ${diag}`).toBe(0);
     if (expectRegion) {
       expect.soft(on.hits > 0 && on.rpx > 0 && off.hits === 0,
         `…and the live region path ran for ${name} (on +${on.hits} / ${on.rpx} px, off +${off.hits})`).toBe(true);

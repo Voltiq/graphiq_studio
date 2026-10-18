@@ -1041,10 +1041,6 @@ export class PaintEngine {
   /** Per-stroke full-resolution filter product: a copy of the settled one, with
    *  the stroke's own region re-filtered into it each frame. */
   private liveProduct: (Layer & { id: string; key: string }) | null = null;
-  /** Reusable region-sized scratch (source, filter mask). They grow with the
-   *  stroke every frame, so allocating per frame would cost more than the filter
-   *  does — the lesson from alphaMask. */
-  private regionBufs: (Layer | undefined)[] = [];
   private renderTick = 0; // LRU clock
   private renderBytes = 0; // owned bytes currently cached
   private renderBudget = 256 * 1024 * 1024; // LRU eviction beyond this (Preferences ▸ Performance)
@@ -5353,11 +5349,9 @@ export class PaintEngine {
     const out = this.mk(this.w, this.h, true);
     out.ctx.drawImage(src, 0, 0);
     const cur = this.filterStack(
-      out,
+      out.ctx.getImageData(0, 0, this.w, this.h),
       filters,
       fmAlpha ? () => fmAlpha.getContext("2d")!.getImageData(0, 0, this.w, this.h).data : null,
-      this.w,
-      this.h,
     );
     out.ctx.putImageData(cur, 0, 0);
     return out.c;
@@ -5377,13 +5371,11 @@ export class PaintEngine {
    * that two copies of it would eventually disagree.
    */
   private filterStack(
-    buf: Layer,
+    input: ImageData,
     filters: SmartFilter[],
     fm: (() => Uint8ClampedArray) | null,
-    w: number,
-    h: number,
   ): ImageData {
-    let cur = buf.ctx.getImageData(0, 0, w, h);
+    let cur = input;
     const base = fm ? cur : null; // pristine pixels; never mutated by the loop below
     for (const f of filters) {
       if (!f.enabled) continue;
@@ -10043,51 +10035,27 @@ export class PaintEngine {
       prod.key = key;
     }
 
-    const sub = this.regionBuf(0, inn.w, inn.h, true);
-    sub.ctx.drawImage(src, inn.x, inn.y, inn.w, inn.h, 0, 0, inn.w, inn.h);
+    /* Pixels in and out by getImageData / putImageData — exactly as the full
+       pass reads and writes them, so the two agree by construction, on any
+       rasterizer. This used to copy sub-rects through canvases (drawImage with a
+       source rect, in and out, and the filter mask likewise), which the full
+       pass never does. Windows reproduced the full pass to the byte that way;
+       Linux's software raster did not: 1-level rounding on opaque pixels over
+       the stroke's blur footprint, and Δ79 through a painted filter mask —
+       found only once CI could say which pixels and what values. */
     const fmFull = this.filterMaskAlpha(node);
-    let fmBuf: Layer | null = null;
-    if (fmFull) {
-      fmBuf = this.regionBuf(1, inn.w, inn.h, true);
-      fmBuf.ctx.drawImage(fmFull, inn.x, inn.y, inn.w, inn.h, 0, 0, inn.w, inn.h);
-    }
     const cur = this.filterStack(
-      sub,
+      (src.getContext("2d") as CanvasRenderingContext2D).getImageData(inn.x, inn.y, inn.w, inn.h),
       node.filters!,
-      fmBuf ? () => fmBuf!.ctx.getImageData(0, 0, inn.w, inn.h).data : null,
-      inn.w,
-      inn.h,
+      fmFull ? () => fmFull.getContext("2d")!.getImageData(inn.x, inn.y, inn.w, inn.h).data : null,
     );
-    sub.ctx.putImageData(cur, 0, 0);
 
-    // REPLACE, never blend: the region carries its own alpha.
-    prod.ctx.globalAlpha = 1;
-    prod.ctx.globalCompositeOperation = "source-over";
-    prod.ctx.clearRect(out.x, out.y, out.w, out.h);
-    prod.ctx.drawImage(sub.c, out.x - inn.x, out.y - inn.y, out.w, out.h, out.x, out.y, out.w, out.h);
+    // REPLACE, never blend: the region carries its own alpha. putImageData's
+    // dirty rect writes just OUT, and writes it rather than compositing it.
+    prod.ctx.putImageData(cur, inn.x, inn.y, out.x - inn.x, out.y - inn.y, out.w, out.h);
     this.liveRegionHits++;
     this.liveRegionPx += inn.w * inn.h;
     return prod.c;
-  }
-
-  /** A reusable scratch canvas at least `w`×`h`, cleared over that rect. Only
-   *  the top-left `w`×`h` is ever read, so growing it in place is safe. */
-  private regionBuf(slot: number, w: number, h: number, readFreq: boolean): Layer {
-    let b = this.regionBufs[slot];
-    if (!b || b.c.width < w || b.c.height < h) {
-      // Round the allocation up in blocks. The region grows a little on EVERY
-      // frame of a stroke, so an exact fit would reallocate every frame — the
-      // per-frame allocation this pool exists to avoid. Blocks make it O(log n)
-      // reallocations per stroke instead, at the cost of some slack that is
-      // never read (only the top-left w×h ever is).
-      const blk = (v: number) => Math.ceil(v / 256) * 256;
-      b = this.mk(blk(Math.max(w, b?.c.width ?? 0)), blk(Math.max(h, b?.c.height ?? 0)), readFreq);
-      this.regionBufs[slot] = b;
-    }
-    b.ctx.globalAlpha = 1;
-    b.ctx.globalCompositeOperation = "source-over";
-    b.ctx.clearRect(0, 0, w, h);
-    return b;
   }
 
   /** Working scale for live filter frames: enough of a reduction to keep the
