@@ -5030,11 +5030,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       const c = document.createElement("canvas");
       c.width = composite.width;
       c.height = composite.height;
-      const g = c.getContext("2d", { willReadFrequently: true });
+      /* In the DOCUMENT's space. A canvas made without one is sRGB, and the
+         copy into it alone clipped every colour to sRGB; the proof then ran on
+         sRGB numbers it was told were P3. With an sRGB target that looked
+         right by accident; with Adobe RGB it printed P3 green as sRGB green. */
+      const space = canvasSpaceOf(colorSpaceRef.current);
+      const g = c.getContext("2d", { willReadFrequently: true, colorSpace: space });
       if (g) {
         g.drawImage(composite, 0, 0);
-        const img = g.getImageData(0, 0, c.width, c.height);
-        proofTransformInPlace(img.data, canvasSpaceOf(colorSpaceRef.current), proofTarget, true, gamutWarn);
+        const img = g.getImageData(0, 0, c.width, c.height, { colorSpace: space });
+        proofTransformInPlace(img.data, space, proofTarget, true, gamutWarn);
         g.putImageData(img, 0, 0);
         source = c;
       }

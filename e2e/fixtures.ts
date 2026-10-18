@@ -304,6 +304,7 @@ export const test = base.extend<{
   keepStartCard: boolean;
   hardware: Hardware | null;
   filePickers: boolean;
+  storage: Record<string, string> | null;
 }>({
   /** `test.use({ keepStartCard: true })` for a spec about the phone's start card. */
   keepStartCard: [false, { option: true }],
@@ -312,6 +313,9 @@ export const test = base.extend<{
      automation can reach; without them the app takes its download and
      <input type=file> route — the one every browser lacking the API uses. */
   filePickers: [true, { option: true }],
+  /** `test.use({ storage: { "pe-colorspace": "display-p3" } })`: localStorage
+   *  the session starts with, written before any app code runs. */
+  storage: [null, { option: true }],
   /* Pinned by default, so no test depends on the machine running it. The app
      sizes its budgets from `hardwareConcurrency` / `deviceMemory`, and a 4-core
      GitHub runner halves the live-filter frame: the region-scope live test's
@@ -321,8 +325,8 @@ export const test = base.extend<{
      `test.use({ hardware: null })` lets a spec about the hints see the host. */
   hardware: [{ cores: 16, memoryGB: 8 }, { option: true }],
   // `provide` is Playwright's `use` — renamed, or the React-hooks lint takes it for a hook.
-  app: async ({ page, keepStartCard, hardware, filePickers }, provide) => {
-    const app = await bootApp(page, { keepStartCard, hardware, filePickers });
+  app: async ({ page, keepStartCard, hardware, filePickers, storage }, provide) => {
+    const app = await bootApp(page, { keepStartCard, hardware, filePickers, storage: storage ?? undefined });
     await provide(app);
     expect(app.errors, "page errors during the test").toEqual([]);
   },
