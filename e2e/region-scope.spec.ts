@@ -329,7 +329,7 @@ test("live frame: the region-patched filter frame matches a full-res frame", asy
   const liveLeg = async (name: string, fy: number, expectRegion = true) => {
     // Does the worker's settled product match an inline render right now?
     const ab = await page.evaluate(() => {
-      const r = (window.__gqRenderCache as unknown as { filterAB(): { differing: number; worst: number; quality: string } | null }).filterAB();
+      const r = window.__gqRenderCache!.filterAB();
       return r ? `${r.differing} bytes, worst Δ${r.worst}, ${r.quality}` : "no settled product";
     });
     const on = await liveArm(true, fy);

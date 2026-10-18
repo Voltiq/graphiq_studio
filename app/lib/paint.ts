@@ -1477,6 +1477,9 @@ export class PaintEngine {
      *  0 before comparing pixels: a stale or draft product draws while a job is
      *  out, and a fixed sleep cannot know how long a slow machine takes. */
     workerJobs: number;
+    /** Smart-filter products that came back from the worker and were stored.
+     *  Proves a worker-vs-inline comparison really had a worker side. */
+    filterWorkerResults: number;
   } {
     let tiles = 0;
     for (const t of this.tiledAdj.values()) for (const tile of t.tiles) if (tile) tiles++;
@@ -1487,6 +1490,7 @@ export class PaintEngine {
       liveRegionPx: this.liveRegionPx,
       liveDraftFrames: this.liveDraftFrames,
       workerJobs: this.filterPending.size + this.healPending.size + this.blurPending.size,
+      filterWorkerResults: this.filterWorkerResults,
       enabled: this.renderCacheOn,
       entries: this.renderCache.size + this.tiledAdj.size,
       bytes: this.renderBytes,
@@ -9827,6 +9831,7 @@ export class PaintEngine {
   private filterWorker: Worker | null = null;
   private filterWorkerBroken = false;
   private filterJobSeq = 0;
+  private filterWorkerResults = 0;
   /** Per-node newest in-flight job (older replies are dropped). */
   private filterPending = new Map<
     string,
@@ -9910,6 +9915,7 @@ export class PaintEngine {
       out = cv.c;
     }
     this.storeFiltered(nodeId, key, out, pend.quality);
+    this.filterWorkerResults++;
     // Frames composited while this was in flight cached STALE products under
     // fresh keys (the node itself, its ancestors, clip groups, adjustment
     // accumulators — tiled ones included). One cache clear is the safe, cheap

@@ -30,7 +30,18 @@ declare global {
         liveRegionHits: number;
         liveRegionPx: number;
         workerJobs: number;
+        filterWorkerResults: number;
       };
+      /** The active layer's cached smart-filter product vs a fresh inline
+       *  render of the same stack; null while the cached product is stale. */
+      filterAB(id?: string): {
+        differing: number;
+        worst: number;
+        total: number;
+        quality: "preview" | "full";
+        digest: number;
+        sample: { at: number; cached: number[]; inline: number[] } | null;
+      } | null;
     };
   }
 }
