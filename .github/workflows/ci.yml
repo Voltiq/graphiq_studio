@@ -18,8 +18,9 @@
 # installed one. GitHub's ubuntu runners carry Chrome and Edge, so either avoids a
 # download — Chrome is the more reliably present of the two. The harnesses default
 # to msedge locally and take the channel from $GQ_CHANNEL (tools/lib/launch.js).
-# Verified before writing this: golden-effects produces IDENTICAL hashes on Chrome
-# and Edge, so pinning a different channel here does not invalidate the baselines.
+# Verified before writing this: the layer-effect goldens (e2e/golden-effects.spec.ts)
+# come out IDENTICAL on Chrome and Edge, so pinning a different channel here does
+# not invalidate the baselines.
 # If a runner image ever drops Chrome, `npx playwright install chromium` plus
 # GQ_CHANNEL=chromium is the fallback.
 #
@@ -124,29 +125,6 @@ jobs:
 
       # Each harness exits non-zero on failure and prints its own PASS/FAIL lines.
       # They are separate steps so the summary names which one broke.
-      - name: Golden layer effects
-        id: goldens
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:fx -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-      # The goldens are recorded on the software rasterizer, which is what this
-      # runner has — but Windows-recorded and Linux-rendered have never been
-      # compared directly. If they disagree, record what Linux produced and keep
-      # it, so the difference can be inspected (and committed, if it is only
-      # rasterizer rounding) without needing a Linux machine.
-      - name: Record this runner's goldens for inspection
-        if: ${{ !cancelled() && steps.goldens.outcome == 'failure' }}
-        run: node tools/golden-effects.js --update --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-          GQ_GOLDEN_DIR: ci-golden
-      - name: Upload this runner's goldens
-        if: ${{ !cancelled() && steps.goldens.outcome == 'failure' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: golden-effects-${{ runner.os }}
-          path: ci-golden
       - name: Smart-filter worker agrees with the inline path
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:blend -- --url http://localhost:3000

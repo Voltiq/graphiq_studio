@@ -77,12 +77,11 @@ npm run test:watch # on save
 npm run check      # typecheck + tests
 ```
 
-The browser tests drive a real browser against the dev server. Among them is the pixel-identity check (`e2e/pixel-identity.spec.ts`), which renders a fixture document twice after every stage — with the render cache on and off — and requires the results to be byte-identical:
+The browser tests drive a real browser against the dev server. Among them is the pixel-identity check (`e2e/pixel-identity.spec.ts`), which renders a fixture document twice after every stage — with the render cache on and off — and requires the results to be byte-identical, and the layer-effect goldens (`e2e/golden-effects.spec.ts`, re-recorded with `GQ_UPDATE_GOLDENS=1`):
 
 ```bash
 npm run dev        # in one terminal
-npm run test:e2e  # in another — includes cached vs uncached pixel identity
-npm run test:fx    # golden images for the eight layer effects
+npm run test:e2e  # in another — includes pixel identity and the effect goldens
 npm run perf       # interaction budgets
 npm run bench      # filter throughput + composite cost, tracked run to run
 ```
