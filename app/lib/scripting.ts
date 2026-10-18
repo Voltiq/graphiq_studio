@@ -12,7 +12,7 @@
 // cheat sheet; the Help dialog documents it too. Dev tool honesty: the
 // surface may grow between versions — `version` bumps when it changes shape.
 
-import { MENUS } from "./menus";
+import { MENUS, isCommandId } from "./menus";
 import type { LayersApi, LayerNode } from "./layers";
 import type { EngineHandle } from "./paint";
 import type { Rect } from "./view";
@@ -141,7 +141,6 @@ Example — run a macro over the current doc and save the result:
 /** Build the console API around a live deps ref (read fresh on every call). */
 export function buildScriptingApi(depsRef: { current: ScriptingDeps | null }): GraphiqScripting {
   const deps = (): ScriptingDeps | null => depsRef.current;
-  const known = new Set(executableCommandIds());
   return {
     version: 1,
     help() {
@@ -170,7 +169,7 @@ export function buildScriptingApi(depsRef: { current: ScriptingDeps | null }): G
     run(actionId) {
       const d = deps();
       if (!d) return false;
-      if (!known.has(actionId)) {
+      if (!isCommandId(actionId)) {
         console.warn(`graphiq.run: unknown command "${actionId}" — see graphiq.commands()`);
         return false;
       }

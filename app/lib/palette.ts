@@ -36,7 +36,7 @@ export interface PaletteSources {
      ones the live registries do not currently contain: today NO menu item is
      `disabled`, so a test run against `MENUS` compares an empty set with an
      empty set and proves nothing about the rule that withholds them. */
-  menus?: Menu[];
+  menus?: readonly Menu[];
   tools?: Tool[][];
 }
 
@@ -66,12 +66,20 @@ export function buildPaletteCommands({
       run: () => onSelectTool?.(t.id),
     });
   }
+  /* A command listed in two menus (Keyboard shortcuts… is under Settings AND
+     Help) is ONE palette entry, from the first menu that has it. Two would both
+     be noise in a search list and share a key, and keys index the palette's
+     recents: one would silently shadow the other across reloads. */
+  const seen = new Set<string>();
   for (const menu of menus) {
     for (const item of menu.items) {
       if (!item.action || item.disabled) continue;
       const action = item.action;
+      const key = `menu:${action}:${item.label}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       out.push({
-        key: `menu:${action}:${item.label}`,
+        key,
         label: item.label.replace(/…$/, ""),
         sub: `${menu.label} menu`,
         shortcut: keyFor("menu", action, item.shortcut),
@@ -84,14 +92,14 @@ export function buildPaletteCommands({
 }
 
 /** Every action id the menus declare, runnable or not. */
-export function menuActionIds(menus: Menu[] = MENUS): string[] {
+export function menuActionIds(menus: readonly Menu[] = MENUS): string[] {
   const out: string[] = [];
   for (const menu of menus) for (const item of menu.items) if (item.action) out.push(item.action);
   return out;
 }
 
 /** Action ids the menus declare but mark `disabled` — tree-only by design. */
-export function disabledActionIds(menus: Menu[] = MENUS): string[] {
+export function disabledActionIds(menus: readonly Menu[] = MENUS): string[] {
   const out: string[] = [];
   for (const menu of menus)
     for (const item of menu.items) if (item.action && item.disabled) out.push(item.action);

@@ -269,6 +269,17 @@ import {
   setRawWorkerEnabled,
 } from "../lib/imageio";
 import { buildZip, type ZipEntry } from "../lib/zip";
+import { isCommandId, type CommandId } from "../lib/menus";
+import {
+  adjustmentOf,
+  effectOf,
+  extraAdjustmentOf,
+  familyOf,
+  filterOf,
+  panelOf,
+  type DirectCommand,
+  type FamilyCommand,
+} from "../lib/commands";
 import { dedupeFilenames, targetFilename } from "../lib/exportpresets";
 import { exportSVG, looksLikeSVG, parseSVGFile, translateVectorPath } from "../lib/svg";
 import { buildPSD, parsePSD, type PsdDocument, type PsdImage, type PsdNode, type PsdOutNode } from "../lib/psd";
@@ -444,23 +455,6 @@ const ALL_PANELS: PanelVisibility = {
   channels: true,
   metadata: true,
   info: true,
-};
-/** Window-menu action id → panel key. */
-const PANEL_BY_ACTION: Record<string, keyof PanelVisibility> = {
-  "window-color": "color",
-  "window-swatches": "swatches",
-  "window-brushes": "brushes",
-  "window-adjustments": "adjustments",
-  "window-properties": "properties",
-  "window-layers": "layers",
-  "window-paths": "paths",
-  "window-comps": "comps",
-  "window-history": "history",
-  "window-actions": "actions",
-  "window-navigator": "navigator",
-  "window-channels": "channels",
-  "window-metadata": "metadata",
-  "window-info": "info",
 };
 
 const makeDoc = (seq: number, size?: { w: number; h: number }, dpi = 300): Doc => ({
@@ -6237,15 +6231,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       /* ignore */
     }
   };
-  const handleWindowAction = (actionId: string) => {
-    if (actionId === "window-reset") {
-      persistPanels({ ...ALL_PANELS });
-      dockRef.current?.apply(null); // factory dock layout: all right, none floating
-      return;
-    }
-    const id = PANEL_BY_ACTION[actionId];
-    if (id) persistPanels({ ...panels, [id]: !panels[id] });
-  };
 
   // ---- Guides (View menu, ruler drags — per-document, saved in .gproj) ------
   // Guide edits are ordinary undo steps: they're structural (no pixels), and the
@@ -6370,35 +6355,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     } catch {
       /* ignore */
     }
-  };
-  const handleViewAction = (actionId: string) => {
-    const v = viewSettingsRef.current;
-    if (actionId === "view-zoom-in") viewApiRef.current?.zoomIn();
-    else if (actionId === "view-zoom-out") viewApiRef.current?.zoomOut();
-    else if (actionId === "view-fit") viewApiRef.current?.fit();
-    else if (actionId === "view-100") viewApiRef.current?.zoom100();
-    else if (actionId === "view-rulers") persistView({ rulers: !v.rulers });
-    else if (actionId === "view-grid") persistView({ grid: !v.grid });
-    else if (actionId === "view-docgrid") persistView({ docgrid: !v.docgrid });
-    else if (actionId === "view-snap") persistView({ snap: !v.snap });
-    else if (actionId === "view-guides") persistView({ guides: !v.guides });
-    else if (actionId === "view-lock-guides") persistView({ lockguides: !v.lockguides });
-    else if (actionId === "view-smart-guides") persistView({ smartguides: !v.smartguides });
-    else if (actionId === "view-new-guide") setNewGuideOpen(true);
-    else if (actionId === "view-clear-guides") {
-      if ((activeDocRef.current.guides ?? []).length) commitGuides("Clear Guides", []);
-      else showToast("This document has no guides.");
-    } else if (actionId === "view-compare") {
-      // Nothing to compare against without adjustments or smart filters — say so
-      // rather than showing a split between two identical halves.
-      if (compareSplit === null && !hasAdjustments(activeDocRef.current.layers)) {
-        showToast("Nothing to compare — add an adjustment layer or a smart filter first.");
-      } else setCompareSplit((s) => (s === null ? 50 : null));
-    } else if (actionId === "view-compare-axis") {
-      setCompareAxis((a) => (a === "vertical" ? "horizontal" : "vertical"));
-    } else if (actionId === "view-proof") setProofColors((p) => !p);
-    else if (actionId === "view-gamut") setGamutWarn((g) => !g);
-    else if (actionId === "view-perf-hud") setPerfHud((h) => !h);
   };
 
   // ---- Actions (macro recorder — Actions panel + F-key playback) ------------
@@ -6829,7 +6785,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     remove: (id) => patchPaths((list) => list.filter((x) => x.id !== id)),
   };
 
-  const handleMenuAction = (actionId: string) => {
+  const handleMenuAction = (actionId: CommandId) => {
     // Recording: log replay-safe commands into the armed action (never while
     // playing back — a played action must not append to itself).
     if (recordingIdRef.current && !playingRef.current && isRecordable(actionId)) {
@@ -6843,128 +6799,212 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       );
     }
     const al = active.activeLayerId;
-    if (actionId === "canvas-size") openSizeDialog("canvas");
-    else if (actionId === "image-size") openSizeDialog("image");
-    else if (actionId === "image-crop") cropToSelection();
-    else if (actionId === "image-trim") setTrimOpen(true);
-    else if (actionId === "image-rotate-cw") applyImageTransform("rotate-cw");
-    else if (actionId === "image-rotate-ccw") applyImageTransform("rotate-ccw");
-    else if (actionId === "image-flip-h") applyImageTransform("flip-h");
-    else if (actionId === "image-flip-v") applyImageTransform("flip-v");
-    else if (actionId === "edit-cut") cutSelection();
-    else if (actionId === "edit-copy") copySelection();
-    else if (actionId === "edit-paste") pasteFromClipboard();
-    else if (actionId === "free-transform") enterTransform(true);
-    else if (actionId === "transform") enterTransform(false);
-    else if (actionId === "select-all") selectAll();
-    else if (actionId === "select-deselect") deselect();
-    else if (actionId === "select-reselect") reselect();
-    else if (actionId === "select-inverse") invertSelection();
-    else if (actionId === "vmask-add") addVectorMask();
-    else if (actionId === "pattern-fill") setPatternFill(true);
-    else if (actionId === "text-on-path") setTextPath(true);
-    else if (actionId === "text-off-path") setTextPath(false);
-    else if (actionId === "vmask-invert") invertVectorMask();
-    else if (actionId === "vmask-delete") deleteVectorMask();
-    else if (actionId === "select-refine") openRefineEdge();
-    else if (actionId === "select-border") setSelectModify("border");
-    else if (actionId === "select-smooth") setSelectModify("smooth");
-    else if (actionId === "select-expand") setSelectModify("expand");
-    else if (actionId === "select-contract") setSelectModify("contract");
-    else if (actionId === "select-feather") setSelectModify("feather");
-    else if (actionId === "select-grow") setSelectModify("grow");
-    else if (actionId === "select-save") setChannelDialog("save");
-    else if (actionId === "select-load") setChannelDialog("load");
-    else if (actionId === "select-quickmask") toggleQuickMask();
-    else if (actionId === "new-doc") requestNewDoc();
-    else if (actionId === "open") openProject();
-    else if (actionId === "open-recent") setRecentsOpen(true);
-    else if (actionId === "save") saveProject();
-    else if (actionId === "save-as") setSaveAsOpen(true);
-    else if (actionId === "doc-rename") setRenameOpen(true);
-    else if (actionId === "view-more-space") setMoreSpaceOpen(true);
-    else if (actionId === "import") openImport();
-    else if (actionId === "export-as") openExport();
-    else if (actionId === "export-svg") exportVectorSVG();
-    else if (actionId === "export-frames") void exportFrames();
-    else if (actionId === "export-psd") exportPSD();
-    else if (actionId === "export-lut") setLutExportOpen(true);
-    else if (actionId === "export-tiff") setTiffExportOpen(true);
-    else if (actionId === "export-pdf") setPdfExportOpen(true);
-    else if (actionId === "merge-hdr") setHdrMergeOpen(true);
-    else if (actionId === "batch-process") setBatchOpen(true);
-    else if (actionId === "help-tour") setTourStep(0);
-    else if (actionId === "help-sample") openSampleDoc();
-    else if (actionId === "hdr-tone") {
-      if (activeDocRef.current.hdr) setHdrToneOpen(true);
-      else
-        showToast(
-          "No HDR source — this works on documents created via File ▸ Merge to HDR (the float map lives in memory, not in .gproj).",
-        );
-    } else if (actionId === "export-hdr") {
-      if (activeDocRef.current.hdr) setHdrExportOpen(true);
-      else showToast("No HDR source — export true HDR from a document created via File ▸ Merge to HDR.");
-    } else if (actionId === "print") printCanvas();
-    else if (actionId === "effect-blur") openBlurFx();
-    else if (actionId === "effect-liquify") openLiquify();
-    else if (actionId === "effect-warp") openWarp();
-    else if (actionId === "color-manage") openColorDialog();
-    else if (actionId === "color-compare") openCompare();
-    else if (actionId === "preferences") setPrefsOpen(true);
-    else if (actionId === "workspaces") setWorkspacesOpen(true);
-    else if (actionId.startsWith("window-")) handleWindowAction(actionId);
-    else if (actionId.startsWith("view-")) handleViewAction(actionId);
-    else if (actionId === "undo") doUndo();
-    else if (actionId === "redo") doRedo();
-    else if (actionId === "layer-new") addLayerOp();
-    else if (actionId === "fill-solid") addFillOp("solid");
-    else if (actionId === "fill-gradient") addFillOp("gradient");
-    else if (actionId === "layer-duplicate") duplicateSelected();
-    else if (actionId === "layer-delete") removeSelected();
-    else if (actionId === "layer-group") groupSelected();
-    else if (actionId === "layer-ungroup") {
-      if (al) ungroupLayerOp(al);
-    } else if (actionId === "frame-from-layer") {
-      if (al) frameFromLayerOp(al);
-    } else if (actionId === "layer-isolate") {
-      toggleIsolate();
-    } else if (actionId === "layer-merge-visible") mergeVisibleOp();
-    else if (actionId === "layer-stamp-visible") stampVisibleOp();
-    else if (actionId === "layer-merge-down") mergeSelected();
-    else if (actionId === "layer-flatten") flattenImage();
-    else if (actionId === "mask-add") addMaskOp("reveal");
-    else if (actionId === "mask-add-hide") addMaskOp("hide");
-    else if (actionId === "mask-from-sel") addMaskOp("selection");
-    else if (actionId === "mask-delete") removeMaskOp();
-    else if (actionId === "mask-apply") applyMaskOp();
-    else if (actionId === "mask-to-sel") loadMaskAsSelectionOp();
-    else if (actionId === "adj-tone-curves") addToneAdjustment("curves");
-    else if (actionId === "adj-tone-levels") addToneAdjustment("levels");
-    else if (actionId === "tone-dest-curves") openDestructiveTone("curves");
-    else if (actionId === "tone-dest-levels") openDestructiveTone("levels");
-    else if (actionId.startsWith("adj-x-")) addExtraAdjustment(actionId.slice(6));
-    else if (actionId.startsWith("adj-")) addAdjustmentOp(actionId.slice(4));
-    else if (actionId === "fx-open") {
-      const id = activeDocRef.current.activeLayerId;
-      if (id) openLayerStyleOp(id);
-    } else if (actionId === "fx-clear") {
-      const id = activeDocRef.current.activeLayerId;
-      if (id) clearLayerStyleOp(id);
-    } else if (actionId.startsWith("fx-add-")) addEffectOp(actionId.slice(7) as FxKey);
-    else if (actionId === "layer-clip") toggleClippingMask();
-    else if (actionId.startsWith("filter-add-")) addFilterOp(actionId.slice(11) as FilterType);
-    else if (actionId === "filter-open") {
-      const id = activeDocRef.current.activeLayerId;
-      if (id) openFiltersOp(id);
-    } else if (actionId === "shortcuts") setShortcutsOpen(true);
-    else if (actionId === "prefs-performance") openPrefs("performance");
-    else if (actionId === "prefs-storage") openPrefs("storage");
-    else if (actionId === "help-start") setHelpOpen("start");
-    else if (actionId === "help-docs") setHelpOpen("docs");
-    else if (actionId === "about") setAboutOpen(true);
-    else if (actionId === "edit-caf") contentAwareFillOp();
+    const v = viewSettingsRef.current;
+    /* One entry per direct command. Its type makes a missing entry, or one for
+       an id no menu has, a COMPILE error — the if/else chain this replaced could
+       catch neither, and its argument-carrying branches were unchecked casts.
+       Families (panels, adjustments, effects, filters) are below the table. */
+    const direct: { [K in DirectCommand]: () => void } = {
+      "canvas-size": () => openSizeDialog("canvas"),
+      "image-size": () => openSizeDialog("image"),
+      "image-crop": () => cropToSelection(),
+      "image-trim": () => setTrimOpen(true),
+      "image-rotate-cw": () => applyImageTransform("rotate-cw"),
+      "image-rotate-ccw": () => applyImageTransform("rotate-ccw"),
+      "image-flip-h": () => applyImageTransform("flip-h"),
+      "image-flip-v": () => applyImageTransform("flip-v"),
+      "edit-cut": () => cutSelection(),
+      "edit-copy": () => copySelection(),
+      "edit-paste": () => pasteFromClipboard(),
+      "free-transform": () => enterTransform(true),
+      "transform": () => enterTransform(false),
+      "select-all": () => selectAll(),
+      "select-deselect": () => deselect(),
+      "select-reselect": () => reselect(),
+      "select-inverse": () => invertSelection(),
+      "vmask-add": () => addVectorMask(),
+      "pattern-fill": () => setPatternFill(true),
+      "text-on-path": () => setTextPath(true),
+      "text-off-path": () => setTextPath(false),
+      "vmask-invert": () => invertVectorMask(),
+      "vmask-delete": () => deleteVectorMask(),
+      "select-refine": () => openRefineEdge(),
+      "select-border": () => setSelectModify("border"),
+      "select-smooth": () => setSelectModify("smooth"),
+      "select-expand": () => setSelectModify("expand"),
+      "select-contract": () => setSelectModify("contract"),
+      "select-feather": () => setSelectModify("feather"),
+      "select-grow": () => setSelectModify("grow"),
+      "select-save": () => setChannelDialog("save"),
+      "select-load": () => setChannelDialog("load"),
+      "select-quickmask": () => toggleQuickMask(),
+      "new-doc": () => requestNewDoc(),
+      "open": () => openProject(),
+      "open-recent": () => setRecentsOpen(true),
+      "save": () => saveProject(),
+      "save-as": () => setSaveAsOpen(true),
+      "doc-rename": () => setRenameOpen(true),
+      "doc-close": () => {
+        // One canvas always stays open (closeDoc refuses the last one) — say so.
+        if (docs.length <= 1) showToast("This is the only open document, so it stays open.");
+        else closeDoc(activeId);
+      },
+      "view-more-space": () => setMoreSpaceOpen(true),
+      "import": () => openImport(),
+      "export-as": () => openExport(),
+      "export-svg": () => exportVectorSVG(),
+      "export-frames": () => void exportFrames(),
+      "export-psd": () => exportPSD(),
+      "export-lut": () => setLutExportOpen(true),
+      "export-tiff": () => setTiffExportOpen(true),
+      "export-pdf": () => setPdfExportOpen(true),
+      "merge-hdr": () => setHdrMergeOpen(true),
+      "batch-process": () => setBatchOpen(true),
+      "help-tour": () => setTourStep(0),
+      "help-sample": () => openSampleDoc(),
+      "hdr-tone": () => {
+        if (activeDocRef.current.hdr) setHdrToneOpen(true);
+        else
+          showToast(
+            "No HDR source — this works on documents created via File ▸ Merge to HDR (the float map lives in memory, not in .gproj).",
+          );
+      },
+      "export-hdr": () => {
+        if (activeDocRef.current.hdr) setHdrExportOpen(true);
+        else showToast("No HDR source — export true HDR from a document created via File ▸ Merge to HDR.");
+      },
+      "print": () => printCanvas(),
+      "effect-blur": () => openBlurFx(),
+      "effect-liquify": () => openLiquify(),
+      "effect-warp": () => openWarp(),
+      "color-manage": () => openColorDialog(),
+      "color-compare": () => openCompare(),
+      "preferences": () => setPrefsOpen(true),
+      "workspaces": () => setWorkspacesOpen(true),
+      "undo": () => doUndo(),
+      "redo": () => doRedo(),
+      "layer-new": () => addLayerOp(),
+      "fill-solid": () => addFillOp("solid"),
+      "fill-gradient": () => addFillOp("gradient"),
+      "layer-duplicate": () => duplicateSelected(),
+      "layer-delete": () => removeSelected(),
+      "layer-group": () => groupSelected(),
+      "layer-ungroup": () => {
+        if (al) ungroupLayerOp(al);
+      },
+      "frame-from-layer": () => {
+        if (al) frameFromLayerOp(al);
+      },
+      "layer-isolate": () => {
+        toggleIsolate();
+      },
+      "layer-merge-visible": () => mergeVisibleOp(),
+      "layer-stamp-visible": () => stampVisibleOp(),
+      "layer-merge-down": () => mergeSelected(),
+      "layer-flatten": () => flattenImage(),
+      "mask-add": () => addMaskOp("reveal"),
+      "mask-add-hide": () => addMaskOp("hide"),
+      "mask-from-sel": () => addMaskOp("selection"),
+      "mask-delete": () => removeMaskOp(),
+      "mask-apply": () => applyMaskOp(),
+      "mask-to-sel": () => loadMaskAsSelectionOp(),
+      "adj-tone-curves": () => addToneAdjustment("curves"),
+      "adj-tone-levels": () => addToneAdjustment("levels"),
+      "tone-dest-curves": () => openDestructiveTone("curves"),
+      "tone-dest-levels": () => openDestructiveTone("levels"),
+      "fx-open": () => {
+        const id = activeDocRef.current.activeLayerId;
+        if (id) openLayerStyleOp(id);
+      },
+      "fx-clear": () => {
+        const id = activeDocRef.current.activeLayerId;
+        if (id) clearLayerStyleOp(id);
+      },
+      "layer-clip": () => toggleClippingMask(),
+      "filter-open": () => {
+        const id = activeDocRef.current.activeLayerId;
+        if (id) openFiltersOp(id);
+      },
+      "shortcuts": () => setShortcutsOpen(true),
+      "prefs-performance": () => openPrefs("performance"),
+      "prefs-storage": () => openPrefs("storage"),
+      "help-start": () => setHelpOpen("start"),
+      "help-docs": () => setHelpOpen("docs"),
+      "about": () => setAboutOpen(true),
+      "edit-caf": () => contentAwareFillOp(),
+      "view-zoom-in": () => viewApiRef.current?.zoomIn(),
+      "view-zoom-out": () => viewApiRef.current?.zoomOut(),
+      "view-fit": () => viewApiRef.current?.fit(),
+      "view-100": () => viewApiRef.current?.zoom100(),
+      "view-rulers": () => persistView({ rulers: !v.rulers }),
+      "view-grid": () => persistView({ grid: !v.grid }),
+      "view-docgrid": () => persistView({ docgrid: !v.docgrid }),
+      "view-snap": () => persistView({ snap: !v.snap }),
+      "view-guides": () => persistView({ guides: !v.guides }),
+      "view-lock-guides": () => persistView({ lockguides: !v.lockguides }),
+      "view-smart-guides": () => persistView({ smartguides: !v.smartguides }),
+      "view-new-guide": () => setNewGuideOpen(true),
+      "view-clear-guides": () => {
+        if ((activeDocRef.current.guides ?? []).length) commitGuides("Clear Guides", []);
+        else showToast("This document has no guides.");
+      },
+      "view-compare": () => {
+        // Nothing to compare against without adjustments or smart filters — say so
+        // rather than showing a split between two identical halves.
+        if (compareSplit === null && !hasAdjustments(activeDocRef.current.layers)) {
+          showToast("Nothing to compare — add an adjustment layer or a smart filter first.");
+        } else setCompareSplit((s) => (s === null ? 50 : null));
+      },
+      "view-compare-axis": () => {
+        setCompareAxis((a) => (a === "vertical" ? "horizontal" : "vertical"));
+      },
+      "view-proof": () => setProofColors((p) => !p),
+      "view-gamut": () => setGamutWarn((g) => !g),
+      "view-perf-hud": () => setPerfHud((h) => !h),
+      "window-reset": () => {
+        persistPanels({ ...ALL_PANELS });
+        dockRef.current?.apply(null); // factory dock layout: all right, none floating
+      },
+    };
+    if (Object.hasOwn(direct, actionId)) {
+      direct[actionId as DirectCommand]();
+      return;
+    }
+    const f = familyOf(actionId as FamilyCommand);
+    switch (f.kind) {
+      case "panel": {
+        const key: keyof PanelVisibility = panelOf(f.id); // compile-checked: every window-<x> is a panel
+        persistPanels({ ...panels, [key]: !panels[key] });
+        return;
+      }
+      case "extraAdjustment":
+        addExtraAdjustment(extraAdjustmentOf(f.id));
+        return;
+      case "adjustment":
+        addAdjustmentOp(adjustmentOf(f.id));
+        return;
+      case "effect":
+        addEffectOp(effectOf(f.id));
+        return;
+      case "filter":
+        addFilterOp(filterOf(f.id));
+        return;
+    }
   };
-  handleMenuActionRef.current = handleMenuAction;
+  /** The gate for ids that arrive as plain strings — a menu row, the palette, a
+   *  recorded action read back from storage, the console. An unknown id used to
+   *  fall through the chain doing nothing; now it says so. */
+  const runCommand = (id: string): boolean => {
+    if (!isCommandId(id)) {
+      console.warn(`Unknown command "${id}"`);
+      return false;
+    }
+    handleMenuAction(id);
+    return true;
+  };
+  // Playback and keybindings carry plain strings (recorded steps come back from
+  // storage), so they go through the gate.
+  handleMenuActionRef.current = runCommand;
 
   const swapColors = () => {
     const f = fgRef.current;
@@ -7512,7 +7552,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     docs,
     activeId,
     setActiveId,
-    handleMenuAction,
+    handleMenuAction: runCommand,
     layersApi,
     foreground,
     setForeground,
@@ -7532,7 +7572,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         tablet={tablet}
         panelsOpen={tablet && mobileDrawer === "panels"}
         onTogglePanels={() => toggleMobileDrawer("panels")}
-        onMenuAction={handleMenuAction}
+        onMenuAction={runCommand}
         onSelectTool={setTool}
         shortcutLabels={shortcutLabels}
         initialTheme={initialTheme}

@@ -15,7 +15,7 @@
 // pipeline at the recorded coordinates. Other tools' gestures (clone, heal,
 // gradient drags, shapes, text) and dialog settings remain uncaptured.
 
-import { MENUS } from "./menus";
+import { MENUS, type CommandId } from "./menus";
 import type { BrushSettings } from "./paint";
 
 /** A recorded paint stroke (brush / pencil / eraser): the tool's settings and
@@ -59,7 +59,10 @@ export const FKEY_CHOICES = ["F2", "F3", "F4", "F6", "F7", "F8", "F9", "F10"] as
  *  next handler reads (they update during render). */
 export const PLAYBACK_STEP_MS = 60;
 
-const RECORDABLE_EXACT = new Set<string>([
+/* Typed as CommandId, so a renamed or removed menu command is a compile error
+   here. It used to be checked by recordableIdsMissingFromMenus(), which nothing
+   ever called. */
+const RECORDABLE_EXACT: ReadonlySet<string> = new Set<CommandId>([
   "undo",
   "redo",
   "edit-cut",
@@ -133,14 +136,6 @@ export function actionLabel(action: string): string {
     }
   }
   return labelCache.get(action) ?? action;
-}
-
-/** Every recordable id must exist in the menus — a menus.ts rename would
- *  otherwise silently orphan the allowlist. Exposed for the verify script. */
-export function recordableIdsMissingFromMenus(): string[] {
-  const known = new Set<string>();
-  for (const menu of MENUS) for (const item of menu.items) if (item.action) known.add(item.action);
-  return [...RECORDABLE_EXACT].filter((id) => !known.has(id));
 }
 
 let actionSeq = 0;

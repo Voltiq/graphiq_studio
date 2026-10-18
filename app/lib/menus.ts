@@ -3,17 +3,20 @@ export interface MenuItem {
   shortcut?: string;
   separatorAfter?: boolean;
   disabled?: boolean;
-  /** Optional action id wired up by the editor. */
-  action?: string;
+  /** The command this row runs. Required: a row with none is a dead row, and
+   *  File ▸ Close was one. The editor's dispatch must handle every id here. */
+  action: string;
 }
 
 export interface Menu {
   label: string;
-  items: MenuItem[];
+  items: readonly MenuItem[];
 }
 
-/** Top menu bar definitions. Items are presentational only for now. */
-export const MENUS: Menu[] = [
+/* The literal definition, kept private: `as const` lets the compiler read every
+   action id off it (CommandId, below), while the rest of the app sees the plain
+   `readonly Menu[]` it has always used. */
+const MENU_DEFS = [
   {
     label: "File",
     items: [
@@ -35,7 +38,10 @@ export const MENUS: Menu[] = [
       { label: "Export LUT (.cube)…", action: "export-lut" },
       { label: "Export HDR PNG…", separatorAfter: true, action: "export-hdr" },
       { label: "Print…", shortcut: "Ctrl+P", separatorAfter: true, action: "print" },
-      { label: "Close", shortcut: "Ctrl+W" },
+      /* No Ctrl+W: the browser reserves it to close the whole tab, and a page
+         cannot intercept it — advertising it invited exactly the wrong action.
+         This row had no action at all until `action` became required. */
+      { label: "Close", action: "doc-close" },
     ],
   },
   {
@@ -223,8 +229,24 @@ export const MENUS: Menu[] = [
       { label: "Interactive tour", action: "help-tour" },
       { label: "Open sample document", action: "help-sample", separatorAfter: true },
       { label: "Documentation", action: "help-docs" },
-      { label: "Keyboard shortcuts", action: "shortcuts", separatorAfter: true },
+      { label: "Keyboard shortcuts…", action: "shortcuts", separatorAfter: true },
       { label: "About Graphiq Studio", action: "about" },
     ],
   },
-];
+] as const satisfies readonly Menu[];
+
+/** Top menu bar definitions, and the registry of every menu command. */
+export const MENUS: readonly Menu[] = MENU_DEFS;
+
+/** Every command a menu row can dispatch. Derived from MENU_DEFS, so the menu
+ *  stays the single source of truth: a handler for an id that is not here, or a
+ *  row whose id has no handler, is a COMPILE error in the editor dispatch. */
+export type CommandId = Extract<(typeof MENU_DEFS)[number]["items"][number], { action: string }>["action"];
+
+const COMMAND_IDS: ReadonlySet<string> = new Set(
+  MENU_DEFS.flatMap((m) => m.items.flatMap((i) => ("action" in i ? [i.action] : []))),
+);
+
+/** Runtime guard for ids that arrive as plain strings: the scripting console,
+ *  a recorded action read back from storage. */
+export const isCommandId = (id: string): id is CommandId => COMMAND_IDS.has(id);
