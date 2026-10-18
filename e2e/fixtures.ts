@@ -284,6 +284,37 @@ export class App {
     }
   }
 
+  /** Give the display unusable edges, the way a notch and a home indicator
+   *  do, so `env(safe-area-inset-*)` resolves for real (CDP). All zeros clears. */
+  async setSafeArea(insets: { top: number; right: number; bottom: number; left: number }): Promise<void> {
+    this.cdp ??= await this.page.context().newCDPSession(this.page);
+    await this.cdp.send("Emulation.setSafeAreaInsetsOverride", { insets });
+    await this.settle(300);
+  }
+  private cdp: import("@playwright/test").CDPSession | null = null;
+
+  /** Open a panel by its `data-panel-id`, whichever shell it is in. */
+  async openPanelById(id: string): Promise<boolean> {
+    const section = this.page.locator(`[data-panel-id="${id}"]`);
+    if (!(await section.count())) return false;
+    if ((await section.first().getAttribute("data-open")) === "true") return true;
+    await section.locator('button[class*="panelCaret"]').first().click();
+    await this.settle(650);
+    return (await section.first().getAttribute("data-open")) === "true";
+  }
+
+  /** Phone: step the panels sheet's handle until it rests at `want` ("peek" | "half" | "full"). */
+  async setSheetDetent(want: string): Promise<boolean> {
+    const handle = this.page.locator("[data-sheet-handle]");
+    if (!(await handle.count())) return false;
+    for (let i = 0; i < 4; i++) {
+      if ((await this.page.evaluate(() => document.documentElement.dataset.sheet)) === want) return true;
+      await handle.first().click();
+      await this.settle(420);
+    }
+    return (await this.page.evaluate(() => document.documentElement.dataset.sheet)) === want;
+  }
+
   historyRows(): Promise<string[]> {
     return this.page.evaluate(() =>
       [...document.querySelectorAll('[data-panel-id="history"] ol[class*="history"] > li')].map((li) =>

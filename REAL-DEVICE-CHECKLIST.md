@@ -19,7 +19,7 @@ one Android device before shipping anything that touches the mobile shell.
 **Covers:** `app/lib/safeArea.ts`, the `--safe-t` family of tokens and the derived
 `--chrome-top` / `--chrome-bottom` in `app/globals.scss`.
 
-`verify-safe-area.js` hands Chromium a synthetic 47/34 inset over CDP, which
+`e2e/safe-area.spec.ts` hands Chromium a synthetic 47/34 inset over CDP, which
 makes `env()` resolve for real — but only for the one device shape we chose.
 Real insets differ per model, change on rotation, and change again when the
 browser's own chrome appears.
@@ -146,5 +146,5 @@ were controls no finger could reach — but assistive tech is its own stack.
 `elementFromPoint`, no page scroll even when shoved, shell height equal to
 `visualViewport.height`, no control under a simulated notch, and every dialog's
 primary button touchable where it sits. Behind it sit `verify-hit-targets`,
-`verify-touch-targets`, `verify-safe-area`, `verify-viewport` and
+`verify-touch-targets`, `verify-viewport`, `e2e/safe-area.spec.ts` and
 `e2e/dialog-sheets.spec.ts` — 104 further checks.

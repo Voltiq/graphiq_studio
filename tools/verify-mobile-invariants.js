@@ -3,7 +3,7 @@
  * THE ITEM'S PREMISE, CHECKED FIRST: "a harness that only screenshots proves
  * nothing". Nothing here screenshots. Five rails already assert most of these
  * geometrically — `verify-hit-targets` (23 checks), `verify-touch-targets` (8),
- * `verify-safe-area` (42, with real CDP notch insets), `verify-viewport` (17)
+ * `e2e/safe-area.spec.ts` (with real CDP notch insets), `verify-viewport` (17)
  * and `e2e/dialog-sheets.spec.ts` (14) — 104 checks, all green before this file
  * existed. So this rail is NOT a rewrite of them, and duplicating them would be
  * worse than useless: it states the five invariants in one place, on the full
@@ -44,7 +44,7 @@
 const { DEVICES, deviceContext, openApp, tap } = require("./mobile");
 const { launchBrowser } = require("./lib/launch");
 
-/* The same notch as verify-safe-area, so the two rails describe one device. */
+/* The same notch as e2e/safe-area.spec.ts, so the two rails describe one device. */
 const NOTCH = { top: 47, right: 0, bottom: 34, left: 0 };
 const FLOOR = 44;
 

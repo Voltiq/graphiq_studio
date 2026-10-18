@@ -78,7 +78,7 @@ export const metadata: Metadata = {
      non-zero. That is what the shell's `--safe-t` has been reading since M0,
      and it is why this tag could not land before the top inset did: without
      the inset, a translucent status bar means the top bar slides under the
-     clock. With it, the bar grows by exactly the notch (verify-safe-area
+     clock. With it, the bar grows by exactly the notch (e2e/safe-area.spec.ts
      measures the difference, 48 → 95px) and nothing on it is covered.
 
      `title` is the home-screen label — the document title is far too long for
