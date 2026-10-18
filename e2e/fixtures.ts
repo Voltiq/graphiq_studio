@@ -199,6 +199,38 @@ export class App {
     });
   }
 
+  /** Size, ink and a byte hash of the on-screen view canvas. */
+  viewShot(): Promise<{ hash: string; ink: number; w: number; h: number }> {
+    return this.page.evaluate(() => {
+      const c = document.querySelector<HTMLCanvasElement>('[data-tour="canvas"] canvas')!;
+      const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+      let a = 0x811c9dc5;
+      let b = 0x9dc5811c;
+      let ink = 0;
+      for (let i = 0; i < d.length; i++) {
+        a = Math.imul(a ^ d[i], 0x01000193);
+        b = Math.imul(b ^ d[i], 0x01000197);
+        if (i % 4 === 3 && d[i] > 0) ink++;
+      }
+      return { hash: (a >>> 0).toString(36) + "." + (b >>> 0).toString(36), ink, w: c.width, h: c.height };
+    });
+  }
+
+  /** A viewShot taken once the canvas has STOPPED changing: two equal hashes
+   *  250 ms apart. Opening a document decodes and composites asynchronously, so
+   *  one read after a fixed wait can catch a half-drawn frame — which once read
+   *  as a colour difference in a recovery check whose pixels were identical. */
+  async stableViewShot(tries = 20) {
+    let prev = await this.viewShot();
+    for (let i = 0; i < tries; i++) {
+      await this.settle(250);
+      const next = await this.viewShot();
+      if (next.hash === prev.hash) return next;
+      prev = next;
+    }
+    return prev;
+  }
+
   /** Painted pixels on the on-screen view canvas — what the user sees, floats included. */
   viewInk(): Promise<number> {
     return this.page.evaluate(() => {
@@ -234,9 +266,19 @@ export interface Hardware {
   memoryGB: number;
 }
 
-export const test = base.extend<{ app: App; keepStartCard: boolean; hardware: Hardware | null }>({
+export const test = base.extend<{
+  app: App;
+  keepStartCard: boolean;
+  hardware: Hardware | null;
+  filePickers: boolean;
+}>({
   /** `test.use({ keepStartCard: true })` for a spec about the phone's start card. */
   keepStartCard: [false, { option: true }],
+  /* `test.use({ filePickers: false })` removes the File System Access pickers
+     before the app boots. With them, Save and Open raise a native dialog no
+     automation can reach; without them the app takes its download and
+     <input type=file> route — the one every browser lacking the API uses. */
+  filePickers: [true, { option: true }],
   /* Pinned by default, so no test depends on the machine running it. The app
      sizes its budgets from `hardwareConcurrency` / `deviceMemory`, and a 4-core
      GitHub runner halves the live-filter frame: the region-scope live test's
@@ -246,7 +288,14 @@ export const test = base.extend<{ app: App; keepStartCard: boolean; hardware: Ha
      `test.use({ hardware: null })` lets a spec about the hints see the host. */
   hardware: [{ cores: 16, memoryGB: 8 }, { option: true }],
   // `provide` is Playwright's `use` — renamed, or the React-hooks lint takes it for a hook.
-  app: async ({ page, keepStartCard, hardware }, provide) => {
+  app: async ({ page, keepStartCard, hardware, filePickers }, provide) => {
+    if (!filePickers) {
+      await page.addInitScript(() => {
+        const w = window as unknown as Record<string, unknown>;
+        delete w.showSaveFilePicker;
+        delete w.showOpenFilePicker;
+      });
+    }
     if (hardware) {
       await page.addInitScript((hw) => {
         Object.defineProperty(navigator, "hardwareConcurrency", { get: () => hw.cores, configurable: true });

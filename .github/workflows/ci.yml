@@ -9,7 +9,7 @@
 # It cannot work here: the harnesses drive the app through dev-only console hooks
 # — `__gqRenderCache` (pixel-identity toggles the render cache to force the
 # always-correct uncached path; the region and blend rails use it too) and
-# `__gqCrash` (smoke simulates a crash to test recovery) — and CanvasArea returns
+# `__gqCrash` (e2e/smoke.spec.ts simulates a crash to test recovery) — and CanvasArea returns
 # early from installing them when NODE_ENV is production. Against `next start`
 # every browser harness would fail on a missing hook. A production build is still
 # compiled, by the `build` step in `check`, so a build-only break is caught.
@@ -124,11 +124,6 @@ jobs:
 
       # Each harness exits non-zero on failure and prints its own PASS/FAIL lines.
       # They are separate steps so the summary names which one broke.
-      - name: Smoke (31 checks)
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run smoke -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
       - name: Pixel identity — cached render == uncached render
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:pixel -- --url http://localhost:3000

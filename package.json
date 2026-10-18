@@ -9,7 +9,6 @@
     "lint": "eslint --max-warnings 0",
     "perf": "node tools/perf-suite.js",
     "bench": "node tools/bench-track.js",
-    "smoke": "node tools/smoke.js",
     "test": "vitest run",
     "test:pixel": "node tools/pixel-identity.js",
     "test:fx": "node tools/golden-effects.js",
