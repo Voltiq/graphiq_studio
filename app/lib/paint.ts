@@ -964,6 +964,7 @@ export class PaintEngine {
     };
     for (const [id, l] of this.layers) add(`layer:${id}`, l.c);
     for (const [id, m] of this.masks) add(`mask:${id}`, m.c);
+    for (const [id, v] of this.vectorMaskCache) add(`vmask:${id}`, v.c);
     add("stroke", this.stroke?.c);
     add("scratch", this.scratch?.c);
     return {
@@ -4258,6 +4259,7 @@ export class PaintEngine {
   removeLayer(id: string) {
     this.layers.delete(id);
     this.frameSrc.delete(id);
+    this.vectorMaskCache.delete(id);
     this.freeMask(id);
     this.freeMask(filterMaskKey(id));
     this.dropCache(id);
@@ -5035,6 +5037,11 @@ export class PaintEngine {
   }
 
   private renderNode(node: LayerNode): HTMLCanvasElement | null {
+    // A deleted or disabled vector mask must not keep its document-sized
+    // raster. Every render path skips vectorMaskAlpha once the mask is
+    // inactive, so this is the one place that sees it go.
+    if (this.vectorMaskCache.size && !vectorMaskActive(node.vectorMask))
+      this.vectorMaskCache.delete(node.id);
     if (node.type === "adjustment") return null; // handled by drawStack
     // Plain leaf (no fill, no mask of EITHER kind, no effects, no smart
     // filters): its layer canvas IS the intrinsic render — alias it, no copy,

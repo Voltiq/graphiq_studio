@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_ADJUST } from "@/app/lib/adjust";
 import {
+  allNodeIds,
   clearLinkKey,
   clipGroupsOf,
   cloneSubtree,
@@ -529,5 +530,19 @@ describe("purity", () => {
     }).not.toThrow();
 
     expect(JSON.stringify(t)).toBe(snapshot);
+  });
+});
+
+describe("allNodeIds", () => {
+  /* What closing a document frees (TODO 1.2). It must reach the children of a
+     COLLAPSED group (flattenedIds would skip them) and the groups and
+     adjustments themselves (collectLeafIds would skip those — and they own
+     masks and cached renders too). */
+  it("lists every node, collapsed groups' children and the groups included", () => {
+    const tree = [
+      leaf("a"),
+      group("g", [leaf("b"), group("inner", [leaf("c")], { expanded: false }), adj("x")], { expanded: false }),
+    ];
+    expect(allNodeIds(tree).sort()).toEqual(["a", "b", "c", "g", "inner", "x"]);
   });
 });

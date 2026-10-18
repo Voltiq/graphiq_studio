@@ -164,6 +164,7 @@ import type { Theme } from "../lib/theme";
 import { invertRects, type Pan, type Rect } from "../lib/view";
 import {
   cloneSubtree,
+  allNodeIds,
   collectLeafIds,
   filterMaskKey,
   findNode,
@@ -4143,10 +4144,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     // Finish open edits while this tab's history still exists to take them.
     if (id === activeId) paintRef.current?.commitPendingEdits();
     const idx = docs.findIndex((d) => d.id === id);
+    const closing = docs[idx];
     const next = docs.filter((d) => d.id !== id);
     setDocs(next);
     docJsonCache.current.delete(id);
-    paintRef.current?.discardHistoryDocument(id);
+    const eng = paintRef.current;
+    eng?.discardHistoryDocument(id);
+    /* Free its pixels. The engine is shared by every tab and holds each
+       document's canvases in one map; closing used to leave all of them
+       resident — measured: every layer and mask of a closed document still
+       there — and, its history gone, unreachable. */
+    if (eng && closing) {
+      for (const nodeId of allNodeIds(closing.layers)) eng.removeLayer(nodeId);
+      eng.freeMask(quickMaskKey(id));
+      for (const ch of closing.channels ?? []) eng.freeMask(selectionChannelKey(id, ch.id));
+    }
     if (id === activeId) setActiveId(next[Math.min(idx, next.length - 1)].id);
   };
 

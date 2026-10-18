@@ -635,6 +635,18 @@ export function filterLayerTree(
   return { match, visible };
 }
 
+/** Every node id in the tree — leaves, groups and adjustments, collapsed or not.
+ *  (flattenedIds skips collapsed children; collectLeafIds skips groups, which
+ *  own masks and cached renders too.) */
+export function allNodeIds(nodes: LayerNode[]): string[] {
+  const out: string[] = [];
+  for (const n of nodes) {
+    out.push(n.id);
+    if (n.type === "group") out.push(...allNodeIds(n.children));
+  }
+  return out;
+}
+
 /** Visible row ids in order (children of collapsed groups omitted). */
 export function flattenedIds(nodes: LayerNode[]): string[] {
   const out: string[] = [];
