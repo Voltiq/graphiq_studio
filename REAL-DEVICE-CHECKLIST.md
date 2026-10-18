@@ -164,5 +164,5 @@ nothing happen, and the buttons should act on `pointerup` instead.
 `elementFromPoint`, no page scroll even when shoved, shell height equal to
 `visualViewport.height`, no control under a simulated notch, and every dialog's
 primary button touchable where it sits. Behind it sit `verify-hit-targets`,
-`verify-touch-targets`, `e2e/viewport.spec.ts`, `e2e/safe-area.spec.ts` and
+`e2e/touch-targets.spec.ts`, `e2e/viewport.spec.ts`, `e2e/safe-area.spec.ts` and
 `e2e/dialog-sheets.spec.ts` — 104 further checks.

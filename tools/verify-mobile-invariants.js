@@ -2,7 +2,7 @@
  *
  * THE ITEM'S PREMISE, CHECKED FIRST: "a harness that only screenshots proves
  * nothing". Nothing here screenshots. Five rails already assert most of these
- * geometrically — `verify-hit-targets` (23 checks), `verify-touch-targets` (8),
+ * geometrically — `verify-hit-targets` (23 checks), `e2e/touch-targets.spec.ts`,
  * `e2e/safe-area.spec.ts` (with real CDP notch insets), `e2e/viewport.spec.ts`
  * and `e2e/dialog-sheets.spec.ts` (14) — 104 checks, all green before this file
  * existed. So this rail is NOT a rewrite of them, and duplicating them would be
