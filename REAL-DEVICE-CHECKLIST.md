@@ -34,7 +34,7 @@ browser's own chrome appears.
 **Covers:** `height: 100svh` in `app/components/Editor.module.scss`.
 
 This one is invisible to emulation *by measurement, not by assumption*:
-`verify-viewport.js` records that desktop Chromium resolves `vh`, `svh`, `lvh`
+`e2e/viewport.spec.ts` records that desktop Chromium resolves `vh`, `svh`, `lvh`
 and `dvh` to the same number, and that neither `Emulation.setVisibleSize` nor a
 clipped device-metrics override makes them diverge. Reverting `100svh` to
 `100vh` would leave every emulated check green.
@@ -48,7 +48,7 @@ clipped device-metrics override makes them diverge. Reverting `100svh` to
 **Covers:** `app/lib/useVisualViewport.ts` — the `--kb-inset` and `--vv-h`
 custom properties.
 
-CDP can shrink the visual viewport, and `verify-viewport.js` uses that. It
+CDP can shrink the visual viewport, and `e2e/viewport.spec.ts` uses that. It
 cannot reproduce iOS's accessory bar, the predictive-text strip, the way Safari
 scrolls a focused field into view on its own, or a third-party keyboard's
 height.
@@ -146,5 +146,5 @@ were controls no finger could reach — but assistive tech is its own stack.
 `elementFromPoint`, no page scroll even when shoved, shell height equal to
 `visualViewport.height`, no control under a simulated notch, and every dialog's
 primary button touchable where it sits. Behind it sit `verify-hit-targets`,
-`verify-touch-targets`, `verify-viewport`, `e2e/safe-area.spec.ts` and
+`verify-touch-targets`, `e2e/viewport.spec.ts`, `e2e/safe-area.spec.ts` and
 `e2e/dialog-sheets.spec.ts` — 104 further checks.

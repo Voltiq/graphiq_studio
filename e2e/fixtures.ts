@@ -287,11 +287,18 @@ export class App {
   /** Give the display unusable edges, the way a notch and a home indicator
    *  do, so `env(safe-area-inset-*)` resolves for real (CDP). All zeros clears. */
   async setSafeArea(insets: { top: number; right: number; bottom: number; left: number }): Promise<void> {
-    this.cdp ??= await this.page.context().newCDPSession(this.page);
-    await this.cdp.send("Emulation.setSafeAreaInsetsOverride", { insets });
+    await this.cdp("Emulation.setSafeAreaInsetsOverride", { insets });
     await this.settle(300);
   }
-  private cdp: import("@playwright/test").CDPSession | null = null;
+
+  /** A Chrome DevTools Protocol call on this page (one session, reused). */
+  async cdp(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    this.cdpSession ??= await this.page.context().newCDPSession(this.page);
+    // The protocol's method map is typed per name; these specs call a handful by string.
+    const send = this.cdpSession.send as (this: unknown, m: string, p: object) => Promise<unknown>;
+    return send.call(this.cdpSession, method, params);
+  }
+  private cdpSession: import("@playwright/test").CDPSession | null = null;
 
   /** Open a panel by its `data-panel-id`, whichever shell it is in. */
   async openPanelById(id: string): Promise<boolean> {

@@ -125,11 +125,6 @@ jobs:
 
       # Each harness exits non-zero on failure and prints its own PASS/FAIL lines.
       # They are separate steps so the summary names which one broke.
-      - name: The shell fills the visible viewport
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:viewport -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
       - name: Each device gets the right shell
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:breakpoint -- --url http://localhost:3000

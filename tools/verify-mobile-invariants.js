@@ -3,7 +3,7 @@
  * THE ITEM'S PREMISE, CHECKED FIRST: "a harness that only screenshots proves
  * nothing". Nothing here screenshots. Five rails already assert most of these
  * geometrically — `verify-hit-targets` (23 checks), `verify-touch-targets` (8),
- * `e2e/safe-area.spec.ts` (with real CDP notch insets), `verify-viewport` (17)
+ * `e2e/safe-area.spec.ts` (with real CDP notch insets), `e2e/viewport.spec.ts`
  * and `e2e/dialog-sheets.spec.ts` (14) — 104 checks, all green before this file
  * existed. So this rail is NOT a rewrite of them, and duplicating them would be
  * worse than useless: it states the five invariants in one place, on the full
@@ -20,7 +20,7 @@
  *   2. HIT-TESTED, NOT MEASURED. `e2e/dialog-sheets.spec.ts` walks all 54 dialogs and
  *      checks their footers are inside the visible area — then drives them with
  *      `element.click()`, which reaches a button that is completely covered.
- *      `verify-viewport` does hit-test a primary button with `elementFromPoint`,
+ *      `e2e/viewport.spec.ts` does hit-test a primary button with `elementFromPoint`,
  *      but only one dialog, under a simulated keyboard. Here every dialog's
  *      primary button is hit-tested, which is the item's fifth invariant and the
  *      one genuinely not covered.
