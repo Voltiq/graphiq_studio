@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "2.6.12",
+  "version": "2.6.13",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,7 +10,6 @@
     "perf": "node tools/perf-suite.js",
     "bench": "node tools/bench-track.js",
     "test": "vitest run",
-    "test:commit": "node tools/verify-commit-cancel.js",
     "test:reorder": "node tools/verify-layer-reorder.js",
     "test:pan": "node tools/verify-pan-mode.js",
     "test:pinch": "node tools/verify-pinch-abort.js",

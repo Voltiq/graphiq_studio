@@ -595,12 +595,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const finishTouchSession = (kind: "commit" | "cancel") => {
     const editable = document.querySelector<HTMLElement>('[contenteditable="true"]');
     const target: EventTarget = editable ?? window;
+    /* `code` as well as `key`, as a real key press has both. The crop tool's
+       Escape tests `e.code`, so ✕ sent `key` alone and never reset a crop. */
     const init: KeyboardEventInit =
       kind === "cancel"
-        ? { key: "Escape" }
+        ? { key: "Escape", code: "Escape" }
         : editable
-          ? { key: "Enter", ctrlKey: true }
-          : { key: "Enter" };
+          ? { key: "Enter", code: "Enter", ctrlKey: true }
+          : { key: "Enter", code: "Enter" };
     target.dispatchEvent(
       new KeyboardEvent("keydown", { ...init, bubbles: true, cancelable: true }),
     );
@@ -1527,7 +1529,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const applyCropNow = useCallback(() => {
     const eng = paintRef.current;
     const d = activeDocRef.current;
-    if (!eng || !d.layers.length) return;
+    /* No `!d.layers.length` bail-out. A new document starts with NO layers, and
+       that guard made Crop ▸ Apply (and Enter, and the phone's ✓) a silent no-op
+       on it: a box drawn, Apply pressed, the canvas unchanged and nothing in
+       History. Cropping an empty canvas is a canvas resize, and the engine's
+       crop handles an empty layer list. */
+    if (!eng) return;
     const docId = activeIdRef.current;
     const leafIds = collectLeafIds(d.layers);
     const setDims = (w: number, h: number) =>

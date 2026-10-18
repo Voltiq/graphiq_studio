@@ -28,7 +28,11 @@ export default defineConfig({
   /* Every test boots its own page (the `app` fixture), so tests — not just
      files — can run in parallel and be split across CI shards. */
   fullyParallel: true,
-  workers: process.env.CI ? 2 : undefined,
+  /* Locally 8, not Playwright's default of half the cores: on a 32-core box
+     that was 16 simultaneous boots of the dev app, and once the suite passed
+     ~150 tests the first wave started missing the 30 s wait for
+     window.graphiq (two full runs in a row, 0 failures with 8). */
+  workers: process.env.CI ? 2 : 8,
   /* `github` turns each failure into an annotation on the run, which the public
      API serves without the admin rights raw logs need. */
   reporter: process.env.CI ? [["list"], ["github"], ["html", { open: "never" }]] : "list",
