@@ -444,6 +444,15 @@ const EMPTY_GUIDES: Guide[] = [];
  *  menus and dialogs. None of these roles is on anything persistent. */
 const OVERLAY_SELECTOR = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
 
+/** History labels for a selection made with a tool (an emptied one is "Deselect"). */
+const TOOL_SELECTION_LABEL: Partial<Record<ToolId, string>> = {
+  select: "Marquee",
+  lasso: "Lasso",
+  wand: "Magic Wand",
+  quickselect: "Quick Selection",
+  move: "Move Selection",
+};
+
 const ALL_PANELS: PanelVisibility = {
   color: true,
   swatches: true,
@@ -1188,7 +1197,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
      late (it used to be dropped). The engine's own sessions, a floating paste
      included, are finished when it swaps histories (setHistoryDocument). */
   const setActiveId = (id: string) => {
-    if (id !== activeIdRef.current) paintRef.current?.commitPendingEdits();
+    if (id !== activeIdRef.current) {
+      flushToolSelectionRef.current(); // a selection gesture belongs to the tab it was made in
+      paintRef.current?.commitPendingEdits();
+    }
     setActiveIdState(id);
   };
   const seqRef = useRef(1);
@@ -1667,7 +1679,41 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // The most recent non-empty selection, so Reselect can bring it back.
   const lastSelectionRef = useRef<SelState | null>(null);
 
+  /* Selection TOOLS change the selection live — a Quick Selection drag every
+     dab, a Magic Wand re-run as its tolerance slider moves — so each change
+     cannot be its own history step. The selection from before the gesture is
+     held here, and the whole gesture becomes ONE step when it ends: any
+     pointerup or keyup (the effect below), a menu selection command, or a tab
+     switch. Before this, tool selections were no step at all: Ctrl+Z after
+     drawing a marquee undid the previous paint stroke instead, and a click that
+     deselected could not be undone. */
+  const pendingToolSelRef = useRef<{ docId: string; before: SelState; after: SelState } | null>(null);
+  const flushToolSelection = () => {
+    const p = pendingToolSelRef.current;
+    if (!p) return;
+    pendingToolSelRef.current = null;
+    if (sameSelState(p.before, p.after)) return;
+    const label = p.after.rects.length ? (TOOL_SELECTION_LABEL[toolRef.current] ?? "Selection") : "Deselect";
+    paintRef.current?.pushStructural(
+      label,
+      () => setSelState(p.docId, p.before),
+      () => setSelState(p.docId, p.after),
+    );
+  };
+  const flushToolSelectionRef = useRef(flushToolSelection);
+  flushToolSelectionRef.current = flushToolSelection;
+  /** What CanvasArea's selection tools call, live, during a gesture. */
+  const toolSelectionChange = (rects: Rect[]) => {
+    const docId = activeIdRef.current;
+    if (pendingToolSelRef.current && pendingToolSelRef.current.docId !== docId) flushToolSelection();
+    const after: SelState = { rects, angle: 0, pivot: null };
+    if (pendingToolSelRef.current) pendingToolSelRef.current.after = after;
+    else pendingToolSelRef.current = { docId, before: selStateOf(activeDocRef.current), after };
+    setSelection(rects);
+  };
+
   const commitSelection = (label: string, rects: Rect[], angle = 0, pivot: { x: number; y: number } | null = null) => {
+    flushToolSelection(); // a tool gesture still open is its own, earlier step
     const docId = activeIdRef.current;
     const before = selStateOf(activeDocRef.current);
     const after: SelState = { rects, angle, pivot };
@@ -7415,9 +7461,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         }
       } else if (e.key === "Enter" && paintRef.current?.isFloating()) {
         // Commit an in-progress transform (the floated, scaled/rotated content).
+        // The selection it leaves goes as an undoable Deselect, not outright.
         e.preventDefault();
         paintRef.current.commitFloat();
-        setSelection([]);
+        deselect();
       } else if (e.code === "Delete") {
         if (selRef.current.length && activeLayerRef.current) {
           e.preventDefault();
@@ -7503,9 +7550,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     };
     window.addEventListener("keydown", onKeyCapture, true);
     window.addEventListener("keydown", onKeyDown);
+    // A selection-tool gesture ends with the pointer or key that drove it.
+    // Bubble phase: the canvas's own handlers have applied the change by then.
+    const endGesture = () => flushToolSelectionRef.current();
+    window.addEventListener("pointerup", endGesture);
+    window.addEventListener("keyup", endGesture);
     return () => {
       window.removeEventListener("keydown", onKeyCapture, true);
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerup", endGesture);
+      window.removeEventListener("keyup", endGesture);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -7857,7 +7911,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           measure={measure}
           onMeasure={setMeasure}
           selection={active.selection}
-          onSelectionChange={setSelection}
+          onSelectionChange={toolSelectionChange}
           onSelectionRects={setSelectionRects}
           selectionAngle={active.selectionAngle}
           selectionPivot={active.selectionPivot}

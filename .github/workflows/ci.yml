@@ -46,10 +46,14 @@ on:
     branches: [master]
   pull_request:
 
-# A newer push supersedes an in-flight run on the same ref.
+# On a pull request a newer push supersedes the in-flight run: only its latest
+# commit matters. On master it does NOT: every commit there is a state of the
+# main branch worth knowing about, and cancelling meant the ~45-minute browser
+# job never finished — six master runs in a row (2026-10-17/18) were cancelled
+# by the next push before it could say whether the branch was green.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
