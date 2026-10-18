@@ -276,6 +276,14 @@ test("live frame: the region-patched filter frame matches a full-res frame", asy
   await ndlg.getByText("Create", { exact: true }).click();
   await app.settle(1600);
   const lbox = await app.canvasBox();
+  /* The premise, asserted rather than assumed: the region-OFF arm is only a
+     full-resolution reference while draftScale() is 1. The draft budget follows
+     the device (a 4-core machine halves it), and when that broke the premise on
+     CI this test reported pixel diffs for two days instead of saying so. */
+  const draftScale = await page.evaluate(
+    () => (window as unknown as { __gqBudgets?: () => { draftScale: number } }).__gqBudgets?.().draftScale,
+  );
+  expect(draftScale, `the off arm must be full resolution (draftScale ${draftScale})`).toBe(1);
 
   await app.menu("Layer", "New layer");
   await page.mouse.move(lbox.x + 30, lbox.y + 30);

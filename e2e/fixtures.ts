@@ -224,11 +224,31 @@ export class App {
   }
 }
 
-export const test = base.extend<{ app: App; keepStartCard: boolean }>({
+/** The hardware the page is told it runs on. */
+export interface Hardware {
+  cores: number;
+  memoryGB: number;
+}
+
+export const test = base.extend<{ app: App; keepStartCard: boolean; hardware: Hardware | null }>({
   /** `test.use({ keepStartCard: true })` for a spec about the phone's start card. */
   keepStartCard: [false, { option: true }],
+  /* Pinned by default, so no test depends on the machine running it. The app
+     sizes its budgets from `hardwareConcurrency` / `deviceMemory`, and a 4-core
+     GitHub runner halves the live-filter frame: the region-scope live test's
+     "full-resolution" reference quietly became a 72%-scale draft there and
+     failed for two days of wrong diagnoses (Linux rounding, un-premultiply,
+     canvas copies) before it was reproduced here by reporting 4 cores.
+     `test.use({ hardware: null })` lets a spec about the hints see the host. */
+  hardware: [{ cores: 16, memoryGB: 8 }, { option: true }],
   // `provide` is Playwright's `use` — renamed, or the React-hooks lint takes it for a hook.
-  app: async ({ page, keepStartCard }, provide) => {
+  app: async ({ page, keepStartCard, hardware }, provide) => {
+    if (hardware) {
+      await page.addInitScript((hw) => {
+        Object.defineProperty(navigator, "hardwareConcurrency", { get: () => hw.cores, configurable: true });
+        Object.defineProperty(navigator, "deviceMemory", { get: () => hw.memoryGB, configurable: true });
+      }, hardware);
+    }
     const app = new App(page);
     await app.boot({ keepStartCard });
     await provide(app);
