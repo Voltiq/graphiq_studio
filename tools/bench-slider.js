@@ -183,7 +183,7 @@ const INSTRUMENT = () => {
     page.evaluate(() =>
       document.querySelectorAll('[data-tour="dock"] section, [data-tour="dock"] [class*="panel"]').length,
     );
-  await page.getByRole("button", { name: "Brush" }).first().click();
+  await page.getByRole("button", { name: "Brush", exact: true }).click();
   await page.waitForTimeout(450);
   if (THROTTLE > 1) await cdp.send("Emulation.setCPUThrottlingRate", { rate: THROTTLE });
 
@@ -219,7 +219,7 @@ const INSTRUMENT = () => {
   await page.waitForTimeout(500);
   if (THROTTLE > 1) await cdp.send("Emulation.setCPUThrottlingRate", { rate: THROTTLE });
 
-  await page.getByRole("button", { name: "Brush" }).first().click();
+  await page.getByRole("button", { name: "Brush", exact: true }).click();
   await page.waitForTimeout(450);
   const noDock = await sweep("Size", 40);
   console.log(

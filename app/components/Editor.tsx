@@ -440,6 +440,10 @@ type Sel = { active: string | null; selected: string[] };
 /** Stable empty guide list — a fresh `[]` every render would churn the canvas. */
 const EMPTY_GUIDES: Guide[] = [];
 
+/** Anything that owns an Escape before the document does: popovers, dropdowns,
+ *  menus and dialogs. None of these roles is on anything persistent. */
+const OVERLAY_SELECTOR = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
+
 const ALL_PANELS: PanelVisibility = {
   color: true,
   swatches: true,
@@ -1199,6 +1203,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // Latest active-doc bits reachable from the one-time keydown listener.
   const activeIdRef = useRef(activeId);
   const selRef = useRef(active.selection);
+  /** Set in the keydown CAPTURE phase: did this Escape find an overlay open? */
+  const escapeForOverlayRef = useRef(false);
   const activeLayerRef = useRef(active.activeLayerId);
   const activeDocRef = useRef(active);
   const toolRef = useRef(tool);
@@ -7392,13 +7398,20 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
            the same intent from a keyboard, so it consumes it too. */
         if (dismissTop()) {
           e.preventDefault();
+        } else if (escapeForOverlayRef.current) {
+          /* This Escape closed a popover, dropdown, menu or dialog (see
+             onKeyCapture). It used to reach here as well and deselect on the
+             same keystroke: tweak a colour, press Escape to close the picker,
+             lose the selection. */
         } else if (paintRef.current?.isFloating()) {
           e.preventDefault();
           paintRef.current.commitFloat();
-          setSelection([]);
+          deselect();
         } else if (selRef.current.length) {
+          // Journalled like Select ▸ Deselect, so Ctrl+Z and Reselect bring it
+          // back. It used to clear the selection outright, with no way back.
           e.preventDefault();
-          setSelection([]);
+          deselect();
         }
       } else if (e.key === "Enter" && paintRef.current?.isFloating()) {
         // Commit an in-progress transform (the floated, scaled/rotated content).
@@ -7479,8 +7492,21 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         }
       }
     };
+    /* Was an overlay open when Escape was PRESSED? Asked in the capture phase,
+       before any of them has run: ~80 popovers, dropdowns, menus and dialogs
+       close on Escape from their own listeners, and React flushes that close in
+       the microtask checkpoint BETWEEN listeners — so by the time onKeyDown runs
+       the overlay is already gone from the DOM, and asking there finds nothing
+       (measured: 0 overlays, after the dropdown had been open). */
+    const onKeyCapture = (e: KeyboardEvent) => {
+      if (e.code === "Escape") escapeForOverlayRef.current = !!document.querySelector(OVERLAY_SELECTOR);
+    };
+    window.addEventListener("keydown", onKeyCapture, true);
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyCapture, true);
+      window.removeEventListener("keydown", onKeyDown);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -169,7 +169,7 @@ const CRASH_H = 180;
 
     // ---- 3. paint -----------------------------------------------------------
     const box = await page.locator('[data-tour="canvas"] canvas').first().boundingBox();
-    await page.getByRole("button", { name: "Brush" }).first().click();
+    await page.getByRole("button", { name: "Brush", exact: true }).click();
     await page.waitForTimeout(300);
     for (let i = 0; i < 12; i++) await page.keyboard.press("]");
     await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.3);
@@ -310,7 +310,7 @@ const CRASH_H = 180;
       await nd.getByText("Create", { exact: true }).click();
       await page.waitForTimeout(1500);
       const cbox = await page.locator('[data-tour="canvas"] canvas').first().boundingBox();
-      await page.getByRole("button", { name: "Brush" }).first().click();
+      await page.getByRole("button", { name: "Brush", exact: true }).click();
       await page.waitForTimeout(300);
       await page.mouse.move(cbox.x + cbox.width * 0.25, cbox.y + cbox.height * 0.6);
       await page.mouse.down();

@@ -73,7 +73,7 @@ const DOC_H = 1080;
 
   await newDoc();
   // Deterministic artwork: three hard-edged blobs on the flat background.
-  await page.getByRole("button", { name: "Brush" }).first().click();
+  await page.getByRole("button", { name: "Brush", exact: true }).click();
   await page.waitForTimeout(400);
   await setVal("Size", 220);
   await setVal("Hardness", 100);

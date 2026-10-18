@@ -194,7 +194,7 @@ const DOC_H = 400;
    *  after a dialog closes, and a stage that silently painted nothing still
    *  compares two identical composites and "passes". */
   const stroke = async (x0, y0, x1, y1, size = 16) => {
-    await page.getByRole("button", { name: "Brush" }).first().click();
+    await page.getByRole("button", { name: "Brush", exact: true }).click();
     await page.waitForTimeout(300);
     await page.mouse.move(box.x + x0, box.y + y0);
     for (let i = 0; i < size; i++) await page.keyboard.press("]");

@@ -11,7 +11,7 @@ import { test, expect, type App } from "./fixtures";
 
 async function stroke(app: App, fy: number) {
   const b = await app.canvasBox();
-  await app.page.getByRole("button", { name: "Brush" }).first().click();
+  await app.page.getByRole("button", { name: "Brush", exact: true }).click();
   await app.settle(200);
   for (let i = 0; i < 10; i++) await app.page.keyboard.press("]");
   await app.page.mouse.move(b.x + b.width * 0.2, b.y + b.height * fy);

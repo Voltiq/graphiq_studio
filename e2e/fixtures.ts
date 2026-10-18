@@ -158,7 +158,7 @@ export class App {
   }
 
   async brush(size: number, hardness: number): Promise<void> {
-    await this.page.getByRole("button", { name: "Brush" }).first().click();
+    await this.page.getByRole("button", { name: "Brush", exact: true }).click();
     await this.settle(300);
     await this.setRange("Size", size);
     await this.setRange("Hardness", hardness);
