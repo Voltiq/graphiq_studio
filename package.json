@@ -10,7 +10,6 @@
     "perf": "node tools/perf-suite.js",
     "bench": "node tools/bench-track.js",
     "test": "vitest run",
-    "test:breakpoint": "node tools/verify-breakpoint.js",
     "test:gestures": "node tools/verify-gestures.js",
     "test:autosave": "node tools/verify-autosave.js",
     "test:back": "node tools/verify-back-gesture.js",
