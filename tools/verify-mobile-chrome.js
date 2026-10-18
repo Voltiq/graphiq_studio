@@ -230,7 +230,7 @@ const READOUTS = () => {
      document is "Unsaved changes" the moment the start card is dismissed, so
      asserting `saved === "false"` after an edit passes on a readout that is
      hard-wired to the word: it read false → false. An autosave is forced first
-     — the same `visibilitychange → hidden` path `verify-autosave` drives — and
+     — the same `visibilitychange → hidden` path `e2e/autosave.spec.ts` drives — and
      only then is the edit made. */
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });

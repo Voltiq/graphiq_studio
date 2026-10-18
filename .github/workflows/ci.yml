@@ -125,11 +125,6 @@ jobs:
 
       # Each harness exits non-zero on failure and prints its own PASS/FAIL lines.
       # They are separate steps so the summary names which one broke.
-      - name: Work survives the tab going away
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:autosave -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
       - name: Back closes what is in front, not the app
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:back -- --url http://localhost:3000
