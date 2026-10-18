@@ -137,6 +137,24 @@ were controls no finger could reach — but assistive tech is its own stack.
 - [ ] With VoiceOver / TalkBack on, swiping through the page never announces a
       control from a closed drawer.
 
+### 10. The first tap after drawing
+
+**Covers:** the `onClick` handlers in `app/components/MobileBar.tsx` (Tools,
+Panels), right after a gesture on the canvas.
+
+Under Chromium's CDP touch emulation, a touch DRAG on a `touch-action: none`
+element is followed by a ~2 s window in which the next tap elsewhere gets
+`pointerdown` / `pointerup` but **no `click`**. A bare `<div>` outside the
+app reproduces it, and `touch-action: auto` does not, so it is the browser's
+touch pipeline, not this code. What is unknown is whether a real phone does it
+too. If it does, a user who draws a selection and then taps Panels sees
+nothing happen, and the buttons should act on `pointerup` instead.
+(e2e/modifiers.spec.ts waits 2.5 s before tapping the bar for this reason.)
+
+- [ ] On Android Chrome, draw a marquee with a finger, then tap **Panels** at
+      once: the drawer opens on the first tap.
+- [ ] The same on iOS Safari.
+
 ---
 
 ## What emulation *does* cover, so it is not repeated above

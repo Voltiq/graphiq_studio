@@ -125,26 +125,49 @@ export function installModifierInjection(): () => void {
   const noteStart = (e: Event) => {
     onCanvas = e.target instanceof Element && !!e.target.closest(SURFACES);
   };
+  /* Spent by the gesture's CLICK, not by a timer after `pointerup`. The panel
+     behaviours are onClick handlers, and `click` comes after `pointerup`: for
+     a mouse at once, but for a FINGER only after `touchend`, in a later task.
+     Measured on a Layers row: pointerup@23, then mousedown@24, mouseup@25 and
+     click@47, all alt=FALSE, because the zero timeout this used to spend on had
+     already cleared the latch. A race: Alt-tap to clip and Shift-tap to disable
+     a mask failed 7 times in 10 by finger — the device the chips are for — and
+     a mouse passed because its click usually won. (Spent synchronously on
+     pointerup, the same rows saw `click alt=false` with a mouse too.) */
+  let pending: number | null = null;
+  const flush = () => {
+    if (pending === null) return;
+    window.clearTimeout(pending);
+    pending = null;
+    clearArmedModifiers();
+  };
   const spend = () => {
     const was = onCanvas;
     onCanvas = false;
     if (!was) return;
-    /* Deferred by a turn, because `click` is dispatched AFTER `pointerup` — and
-       the panel behaviours are onClick handlers, not onPointerDown ones. Spent
-       synchronously here, a tap on a Layers row saw `pointerdown alt=true,
-       mousedown alt=true, click alt=FALSE`, so nothing clipped: the canvas
-       worked and the panels did not, for a reason that was invisible from
-       either end. */
-    setTimeout(clearArmedModifiers, 0);
+    // Fallback for a gesture that ends with no click (a drag off its element).
+    pending = window.setTimeout(flush, 600);
   };
+  // After the click's own handlers have run.
+  const onClick = () => {
+    if (pending !== null) window.setTimeout(flush, 0);
+  };
+  /* A new gesture spends the previous one's latch BEFORE `inject` sees it, so
+     a quick second gesture inside the fallback window does not inherit it.
+     Registered first, because listeners on one target run in that order. */
+  window.addEventListener("pointerdown", flush, true);
   for (const type of TYPES) window.addEventListener(type, inject, true);
   window.addEventListener("pointerdown", noteStart, true);
   window.addEventListener("pointerup", spend, false);
   window.addEventListener("pointercancel", spend, false);
+  window.addEventListener("click", onClick, false);
   return () => {
+    window.removeEventListener("pointerdown", flush, true);
     for (const type of TYPES) window.removeEventListener(type, inject, true);
     window.removeEventListener("pointerdown", noteStart, true);
     window.removeEventListener("pointerup", spend, false);
     window.removeEventListener("pointercancel", spend, false);
+    window.removeEventListener("click", onClick, false);
+    if (pending !== null) window.clearTimeout(pending);
   };
 }
