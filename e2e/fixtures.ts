@@ -323,6 +323,15 @@ export class App {
     this.finger = null;
   }
 
+  /** A raw multi-finger touch event: every point currently down, in order.
+   *  For gestures the single-finger helpers cannot express (a pinch). */
+  async touches(type: "touchStart" | "touchMove" | "touchEnd", points: { x: number; y: number }[]): Promise<void> {
+    await this.cdp("Input.dispatchTouchEvent", {
+      type,
+      touchPoints: points.map((p, i) => ({ x: Math.round(p.x), y: Math.round(p.y), radiusX: 12, radiusY: 12, force: 1, id: i + 1 })),
+    });
+  }
+
   /** Open a panel by its `data-panel-id`, whichever shell it is in. */
   async openPanelById(id: string): Promise<boolean> {
     const section = this.page.locator(`[data-panel-id="${id}"]`);
