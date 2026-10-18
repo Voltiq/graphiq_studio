@@ -54,6 +54,7 @@ export default function FillDialog({
         className={styles.dialog}
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
+        aria-modal="true"
         aria-label="Fill layer"
         onKeyDown={(e) => {
           if (e.key === "Escape" || e.key === "Enter") onClose();

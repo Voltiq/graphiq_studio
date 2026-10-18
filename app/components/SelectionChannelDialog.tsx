@@ -58,6 +58,7 @@ export default function SelectionChannelDialog({
         className={styles.dialog}
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
+        aria-modal="true"
         aria-label={mode === "save" ? "Save selection" : "Load selection"}
         onKeyDown={(e) => {
           if (e.key === "Escape") onClose();

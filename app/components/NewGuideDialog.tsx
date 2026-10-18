@@ -43,6 +43,7 @@ export default function NewGuideDialog({
         style={{ width: 340 }}
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
+        aria-modal="true"
         aria-label="New guide"
         onKeyDown={(e) => {
           if (e.key === "Escape") onClose();

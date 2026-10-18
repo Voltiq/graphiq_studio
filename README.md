@@ -77,11 +77,11 @@ npm run test:watch # on save
 npm run check      # typecheck + tests
 ```
 
-There is also a pixel-identity check that renders fixture documents twice — with the render cache on and off — and requires the results to be byte-identical. It drives a real browser, so it needs the dev server running:
+The browser tests drive a real browser against the dev server. Among them is the pixel-identity check (`e2e/pixel-identity.spec.ts`), which renders a fixture document twice after every stage — with the render cache on and off — and requires the results to be byte-identical:
 
 ```bash
 npm run dev        # in one terminal
-npm run test:pixel # in another — cached vs uncached composites must match
+npm run test:e2e  # in another — includes cached vs uncached pixel identity
 npm run test:fx    # golden images for the eight layer effects
 npm run perf       # interaction budgets
 npm run bench      # filter throughput + composite cost, tracked run to run

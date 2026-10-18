@@ -21,13 +21,6 @@ import type { Page } from "@playwright/test";
 declare global {
   interface Window {
     __gqPerf?: { stats(): { full: boolean; dirty: { x: number; y: number; w: number; h: number } | null; dirtyAt: number } };
-    __gqRenderCache?: {
-      enable(): void;
-      disable(): void;
-      regionOn(): void;
-      regionOff(): void;
-      stats(): { regionHits: number; liveRegionHits: number; liveRegionPx: number; workerJobs: number };
-    };
     __abBefore?: Uint8ClampedArray;
   }
 }

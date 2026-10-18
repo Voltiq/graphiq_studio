@@ -13,6 +13,28 @@ import { test as base, expect, type Page } from "@playwright/test";
    it is installed, so page code below asserts it with `!`. */
 import type {} from "../app/lib/scripting"; // types only: the global declaration
 
+declare global {
+  interface Window {
+    /** Dev-only render-cache A/B hook (CanvasArea). Absent in production builds. */
+    __gqRenderCache?: {
+      enable(): void;
+      disable(): void;
+      regionOn(): void;
+      regionOff(): void;
+      stats(): {
+        entries: number;
+        hits: number;
+        misses: number;
+        tiles: number;
+        regionHits: number;
+        liveRegionHits: number;
+        liveRegionPx: number;
+        workerJobs: number;
+      };
+    };
+  }
+}
+
 /** Alpha census of an image: distinct alpha levels, partial (0<a<255) and inked pixels, a hash. */
 export interface Census {
   levels: number;

@@ -55,6 +55,9 @@ interface Measure {
   primary: string | null;
   reaches: string;
   middleScrolls: boolean;
+  /** On a full-screen backdrop — what DialogFocus treats as modal — without
+   *  saying so: assistive tech then reads the blocked page as reachable. */
+  undeclaredModal: boolean;
 }
 
 /** Geometry of the open dialog, plus whether its primary action can be pressed. */
@@ -88,6 +91,8 @@ const measure = (page: Page) =>
       primary: primary ? (primary.textContent ?? "").trim().slice(0, 20) : null,
       reaches,
       middleScrolls: middle.some((c) => c.scrollHeight > c.clientHeight + 2),
+      undeclaredModal:
+        /overlay/i.test(d.parentElement?.className || "") && d.getAttribute("aria-modal") !== "true",
     };
   });
 
@@ -99,6 +104,7 @@ function faultsOf(m: Measure): string[] {
   if (m.bottom > m.visible) f.push(`bottom ${m.bottom} > ${m.visible}`);
   if (m.reaches !== "itself") f.push(`primary "${m.primary}" reaches ${m.reaches}`);
   if (!m.hasHeader) f.push("no title bar");
+  if (m.undeclaredModal) f.push("blocks the page but is not aria-modal");
   if (m.hasFooter && m.footBottom! > m.visible) f.push(`footer ends ${m.footBottom} > ${m.visible}`);
   return f;
 }

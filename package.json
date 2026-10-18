@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "2.6.8",
+  "version": "2.6.9",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,7 +10,6 @@
     "perf": "node tools/perf-suite.js",
     "bench": "node tools/bench-track.js",
     "test": "vitest run",
-    "test:pixel": "node tools/pixel-identity.js",
     "test:fx": "node tools/golden-effects.js",
     "test:blend": "node tools/verify-worker-blend.js",
     "test:react": "node tools/verify-react-state.js",

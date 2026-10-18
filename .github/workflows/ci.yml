@@ -7,7 +7,7 @@
 #
 # WHY A DEV SERVER AND NOT A PRODUCTION BUILD. The instinct is to test what ships.
 # It cannot work here: the harnesses drive the app through dev-only console hooks
-# — `__gqRenderCache` (pixel-identity toggles the render cache to force the
+# — `__gqRenderCache` (e2e/pixel-identity.spec.ts toggles the render cache to force the
 # always-correct uncached path; the region and blend rails use it too) and
 # `__gqCrash` (e2e/smoke.spec.ts simulates a crash to test recovery) — and CanvasArea returns
 # early from installing them when NODE_ENV is production. Against `next start`
@@ -124,11 +124,6 @@ jobs:
 
       # Each harness exits non-zero on failure and prints its own PASS/FAIL lines.
       # They are separate steps so the summary names which one broke.
-      - name: Pixel identity — cached render == uncached render
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:pixel -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
       - name: Golden layer effects
         id: goldens
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
