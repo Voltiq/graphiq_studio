@@ -92,15 +92,20 @@ class Fixture {
   /** A brush stroke in view coordinates. The tool is chosen by CLICKING it, not
    *  by its shortcut: a keypress lands wherever focus happens to be after a
    *  dialog closes, and a stage that silently painted nothing still compares
-   *  two identical composites and "passes". */
-  async stroke(x0: number, y0: number, x1: number, y1: number, size = 16): Promise<void> {
+   *  two identical composites and "passes".
+   *
+   *  Always at 24 px, set explicitly. The script this came from pressed `]`
+   *  per stroke for a size, but the Brush had no `]` until v2.6.10, so every
+   *  stroke was at the 24 px default — which is what the mutation counts in the
+   *  header were measured on. Once `]` worked, the presses accumulated across
+   *  stages to the 500 px cap and stage 11 painted over the whole document. */
+  async stroke(x0: number, y0: number, x1: number, y1: number): Promise<void> {
     const { page } = this.app;
     // A short timeout: a dialog left open blocks this click, and the default
     // retries it until the whole test times out, nine minutes later.
     await page.getByRole("button", { name: "Brush", exact: true }).click({ timeout: 10_000 });
     await this.app.settle(300);
-    await page.mouse.move(this.box.x + x0, this.box.y + y0);
-    for (let i = 0; i < size; i++) await page.keyboard.press("]");
+    await this.app.setRange("Size", 24);
     await page.mouse.move(this.box.x + x0, this.box.y + y0);
     await page.mouse.down();
     await page.mouse.move(this.box.x + x1, this.box.y + y1, { steps: 18 });
@@ -309,13 +314,13 @@ test("a cached composite is byte-identical to a full recompute, stage by stage",
   });
   await f.stage("3. second layer, non-Normal blend at partial opacity", async () => {
     await f.nameNew("multiply", () => f.run("layer-new"));
-    await f.stroke(300, 80, 120, 300, 4);
+    await f.stroke(300, 80, 120, 300);
     await f.patch("multiply", { blend: "Multiply", opacity: 70 });
   });
   await f.stage("4. adjustment layer over the stack", () => f.run("adj-x-invert"));
   await f.stage("5. clipping mask", async () => {
     await f.nameNew("clipped", () => f.run("layer-new"));
-    await f.stroke(200, 150, 500, 320, 6);
+    await f.stroke(200, 150, 500, 320);
     await f.run("layer-clip");
   });
   await f.stage("6. group", () => f.run("layer-group"));
@@ -328,7 +333,7 @@ test("a cached composite is byte-identical to a full recompute, stage by stage",
     // and a selection that CUTS the artwork — one containing the whole stroke
     // masks nothing away, and the stage then compares an unchanged document.
     await f.nameNew("masked", () => f.run("layer-new"));
-    await f.stroke(60, 200, 540, 200, 8);
+    await f.stroke(60, 200, 540, 200);
     await app.page.evaluate(() => window.graphiq!.select([{ x: 0, y: 0, w: 260, h: 400 }]));
     await app.settle(500);
     await f.run("mask-from-sel");
@@ -351,7 +356,7 @@ test("a cached composite is byte-identical to a full recompute, stage by stage",
   // smart filter, so this also re-runs the filter stack over changed pixels.
   await f.stage("11. repaint a layer that already has a cached product", async () => {
     await f.activate("multiply");
-    await f.stroke(120, 300, 480, 120, 3);
+    await f.stroke(120, 300, 480, 120);
   });
   await f.stage("12. undo that repaint", async () => {
     await app.page.evaluate(() => window.graphiq!.undo());
@@ -372,7 +377,7 @@ test("a cached composite is byte-identical to a full recompute, stage by stage",
       .first()
       .click(); // switch the brush to the mask surface
     await app.settle(600);
-    await f.stroke(80, 120, 240, 300, 6);
+    await f.stroke(80, 120, 240, 300);
   });
 });
 
@@ -385,7 +390,7 @@ test("a tiled product is byte-identical to a full recompute", async ({ app }) =>
   const f = new Fixture(app);
   await f.newDoc(4096, 4096);
   const r = await f.stage("15. tiled adjustment product", async () => {
-    await f.nameNew("big", () => f.stroke(100, 100, 600, 500, 20));
+    await f.nameNew("big", () => f.stroke(100, 100, 600, 500));
     await f.run("adj-x-invert");
   });
   // Without this, a whole-product hit would satisfy "reused" and the stage
@@ -396,6 +401,6 @@ test("a tiled product is byte-identical to a full recompute", async ({ app }) =>
   // product once and never makes it stale.
   await f.stage("16. repaint beneath a tiled product", async () => {
     await f.activate("big");
-    await f.stroke(500, 120, 150, 450, 0);
+    await f.stroke(500, 120, 150, 450);
   });
 });

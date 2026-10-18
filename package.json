@@ -1,6 +1,6 @@
 {
   "name": "graphiq_studio",
-  "version": "2.6.9",
+  "version": "2.6.10",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,7 +10,6 @@
     "perf": "node tools/perf-suite.js",
     "bench": "node tools/bench-track.js",
     "test": "vitest run",
-    "test:react": "node tools/verify-react-state.js",
     "test:colorspace": "node tools/verify-colorspace-roundtrip.js",
     "test:panels": "node tools/verify-panel-groups.js",
     "test:print": "node tools/verify-print.js",

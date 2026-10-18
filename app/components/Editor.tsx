@@ -92,6 +92,7 @@ import PatternFillDialog, { type PatternFillResult } from "./PatternFillDialog";
 import type { RawDevelopOptions } from "../lib/dng";
 import { anchorsToPathData } from "../lib/paths";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
+import { brushKey, stepHardness, stepSize } from "../lib/brush-keys";
 import {
   cleanChannelName,
   coerceChannels,
@@ -7233,6 +7234,33 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           );
           return;
         }
+      }
+
+      // The painting tools the Shortcuts dialog lists under "Brush-style tools"
+      // that never had them: [ / ] size, { / } hardness (not the pencil, which
+      // is always hard), and on the brush, eraser and pencil a digit sets
+      // opacity, as in Photoshop.
+      const bk = !e.ctrlKey && !e.metaKey && !e.altKey ? brushKey(e.key) : null;
+      const painting = toolRef.current;
+      const opacityTool = painting === "brush" || painting === "eraser" || painting === "pencil";
+      if (bk && (opacityTool || (bk.kind !== "percent" && ["mixer", "heal", "redeye"].includes(painting)))) {
+        type Sized = { size: number; hardness?: number };
+        const step = <S extends Sized>(s: S, min = 1, max = 500): S =>
+          bk.kind === "size"
+            ? { ...s, size: stepSize(s.size, bk.dir, min, max) }
+            : bk.kind === "hardness" && s.hardness !== undefined && painting !== "pencil"
+              ? { ...s, hardness: stepHardness(s.hardness, bk.dir) }
+              : s;
+        const brushStep = (s: BrushSettings): BrushSettings =>
+          bk.kind === "percent" ? { ...s, opacity: bk.value } : step(s);
+        if (painting === "brush") setBrush(brushStep);
+        else if (painting === "eraser") setEraser(brushStep);
+        else if (painting === "pencil") setPencil(brushStep);
+        else if (painting === "mixer") setMixer((s) => step(s));
+        else if (painting === "heal") setHeal((s) => step(s, 4, 300));
+        else setRedEye((s) => step(s, 6, 200));
+        e.preventDefault();
+        return;
       }
 
       // Quick-select shortcuts: [ / ] brush size, digits = tolerance.
