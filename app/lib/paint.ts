@@ -550,6 +550,12 @@ export interface EngineHandle {
   maskSelectionRects: (id: string) => Rect[];
   /** Does this selection carry partial coverage beyond its ≥50% rects? */
   isSoftSelection: (rects: Rect[]) => boolean;
+  /** Combine selections keeping soft coverage; null when neither is soft. */
+  combineSelectionSoft: (
+    a: Rect[],
+    b: Rect[] | null,
+    op: "add" | "subtract" | "intersect" | "invert",
+  ) => Rect[] | null;
   /** Small grayscale PNG of a mask raster (Channels-panel thumbnails). */
   maskPreviewURL: (id: string, maxW?: number) => string | null;
   /** Tight bounds of a layer's non-transparent pixels (null = empty layer). */
@@ -2973,8 +2979,16 @@ export class PaintEngine {
     const cache = this.maskAlpha.get(id);
     if (!cache) return [];
     const d = cache.ctx.getImageData(0, 0, this.w, this.h).data;
+    return this.selectionFromCoverage((i) => d[i * 4 + 3]);
+  }
+
+  /**
+   * A selection from per-pixel coverage (`at(i)` for pixel i, 0–255): the rects
+   * are the ≥50% outline, and anything in between is kept as the selection's
+   * soft coverage (see SelectionCoverage).
+   */
+  private selectionFromCoverage(at: (i: number) => number): Rect[] {
     const out: Rect[] = [];
-    // The rects are the ≥50% outline; anything in between is kept as coverage.
     let soft = false;
     let bx0 = this.w;
     let by0 = this.h;
@@ -2984,7 +2998,7 @@ export class PaintEngine {
       let x0 = -1;
       const row = y * this.w;
       for (let x = 0; x < this.w; x++) {
-        const a = d[(row + x) * 4 + 3];
+        const a = at(row + x);
         if (a) {
           if (a < 255) soft = true;
           if (x < bx0) bx0 = x;
@@ -3008,12 +3022,62 @@ export class PaintEngine {
       const bounds = { x: bx0, y: by0, w: bx1 - bx0 + 1, h: by1 - by0 + 1 };
       const alpha = new Uint8Array(bounds.w * bounds.h);
       for (let y = 0; y < bounds.h; y++) {
-        const src = ((bounds.y + y) * this.w + bounds.x) * 4 + 3;
-        for (let x = 0; x < bounds.w; x++) alpha[y * bounds.w + x] = d[src + x * 4];
+        const src = (bounds.y + y) * this.w + bounds.x;
+        for (let x = 0; x < bounds.w; x++) alpha[y * bounds.w + x] = at(src + x);
       }
       this.coverage.set(out, { w: this.w, h: this.h, bounds, alpha });
     }
     return out;
+  }
+
+  /** A selection's coverage over the whole canvas: its soft coverage where it
+   *  has one, otherwise its rects as 0 / 255. One byte per pixel. */
+  private coverageFull(rects: Rect[]): Uint8Array {
+    const out = new Uint8Array(this.w * this.h);
+    const cov = this.coverageOf(rects);
+    if (cov) {
+      const { bounds: bd, alpha } = cov;
+      for (let y = 0; y < bd.h; y++) out.set(alpha.subarray(y * bd.w, (y + 1) * bd.w), (bd.y + y) * this.w + bd.x);
+      return out;
+    }
+    for (const r of rects) {
+      const x0 = Math.max(0, Math.floor(r.x));
+      const x1 = Math.min(this.w, Math.ceil(r.x + r.w));
+      const y0 = Math.max(0, Math.floor(r.y));
+      const y1 = Math.min(this.h, Math.ceil(r.y + r.h));
+      for (let y = y0; y < y1; y++) out.fill(255, y * this.w + x0, y * this.w + x1);
+    }
+    return out;
+  }
+
+  /**
+   * Combine selections KEEPING soft coverage (TODO 0.2a): add = max(a, b),
+   * subtract = min(a, 255 − b), intersect = min(a, b), invert = 255 − a — the
+   * usual mask algebra, which for 0/255 inputs is exactly union, difference,
+   * intersection and complement. Returns null when no operand is soft, so hard
+   * selections keep their existing paths (and rect layout) untouched. Unrotated
+   * selections only: the caller falls back for a rotated one.
+   */
+  combineSelectionSoft(
+    a: Rect[],
+    b: Rect[] | null,
+    op: "add" | "subtract" | "intersect" | "invert",
+  ): Rect[] | null {
+    if (!this.coverageOf(a) && !(b && this.coverageOf(b))) return null;
+    const ca = this.coverageFull(a);
+    const cb = b ? this.coverageFull(b) : null;
+    const n = this.w * this.h;
+    const r = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = ca[i];
+      const y = cb ? cb[i] : 0;
+      r[i] =
+        op === "invert" ? 255 - x
+        : op === "add" ? (x > y ? x : y)
+        : op === "intersect" ? (x < y ? x : y)
+        : Math.min(x, 255 - y);
+    }
+    return this.selectionFromCoverage((i) => r[i]);
   }
 
   /** The coverage behind a selection, if it has one that still fits the canvas. */

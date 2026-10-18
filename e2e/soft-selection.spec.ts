@@ -85,3 +85,47 @@ test("F  control: a marquee selection still fills hard", async ({ app }) => {
   expect(c.levels).toBe(2);
   expect(c.partial).toBe(0);
 });
+
+/* TODO 0.2a: operations that used to rebuild a soft selection as hard rects. */
+
+test("G  Select ▸ Inverse of a soft selection is its exact complement, still soft", async ({ app }) => {
+  await opaqueLayer(app);
+  await softSelection(app);
+  await app.run("mask-from-sel");
+  const direct = await app.exported();
+  await app.run("undo"); // the mask
+  await app.run("select-inverse");
+  await app.run("mask-from-sel");
+  const inverted = await app.exported();
+  expect(inverted.partial, "the inverse kept its soft edge").toBeGreaterThan(SOFT);
+  /* Every pixel's coverage became 255 − a, so the two masks' alpha sums add up
+     to exactly 255 per pixel — a hard inverse could not land on that. */
+  const px = 1920 * 1080;
+  expect(direct.alphaSum + inverted.alphaSum).toBe(255 * px);
+});
+
+test("H  intersecting with a soft saved channel keeps the soft edge", async ({ app }) => {
+  await opaqueLayer(app);
+  await softSelection(app);
+  // Save it as a channel…
+  await app.page.evaluate(() => window.graphiq!.run("select-save"));
+  const save = app.page.locator('div[role="dialog"][aria-label="Save selection"]');
+  await save.waitFor();
+  await save.locator('input[aria-label="Channel name"]').fill("soft");
+  await save.getByRole("button", { name: "Save", exact: true }).click();
+  await app.settle();
+  // …then a hard rect over the left half, intersected with it.
+  await app.page.evaluate(() => window.graphiq!.select([{ x: 0, y: 0, w: 960, h: 1080 }]));
+  await app.settle();
+  await app.page.evaluate(() => window.graphiq!.run("select-load"));
+  const load = app.page.locator('div[role="dialog"][aria-label="Load selection"]');
+  await load.waitFor();
+  await load.getByRole("button", { name: "Intersect", exact: true }).click();
+  await load.getByRole("button", { name: "Load", exact: true }).click();
+  await app.settle();
+  await app.run("mask-from-sel");
+  const c = await app.exported();
+  // Soft, and roughly half the band's soft pixels (the other half was cut away).
+  expect(c.partial, `${c.partial} partial px`).toBeGreaterThan(SOFT);
+  expect(c.partial).toBeLessThan(211_264 * 0.75);
+});

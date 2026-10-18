@@ -19,6 +19,8 @@ export interface Census {
   partial: number;
   ink: number;
   hash: string;
+  /** Sum of every alpha value — compares coverage as a whole (e.g. an exact inverse). */
+  alphaSum: number;
 }
 
 export class App {
@@ -182,6 +184,7 @@ export class App {
       const d = x.getImageData(0, 0, bmp.width, bmp.height).data;
       const levels = new Set<number>();
       let partial = 0;
+      let alphaSum = 0;
       let ink = 0;
       let h = 0x811c9dc5;
       for (let i = 0; i < d.length; i++) {
@@ -190,8 +193,9 @@ export class App {
         levels.add(d[i]);
         if (d[i]) ink++;
         if (d[i] > 0 && d[i] < 255) partial++;
+        alphaSum += d[i];
       }
-      return { levels: levels.size, partial, ink, hash: (h >>> 0).toString(36) };
+      return { levels: levels.size, partial, ink, alphaSum, hash: (h >>> 0).toString(36) };
     });
   }
 

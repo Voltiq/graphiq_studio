@@ -1902,7 +1902,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const d = activeDocRef.current;
     if (!d.selection.length) return; // nothing selected → inverse is undefined here
     commitFloatIfAny();
-    commitSelection("Invert Selection", invertRects(d.selection, d.width, d.height));
+    // A soft selection inverts its coverage (255 − a), not just its outline.
+    const soft = d.selectionAngle ? null : paintRef.current?.combineSelectionSoft(d.selection, null, "invert");
+    commitSelection("Invert Selection", soft ?? invertRects(d.selection, d.width, d.height));
   };
 
   // Enter transform via the marquee's handles (drag a corner/edge to scale, the
@@ -6725,6 +6727,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const cur = d.selection;
     if (op === "new" || !cur.length) {
       commitSelection(loadLabel(ch.name, "new"), rects);
+      return;
+    }
+    // Either side soft (a saved feathered channel, a Quick Mask selection) →
+    // combine coverage, not just outlines. Null for two hard sides: the
+    // existing paths below, unchanged.
+    const soft = d.selectionAngle ? null : eng.combineSelectionSoft(cur, rects, op);
+    if (soft) {
+      commitSelection(loadLabel(ch.name, op), soft);
       return;
     }
     if (op === "add" || op === "subtract") {
