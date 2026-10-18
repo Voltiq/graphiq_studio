@@ -14,7 +14,7 @@
  *      with `hasTouch: true` driven by `page.mouse` delivers
  *      `pointerType: "mouse"`; only `page.touchscreen` delivers `"touch"`.
  *      Three of 54 rails use the touchscreen. NINE of the 21 touch rails drive
- *      entirely with the mouse — including `verify-pinch-abort`, `verify-pan-mode`, `verify-two-stage`,
+ *      entirely with the mouse — including `verify-pinch-abort`, `verify-two-stage`,
  *      `verify-loupe` and `verify-grab-radius`, whose whole subject is touch.
  *      The app branches on `pointerType === "touch"` in several places, and
  *      those branches were not being taken.

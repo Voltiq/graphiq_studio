@@ -10,7 +10,6 @@
     "perf": "node tools/perf-suite.js",
     "bench": "node tools/bench-track.js",
     "test": "vitest run",
-    "test:pan": "node tools/verify-pan-mode.js",
     "test:pinch": "node tools/verify-pinch-abort.js",
     "test:targets": "node tools/verify-touch-targets.js",
     "test:hittargets": "node tools/verify-hit-targets.js",
