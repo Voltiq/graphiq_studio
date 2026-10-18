@@ -322,25 +322,49 @@ export const test = base.extend<{
   hardware: [{ cores: 16, memoryGB: 8 }, { option: true }],
   // `provide` is Playwright's `use` — renamed, or the React-hooks lint takes it for a hook.
   app: async ({ page, keepStartCard, hardware, filePickers }, provide) => {
-    if (!filePickers) {
-      await page.addInitScript(() => {
-        const w = window as unknown as Record<string, unknown>;
-        delete w.showSaveFilePicker;
-        delete w.showOpenFilePicker;
-      });
-    }
-    if (hardware) {
-      await page.addInitScript((hw) => {
-        Object.defineProperty(navigator, "hardwareConcurrency", { get: () => hw.cores, configurable: true });
-        Object.defineProperty(navigator, "deviceMemory", { get: () => hw.memoryGB, configurable: true });
-      }, hardware);
-    }
-    const app = new App(page);
-    await app.boot({ keepStartCard });
+    const app = await bootApp(page, { keepStartCard, hardware, filePickers });
     await provide(app);
     expect(app.errors, "page errors during the test").toEqual([]);
   },
 });
+
+export interface BootOptions {
+  keepStartCard?: boolean;
+  hardware?: Hardware | null;
+  filePickers?: boolean;
+  /** localStorage entries written before any app code runs — a preference the
+   *  session should start with (e.g. `{ "pe-colorspace": "display-p3" }`). */
+  storage?: Record<string, string>;
+}
+
+/** Boot Graphiq on any page, the way the `app` fixture does. For a test that
+ *  needs a SECOND, independent session (its own context, its own storage):
+ *  `bootApp(await (await browser.newContext({ baseURL })).newPage(), …)`.
+ *  The defaults match the fixture's: hardware pinned, pickers present. */
+export async function bootApp(page: Page, opts: BootOptions = {}): Promise<App> {
+  const { keepStartCard = false, hardware = { cores: 16, memoryGB: 8 }, filePickers = true, storage } = opts;
+  if (storage) {
+    await page.addInitScript((entries) => {
+      for (const [k, v] of Object.entries(entries)) localStorage.setItem(k, v);
+    }, storage);
+  }
+  if (!filePickers) {
+    await page.addInitScript(() => {
+      const w = window as unknown as Record<string, unknown>;
+      delete w.showSaveFilePicker;
+      delete w.showOpenFilePicker;
+    });
+  }
+  if (hardware) {
+    await page.addInitScript((hw) => {
+      Object.defineProperty(navigator, "hardwareConcurrency", { get: () => hw.cores, configurable: true });
+      Object.defineProperty(navigator, "deviceMemory", { get: () => hw.memoryGB, configurable: true });
+    }, hardware);
+  }
+  const app = new App(page);
+  await app.boot({ keepStartCard });
+  return app;
+}
 
 /** Device profiles for `test.use(...)`: the ones the mobile rails are written against. */
 export const PHONE = { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true };

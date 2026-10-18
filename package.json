@@ -10,7 +10,6 @@
     "perf": "node tools/perf-suite.js",
     "bench": "node tools/bench-track.js",
     "test": "vitest run",
-    "test:colorspace": "node tools/verify-colorspace-roundtrip.js",
     "test:panels": "node tools/verify-panel-groups.js",
     "test:print": "node tools/verify-print.js",
     "test:safearea": "node tools/verify-safe-area.js",
