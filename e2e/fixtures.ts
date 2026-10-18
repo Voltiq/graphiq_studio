@@ -44,6 +44,14 @@ export class App {
 
   async boot(opts: { keepStartCard?: boolean } = {}): Promise<void> {
     const { page } = this;
+    /* GQ_THROTTLE=<n>: run the page n× slower (CDP CPU throttling) — a CI runner
+       on a fast desk. Load-dependent behaviour (coalesced pointer events, worker
+       timing) only shows up there otherwise. */
+    const throttle = Number(process.env.GQ_THROTTLE || 0);
+    if (throttle > 1) {
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send("Emulation.setCPUThrottlingRate", { rate: throttle });
+    }
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.waitForSelector('[data-tour="canvas"]', { timeout: 60_000 });
     await page.waitForFunction(() => typeof window.graphiq === "object", null, { timeout: 30_000 });

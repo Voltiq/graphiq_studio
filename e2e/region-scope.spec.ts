@@ -354,6 +354,11 @@ test("live frame: the region-patched filter frame matches a full-res frame", asy
        - ab: worker product vs inline render, compared directly. */
     let preDiff = 0;
     let bx = [LW, LH, -1, -1];
+    /* The first few differing pixels, whole: low alpha with a large RGB gap
+       would mean un-premultiplying amplified a 1-level difference; high alpha
+       with a 1-level RGB gap would mean plain rounding in a different place. */
+    const samples: string[] = [];
+    const rgba = (a: number[] | null, p: number) => (a ? a.slice(p * 4, p * 4 + 4).join(",") : "-");
     for (let i = 0; i < on.px!.length; i++) {
       const pix = i >> 2;
       const x = pix % LW;
@@ -370,10 +375,13 @@ test("live frame: the region-patched filter frame matches a full-res frame", asy
         outN++;
         if (d > outWorst) outWorst = d;
         bx = [Math.min(bx[0], x), Math.min(bx[1], y), Math.max(bx[2], x), Math.max(bx[3], y)];
+        if (samples.length < 3 && (i & 3) === 0) {
+          samples.push(`(${x},${y}) on ${rgba(on.px, pix)} off ${rgba(off.px, pix)} pre ${rgba(on.pre, pix)}`);
+        }
       }
     }
     const where = bx[2] < 0 ? "none" : `x ${bx[0]}–${bx[2]}, y ${bx[1]}–${bx[3]} of ${LW}×${LH}`;
-    const diag = `preDiff ${preDiff} bytes; seeded diffs: ${where} (stroke row y≈${Math.round(LH * fy)}); filterAB ${ab}`;
+    const diag = `preDiff ${preDiff} bytes; seeded diffs: ${where} (stroke row y≈${Math.round(LH * fy)}); filterAB ${ab}; samples ${samples.join(" | ") || "none"}`;
     expect.soft(inN, `${name}: PATCHED pixels byte-identical to the full-res frame (worst Δ ${inWorst}) — ${diag}`).toBe(0);
     // "Identical" over a band the stroke never reached would prove nothing.
     expect.soft(painted, `${name}: the band is pixels the stroke actually repainted`).toBeGreaterThan(500);
