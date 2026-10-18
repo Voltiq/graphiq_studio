@@ -10,7 +10,6 @@
     "perf": "node tools/perf-suite.js",
     "bench": "node tools/bench-track.js",
     "test": "vitest run",
-    "test:edge": "node tools/verify-edge-swipe.js",
     "test:modifiers": "node tools/verify-modifiers.js",
     "test:commit": "node tools/verify-commit-cancel.js",
     "test:reorder": "node tools/verify-layer-reorder.js",

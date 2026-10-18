@@ -125,11 +125,6 @@ jobs:
 
       # Each harness exits non-zero on failure and prints its own PASS/FAIL lines.
       # They are separate steps so the summary names which one broke.
-      - name: Edge strips stand aside for the canvas
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:edge -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
       - name: Latched modifiers reach the canvas
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:modifiers -- --url http://localhost:3000

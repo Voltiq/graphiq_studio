@@ -300,6 +300,29 @@ export class App {
   }
   private cdpSession: import("@playwright/test").CDPSession | null = null;
 
+  /* A REAL finger. In a `hasTouch` context `page.mouse` still delivers
+     `pointerType: "mouse"`, and Playwright's touchscreen only taps, so a drag
+     goes through CDP. The point carries a radius and force like a finger. */
+  private finger: { x: number; y: number } | null = null;
+  private touchAt = (x: number, y: number) => [{ x, y, radiusX: 12, radiusY: 12, force: 1, id: 1 }];
+  async touchDown(x: number, y: number): Promise<void> {
+    this.finger = { x, y };
+    await this.cdp("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: this.touchAt(x, y) });
+  }
+  /** Move the finger down to (x, y) in `steps`, so the app sees moves, not a teleport. */
+  async touchMove(x: number, y: number, steps = 6): Promise<void> {
+    const from = this.finger ?? { x, y };
+    for (let i = 1; i <= steps; i++) {
+      const at = { x: from.x + ((x - from.x) * i) / steps, y: from.y + ((y - from.y) * i) / steps };
+      await this.cdp("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: this.touchAt(at.x, at.y) });
+    }
+    this.finger = { x, y };
+  }
+  async touchUp(): Promise<void> {
+    await this.cdp("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    this.finger = null;
+  }
+
   /** Open a panel by its `data-panel-id`, whichever shell it is in. */
   async openPanelById(id: string): Promise<boolean> {
     const section = this.page.locator(`[data-panel-id="${id}"]`);
