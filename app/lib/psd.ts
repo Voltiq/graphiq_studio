@@ -15,6 +15,8 @@
 // and the required flattened composite (RGB over white) so every reader —
 // including ones that ignore layers — shows the document.
 
+import { DecodeBudget, fitsDecode } from "./decode-limits";
+
 // ---------------------------------------------------------------------------
 // Shared bits
 // ---------------------------------------------------------------------------
@@ -346,16 +348,16 @@ function composeMask(rec: RawRecord, docW: number, docH: number): PsdImage | nul
 }
 
 /** Parse a PSD file. Null = not a readable PSD at all. */
-export function parsePSD(buf: ArrayBuffer): PsdDocument | null {
+export function parsePSD(buf: ArrayBuffer, budget = new DecodeBudget()): PsdDocument | null {
   try {
-    return parsePSDUnsafe(buf);
+    return parsePSDUnsafe(buf, budget);
   } catch {
     return null;
   }
 }
 
 /** The throwing parser — parsePSD's guts, exported for tests/diagnostics. */
-export function parsePSDUnsafe(buf: ArrayBuffer): PsdDocument | null {
+export function parsePSDUnsafe(buf: ArrayBuffer, budget = new DecodeBudget()): PsdDocument | null {
   const r = new Reader(buf);
   if (buf.byteLength < 26 + 4 * 4) return null;
   if (r.ascii(4) !== "8BPS") return null;
@@ -368,7 +370,13 @@ export function parsePSDUnsafe(buf: ArrayBuffer): PsdDocument | null {
   const docW = r.u32();
   const depth = r.u16();
   const mode = r.u16(); // 1 gray, 3 RGB
-  if (docW < 1 || docH < 1 || docW > 30000 || docH > 30000) return null;
+  if (!fitsDecode(docW, docH)) return null;
+  /* Each layer is composed onto a DOCUMENT-sized buffer however small its own
+     rect, and a layer record costs ~100 bytes of file — so 1000 1×1 layers in
+     a big document would ask for 1000 documents' worth. Planes and composites
+     all come out of one budget; past it the file is refused rather than opened
+     with layers silently missing (a save would lose them). */
+  const fitsDoc = () => budget.take(docW * docH * 4);
   const gray = mode === 1;
   const supportedMode = (mode === 3 || mode === 1) && depth === 8;
 
@@ -417,7 +425,11 @@ export function parsePSDUnsafe(buf: ArrayBuffer): PsdDocument | null {
           const isMask = ch.id === -2;
           const rw = isMask && rec.mask ? rec.mask.r - rec.mask.l : rec.rect.r - rec.rect.l;
           const rh = isMask && rec.mask ? rec.mask.b - rec.mask.t : rec.rect.b - rec.rect.t;
-          const plane = readPlane(r, ch.length, Math.max(0, rw), Math.max(0, rh));
+          // A layer's rect is the file's claim too, independent of the document.
+          const pw = Math.max(0, rw);
+          const ph = Math.max(0, rh);
+          if (pw * ph > 0 && (!fitsDecode(pw, ph, 1) || !budget.take(pw * ph))) return null;
+          const plane = readPlane(r, ch.length, pw, ph);
           if (plane) rec.planes.set(ch.id, plane);
           else if (ch.id >= -1) rec.unsupported = true;
         }
@@ -462,6 +474,7 @@ export function parsePSDUnsafe(buf: ArrayBuffer): PsdDocument | null {
       // Folder record = the TOP of the group; carries its props.
       stack.pop();
       const children = pendingGroups.pop() ?? [];
+      if (rec.mask && !fitsDoc()) return null; // its mask is a document's worth
       children.reverse(); // bottom→top collected → top-first
       const g: PsdGroup = {
         kind: "group",
@@ -481,6 +494,9 @@ export function parsePSDUnsafe(buf: ArrayBuffer): PsdDocument | null {
     if (rec.unsupported) {
       notes.push(`"${common.name}": channel data outside the subset — layer imported empty.`);
     }
+    // Budget first: each composite below is a whole document's worth.
+    if (!rec.unsupported && !fitsDoc()) return null;
+    if (rec.mask && !fitsDoc()) return null;
     const node: PsdLayer = {
       kind: "layer",
       ...common,

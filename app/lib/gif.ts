@@ -11,6 +11,8 @@
 // Output is straight RGBA for every frame, already composed to full canvas
 // size — which is what a layer stack needs.
 
+import { DecodeBudget, fitsDecode } from "./decode-limits";
+
 export interface GifFrame {
   /** Full-canvas RGBA, already composed over the preceding frames. */
   rgba: Uint8ClampedArray;
@@ -28,6 +30,9 @@ export interface GifImage {
   frames: GifFrame[];
   /** Netscape loop count: 0 = forever, absent ⇒ 1 pass. */
   loops: number;
+  /** Frames stopped here because the rest would not fit the decode budget —
+   *  the frames kept are complete and in order. */
+  truncated?: boolean;
 }
 
 /** Cheap sniff — the 6-byte signature, before anything is parsed. */
@@ -160,14 +165,20 @@ function readBlocks(b: Uint8Array, p: number): { data: Uint8Array; next: number 
  * corrupt file yields whatever frames were readable, which is friendlier than
  * refusing the import outright.
  */
-export function decodeGif(bytes: Uint8Array): GifImage | null {
+export function decodeGif(bytes: Uint8Array, budget = new DecodeBudget()): GifImage | null {
   if (!isGif(bytes)) return null;
   const b = bytes;
   const u16 = (p: number) => b[p] | (b[p + 1] << 8);
 
   const width = u16(6);
   const height = u16(8);
-  if (width <= 0 || height <= 0) return null;
+  // The header is a claim, not a fact: 65535×65535 decoded into 32 GB.
+  if (!fitsDecode(width, height)) return null;
+  /* Every frame keeps a full-canvas copy, at ~15 bytes of file each — the
+     multiplier that made a 15 KB file ask for 64 GB. The running canvas and
+     the disposal-3 copy come out of the same budget. */
+  if (!budget.take(width * height * 4 * 2)) return null;
+  let truncated = false;
   const flags = b[10];
   const globalTableSize = flags & 0x80 ? 2 << (flags & 7) : 0;
   const bgIndex = b[11];
@@ -240,6 +251,8 @@ export function decodeGif(bytes: Uint8Array): GifImage | null {
     const { data, next } = readBlocks(b, p);
     p = next;
     if (!table || fw <= 0 || fh <= 0) continue;
+    // A frame states its own size too, and LZW allocates it up front.
+    if (!fitsDecode(fw, fh, 1)) continue;
 
     const indices = lzwDecode(data, minCodeSize, fw * fh);
 
@@ -266,6 +279,10 @@ export function decodeGif(bytes: Uint8Array): GifImage | null {
       }
     }
 
+    if (!budget.take(width * height * 4)) {
+      truncated = true;
+      break;
+    }
     frames.push({
       rgba: canvas.slice(),
       delayMs: delayMs > 0 ? delayMs : 100, // 0 means "as fast as possible"; 100ms is the de-facto floor
@@ -294,5 +311,5 @@ export function decodeGif(bytes: Uint8Array): GifImage | null {
     disposal = 0;
   }
 
-  return frames.length ? { width, height, frames, loops } : null;
+  return frames.length ? { width, height, frames, loops, ...(truncated ? { truncated } : {}) } : null;
 }

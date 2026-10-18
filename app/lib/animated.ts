@@ -15,6 +15,7 @@
 //          importing a one-layer "animation".
 
 import { decodeGif, isGif } from "./gif";
+import { DecodeBudget, fitsDecode } from "./decode-limits";
 
 export interface AnimFrame {
   bitmap: CanvasImageSource;
@@ -31,6 +32,10 @@ export interface AnimImage {
   /** Empty unless something couldn't be honoured (shown as a toast). */
   note: string;
 }
+
+/** What the toast says when an animation had more frames than would fit. */
+const truncatedNote = (kept: number, total?: number) =>
+  `Only the first ${kept}${total ? ` of ${total}` : ""} frames were opened — the rest would not fit in memory.`;
 
 /** File extensions that can hold an animation. */
 export const ANIMATED_EXT = /\.(gif|png|apng|webp)$/i;
@@ -105,10 +110,19 @@ async function decodeViaImageDecoder(
     const frames: AnimFrame[] = [];
     let width = 0;
     let height = 0;
+    // One canvas per frame: the same multiplier as GIF frames, so the same budget.
+    const budget = new DecodeBudget();
+    let truncated = false;
     for (let i = 0; i < count; i++) {
       const { image } = await dec.decode({ frameIndex: i });
       width = image.displayWidth || image.codedWidth;
       height = image.displayHeight || image.codedHeight;
+      if (!fitsDecode(width, height) || !budget.take(width * height * 4)) {
+        image.close();
+        if (!frames.length) return null;
+        truncated = true;
+        break;
+      }
       const c = document.createElement("canvas");
       c.width = width;
       c.height = height;
@@ -123,7 +137,7 @@ async function decodeViaImageDecoder(
       height,
       frames,
       loops: track?.repetitionCount === Infinity ? 0 : (track?.repetitionCount ?? 0),
-      note: "",
+      note: truncated ? truncatedNote(frames.length, count) : "",
     };
   } catch {
     return null;
@@ -157,7 +171,7 @@ export async function decodeAnimation(file: File): Promise<AnimImage | null> {
         delayMs: f.delayMs,
       })),
       loops: gif.loops,
-      note: "",
+      note: gif.truncated ? truncatedNote(gif.frames.length) : "",
     };
   }
 

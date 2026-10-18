@@ -14,6 +14,8 @@
 // path): JPEG-in-TIFF, CCITT fax, float/signed samples, planar configuration,
 // FillOrder 2, bit depths below 8.
 
+import { fitsDecode } from "./decode-limits";
+
 /* ----------------------------- shared helpers ------------------------------ */
 
 const T_BYTE = 1;
@@ -235,7 +237,7 @@ export async function decodeTiff(buffer: ArrayBuffer): Promise<TiffDecodeResult 
 
   const width = num(r, e.get(256), 0);
   const height = num(r, e.get(257), 0);
-  if (!width || !height || width * height > 268435456) return null;
+  if (!fitsDecode(width, height)) return null;
   const bitsArr = nums(r, e.get(258), 8);
   const bits = bitsArr.length ? bitsArr[0] : 1;
   const spp = num(r, e.get(277), 1);
@@ -256,6 +258,10 @@ export async function decodeTiff(buffer: ArrayBuffer): Promise<TiffDecodeResult 
   if (![1, 5, 8, 32773, 32946].includes(compression)) return null;
 
   const bytesPer = bits >> 3;
+  /* The samples and the RGBA they become are alive together. Checked before
+     either exists: a 150-byte TIFF claiming 16384² RGBA16 allocated ~2 GB here
+     and only then found it had no pixel data. */
+  if (!fitsDecode(width, height, spp * bytesPer + 4)) return null;
   const rowBytes = width * spp * bytesPer;
   const samples = new Uint8Array(rowBytes * height);
 

@@ -14,6 +14,7 @@
 // Everything is bounds-checked and wrapped — decodeDNG never throws.
 
 import { demosaicMHC, type CFAColor, type RGBOut } from "./demosaic";
+import { fitsDecode } from "./decode-limits";
 
 export interface RawDecodeResult {
   width: number;
@@ -358,6 +359,8 @@ function ljpegDecode(b: Uint8Array): Ljpeg | null {
     o += 2 + len;
   }
   if (scanAt < 0 || !width || !height) return null;
+  // The embedded JPEG's SOF states its own size, independent of the DNG's tags.
+  if (!fitsDecode(width, height, 2 * comps)) return null;
 
   const br = new BitReader(b, scanAt);
   const out = new Uint16Array(width * height * comps);
@@ -460,11 +463,15 @@ function assembleRaw(r: Reader, ifd: IFD, buf: Uint8Array): RawGrid | null {
   const spp = tag1(ifd, 277, 1);
   const compression = tag1(ifd, 259, 1);
   if (!w || !h || w * h > 120_000_000 || bps < 8 || bps > 16 || spp < 1 || spp > 3) return null;
+  if (!fitsDecode(w, h, 2 * spp)) return null;
   const data = new Uint16Array(w * h * spp);
 
   const tileW = tag1(ifd, 322);
   const tileH = tag1(ifd, 323);
   const tiled = tileW > 0 && tileH > 0;
+  // Tile sizes are their own claim, unbounded by the image's: one tile tagged
+  // 65535×65535 would allocate 8 GB below.
+  if (tiled && !fitsDecode(tileW, tileH, 2 * spp)) return null;
   const offsets = tag(ifd, tiled ? 324 : 273);
   const counts = tag(ifd, tiled ? 325 : 279);
   if (!offsets || !counts || offsets.length !== counts.length) return null;
