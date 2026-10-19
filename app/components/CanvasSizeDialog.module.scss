@@ -1,3 +1,5 @@
+@use "../styles/ds" as ds;
+
 .overlay {
   position: fixed;
   /* Ends above a keyboard, so the dialog centres in what is visible. */
@@ -6,6 +8,8 @@
   display: grid;
   place-items: center;
   background: var(--blanket);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
   animation: fade var(--t-med) var(--ease);
 }
 
@@ -21,10 +25,9 @@
 .dialog {
   width: 380px;
   max-width: calc(100vw - 32px);
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  box-shadow: var(--shadow);
+  @include ds.shine(var(--surface-3));
+  border-radius: var(--r-2xl);
+  box-shadow: var(--shadow), var(--inset-hi);
   animation: pop var(--t-med) var(--ease-pop);
   overflow: hidden;
 }
@@ -44,33 +47,17 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--sp-3) var(--sp-4);
-  border-bottom: 1px solid var(--border);
+  padding: 14px 14px 10px 20px;
 
   h2 {
-    font-size: 14px;
-    font-weight: var(--weight-bold);
+    font-size: 15px;
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.012em;
   }
 }
 
 .close {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--r-md);
-  color: var(--text-2);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
-    transform var(--t-fast) var(--ease);
-
-  &:hover {
-    background: var(--wash);
-    color: var(--text);
-  }
-
-  &:active {
-    transform: scale(0.9);
-  }
+  @include ds.icon-btn(30px);
 }
 
 .body {
@@ -100,8 +87,9 @@
 
 .rowLabel {
   font-size: 12px;
+  font-weight: var(--weight-medium);
   color: var(--text-2);
-  width: 56px;
+  width: 64px;
   flex-shrink: 0;
 }
 
@@ -112,25 +100,22 @@
   min-width: 0;
 }
 
+/* A native select drawn as the design system's field, with its own chevron. */
 .preset {
-  height: 34px;
-  padding: 0 10px;
-  font-size: 14px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  color: var(--text);
+  padding: 0 30px 0 11px;
+  font-size: 13px;
+  font-weight: var(--weight-medium);
   outline: none;
   cursor: pointer;
-  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
-
-  &:hover {
-    background: var(--surface-3);
-  }
+  appearance: none;
+  -webkit-appearance: none;
+  @include ds.field(34px);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238a909b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
 
   &:focus {
-    border-color: var(--accent);
-    box-shadow: var(--focus-ring);
+    @include ds.field-focus;
   }
 }
 
@@ -150,20 +135,11 @@
 .numBox {
   display: inline-flex;
   align-items: center;
-  height: 34px;
-  padding: 0 10px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
-
-  &:hover {
-    border-color: var(--border-strong);
-  }
+  padding: 0 11px;
+  @include ds.field(34px);
 
   &:focus-within {
-    border-color: var(--accent);
-    box-shadow: var(--focus-ring);
+    @include ds.field-focus;
   }
 
   input {
@@ -172,7 +148,8 @@
     background: none;
     border: none;
     outline: none;
-    font-size: 14px;
+    font-size: 13px;
+    font-weight: var(--weight-medium);
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     color: var(--text);
@@ -189,6 +166,7 @@
 
 .unit {
   font-size: 11px;
+  font-family: var(--font-mono);
   color: var(--text-3);
   padding-left: 4px;
 }
@@ -249,15 +227,16 @@
   gap: 3px;
 
   button {
-    border-radius: var(--r-xs);
+    border-radius: 7px;
     background: var(--surface-2);
     border: 1px solid var(--border);
+    box-shadow: var(--inset-lo);
     transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
-      transform var(--t-fast) var(--ease);
+      transform var(--t-fast) var(--spring);
 
     &:hover {
-      border-color: var(--border-strong);
-      background: var(--surface-3);
+      border-color: var(--line-2);
+      background: var(--raised);
     }
 
     &:active {
@@ -265,9 +244,8 @@
     }
 
     &[data-active="true"] {
-      background: var(--accent);
-      border-color: var(--accent);
-      box-shadow: var(--focus-ring);
+      border-color: transparent;
+      @include ds.accent-on;
     }
   }
 }
@@ -276,40 +254,17 @@
   display: flex;
   justify-content: flex-end;
   gap: var(--sp-2);
-  padding: var(--sp-3) var(--sp-4);
+  padding: 12px 16px;
   border-top: 1px solid var(--border);
+  background: color-mix(in oklab, var(--surface-2) 60%, transparent);
 }
 
 .btn {
-  height: 34px;
-  padding: 0 16px;
-  font-size: 14px;
-  font-weight: var(--weight-medium);
-  border-radius: var(--r-lg);
-  color: var(--text);
-  background: transparent;
-  border: 1px solid var(--border);
-  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
-    transform var(--t-fast) var(--ease);
-
-  &:hover {
-    background: var(--wash);
-    border-color: var(--border-strong);
-  }
-
-  &:active {
-    transform: scale(0.98);
-  }
+  @include ds.btn(34px);
+  padding: 0 15px;
+  font-size: 13px;
 }
 
 .primary {
-  color: var(--accent-contrast);
-  background: var(--accent);
-  border-color: transparent;
-  font-weight: 600;
-
-  &:hover {
-    background: var(--accent-2);
-    border-color: transparent;
-  }
+  @include ds.btn-primary;
 }

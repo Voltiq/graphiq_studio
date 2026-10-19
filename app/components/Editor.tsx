@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import styles from "./Editor.module.scss";
 import TopBar from "./TopBar";
 import Toolbar from "./Toolbar";
@@ -2739,6 +2740,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // portal in from RightDock, which owns the whole layout model).
   const [leftHost, setLeftHost] = useState<HTMLDivElement | null>(null);
   const [floatHost, setFloatHost] = useState<HTMLDivElement | null>(null);
+  /* Desktop: the status readouts float over the foot of the stage (CanvasArea
+     renders the host); the phone and tablet keep the bar. */
+  const [statusHost, setStatusHost] = useState<HTMLDivElement | null>(null);
   const dockRef = useRef<DockApi | null>(null);
   const [tiffExportOpen, setTiffExportOpen] = useState(false);
   const [pdfExportOpen, setPdfExportOpen] = useState(false);
@@ -6383,16 +6387,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   useEffect(() => {
     try {
       const v = JSON.parse(localStorage.getItem("pe-view") || "{}");
-      /* Rulers default OFF on any TOUCH device and ON everywhere else. A
-         DEFAULT, not an override: a stored boolean wins either way, so View ▸
-         Rulers sticks once it is used.
-
-         Gated on the DEVICE rather than on the phone shell, because the reason
-         is about the pointer: a ruler is for measuring against something you
-         can place precisely, which a fingertip is not, and that is as true of a
-         tablet as of a phone. It is also what takes a 768px tablet's canvas
-         from 690px to 712 — the vertical ruler was the last 22px between the
-         stage and the whole width.
+      /* Rulers default OFF — on every shell, as the design shows the stage and
+         as Photoshop starts — and that is a DEFAULT, not an override: a stored
+         boolean wins either way, so View ▸ Show rulers sticks once it is used.
+         On a touch device it is also the right call on its own merits: a ruler
+         is for measuring against a pointer you can place precisely, and on a
+         768px tablet the vertical one was the last 22px between the stage and
+         the whole width.
 
          The same decision is made before the first paint by the inline script
          in layout.tsx — it has to be, because the stage's size comes from a
@@ -6400,7 +6401,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
          into React state and then drops the bridging attribute, so from here on
          `data-rulers` is the only thing deciding. */
       if (typeof v.rulers === "boolean") setShowRulers(v.rulers);
-      else if (window.matchMedia(TOUCH_QUERY).matches) setShowRulers(false);
+      else setShowRulers(false);
       delete document.documentElement.dataset.rulersDefault;
       if (typeof v.grid === "boolean") setShowGrid(v.grid);
       if (typeof v.snap === "boolean") setSnap(v.snap);
@@ -7714,6 +7715,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         tablet={tablet}
         panelsOpen={tablet && mobileDrawer === "panels"}
         onTogglePanels={() => toggleMobileDrawer("panels")}
+        docs={docs.map((d) => ({ id: d.id, name: d.name }))}
+        activeDocId={activeId}
+        onSelectDoc={(id) => {
+          commitFloatIfAny();
+          setActiveId(id);
+        }}
+        saved={saveState.ok}
         onMenuAction={runCommand}
         onSelectTool={setTool}
         shortcutLabels={shortcutLabels}
@@ -7886,7 +7894,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         <div className={styles.leftDock} ref={setLeftHost} aria-label="Left dock" />
         <CanvasArea
           panMode={mobile && panMode}
-          saveState={saveState}
+          statusHost={!mobile && !tablet ? setStatusHost : undefined}
           docs={docs}
           activeId={activeId}
           onSelectDoc={(id) => {
@@ -8158,24 +8166,34 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onToast={showToast}
         />
       </div>
-      <StatusBar
-        tool={tool}
-        zoom={zoom}
-        onZoomChange={setZoom}
-        foreground={paintColor}
-        width={active.width}
-        height={active.height}
-        colorSpace={colorSpace}
-        unit={prefs.unit}
-        dpi={active.dpi ?? 300}
-        layerCount={collectLeafIds(active.layers).length}
-        isolatedCount={isolatedHiding}
-        onExitIsolate={() => setIsolate(null)}
-        saveState={saveState}
-        selection={active.selection}
-        measure={tool === "measure" ? measure : null}
-        subscribeCursor={subscribeCursor}
-      />
+      {(() => {
+        const desk = !mobile && !tablet;
+        const bar = (
+          <StatusBar
+            variant={desk ? "chips" : "bar"}
+            tool={tool}
+            zoom={zoom}
+            onZoomChange={setZoom}
+            foreground={paintColor}
+            width={active.width}
+            height={active.height}
+            colorSpace={colorSpace}
+            unit={prefs.unit}
+            dpi={active.dpi ?? 300}
+            layerCount={collectLeafIds(active.layers).length}
+            isolatedCount={isolatedHiding}
+            onExitIsolate={() => setIsolate(null)}
+            saveState={saveState}
+            selection={active.selection}
+            measure={tool === "measure" ? measure : null}
+            subscribeCursor={subscribeCursor}
+          />
+        );
+        /* Nothing until the host exists, rather than a bar for one frame that
+           then jumps into the stage. */
+        if (!desk) return bar;
+        return statusHost ? createPortal(bar, statusHost) : null;
+      })()}
 
       {/* -------- Mobile shell: bottom bar, drawer scrim, edge-swipe strips ---- */}
       {mobile && (
@@ -8239,6 +8257,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             onToggle={toggleMobileDrawer}
             panMode={panMode}
             onTogglePan={() => setPanMode((v) => !v)}
+            tool={tool}
+            onToolChange={(id) => {
+              setTool(id);
+              setMobileDrawer(null);
+            }}
           />
           {mobileDrawer ? (
             <div

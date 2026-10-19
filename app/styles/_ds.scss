@@ -1,0 +1,518 @@
+/* ===========================================================================
+   Graphiq design system — shared component mixins
+   The tokens live in globals.scss; these are the recurring SHAPES built from
+   them, so a button in a dialog and a button in a panel cannot drift apart.
+   Use from a module with `@use "../styles/ds" as ds;` and `@include ds.btn;`.
+   =========================================================================== */
+
+/* ---- Edge shine -------------------------------------------------------------
+   A 1px border that is lit from above: bright at the top edge, nearly gone at
+   the bottom. Drawn as a border-box gradient UNDER a padding-box fill, so the
+   fill colour lives in `--fill` and a hover only has to change that. */
+@mixin shine($fill: var(--surface)) {
+  --fill: #{$fill};
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--fill), var(--fill)) padding-box,
+    linear-gradient(180deg, var(--shine-top), var(--shine-bot)) border-box;
+}
+
+/* Raised card: the chrome's panels, popovers and dialogs. */
+@mixin card($fill: var(--surface), $radius: var(--r-xl)) {
+  @include shine($fill);
+  border-radius: $radius;
+  box-shadow: var(--shadow-md), var(--inset-hi);
+}
+
+/* Floating overlay: menus, selects, popovers. */
+@mixin overlay($radius: var(--r-xl)) {
+  @include shine(var(--surface-3));
+  border-radius: $radius;
+  box-shadow: var(--shadow), var(--inset-hi);
+}
+
+/* Frosted glass for things that float over the canvas. */
+@mixin glass {
+  background: var(--glass);
+  border: 1px solid var(--line-2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  backdrop-filter: blur(16px) saturate(1.4);
+  box-shadow: var(--shadow), var(--inset-hi);
+}
+
+/* ---- Buttons ---------------------------------------------------------------
+   Secondary: a raised face with the shine. Primary: the accent gradient with
+   a lit rim and a soft coloured drop. Both press down 1px. */
+@mixin press {
+  transition:
+    transform var(--t-fast) var(--ease),
+    filter var(--t-med) var(--ease),
+    box-shadow var(--t-med) var(--ease),
+    color var(--t-fast) var(--ease);
+
+  &:active:not(:disabled) {
+    transform: translateY(1px) scale(0.98);
+  }
+}
+
+@mixin btn($h: 34px) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: $h;
+  padding: 0 14px;
+  border-radius: 11px;
+  font-size: 13px;
+  font-weight: var(--weight-regular);
+  white-space: nowrap;
+  color: var(--text);
+  @include shine(var(--raised));
+  box-shadow: var(--shadow-sm), var(--inset-hi);
+  @include press;
+
+  &:hover:not(:disabled) {
+    --fill: var(--raised-2);
+  }
+
+  &:active:not(:disabled) {
+    box-shadow: none;
+  }
+
+  &:disabled {
+    opacity: 0.42;
+    cursor: not-allowed;
+    filter: saturate(0.6);
+  }
+}
+
+@mixin btn-primary {
+  color: var(--accent-contrast);
+  border: 1px solid transparent;
+  background:
+    var(--accent-fill) padding-box,
+    linear-gradient(180deg, rgb(255 255 255 / 38%), rgb(255 255 255 / 5%)) border-box;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 22%),
+    var(--accent-glow),
+    0 1px 2px rgb(0 0 0 / 30%);
+  text-shadow: 0 1px 0 rgb(0 0 0 / 18%);
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.08) saturate(1.05);
+  }
+
+  &:active:not(:disabled) {
+    box-shadow: inset 0 2px 4px rgb(0 0 0 / 25%);
+  }
+}
+
+@mixin btn-danger {
+  color: #fff;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--danger-bold), white 10%), var(--danger-bold)) padding-box,
+    linear-gradient(180deg, rgb(255 255 255 / 32%), rgb(255 255 255 / 4%)) border-box;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 20%),
+    0 2px 8px -3px color-mix(in oklab, var(--danger-bold) 70%, transparent);
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+}
+
+@mixin btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--text-2);
+
+  &:hover:not(:disabled) {
+    background: var(--wash);
+    color: var(--text);
+  }
+}
+
+/* Square icon button: a full-strength glyph on nothing, a raised tile on
+   hover, a little squeeze when pressed. */
+@mixin icon-btn($size: 32px, $radius: var(--r-md)) {
+  display: inline-grid;
+  place-items: center;
+  width: $size;
+  height: $size;
+  flex-shrink: 0;
+  border-radius: $radius;
+  color: var(--text);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+
+  &:hover:not(:disabled) {
+    background: var(--raised);
+    color: var(--text);
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.9);
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+}
+
+/* The selected/on state shared by tool buttons and toggled icon buttons. */
+@mixin accent-on {
+  color: var(--accent-contrast);
+  background: var(--accent-fill);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 25%),
+    var(--accent-glow);
+}
+
+/* ---- Fields ----------------------------------------------------------------
+   A recessed well: container fill, hairline, inner shadow. Focus lights the
+   rim in the accent and adds a soft 3px halo. */
+@mixin field($h: 30px) {
+  height: $h;
+  background: var(--surface-2);
+  border: 1px solid var(--input);
+  border-radius: var(--r-md);
+  box-shadow: var(--inset-lo);
+  color: var(--text);
+  transition:
+    border-color var(--t-med) var(--ease),
+    box-shadow var(--t-med) var(--ease),
+    background var(--t-fast) var(--ease);
+
+  &:hover {
+    border-color: var(--line-2);
+  }
+}
+
+@mixin field-focus {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* ---- Slider ---------------------------------------------------------------
+   6px track with the accent gradient up to `--pct`; a white, lit thumb that
+   grows on a spring and picks up an accent halo while held. Apply to an
+   `input[type="range"]`. */
+@mixin range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: radial-gradient(circle at 50% 30%, #fff, #e7e8ee);
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 16%),
+    0 2px 6px rgb(0 0 0 / 35%);
+}
+
+@mixin range($default-pct: 0%) {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background:
+    var(--accent-fill-x) 0 0 / var(--pct, #{$default-pct}) 100% no-repeat,
+    var(--track);
+  box-shadow: var(--inset-lo);
+  cursor: pointer;
+  outline: none;
+  --accent-fill-x: linear-gradient(90deg, var(--accent-lo), var(--accent-hi));
+
+  &::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    @include range-thumb;
+    transition:
+      transform var(--t-fast) var(--spring),
+      box-shadow var(--t-med) var(--ease);
+  }
+
+  &:hover::-webkit-slider-thumb {
+    transform: scale(1.1);
+    box-shadow:
+      0 0 0 1px rgb(0 0 0 / 16%),
+      0 2px 6px rgb(0 0 0 / 35%),
+      0 0 0 5px var(--accent-soft);
+  }
+
+  &:active::-webkit-slider-thumb {
+    transform: scale(1.2);
+    box-shadow:
+      0 0 0 1px rgb(0 0 0 / 16%),
+      0 2px 8px rgb(0 0 0 / 40%),
+      0 0 0 8px var(--accent-soft);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--inset-lo);
+  }
+
+  &:focus-visible::-webkit-slider-thumb {
+    box-shadow:
+      0 0 0 2px var(--accent),
+      0 0 0 6px var(--accent-soft);
+  }
+
+  &::-moz-range-thumb {
+    @include range-thumb;
+  }
+
+  &::-moz-range-track {
+    background: transparent;
+  }
+}
+
+/* ---- Switch ---------------------------------------------------------------
+   For an element that is the track; the knob is its ::after. The knob
+   stretches while pressed and lands on a spring. */
+@mixin switch($w: 32px, $h: 18px) {
+  $k: $h - 6px;
+  position: relative;
+  flex-shrink: 0;
+  width: $w;
+  height: $h;
+  border-radius: var(--r-pill);
+  background: var(--raised-2);
+  box-shadow: var(--inset-lo);
+  transition:
+    background var(--t-med) var(--ease),
+    box-shadow var(--t-med) var(--ease);
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: $k;
+    height: $k;
+    border-radius: 50%;
+    background: linear-gradient(#fff, #e9eaf0);
+    box-shadow: 0 1px 3px rgb(0 0 0 / 35%);
+    transition:
+      transform var(--t-med) var(--spring),
+      width var(--t-fast) var(--ease);
+  }
+
+  &[data-on="true"] {
+    background: var(--accent-fill);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 20%),
+      0 3px 10px -4px var(--accent-solid);
+
+    &::after {
+      transform: translateX($w - $k - 6px);
+    }
+  }
+}
+
+/* ---- Segmented ------------------------------------------------------------
+   An inset well; the chosen segment rises out of it. */
+@mixin seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 11px;
+  background: var(--surface-2);
+  box-shadow: var(--inset-lo);
+}
+
+@mixin seg-btn($h: 26px) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: $h;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: var(--weight-medium);
+  color: var(--text-3);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+
+  &:hover {
+    color: var(--text);
+  }
+}
+
+@mixin seg-on {
+  color: var(--text);
+  background: var(--raised-2);
+  box-shadow: var(--shadow-sm), var(--inset-hi);
+}
+
+/* ---- Menus ----------------------------------------------------------------
+   The popup and its rows. Hover is the soft accent tint, not a solid fill:
+   the row stays readable and the shortcut stays quiet. */
+@mixin menu {
+  @include overlay;
+  padding: 6px;
+}
+
+@mixin menu-item($h: 30px) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: $h;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: 13px;
+  text-align: left;
+  color: var(--text);
+  transition: background var(--t-fast) var(--ease);
+
+  &:hover:not(:disabled) {
+    background: var(--accent-soft);
+  }
+
+  &:active:not(:disabled) {
+    background: color-mix(in oklab, var(--accent-solid) 26%, transparent);
+  }
+
+  &:disabled {
+    color: var(--text-3);
+    cursor: default;
+  }
+}
+
+@mixin menu-sep {
+  height: 1px;
+  margin: 5px 6px;
+  background: var(--border);
+}
+
+/* Section label inside a menu or panel: small, quiet, tracked caps. */
+@mixin eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* Keyboard hint chip. */
+@mixin kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--text-2);
+  box-shadow: inset 0 -1px 0 var(--line-2);
+}
+
+/* Pop-in for menus and popovers. Each module declares its own keyframes (CSS
+   modules scope them), so this is the shared timing only. */
+@mixin pop-in($name) {
+  animation: $name var(--t-short) var(--ease);
+}
+
+@mixin pop-keyframes($name) {
+  @keyframes #{$name} {
+    from {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}
+
+/* ---- Desktop shell ---------------------------------------------------------
+   The floating-card layout (rail, stage, dock and options bar as separate
+   cards on the app background) is the DESKTOP shell's. The phone and tablet
+   shells keep their edge-to-edge drawers, which are styled in globals.scss, so
+   card geometry is scoped away from them here. Only layout/surface rules go in
+   this block — state styling stays unscoped so it reads the same everywhere. */
+@mixin desktop-shell {
+  :global(html:not([data-mobile="true"]):not([data-tablet="true"])) & {
+    @content;
+  }
+}
+
+/* ---- Choices ----------------------------------------------------------------
+   A choice card (radio-like option row), a radio and a checkbox: recessed
+   until chosen; chosen takes the accent (tint + rim for the card, the fill
+   gradient for the radio and the box). */
+@mixin choice-card {
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+
+  &:hover {
+    border-color: var(--line-2);
+    background: var(--raised);
+  }
+}
+
+@mixin choice-card-on {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+@mixin radio($size: 18px) {
+  position: relative;
+  width: $size;
+  height: $size;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line-2);
+  background: var(--surface-2);
+  box-shadow: var(--inset-lo);
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease),
+    box-shadow var(--t-med) var(--ease);
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 4px;
+    border-radius: 50%;
+    background: #fff;
+    transform: scale(0);
+    transition: transform var(--t-med) var(--spring);
+  }
+}
+
+@mixin radio-on {
+  border-color: transparent;
+  background: var(--accent-fill);
+  box-shadow: 0 3px 8px -3px var(--accent-solid);
+
+  &::after {
+    transform: scale(1);
+  }
+}
+
+/* ---- Phone shell -------------------------------------------------------------
+   The phone's own geometry (html[data-mobile="true"]): a header straight on
+   the background, the stage as a rounded well, a glass tool dock, and the tool
+   options as a card inside the stage. */
+@mixin phone-shell {
+  :global(html[data-mobile="true"]) & {
+    @content;
+  }
+}

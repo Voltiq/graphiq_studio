@@ -3,6 +3,12 @@ export interface MenuItem {
   shortcut?: string;
   separatorAfter?: boolean;
   disabled?: boolean;
+  /** Starts a labelled section: a small heading drawn above this row. */
+  group?: string;
+  /** Starts a new COLUMN in the desktop dropdown (long menus sit side by side
+   *  rather than running off the bottom of the screen). The touch sheet ignores
+   *  it and shows one list. */
+  column?: boolean;
   /** The command this row runs. Required: a row with none is a dead row, and
    *  File ▸ Close was one. The editor's dispatch must handle every id here. */
   action: string;
@@ -81,33 +87,45 @@ const MENU_DEFS = [
   },
   {
     label: "Layer",
+    /* 46 rows: as one column it was 1,584px tall in a 900px window, and its
+       last rows could not be reached. Three titled columns instead. */
     items: [
-      { label: "New layer", shortcut: "Ctrl+Shift+N", action: "layer-new" },
+      { label: "New layer", shortcut: "Ctrl+Shift+N", group: "New", action: "layer-new" },
       { label: "New fill: solid color…", action: "fill-solid" },
-      { label: "Frame from layer", action: "frame-from-layer" },
       { label: "New fill: gradient…", action: "fill-gradient" },
+      { label: "Frame from layer", action: "frame-from-layer" },
       { label: "Duplicate layer", action: "layer-duplicate" },
-      { label: "Delete layer", separatorAfter: true, action: "layer-delete" },
-      { label: "Group layers", shortcut: "Ctrl+G", action: "layer-group" },
+      { label: "Delete layer", action: "layer-delete" },
+      { label: "Group layers", shortcut: "Ctrl+G", group: "Arrange", action: "layer-group" },
       { label: "Ungroup", action: "layer-ungroup" },
-      { label: "Isolate layers", shortcut: "Ctrl+Alt+L", separatorAfter: true, action: "layer-isolate" },
-      { label: "Merge down", shortcut: "Ctrl+E", action: "layer-merge-down" },
+      { label: "Isolate layers", shortcut: "Ctrl+Alt+L", action: "layer-isolate" },
+      { label: "Clipping mask", shortcut: "Ctrl+Alt+G", action: "layer-clip" },
+      { label: "Merge down", shortcut: "Ctrl+E", group: "Merge", action: "layer-merge-down" },
       { label: "Merge visible", action: "layer-merge-visible" },
       { label: "Stamp visible", shortcut: "Ctrl+Alt+Shift+E", action: "layer-stamp-visible" },
       { label: "Flatten image", action: "layer-flatten" },
-      { label: "Clipping mask", shortcut: "Ctrl+Alt+G", separatorAfter: true, action: "layer-clip" },
-      { label: "Add layer mask", action: "mask-add" },
+      { label: "Add layer mask", group: "Masks", column: true, action: "mask-add" },
       { label: "Hide-all mask", action: "mask-add-hide" },
       { label: "Mask from selection", action: "mask-from-sel" },
-      { label: "Delete layer mask", action: "mask-delete" },
-      { label: "Apply layer mask", action: "mask-apply" },
       { label: "Mask to selection", action: "mask-to-sel" },
-      { label: "Vector mask from path", action: "vmask-add" },
+      { label: "Apply layer mask", action: "mask-apply" },
+      { label: "Delete layer mask", action: "mask-delete" },
+      { label: "Vector mask from path", group: "Vector & text", action: "vmask-add" },
+      { label: "Invert vector mask", action: "vmask-invert" },
+      { label: "Delete vector mask", action: "vmask-delete" },
       { label: "Text on path", action: "text-on-path" },
       { label: "Take text off its path", action: "text-off-path" },
-      { label: "Invert vector mask", action: "vmask-invert" },
-      { label: "Delete vector mask", separatorAfter: true, action: "vmask-delete" },
-      { label: "Adjustment: brightness / contrast", action: "adj-brightness-contrast" },
+      { label: "Layer style…", group: "Style", action: "fx-open" },
+      { label: "FX: drop shadow", action: "fx-add-dropShadow" },
+      { label: "FX: outer glow", action: "fx-add-outerGlow" },
+      { label: "FX: stroke", action: "fx-add-stroke" },
+      { label: "Clear layer style", action: "fx-clear" },
+      {
+        label: "Adjustment: brightness / contrast",
+        group: "Adjustment layers",
+        column: true,
+        action: "adj-brightness-contrast",
+      },
       { label: "Adjustment: exposure", action: "adj-exposure" },
       { label: "Adjustment: vibrance", action: "adj-vibrance" },
       { label: "Adjustment: color balance", action: "adj-color-balance" },
@@ -122,12 +140,7 @@ const MENU_DEFS = [
       { label: "Adjustment: invert", action: "adj-x-invert" },
       { label: "Adjustment: equalize", action: "adj-x-equalize" },
       { label: "Adjustment: photo filter — warm", action: "adj-photo-filter-warm" },
-      { label: "Adjustment: photo filter — cool", action: "adj-photo-filter-cool", separatorAfter: true },
-      { label: "Layer style…", action: "fx-open" },
-      { label: "FX: drop shadow", action: "fx-add-dropShadow" },
-      { label: "FX: outer glow", action: "fx-add-outerGlow" },
-      { label: "FX: stroke", action: "fx-add-stroke" },
-      { label: "Clear layer style", action: "fx-clear" },
+      { label: "Adjustment: photo filter — cool", action: "adj-photo-filter-cool" },
     ],
   },
   {

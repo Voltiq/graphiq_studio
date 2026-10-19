@@ -275,13 +275,50 @@ export class App {
     });
   }
 
+  /** Open the command palette the way a user of this shell would: the search
+   *  field in the top bar, or — on the phone, whose header has none — the
+   *  "Search all commands" row that leads the menu sheet. */
+  async openPalette(): Promise<void> {
+    const { page } = this;
+    const field = page.locator('button[aria-label="Open the command palette"]');
+    if (await field.count()) {
+      await field.first().click();
+    } else {
+      await page.locator('button[aria-label="Menu"]').first().click();
+      await page.locator("[data-sheet-search]").first().click();
+    }
+    await this.settle(400);
+  }
+
+  /** Choose a tool on the desktop rail: its slot button if the slot is showing
+   *  it, otherwise from the flyout of the slot that holds it (right-click opens
+   *  one; each is tried until the tool turns up). */
+  async pickTool(name: string): Promise<void> {
+    const { page } = this;
+    const rail = page.locator('[data-tour="toolbar"]');
+    const direct = rail.getByRole("button", { name: new RegExp(`^${name}\\b`) });
+    if (await direct.count()) {
+      await direct.first().click();
+      await this.settle(300);
+      return;
+    }
+    const slots = rail.locator('button[aria-haspopup="menu"]');
+    for (let i = 0; i < (await slots.count()); i++) {
+      await slots.nth(i).click({ button: "right" });
+      const item = page.getByRole("menuitemradio", { name: new RegExp(`^${name}\\b`) });
+      if (await item.count()) {
+        await item.first().click();
+        await this.settle(300);
+        return;
+      }
+      await page.keyboard.press("Escape");
+    }
+    throw new Error(`no rail slot holds a tool named ${name}`);
+  }
+
   /** Open a dock panel that starts collapsed (its rows only render while open). */
   async expandPanel(name: string): Promise<void> {
-    const panel = this.page.locator(`[data-panel-id="${name.toLowerCase()}"]`);
-    if ((await panel.getAttribute("data-open")) !== "true") {
-      await this.page.getByRole("button", { name: `Expand ${name}` }).first().click();
-      await this.settle(400);
-    }
+    await this.openPanelById(name.toLowerCase());
   }
 
   /** Give the display unusable edges, the way a notch and a home indicator
@@ -332,12 +369,15 @@ export class App {
     });
   }
 
-  /** Open a panel by its `data-panel-id`, whichever shell it is in. */
+  /** Open a panel by its `data-panel-id`, whichever shell it is in: the
+   *  phone's sheet picks a panel from its chip strip, a dock unfolds it. */
   async openPanelById(id: string): Promise<boolean> {
     const section = this.page.locator(`[data-panel-id="${id}"]`);
     if (!(await section.count())) return false;
     if ((await section.first().getAttribute("data-open")) === "true") return true;
-    await section.locator('button[class*="panelCaret"]').first().click();
+    const chip = this.page.locator(`[data-panel-chip="${id}"]`);
+    if (await chip.count()) await chip.first().click();
+    else await section.locator('button[class*="panelCaret"]').first().click();
     await this.settle(650);
     return (await section.first().getAttribute("data-open")) === "true";
   }

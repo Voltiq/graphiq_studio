@@ -1,7 +1,10 @@
+@use "../styles/ds" as ds;
+
 /* Floating, non-blocking notification near the top of the canvas. */
 .toast {
   position: fixed;
-  top: 78px;
+  /* Just inside the top of the stage, clear of the bars. */
+  top: calc(var(--chrome-top) + 12px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 150;
@@ -9,13 +12,12 @@
   align-items: center;
   gap: var(--sp-2);
   max-width: min(460px, calc(100vw - 32px - var(--safe-l) - var(--safe-r)));
-  padding: 9px 8px 9px 13px;
-  font-size: 14px;
+  padding: 8px 8px 8px 14px;
+  font-size: 13px;
+  font-weight: var(--weight-medium);
   color: var(--text);
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
+  @include ds.glass;
+  border-radius: var(--r-xl);
   animation: toastIn var(--t-med) var(--ease-pop);
 }
 
@@ -40,17 +42,6 @@
 }
 
 .close {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  border-radius: var(--r-sm);
+  @include ds.icon-btn(24px, var(--r-sm));
   color: var(--text-3);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
-
-  &:hover {
-    background: var(--wash-2);
-    color: var(--text);
-  }
 }

@@ -29,7 +29,7 @@ export function resolvedDark(theme: Theme): boolean {
   return theme === "dark";
 }
 
-/** Magiq-style quick toggle: a quiet icon button that flips light ↔ dark.
+/** Quick toggle: a quiet icon button that flips light ↔ dark.
  *  From `system` it jumps to the explicit opposite of the current look. */
 export default function ThemeToggle({ initialTheme }: { initialTheme: Theme }) {
   const [theme, setTheme] = useState<Theme>(() => currentTheme(initialTheme));

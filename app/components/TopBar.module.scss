@@ -1,3 +1,5 @@
+@use "../styles/ds" as ds;
+
 .topbar {
   /* The bar reserves the top inset as PADDING inside a taller box: its
      background still reaches the top of the display, but nothing pressable
@@ -13,6 +15,17 @@
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   z-index: 60;
+
+  /* Desktop: the bar sits straight on the app background, like the design —
+     the cards below it carry the surfaces. Brand, menus, a centred search
+     field, then the history buttons and Export. */
+  @include ds.desktop-shell {
+    gap: 14px;
+    background: none;
+    border-bottom: 0;
+    padding-left: calc(var(--chrome-side) + var(--safe-l));
+    padding-right: calc(var(--chrome-side) + var(--safe-r));
+  }
 }
 
 /* -------------------------------- Brand ----------------------------------- */
@@ -20,13 +33,24 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding-right: var(--sp-2);
+  padding-right: var(--sp-3);
+
+  @include ds.desktop-shell {
+    gap: 10px;
+    padding-right: 0;
+    margin-right: 6px;
+  }
 }
 
 .logo {
   width: 26px;
   height: 26px;
   flex-shrink: 0;
+
+  @include ds.desktop-shell {
+    width: 28px;
+    height: 28px;
+  }
 
   img {
     display: block;
@@ -37,35 +61,38 @@
 }
 
 .brandName {
-  font-weight: var(--weight-bold);
+  font-weight: var(--weight-semibold);
   font-size: 14px;
+  letter-spacing: -0.01em;
 }
 
-/* Quiet product tag beside the name — bordered, not a fill-only pill. */
+/* Quiet product tag beside the name. */
 .brandTag {
-  font-size: 11px;
-  font-weight: var(--weight-medium);
+  font-size: 10.5px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
   color: var(--text-2);
-  padding: 1px 6px;
-  border: 1px solid var(--border);
+  padding: 2px 7px;
   border-radius: var(--r-sm);
-  background: var(--wash);
+  background: var(--wash-2);
+  box-shadow: var(--inset-hi);
 }
 
-/* The Magiq accent dot — the one place the brand carries the accent. */
+/* The accent dot — the one place the brand carries the accent; it glows. */
 .brandDot {
   width: 6px;
   height: 6px;
   flex-shrink: 0;
   border-radius: 50%;
   background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-solid);
 }
 
 /* ------------------------------- Menu bar --------------------------------- */
 .menubar {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
 }
 
 /* Mobile-only: the hamburger that summons the menu sheet, and its scrim. Both
@@ -98,89 +125,76 @@
   position: relative;
 }
 
+/* Menu names: full-strength text, a quiet tile behind the hovered or open one. */
 .menuButton {
+  height: 30px;
   font-size: 13px;
-  font-weight: var(--weight-medium);
-  color: var(--text-2);
-  padding: 6px 11px;
-  border-radius: var(--r-md);
+  font-weight: var(--weight-regular);
+  color: var(--text);
+  padding: 0 10px;
+  border-radius: 8px;
   transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 
-  &:hover {
-    color: var(--text);
-    background: var(--wash);
-  }
-
+  &:hover,
   &[data-active="true"] {
-    color: var(--text);
-    background: var(--wash-2);
+    background: var(--surface-2);
   }
 }
 
-/* Magiq menu: overlay surface + shadow-overlay, tight radius, 6px padding. */
+/* The menu card. Long menus lay their sections out in columns (menus.ts
+   `column`), each section under a small tracked heading (`group`). */
 .dropdown {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
-  min-width: 240px;
-  padding: 6px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow);
+  display: flex;
+  align-items: flex-start;
+  min-width: 248px;
+  /* Never taller than the room under the bar: a menu that ran off the screen
+     left its last rows unreachable. */
+  max-height: calc(100svh - var(--topbar-total) - 24px);
+  overflow-y: auto;
+  @include ds.menu;
   z-index: 80;
-  animation: dropIn var(--t-short) var(--ease);
+  @include ds.pop-in(dropIn);
   transform-origin: top left;
 }
 
-@keyframes dropIn {
-  from {
-    opacity: 0;
-    transform: translateY(-4px) scale(0.985);
-  }
-  to {
-    opacity: 1;
-    transform: none;
+@include ds.pop-keyframes(dropIn);
+
+.menuCol {
+  display: flex;
+  flex-direction: column;
+  min-width: 236px;
+
+  & + & {
+    margin-left: 6px;
+    padding-left: 6px;
+    border-left: 1px solid var(--border);
   }
 }
 
-/* Magiq menu rows: hovering paints the row SOLID accent with inverse text —
-   the check, label and shortcut all flip together. */
+.menuGroup {
+  @include ds.eyebrow;
+  padding: 10px 10px 4px;
+
+  /* The first heading of a column needs no air above it. */
+  [data-menu-col] > :first-child > & {
+    padding-top: 4px;
+  }
+}
+
+/* Rows: hovering lays a soft accent tint behind the row; the label, check and
+   shortcut keep their own colours, so nothing jumps. */
 .menuItem {
-  width: 100%;
-  display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: var(--sp-5);
-  font-size: 13px;
-  padding: 6px 11px 6px 7px;
-  border-radius: var(--r-md);
-  color: var(--text);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  @include ds.menu-item(30px);
+  padding: 0 10px 0 8px;
+  white-space: nowrap;
 
-  &:hover:not(:disabled) {
-    background: var(--accent);
-    color: var(--accent-contrast);
-
-    .menuCheck {
-      color: var(--accent-contrast);
-    }
-
-    .shortcut {
-      color: var(--accent-contrast);
-      border-color: transparent;
-      background: transparent;
-      opacity: 0.85;
-    }
-  }
-
-  &:active:not(:disabled) {
-    background: var(--accent-2);
-  }
-
-  &:disabled {
-    color: var(--text-3);
-    cursor: default;
+  &:hover:not(:disabled) .shortcut {
+    color: var(--text-2);
   }
 }
 
@@ -189,18 +203,18 @@
   align-items: center;
 }
 
-.menuCheck {
+.menuEnd {
   display: inline-flex;
-  width: 18px;
-  flex-shrink: 0;
-  color: var(--accent); /* checked = selected = brand */
-
-  &[data-on="false"] {
-    visibility: hidden;
-  }
+  align-items: center;
+  gap: 10px;
 }
 
-/* Shortcut in quiet mono, Magiq-style (no chip chrome in menu rows). */
+/* The state of a toggle row (View ▸ Snap, Layer ▸ Clipping mask …). */
+.menuSwitch {
+  @include ds.switch(26px, 15px);
+}
+
+/* Shortcut in quiet mono. */
 .shortcut {
   flex-shrink: 0;
   font-size: 11px;
@@ -208,16 +222,26 @@
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   color: var(--text-3);
-  padding: 3px 5px;
-  border-radius: var(--r-sm);
-  border: 1px solid transparent;
   transition: color var(--t-fast) var(--ease);
 }
 
 .menuSep {
-  height: 1px;
-  margin: 4px 8px;
-  background: var(--border);
+  @include ds.menu-sep;
+}
+
+/* The touch sheet shows ONE list: the desktop columns stack, and their
+   dividers go. */
+:global(html[data-touch="true"]) {
+  .dropdown {
+    display: block;
+    max-height: none;
+  }
+
+  .menuCol + .menuCol {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: 0;
+  }
 }
 
 /* -------------------------------- Actions --------------------------------- */
@@ -226,68 +250,74 @@
   display: flex;
   align-items: center;
   gap: var(--sp-1);
+
+  /* the centred search field takes the slack on desktop */
+  @include ds.desktop-shell {
+    margin-left: 0;
+  }
 }
 
 .iconBtn {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--r-lg);
-  color: var(--text-2);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
-    transform var(--t-fast) var(--ease);
-
-  &:hover:not(:disabled) {
-    background: var(--wash);
-    color: var(--text);
-  }
-
-  &:active:not(:disabled) {
-    transform: scale(0.93);
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
+  @include ds.icon-btn(32px);
 }
 
-/* Magiq search pill — now a BUTTON that opens the command palette (Ctrl+K).
-   (The old inline results dropdown moved into CommandPalette.module.scss.) */
+.vsep {
+  width: 1px;
+  height: 22px;
+  margin: 0 6px;
+  background: var(--border);
+}
+
+/* The bar's one primary action. */
+.export {
+  @include ds.btn(34px);
+  @include ds.btn-primary;
+  flex-shrink: 0;
+}
+
+/* The search field — a BUTTON that opens the command palette (Ctrl+K), drawn
+   as a recessed field with the shortcut chip at its end. */
 .search {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  height: 32px;
-  padding: 0 var(--sp-3);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--text-2);
-  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+  padding: 0 6px 0 11px;
+  margin: 0 var(--sp-1);
+  @include ds.field(32px);
+  color: var(--text-3);
+
+  /* Desktop: a 380px field centred between the menus and the actions. */
+  @include ds.desktop-shell {
+    flex: 0 1 380px;
+    min-width: 200px;
+    height: 34px;
+    margin: 0 auto;
+    padding: 0 10px;
+    border-radius: 11px;
+  }
 }
 
 .searchButton {
   cursor: pointer;
   font: inherit;
 
-  &:hover {
-    border-color: var(--border-strong);
-    background: var(--wash);
-  }
-
   &:focus-visible {
-    border-color: var(--focus-color);
+    @include ds.field-focus;
     outline: none;
   }
 }
 
 .searchHint {
-  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-size: 13px;
+  font-weight: var(--weight-medium);
   color: var(--text-3);
 }
-
 /* The word on the phone's trigger. Sized like the other bar text rather than
    the desktop hint, which is deliberately quiet — this one is the primary way
    into the menus and should not read as a placeholder. */
@@ -339,13 +369,125 @@
 
 .searchKbd {
   flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  line-height: 1;
-  color: var(--border-strong);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: 2px 5px;
+  @include ds.kbd;
 }
 
-/* The theme quick-toggle renders as a plain .iconBtn (Magiq: sun/moon). */
+/* The theme quick-toggle renders as a plain .iconBtn (sun/moon). */
+
+/* ---- Phone header ----------------------------------------------------------
+   As in the design: straight on the background, a 44px row with 14px of air
+   above it — menu, the document's name (its menu behind it), undo, redo,
+   Export. */
+.topbar {
+  @include ds.phone-shell {
+    gap: 4px;
+    padding: calc(14px + var(--safe-t)) calc(12px + var(--safe-r)) 8px calc(8px + var(--safe-l));
+    background: none;
+    border-bottom: 0;
+  }
+}
+
+.hamburger,
+.iconBtn {
+  @include ds.phone-shell {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+    color: var(--text);
+  }
+}
+
+.export {
+  @include ds.phone-shell {
+    height: 44px;
+    margin-left: 4px;
+    padding: 0 16px;
+    border-radius: 14px;
+    font-size: 14px;
+
+    /* the word alone, as in the design */
+    svg {
+      display: none;
+    }
+  }
+}
+
+.actions {
+  @include ds.phone-shell {
+    gap: 0;
+  }
+}
+
+.docRoot {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.docTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  height: 44px;
+  padding: 0 6px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+  color: var(--text);
+  transition: background var(--t-fast) var(--ease);
+
+  &:active,
+  &[aria-expanded="true"] {
+    background: var(--wash);
+  }
+}
+
+.docName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Unsaved work: a small accent light beside the name. */
+.docDirty {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-solid);
+}
+
+.docChevron {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+
+.docMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 90;
+  min-width: 220px;
+  max-width: calc(100vw - 24px);
+  display: flex;
+  flex-direction: column;
+  @include ds.menu;
+  @include ds.pop-in(dropIn);
+  transform-origin: top left;
+
+  .menuItem {
+    min-height: 44px;
+    font-size: 14px;
+  }
+}
+
+.docCheck {
+  flex-shrink: 0;
+  color: var(--accent);
+}

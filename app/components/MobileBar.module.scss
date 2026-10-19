@@ -1,8 +1,11 @@
-/* Fixed bottom bar (mobile only). Sits above the drawers so its toggles stay
-   reachable while a drawer is open. This bar IS the bottom chrome on mobile,
-   so its box is --chrome-bottom rather than a second copy of the same sum —
-   the home-indicator inset is padding, so the row of buttons stays clear of
-   it while the bar's background still reaches the bottom of the display. */
+@use "../styles/ds" as ds;
+
+/* The phone's bottom band. This element IS the bottom chrome (its box is
+   --chrome-bottom, so everything anchored to the foot reads one token); the
+   glass dock floats inside it, 10px from the stage above, the sides, and the
+   home indicator below (which is padding, so the dock clears it while the band
+   still reaches the bottom of the display). Above the drawers, so its toggles
+   stay reachable while one is open. */
 .bar {
   position: fixed;
   left: 0;
@@ -16,40 +19,101 @@
   bottom: var(--kb-inset, 0px);
   z-index: 130;
   height: var(--chrome-bottom);
-  padding: 0 calc(var(--sp-2) + var(--safe-r)) var(--safe-b) calc(var(--sp-2) + var(--safe-l));
+  padding: 10px calc(10px + var(--safe-r)) calc(16px + var(--safe-b)) calc(10px + var(--safe-l));
   display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  background: var(--surface);
-  border-top: 1px solid var(--border);
+  align-items: stretch;
+  /* The band is see-through; only the dock takes a press. */
+  pointer-events: none;
 }
 
-.btn {
-  /* Equal thirds. With the tool chip gone the bar carries exactly three
-     destinations, so they share the row rather than huddling at the left edge
-     with two thirds of a 390px bar empty beside them — and each target grows
-     from 44px to roughly 120px in the process. */
-  flex: 1 1 0;
-  min-width: 68px;
-  height: 44px;
+.dock {
+  flex: 1;
+  min-width: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 2px;
-  border-radius: var(--r-md);
-  color: var(--text-2);
-  font-size: 10.5px;
-  font-weight: var(--weight-medium);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+  padding: 6px;
+  border-radius: 24px;
+  pointer-events: auto;
+  @include ds.glass;
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+  background: color-mix(in oklab, var(--surface) 78%, transparent);
+}
+
+/* A dock button: a 48px tile, full-strength glyph. */
+%tile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  color: var(--text);
+  transition:
+    background var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
 
   &:active {
-    background: var(--wash-2);
+    transform: scale(0.92);
   }
+}
+
+/* A quick tool: the active one is the accent tile, as on the desktop rail. */
+.tool {
+  @extend %tile;
+
+  &[data-active="true"] {
+    @include ds.accent-on;
+  }
+}
+
+/* A toggle (pan, the two sheets): on is the soft accent tint, so it never
+   reads as a selected tool. */
+.toggle {
+  @extend %tile;
 
   &[data-active="true"] {
     color: var(--accent);
-    background: var(--selected-bg);
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent-line);
   }
 }
 
+/* The word stays in the button, for assistive tech and for anything that finds
+   the button by its name; the eye gets the glyph. */
+.label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.divider {
+  flex: none;
+  width: 1px;
+  height: 26px;
+  background: var(--line-2);
+}
+
+/* Seven 48px tiles need a 390px screen. Narrower, the tiles drop to the 44px
+   touch floor; on a 320px phone the move tool also steps back into the tools
+   sheet. */
+@media (max-width: 389px) {
+  .tool,
+  .toggle {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+  }
+}
+
+@media (max-width: 359px) {
+  .tool[data-quick="move"] {
+    display: none;
+  }
+}

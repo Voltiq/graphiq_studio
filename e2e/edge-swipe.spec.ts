@@ -21,7 +21,8 @@ test.afterEach(async ({ app }) => {
   expect(app.consoleErrors, "no console errors").toEqual([]);
 });
 
-const Y = 500;
+/* Mid-stage, above the tool's options card (which sits on the stage's foot). */
+const Y = 300;
 const whatIsAt = (page: Page, x: number) =>
   page.evaluate(
     ([x, y]) => {
@@ -108,8 +109,11 @@ for (const [name, pointerType, make] of INPUTS) {
       await input.move(160, Y, 4);
       await app.settle(150);
       const grabbed = await page.evaluate(() => document.documentElement.dataset.toolgrab ?? "");
-      const left = await whatIsAt(page, 4);
-      const right = await whatIsAt(page, 386);
+      /* Inside the stage's own edges, under the strips: the stage is 10px in
+         from the screen's, so the screen's outermost pixels are the stage's
+         margin either way. */
+      const left = await whatIsAt(page, 14);
+      const right = await whatIsAt(page, 376);
       await input.move(4, Y, 6);
       await input.up();
       await app.settle(600);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { ArrowLeftRight, Maximize2, Minus, Plus, X } from "lucide-react";
+import { ArrowLeftRight, Minus, Plus, X } from "lucide-react";
 import styles from "./CanvasArea.module.scss";
 import type { WorkingSpace } from "../lib/colorspace";
 import { budgets, overlayDpr } from "../lib/budgets";
@@ -707,7 +707,7 @@ export default function CanvasArea({
   setPan,
   onViewport,
   mobile = false,
-  saveState,
+  statusHost,
   tool,
   panMode = false,
   brush,
@@ -844,8 +844,9 @@ export default function CanvasArea({
   /** Mobile shell: while an untouched view is still auto-fit, re-fit on viewport
    *  resize (the desktop→mobile reflow widens the canvas after the first fit). */
   mobile?: boolean;
-  /** Autosave/save wording from the editor; mirrored into the mobile readout. */
-  saveState?: { label: string; ok: boolean };
+  /** Desktop: where the editor portals its status readouts, which float over
+   *  the foot of the stage as chips (StatusBar `variant="chips"`). */
+  statusHost?: (el: HTMLDivElement | null) => void;
   tool: ToolId;
   /** Touch-only override: the one-finger drag pans, whatever tool is selected.
    *  Every drawing and selection tool consumes that drag, so on a phone panning
@@ -4370,14 +4371,22 @@ export default function CanvasArea({
        is false until the media query settles, and the first fit runs before
        that, so gating on it inset by zero and changed nothing. CSS has the
        answer at the first paint. */
-    const strip =
-      parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--edge-strip")) || 0;
+    const root = getComputedStyle(document.documentElement);
+    const strip = parseFloat(root.getPropertyValue("--edge-strip")) || 0;
+    /* The phone's stage also carries the readout chip at its top and the tool's
+       options card at its foot (`--fit-top`, `--m-options-h`; both unset
+       elsewhere), so the picture opens in the part between them — as the
+       design shows it, lifted clear of the card. */
+    const top = parseFloat(root.getPropertyValue("--fit-top")) || 0;
+    const card = parseFloat(root.getPropertyValue("--m-options-h")) || 0;
+    const foot = card ? card + 16 : 0;
     const usableW = Math.max(1, vp.clientWidth - strip * 2);
-    const raw = Math.min(usableW / w, vp.clientHeight / h) * 100 * 0.96;
+    const usableH = Math.max(1, vp.clientHeight - top - foot);
+    const raw = Math.min(usableW / w, usableH / h) * 100 * 0.96;
     const z = clamp(Math.max(1, Math.floor(raw)), MIN_ZOOM, MAX_ZOOM);
     const s = z / 100;
     const px = (vp.clientWidth - w * s) / 2;
-    const py = (vp.clientHeight - h * s) / 2;
+    const py = top + (usableH - h * s) / 2;
     if (z === zoomRef.current) {
       setPanRef.current(clampPan(px, py, s, w, h, vp.clientWidth, vp.clientHeight));
     } else {
@@ -9167,31 +9176,33 @@ export default function CanvasArea({
           )}
         </div>
 
-        {/* Touch only: the three readings the desktop status bar carries and
-            the mobile shell used to drop — the document's name and size, and
-            whether the work is saved. It sits above the zoom pill rather than
-            inside it so the pill keeps its shape, and it is a readout, not a
-            control: `pointer-events: none` leaves the artwork under it
-            drawable. Name and size come from the same props the status bar
-            uses, so there is one source for both shells. */}
+        {/* Phone: the readout chip at the top of the stage, as in the design —
+            the document's size and the zoom, in one glass pill. (Its name and
+            whether it is saved are in the header now.) It is also the phone's
+            "fit on screen": there is no zoom pill here, the foot of the stage
+            belongs to the tool's options, and a tap on the zoom you are
+            reading is where a finger goes to put it back. The button is the
+            44px reach; the pill inside it is what is drawn. */}
         {mobile && (
-          <div className={styles.mobileStatus} data-mobile-status data-tour="mobilestatus">
-            <span className={styles.mobileStatusName} data-status-name>
-              {docs.find((d) => d.id === activeId)?.name ?? ""}
+          <button
+            type="button"
+            className={styles.mobileStatus}
+            data-mobile-status
+            data-tour="mobilestatus"
+            onClick={fit}
+            aria-label={`${width} by ${height} pixels at ${zoom}% — fit on screen`}
+            title="Fit on screen"
+          >
+            <span className={styles.mobileStatusChip}>
+              <span data-status-size>
+                {width} × {height} px
+              </span>
+              <span className={styles.mobileStatusDot} aria-hidden>
+                ·
+              </span>
+              <span data-status-zoom>{zoom}%</span>
             </span>
-            <span className={styles.mobileStatusSep} aria-hidden />
-            <span data-status-size>
-              {width} × {height}
-            </span>
-            <span className={styles.mobileStatusSep} aria-hidden />
-            <span
-              className={saveState?.ok ? styles.mobileStatusSaved : styles.mobileStatusDirty}
-              data-status-save
-              data-saved={saveState?.ok ? "true" : "false"}
-            >
-              {saveState?.label ?? "Not saved"}
-            </span>
-          </div>
+          </button>
         )}
 
         <div className={styles.zoomBar} data-zoombar>
@@ -9205,10 +9216,20 @@ export default function CanvasArea({
             <Plus size={14} />
           </button>
           <span className={styles.zoomSep} />
-          <button type="button" onClick={fit} aria-label="Fit on screen" title="Fit on screen">
-            <Maximize2 size={13} />
+          <button
+            type="button"
+            className={styles.zoomFit}
+            onClick={fit}
+            aria-label="Fit on screen"
+            title="Fit on screen (Ctrl+0)"
+          >
+            Fit
           </button>
         </div>
+
+        {/* Desktop status readouts land here (portalled by the editor), as
+            chips either side of the zoom pill. */}
+        {!mobile && statusHost && <div className={styles.statusHost} ref={statusHost} data-status-host />}
       </div>
     </section>
   );

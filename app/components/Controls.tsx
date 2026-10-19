@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Check } from "lucide-react";
 import styles from "./Controls.module.scss";
 import ColorPopover from "./ColorPopover";
 import { parseColor, swatchBg, toHex6 } from "../lib/color";
@@ -13,6 +12,20 @@ export { Select } from "./Select";
    They keep their own local state so the UI feels alive without wiring up
    any real editing logic yet.
    -------------------------------------------------------------------------- */
+
+/**
+ * How many characters the longest readout of a numeric control can need, so
+ * its box can be sized for it up front (`min-width: <n>ch`, tabular mono
+ * digits). Without it a readout grows as the number does — "9px" to "200px" —
+ * and pushes the track and every control after it sideways mid-drag.
+ * `signed` counts the "+" a bipolar readout puts on positive values.
+ */
+export function reserveCh(min: number, max: number, step = 1, unit = "", signed = false): number {
+  const frac = step > 0 && step < 1 ? (String(step).split(".")[1] ?? "").length : 0;
+  const digits = (n: number) => String(Math.trunc(Math.abs(n))).length;
+  const sign = min < 0 || (signed && max > 0) ? 1 : 0;
+  return sign + Math.max(digits(min), digits(max)) + (frac ? frac + 1 : 0) + unit.length;
+}
 
 /**
  * A numeric readout that turns into a text input when clicked, so any value can
@@ -32,6 +45,7 @@ export function EditableValue({
   className = "",
   title = "Click to type a value",
   ariaLabel,
+  reserve,
 }: {
   value: number;
   min: number;
@@ -43,8 +57,13 @@ export function EditableValue({
   className?: string;
   title?: string;
   ariaLabel?: string;
+  /** Width to hold for the longest value, in characters (see reserveCh). */
+  reserve?: number;
 }) {
   const [editing, setEditing] = useState(false);
+  /* The reserved width, or the caller's own minimum column (`--value-min`,
+     e.g. the options bar's 40px) if that is wider. */
+  const box = reserve ? { minWidth: `max(${reserve}ch, var(--value-min, 0px))` } : undefined;
   const [draft, setDraft] = useState("");
 
   const begin = () => {
@@ -66,6 +85,7 @@ export function EditableValue({
     return (
       <input
         className={`${styles.valueInput} ${className}`}
+        style={reserve ? { width: `calc(${Math.max(reserve, 3)}ch + 10px)` } : undefined}
         autoFocus
         inputMode="decimal"
         value={draft}
@@ -85,6 +105,7 @@ export function EditableValue({
   return (
     <span
       className={`${styles.valueClickable} ${className}`}
+      style={box}
       role="button"
       tabIndex={0}
       title={title}
@@ -152,6 +173,7 @@ export function Slider({
           step={step}
           unit={unit}
           display={`${bipolar && v > 0 ? "+" : ""}${v}${unit}`}
+          reserve={reserveCh(min, max, step, unit, bipolar)}
           onCommit={set}
           ariaLabel={`${label} value`}
         />
@@ -323,9 +345,7 @@ export function Toggle({
         onChange?.(!on);
       }}
     >
-      <span className={styles.toggleBox} data-on={on}>
-        {on && <Check size={11} strokeWidth={3} />}
-      </span>
+      <span className={styles.toggleBox} data-on={on} aria-hidden />
       <span className={styles.label}>{label}</span>
     </button>
   );

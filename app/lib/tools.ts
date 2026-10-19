@@ -3,20 +3,11 @@ import {
   Bandage,
   Eye,
   MousePointer2,
-  Move,
-  BoxSelect,
-  Lasso,
-  Wand2,
   SquareDashedMousePointer,
-  Crop,
   Pipette,
-  Brush,
   Pencil,
-  Eraser,
   Ruler,
   Stamp,
-  PaintBucket,
-  Blend,
   Droplet,
   Droplets,
   Fingerprint,
@@ -24,12 +15,23 @@ import {
   Palette,
   History,
   SunMedium,
-  Type,
-  PenTool,
-  Shapes,
-  Hand,
-  ZoomIn,
 } from "lucide-react";
+import {
+  BrushIcon,
+  CropIcon,
+  EraserIcon,
+  FillIcon,
+  GradientIcon,
+  HandIcon,
+  LassoIcon,
+  MarqueeIcon,
+  MoveIcon,
+  PenIcon,
+  ShapeIcon,
+  TextIcon,
+  WandIcon,
+  ZoomIcon,
+} from "./tool-icons";
 import type { TextWarp } from "./textwarp";
 import type { NoiseGradient } from "./gradient-noise";
 
@@ -74,27 +76,27 @@ export interface Tool {
 /** Tools grouped the way they sit on the rail; each inner array is a cluster. */
 export const TOOL_GROUPS: Tool[][] = [
   [
-    { id: "move", name: "Move", icon: Move, shortcut: "V" },
-    { id: "select", name: "Rectangular marquee", icon: BoxSelect, shortcut: "M" },
-    { id: "lasso", name: "Lasso", icon: Lasso, shortcut: "L" },
-    { id: "wand", name: "Magic wand", icon: Wand2, shortcut: "W" },
+    { id: "move", name: "Move", icon: MoveIcon, shortcut: "V" },
+    { id: "select", name: "Rectangular marquee", icon: MarqueeIcon, shortcut: "M" },
+    { id: "lasso", name: "Lasso", icon: LassoIcon, shortcut: "L" },
+    { id: "wand", name: "Magic wand", icon: WandIcon, shortcut: "W" },
     // Photoshop groups Quick selection with the Magic wand on W; Q is reserved
     // for Quick Mask mode. Shift+W cycles between the two (see Editor's keydown).
     { id: "quickselect", name: "Quick selection", icon: SquareDashedMousePointer, shortcut: "W" },
-    { id: "crop", name: "Crop", icon: Crop, shortcut: "C" },
+    { id: "crop", name: "Crop", icon: CropIcon, shortcut: "C" },
     { id: "eyedropper", name: "Eyedropper", icon: Pipette, shortcut: "I" },
     { id: "measure", name: "Measure", icon: Ruler, shortcut: "I" },
   ],
   [
-    { id: "brush", name: "Brush", icon: Brush, shortcut: "B" },
+    { id: "brush", name: "Brush", icon: BrushIcon, shortcut: "B" },
     { id: "pencil", name: "Pencil", icon: Pencil, shortcut: "N" },
-    { id: "eraser", name: "Eraser", icon: Eraser, shortcut: "E" },
+    { id: "eraser", name: "Eraser", icon: EraserIcon, shortcut: "E" },
     { id: "history", name: "History brush", icon: History, shortcut: "K" },
     { id: "clone", name: "Clone stamp", icon: Stamp, shortcut: "S" },
     { id: "heal", name: "Spot heal", icon: Bandage, shortcut: "J" },
     { id: "redeye", name: "Red eye", icon: Eye, shortcut: "Y" },
-    { id: "bucket", name: "Paint bucket", icon: PaintBucket, shortcut: "G" },
-    { id: "gradient", name: "Gradient", icon: Blend, shortcut: "G" },
+    { id: "bucket", name: "Paint bucket", icon: FillIcon, shortcut: "G" },
+    { id: "gradient", name: "Gradient", icon: GradientIcon, shortcut: "G" },
   ],
   [
     { id: "blur", name: "Blur", icon: Droplet, shortcut: "R" },
@@ -106,17 +108,53 @@ export const TOOL_GROUPS: Tool[][] = [
     { id: "sponge", name: "Sponge", icon: Droplets, shortcut: "A" },
   ],
   [
-    { id: "text", name: "Text", icon: Type, shortcut: "T" },
-    { id: "pen", name: "Pen", icon: PenTool, shortcut: "P" },
-    { id: "shape", name: "Shape", icon: Shapes, shortcut: "U" },
+    { id: "text", name: "Text", icon: TextIcon, shortcut: "T" },
+    { id: "pen", name: "Pen", icon: PenIcon, shortcut: "P" },
+    { id: "shape", name: "Shape", icon: ShapeIcon, shortcut: "U" },
   ],
   [
-    { id: "hand", name: "Hand", icon: Hand, shortcut: "H" },
-    { id: "zoom", name: "Zoom", icon: ZoomIn, shortcut: "Z" },
+    { id: "hand", name: "Hand", icon: HandIcon, shortcut: "H" },
+    { id: "zoom", name: "Zoom", icon: ZoomIcon, shortcut: "Z" },
   ],
 ];
 
 export const ALL_TOOLS: Tool[] = TOOL_GROUPS.flat();
+
+/**
+ * The desktop rail: clusters of SLOTS. A slot is one button showing one tool of
+ * a family; the rest of the family sits in its flyout (right-click or hold),
+ * the way Photoshop combines tools that share a job. The first id is what a
+ * slot shows until another of its tools is used.
+ *
+ * Fifteen slots, because fifteen 40px buttons, four dividers and the colour
+ * well are what fit the rail on a 900px-tall window with the design's spacing;
+ * twenty-nine tools one by one made it a scrolling column whose bottom half
+ * nobody saw. Every tool appears in exactly one slot
+ * (tests/rail-slots.test.ts).
+ */
+export const RAIL_SLOTS: ToolId[][][] = [
+  [["move"], ["select"], ["lasso"], ["wand", "quickselect"]],
+  [["crop", "frame"], ["eyedropper", "measure"]],
+  [
+    ["brush", "pencil", "mixer"],
+    ["eraser"],
+    ["heal", "redeye", "clone", "history"],
+    ["gradient", "bucket"],
+    ["blur", "smudge", "dodge", "sponge"],
+  ],
+  [["text"], ["pen", "directselect"], ["shape"]],
+  [["hand", "zoom"]],
+];
+
+/** What each rail cluster is for — the headings of the phone's tools sheet,
+ *  which lays the same families out as titled groups of tiles. */
+export const RAIL_CLUSTER_NAMES: string[] = [
+  "Select & move",
+  "Crop & sample",
+  "Paint & retouch",
+  "Type & shapes",
+  "Navigate",
+];
 
 /**
  * The handful of tools a touch layout puts up front.

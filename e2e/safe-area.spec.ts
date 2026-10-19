@@ -76,6 +76,8 @@ const readout = (page: Page) =>
       safe: { t: px("--safe-t"), r: px("--safe-r"), b: px("--safe-b"), l: px("--safe-l") },
       chromeTop: resolve("var(--chrome-top)"),
       chromeBottom: resolve("var(--chrome-bottom)"),
+      /* Where the phone's drawers end: above the tool's options card. */
+      drawerBottom: resolve("var(--m-drawer-bottom, var(--chrome-bottom))"),
       toolbar: box('[data-tour="toolbar"]'),
       dock: box('[data-tour="dock"]'),
       bar: box('[data-tour="mobilebar"]'),
@@ -95,7 +97,9 @@ test.describe("desktop", () => {
   test("every token is 0, the offsets are the chrome's own heights, the shell is untouched", async ({ app }) => {
     const d = await readout(app.page);
     expect(d.safe).toEqual({ t: 0, r: 0, b: 0, l: 0 });
-    expect({ top: d.chromeTop, bottom: d.chromeBottom }, "48+48 and 28").toEqual({ top: 96, bottom: 28 });
+    /* The desktop shell: a 54px top bar, the 48px options card plus its 12px
+       gap, and a 16px foot (the status readouts float inside the stage). */
+    expect({ top: d.chromeTop, bottom: d.chromeBottom }, "54+60 and 16").toEqual({ top: 114, bottom: 16 });
     expect(d.mobile, "no mobile shell").toBe("(absent)");
   });
 });
@@ -108,19 +112,22 @@ test.describe("phone, portrait", () => {
   }) => {
     const flat = await readout(app.page);
     expect(flat.mobile, "the phone profile gets the mobile shell").toBe("true");
-    expect(flat.chromeBottom).toBe(56);
+    /* The foot is the glass tool dock's band: 10px + the 62px dock + 16px. */
+    expect(flat.chromeBottom).toBe(88);
     expect({ h: flat.bar?.height, bottom: flat.bar?.bottom }, "the bar's box matches").toEqual({
-      h: 56,
+      h: 88,
       bottom: MOBILE.height,
     });
-    /* The tools drawer slides in from the side and spans the chrome band. The
-       panels dock is a bottom sheet: closed, it is translated down below the
-       fold, resting on the bar rather than under it. */
+    /* The tools drawer slides in from the side and spans the band between the
+       66px header and the tool's options card. The panels dock is a sheet:
+       closed, it is translated down, resting on that card rather than under
+       it. */
+    expect(flat.drawerBottom, "the drawers end above the options card").toBeGreaterThan(flat.chromeBottom);
     expect({ top: flat.toolbar?.top, bottom: flat.toolbar?.bottom }, "the tools drawer").toEqual({
-      top: 96,
-      bottom: MOBILE.height - 56,
+      top: 66,
+      bottom: MOBILE.height - flat.drawerBottom,
     });
-    expect(flat.dock?.top, "the panels sheet rests on the bar").toBe(MOBILE.height - 56);
+    expect(flat.dock?.top, "the panels sheet rests on the options card").toBe(MOBILE.height - flat.drawerBottom);
   });
 
   test("a notch and a home indicator move everything by exactly their size", async ({ app }) => {
@@ -135,20 +142,21 @@ test.describe("phone, portrait", () => {
     expect(n.bar!.bottom, "still flush with the display").toBe(MOBILE.height);
     /* The bar's BACKGROUND still reaches the bottom of the display, but nothing
        pressable is under the home indicator. */
-    expect(n.barPadBottom).toBe(NOTCH.bottom);
+    expect(n.barPadBottom, "16px under the dock, plus the indicator").toBe(16 + NOTCH.bottom);
     expect(n.barContentBottom!, "the bar's buttons clear the indicator").toBeLessThanOrEqual(
       MOBILE.height - NOTCH.bottom,
     );
     expect(flat.toolbar!.bottom - n.toolbar!.bottom, "the tools drawer stops above it").toBe(NOTCH.bottom);
-    expect(flat.dock!.bottom - n.dock!.bottom, "...and the panels sheet, by the same amount").toBe(NOTCH.bottom);
+    /* The closed sheet is translated down by its own height, so its TOP is
+       where it rests; its height can differ (it is capped to the room above
+       the options card), its resting edge cannot. */
+    expect(flat.dock!.top - n.dock!.top, "...and the panels sheet, by the same amount").toBe(NOTCH.bottom);
     expect(n.topbar!.height - flat.topbar!.height, "the top bar grows by the notch").toBe(NOTCH.top);
     expect(n.topbar!.top, "still flush at the top").toBe(0);
     expect(n.hamburger!.top, "the hamburger sits below the notch").toBeGreaterThanOrEqual(NOTCH.top);
     expect(n.chromeTop - flat.chromeTop, "the top offset follows the bar").toBe(NOTCH.top);
     /* They have to move together, or a strip of bare canvas opens under the chrome. */
-    expect(n.toolbar!.top, "no gap between the chrome and the tools drawer (+48px options bar)").toBe(
-      n.topbar!.bottom + 48,
-    );
+    expect(n.toolbar!.top, "no gap between the header and the tools drawer").toBe(n.topbar!.bottom);
   });
 
   test("the menu sheet sits between the bars, and its last row can be pressed", async ({ app }) => {
@@ -229,10 +237,10 @@ test.describe("phone, portrait", () => {
     await app.setSafeArea(ROTATED);
     const r = await readout(app.page);
     expect({ l: r.safe.l, r: r.safe.r, b: r.safe.b }).toEqual({ l: ROTATED.left, r: ROTATED.right, b: ROTATED.bottom });
-    expect(r.chromeBottom, "the bottom follows the rotation").toBe(56 + ROTATED.bottom);
+    expect(r.chromeBottom, "the bottom follows the rotation").toBe(88 + ROTATED.bottom);
     await app.setSafeArea(NONE);
     const c = await readout(app.page);
-    expect({ chrome: c.chromeBottom, bar: c.bar?.height }).toEqual({ chrome: 56, bar: 56 });
+    expect({ chrome: c.chromeBottom, bar: c.bar?.height }).toEqual({ chrome: 88, bar: 88 });
   });
 });
 
@@ -247,7 +255,8 @@ const rectOf = (page: Page, sel: string) =>
 /** The rightmost edge of any control in the panels drawer. */
 const dockRight = (page: Page) =>
   page.evaluate(() => {
-    const vis = [...document.querySelectorAll('[data-tour="dock"] button')]
+    // Panel content, not the chip strip, which scrolls sideways on its own.
+    const vis = [...document.querySelectorAll('[data-tour="dock"] button:not([data-panel-chip])')]
       .map((b) => b.getBoundingClientRect())
       .filter((b) => b.width > 0);
     return Math.round(Math.max(...vis.map((b) => b.right)));
@@ -308,9 +317,11 @@ test.describe("phone, landscape", () => {
           pad: Math.round(parseFloat(getComputedStyle(el).paddingRight)),
         };
       });
-      expect.soft(dock, "the panel drawer runs to the display edge and pads by the inset").toEqual({
-        right: W,
-        pad: insets.right,
+      /* A floating card on the phone: 10px inside the safe edge, so the inset
+         is margin rather than padding. */
+      expect.soft(dock, "the panel sheet stops 10px inside the inset").toEqual({
+        right: W - insets.right - 10,
+        pad: 0,
       });
       /* A DIFFERENCE, not against the safe box: panel content is already wider
          than the dock here, so with no inset the widest control ends past the

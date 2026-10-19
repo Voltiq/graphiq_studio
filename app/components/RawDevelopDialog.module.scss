@@ -1,3 +1,5 @@
+@use "../styles/ds" as ds;
+
 .overlay {
   position: fixed;
   /* Ends above a keyboard, so the dialog centres in what is visible. */
@@ -6,6 +8,8 @@
   display: grid;
   place-items: center;
   background: var(--blanket);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
   animation: fade var(--t-med) var(--ease);
 }
 
@@ -26,10 +30,9 @@
   max-height: calc(100svh - 32px);
   display: flex;
   flex-direction: column;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  box-shadow: var(--shadow-lg);
+  @include ds.shine(var(--surface-3));
+  border-radius: var(--r-2xl);
+  box-shadow: var(--shadow), var(--inset-hi);
   overflow: hidden;
 }
 
@@ -38,27 +41,17 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
-  border-bottom: 1px solid var(--border);
+  padding: 14px 14px 10px 20px;
 
   h2 {
-    font-size: 14px;
+    font-size: 15px;
     font-weight: var(--weight-semibold);
+    letter-spacing: -0.012em;
   }
 }
 
 .close {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--r-md);
-  color: var(--text-2);
-
-  &:hover {
-    background: var(--wash);
-    color: var(--text);
-  }
+  @include ds.icon-btn(30px);
 }
 
 .body {
@@ -129,29 +122,17 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-3) var(--sp-4);
+  padding: 12px 16px;
   border-top: 1px solid var(--border);
+  background: color-mix(in oklab, var(--surface-2) 60%, transparent);
 
   button {
-    min-height: 32px;
-    padding: 0 var(--sp-3);
-    border-radius: var(--r-md);
-    border: 1px solid var(--border);
+    @include ds.btn(34px);
+    padding: 0 15px;
     font-size: 13px;
-    color: var(--text);
-
-    &:hover {
-      background: var(--wash);
-    }
 
     &[data-primary] {
-      color: var(--accent-contrast);
-      background: var(--accent);
-      border-color: var(--accent);
-
-      &:hover {
-        filter: brightness(1.06);
-      }
+      @include ds.btn-primary;
     }
   }
 }

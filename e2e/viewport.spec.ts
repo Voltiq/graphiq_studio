@@ -112,8 +112,7 @@ test.describe("desktop", () => {
   /** Open a dialog through the command palette. */
   async function viaPalette(app: App, query: string): Promise<void> {
     const { page } = app;
-    await page.click('button[aria-label="Open the command palette"]');
-    await app.settle(400);
+    await app.openPalette();
     await page.keyboard.type(query);
     await app.settle(500);
     await page.keyboard.press("Enter");

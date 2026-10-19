@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Minus, Plus } from "lucide-react";
 import styles from "../RightDock.module.scss";
-import { EditableValue } from "../Controls";
+import { rangeFill } from "../../lib/range-fill";
+import { EditableValue, reserveCh } from "../Controls";
 import { clamp } from "../../lib/color";
 import { clampPan, type NavigatorView } from "../../lib/view";
 
@@ -120,6 +121,7 @@ export default function NavigatorPanel({ view }: { view: NavigatorView }) {
           min={0}
           max={1000}
           value={toSlider(zoom)}
+          style={rangeFill(toSlider(zoom), 0, 1000)}
           onChange={(e) => setZoom(fromSlider(Number(e.target.value)))}
           aria-label="Zoom"
         />
@@ -138,6 +140,7 @@ export default function NavigatorPanel({ view }: { view: NavigatorView }) {
           min={MIN_ZOOM}
           max={MAX_ZOOM}
           display={`${Math.round(zoom)}%`}
+          reserve={reserveCh(MIN_ZOOM, MAX_ZOOM, 1, "%")}
           onCommit={(n) => setZoom(clamp(Math.round(n), MIN_ZOOM, MAX_ZOOM))}
           ariaLabel="Zoom percentage"
         />

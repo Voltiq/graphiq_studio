@@ -83,19 +83,21 @@ export type PanelId =
   | "actions"
   | "metadata"
   | "info";
+/* The working pair first, open — Color and Layers — then History folded under
+   them, as the design lays the dock out; the reference panels follow, folded. */
 const DEFAULT_ORDER: PanelId[] = [
-  "navigator",
-  "channels",
-  "info",
   "color",
+  "layers",
+  "history",
   "swatches",
   "brushes",
   "adjustments",
   "properties",
-  "layers",
+  "navigator",
+  "channels",
+  "info",
   "paths",
   "comps",
-  "history",
   "actions",
   "metadata",
 ];
@@ -227,13 +229,13 @@ function loadLayout(): CoercedLayout {
 
 /** Default collapsed/expanded state per panel. */
 const DEFAULT_OPEN: Record<PanelId, boolean> = {
-  navigator: true,
+  navigator: false,
   channels: false,
   color: true,
   swatches: false,
   brushes: false,
-  adjustments: true,
-  properties: true,
+  adjustments: false,
+  properties: false,
   layers: true,
   paths: false,
   comps: false,
@@ -638,8 +640,18 @@ export default function RightDock({
 
   const toggleOpen = (id: PanelId) => setOpenMap((cur) => ({ ...cur, [id]: !cur[id] }));
 
-  /** Is this panel showing? On a phone, only the one that was opened last. */
-  const isOpen = (id: PanelId): boolean => (mobile ? mobileOpenId === id : openMap[id]);
+  /* On a phone the sheet shows ONE panel, chosen from the chip strip at its
+     top; before anything is chosen, Layers (or the first panel showing). */
+  const phoneIds = order.filter((id) => panels[id]);
+  const shownId: PanelId | null =
+    mobileOpenId && panels[mobileOpenId]
+      ? mobileOpenId
+      : phoneIds.includes("layers")
+        ? "layers"
+        : (phoneIds[0] ?? null);
+
+  /** Is this panel showing? On a phone, only the chosen one. */
+  const isOpen = (id: PanelId): boolean => (mobile ? shownId === id : openMap[id]);
 
   /**
    * Open or close a panel.
@@ -658,8 +670,10 @@ export default function RightDock({
       toggleOpen(id);
       return;
     }
-    const opening = mobileOpenId !== id;
-    setMobileOpenId(opening ? id : null);
+    /* A chip SELECTS: the sheet always shows one panel, so choosing the one
+       already showing leaves it showing rather than emptying the sheet. */
+    const opening = shownId !== id;
+    setMobileOpenId(id);
     if (!opening || !onDetent) return;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -1210,7 +1224,33 @@ export default function RightDock({
         {/* Touch only: the dock is a bottom sheet there, and a sheet needs
             something to take hold of. */}
         {mobile && detent && onDetent && <SheetHandle detent={detent} onDetent={onDetent} />}
-        {renderDock(rightIds)}
+        {/* The phone's panel picker: every panel as a chip, the chosen one's
+            content below. One panel at a time, each a tap away — rather than
+            fourteen folded headers to scroll past. */}
+        {mobile && (
+          <div className={styles.panelChips} role="tablist" aria-label="Panels">
+            {phoneIds.map((id) => {
+              const Icon = PANEL_ICONS[id];
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={shownId === id}
+                  className={styles.panelChip}
+                  data-panel-chip={id}
+                  onClick={() => togglePanel(id)}
+                >
+                  <Icon size={15} />
+                  <span>{PANEL_TITLES[id]}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {/* A phone shows each panel on its own (a tab group is a desktop
+            arrangement), so it never meets a group frame. */}
+        {mobile ? rightIds.map((id) => panelFor(id)) : renderDock(rightIds)}
         {dropZone("right")}
       </aside>
       {/* Not on touch: see `rightIds` above — the one dock already holds these,

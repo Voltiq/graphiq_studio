@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { createPortal } from "react-dom";
 import { ArrowLeftRight, Check, Dices, Download, Plus, Save, Upload, X } from "lucide-react";
 import styles from "./GradientControl.module.scss";
+import { rangeFill } from "../lib/range-fill";
 import ColorPopover from "./ColorPopover";
 import { sampleGradient } from "../lib/gradient";
 import { swatchBg } from "../lib/color";
@@ -339,6 +340,7 @@ function NoiseSection({
               min={0}
               max={100}
               value={spec.roughness}
+              style={rangeFill(spec.roughness, 0, 100)}
               aria-label="Roughness"
               onChange={(e) => patch({ roughness: Number(e.target.value) })}
             />

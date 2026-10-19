@@ -1,3 +1,5 @@
+@use "../styles/ds" as ds;
+
 .wrap {
   display: inline-flex;
   align-items: center;
@@ -52,10 +54,7 @@
   flex-direction: column;
   padding: var(--sp-2);
   gap: var(--sp-2);
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
+  @include ds.overlay(var(--r-xl));
   animation: pop var(--t-med) var(--ease-pop);
   transform-origin: top left;
 }

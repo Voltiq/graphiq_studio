@@ -1,20 +1,56 @@
+@use "../styles/ds" as ds;
+
 .canvasArea {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--canvas-void);
+
+  /* Phone: the stage IS the well — a rounded, sunken pane 10px in from the
+     sides, between the header and the tool dock. */
+  @include ds.phone-shell {
+    margin: 0 calc(10px + var(--safe-r)) 0 calc(10px + var(--safe-l));
+    border-radius: 26px;
+    overflow: hidden;
+  }
+
+  /* Desktop: the stage is a card — the document tabs on its surface, and the
+     image well recessed 8px inside it. */
+  @include ds.desktop-shell {
+    @include ds.card(var(--surface), var(--r-2xl));
+    overflow: hidden;
+
+    @supports (corner-shape: squircle) {
+      corner-shape: squircle;
+      border-radius: 34px;
+    }
+  }
 }
 
 /* -------------------------------- Tabs ------------------------------------ */
 .tabs {
   display: flex;
   align-items: center;
-  height: 36px;
+  height: 38px;
   background: var(--sidebar);
   border-bottom: 1px solid var(--border);
-  padding: 0 var(--sp-2);
+  padding: 0 6px;
   gap: 2px;
+
+  /* Desktop: the tabs sit on the card itself, above the well. */
+  @include ds.phone-shell {
+    background: none;
+    border-bottom: 0;
+  }
+
+  @include ds.desktop-shell {
+    height: 40px;
+    padding: 8px 8px 0;
+    gap: 4px;
+    background: none;
+    border-bottom: 0;
+  }
 }
 
 .tab {
@@ -22,42 +58,36 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 27px;
-  padding: 0 12px;
-  font-size: 12px;
-  color: var(--text-2);
+  height: 32px;
+  padding: 0 10px 0 12px;
+  font-size: 13px;
+  font-weight: var(--weight-regular);
+  color: var(--text);
   border-radius: var(--r-md);
   transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
-  max-width: 200px;
+  max-width: 220px;
 
   &:hover {
-    color: var(--text);
-    background: var(--wash);
+    background: var(--surface-2);
 
     .tabClose {
       opacity: 1;
     }
   }
 
-  /* Active document: raised chip + a selected underline marker. */
+  /* Active document: a raised chip with a glowing accent dot. */
   &[data-active="true"] {
     color: var(--text);
-    background: var(--surface-2);
-    box-shadow: inset 0 0 0 1px var(--border);
-
-    &::after {
-      content: "";
-      position: absolute;
-      left: 10px;
-      right: 10px;
-      bottom: -5px;
-      height: 2px;
-      border-radius: var(--r-pill);
-      background: var(--accent);
-    }
+    background: var(--raised);
+    box-shadow: var(--inset-hi);
 
     .tabDot {
       background: var(--accent);
+      box-shadow: 0 0 8px var(--accent-solid);
+    }
+
+    .tabClose {
+      opacity: 0.7;
     }
   }
 }
@@ -68,7 +98,7 @@
   border-radius: 50%;
   background: var(--text-3);
   flex-shrink: 0;
-  transition: background var(--t-fast) var(--ease);
+  transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
 }
 
 .tabName {
@@ -81,54 +111,38 @@
   width: 11ch;
   min-width: 60px;
   max-width: 200px;
-  padding: 1px 4px;
+  height: 22px;
+  padding: 0 6px;
   font: inherit;
   color: var(--text);
   background: var(--surface-2);
-  border: 1px solid var(--accent);
+  border: 1px solid var(--accent-line);
   border-radius: var(--r-sm);
   outline: none;
-  box-shadow: var(--focus-ring);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .tabClose {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: var(--r-xs);
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
   opacity: 0;
   cursor: pointer;
   transition: opacity var(--t-fast) var(--ease), background var(--t-fast) var(--ease),
     color var(--t-fast) var(--ease);
 
   &:hover {
+    opacity: 1;
     background: var(--wash-2);
     color: var(--danger);
   }
 }
 
 .tabNew {
-  display: grid;
-  place-items: center;
-  width: 27px;
-  height: 27px;
-  margin: 0 4px;
+  @include ds.icon-btn(32px);
   align-self: center;
-  flex-shrink: 0;
-  border-radius: var(--r-md);
-  color: var(--text-3);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
-    transform var(--t-fast) var(--ease);
-
-  &:hover {
-    background: var(--wash);
-    color: var(--text);
-  }
-
-  &:active {
-    transform: scale(0.9);
-  }
 }
 
 .tabSpacer {
@@ -150,11 +164,54 @@ $ruler: 22px;
     grid-template-columns: 0 1fr;
     grid-template-rows: 0 1fr;
   }
+
+  /* Phone: the sunken lip of the well the stage is. */
+  @include ds.phone-shell {
+    &::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 4;
+      box-shadow: var(--inset-lo);
+      pointer-events: none;
+    }
+  }
+
+  /* Desktop: the well. Inset 8px into the stage card, rounded, sunken, with
+     the rulers (when shown) running along its inside edges. */
+  @include ds.desktop-shell {
+    margin: 8px;
+    border-radius: 16px;
+    overflow: hidden;
+    background: var(--canvas-void);
+    isolation: isolate;
+
+    @supports (corner-shape: squircle) {
+      corner-shape: squircle;
+      border-radius: 26px;
+    }
+
+    /* The sunken lip, over the artwork's edge but under the floating pills. */
+    &::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 4;
+      border-radius: inherit;
+      box-shadow: var(--inset-lo);
+      pointer-events: none;
+    }
+  }
 }
 
 .rulerCorner {
   grid-area: 1 / 1;
-  background: var(--sidebar);
+  background: var(--surface);
+
+  @include ds.desktop-shell {
+    background: color-mix(in oklab, var(--surface) 55%, transparent);
+  }
+
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   z-index: 2;
@@ -163,9 +220,14 @@ $ruler: 22px;
 .rulerH,
 .rulerV {
   position: relative;
-  background: var(--sidebar);
+  background: var(--surface);
   color: var(--text-3);
   overflow: hidden;
+
+  /* Desktop: the rulers belong to the well, a shade lighter than it. */
+  @include ds.desktop-shell {
+    background: color-mix(in oklab, var(--surface) 55%, transparent);
+  }
 }
 
 .rulerH {
@@ -262,12 +324,12 @@ $ruler: 22px;
      around it too). */
   touch-action: none;
   /* faint dot lattice so "empty" reads as a workspace, not a void */
-  background-image: radial-gradient(
-    circle at center,
-    color-mix(in srgb, var(--text) 3.5%, transparent) 1px,
-    transparent 1px
-  );
-  background-size: 22px 22px;
+  background-image: radial-gradient(var(--dots) 1px, transparent 1.5px);
+  background-size: 18px 18px;
+
+  @include ds.phone-shell {
+    background-size: 16px 16px;
+  }
 }
 
 /* Free pan/zoom: positioned at the origin and moved/scaled via transform so it
@@ -278,9 +340,8 @@ $ruler: 22px;
   left: 0;
   overflow: hidden;
   border-radius: 2px;
-  /* the document floats on the void: hairline lip + deep soft key shadow */
-  box-shadow: 0 0 0 1px rgba(255, 245, 230, 0.06), 0 10px 30px rgba(0, 0, 0, 0.35),
-    0 32px 90px rgba(0, 0, 0, 0.5);
+  /* the document floats on the well: hairline lip + a long soft key shadow */
+  box-shadow: 0 34px 70px -24px rgb(0 0 0 / 65%), 0 0 0 1px rgb(255 255 255 / 6%);
   will-change: transform;
 }
 
@@ -446,58 +507,49 @@ $ruler: 22px;
 }
 
 /* ------------------------------ Zoom control ------------------------------ */
-/* The phone's status readout: the document's name and size and whether it is
-   saved — the three things the desktop status bar carries and the mobile shell
-   drops, since `[data-tour="status"]` is hidden there.
-
-   A readout, not a bar: no background of its own beyond a soft plate, and
-   `pointer-events: none` so it never intercepts a stroke aimed at the artwork
-   underneath it. */
+/* The phone's readout chip, top-centre of the stage: the document's size and
+   the zoom in mono, on glass. A tap fits the picture (see CanvasArea). The
+   button is the 44px reach; the pill is the 32px drawn part. */
 .mobileStatus {
   position: absolute;
-  /* Stacked clear of the zoom pill, which occupies `--chrome-bottom + 16` to
-     `+ 70` (54px tall). 78 leaves an 8px gap; 62 overlapped it by eight. */
-  bottom: calc(var(--chrome-bottom) + 78px);
+  top: 6px;
   left: 50%;
   transform: translateX(-50%);
   max-width: calc(100% - 24px);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  border-radius: var(--r-pill);
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-sm, var(--shadow-md));
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  color: var(--text-2);
-  white-space: nowrap;
-  pointer-events: none;
+  display: grid;
+  place-items: center;
+  height: 44px;
+  padding: 0;
+  background: none;
   z-index: 5;
 }
 
-.mobileStatusName {
+.mobileStatusChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--r-pill);
+  font-family: var(--font-mono);
+  font-size: 12px;
   font-weight: var(--weight-medium);
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  white-space: nowrap;
+  @include ds.glass;
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+  background: color-mix(in oklab, var(--surface) 78%, transparent);
+  transition: transform var(--t-fast) var(--ease);
+
+  .mobileStatus:active & {
+    transform: scale(0.96);
+  }
 }
 
-.mobileStatusSep {
-  width: 1px;
-  height: 10px;
-  flex-shrink: 0;
-  background: var(--border);
-}
-
-.mobileStatusSaved {
-  color: var(--ok, var(--text-2));
-}
-
-.mobileStatusDirty {
-  color: var(--text-3);
+.mobileStatusDot {
+  opacity: 0.4;
 }
 
 .zoomBar {
@@ -510,49 +562,59 @@ $ruler: 22px;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   padding: 4px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
   border-radius: var(--r-pill);
-  box-shadow: var(--shadow-md);
+  @include ds.glass;
   z-index: 5;
 
   button {
-    display: grid;
-    place-items: center;
-    width: 27px;
-    height: 27px;
-    border-radius: 50%;
-    color: var(--text-2);
-    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
-      transform var(--t-fast) var(--ease);
-
-    &:hover {
-      background: var(--wash-2);
-      color: var(--text);
-    }
-
-    &:active {
-      transform: scale(0.9);
-    }
+    @include ds.icon-btn(30px, 50%);
   }
 }
 
+/* Room for "3200%" so zooming never shifts the buttons either side. */
 .zoomValue {
   font-size: 12px;
   font-family: var(--font-mono);
+  font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
   color: var(--text);
-  min-width: 44px;
+  min-width: max(7ch, 54px);
   text-align: center;
 }
 
 .zoomSep {
   width: 1px;
-  height: 16px;
+  height: 18px;
   background: var(--border);
-  margin: 0 2px;
+  margin: 0 4px;
+}
+
+/* "Fit": the pill's text button, raised like the design's secondary buttons. */
+.zoomBar .zoomFit {
+  @include ds.btn(30px);
+  width: auto;
+  padding: 0 12px;
+  border-radius: var(--r-pill);
+  font-weight: var(--weight-medium);
+}
+
+/* Where the desktop status chips are portalled: across the foot of the well,
+   16px in, under the zoom pill (which is centred over it). */
+.statusHost {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 18px;
+  z-index: 5;
+  display: flex;
+  pointer-events: none;
+  zoom: var(--ui-zoom, 1);
+
+  &:empty {
+    display: none;
+  }
 }
 
 /* The loupe: a magnified view of the pixels under a finger, parked clear of it.

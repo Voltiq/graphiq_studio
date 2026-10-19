@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { BoxSelect, Check, CircleDashed, MousePointer2, Ruler } from "lucide-react";
 import styles from "./StatusBar.module.scss";
-import { EditableValue } from "./Controls";
+import { EditableValue, reserveCh } from "./Controls";
 import { WORKING_SPACE_LABELS, type WorkingSpace } from "../lib/colorspace";
 import type { MeasureUnit } from "../lib/prefs";
 import { getTool, measureInfo, type MeasureLine, type ToolId } from "../lib/tools";
@@ -50,6 +50,7 @@ function selectionInfo(rects: Rect[]) {
 }
 
 export default function StatusBar({
+  variant = "bar",
   tool,
   zoom,
   onZoomChange,
@@ -67,6 +68,11 @@ export default function StatusBar({
   measure = null,
   subscribeCursor,
 }: {
+  /** `bar`: the strip along the foot of the window (tablet; hidden on a phone).
+   *  `chips`: the desktop's glass readouts floating over the foot of the stage
+   *  — the document's size and colour, the cursor or selection while there is
+   *  one, and the save state — with the stage's zoom pill between them. */
+  variant?: "bar" | "chips";
   tool: ToolId;
   zoom: number;
   onZoomChange: (z: number) => void;
@@ -104,12 +110,86 @@ export default function StatusBar({
 
   const sel = selection.length ? selectionInfo(selection) : null;
 
+  if (variant === "chips") {
+    const size =
+      unit === "px"
+        ? `${width} × ${height} px`
+        : `${fmtUnit(width, unit, dpi)} × ${fmtUnit(height, unit, dpi)} ${unit}`;
+    const m = tool === "measure" && measure ? measureInfo(measure) : null;
+    return (
+      <footer className={styles.chips} data-tour="status">
+        <div className={styles.chipGroup}>
+          <span className={styles.chip} data-status-size>
+            {size}
+            <span className={styles.chipDot} aria-hidden>
+              ·
+            </span>
+            {WORKING_SPACE_LABELS[colorSpace]}
+            <span className={styles.chipDot} aria-hidden>
+              ·
+            </span>
+            8-bit
+          </span>
+          {/* What the pointer is over — or what is selected or being
+              measured — only while there is something to say. */}
+          {m ? (
+            <span className={styles.chip} data-status-info>
+              <Ruler size={12} />
+              <span className={styles.mono}>
+                {unit === "px" ? `${Math.round(m.length)} px` : `${fmtUnit(m.length, unit, dpi)} ${unit}`}
+              </span>
+              <span className={styles.mono}>{m.angle.toFixed(1)}°</span>
+            </span>
+          ) : sel ? (
+            <span className={styles.chip} data-status-info>
+              <BoxSelect size={12} />
+              <span className={styles.mono}>
+                {sel.w} × {sel.h}
+              </span>
+              <span className={styles.chipMuted}>
+                ({sel.x0}, {sel.y0})
+              </span>
+            </span>
+          ) : cursor ? (
+            <span className={styles.chip} data-status-info>
+              <span className={`${styles.mono} ${styles.coord}`}>X {cursor.x}</span>
+              <span className={`${styles.mono} ${styles.coord}`}>Y {cursor.y}</span>
+            </span>
+          ) : null}
+        </div>
+        <div className={styles.chipGroup}>
+          {isolatedCount > 0 && (
+            /* Isolate mode changes what the canvas shows without changing the
+               document, so it MUST be visible somewhere permanent. */
+            <button
+              type="button"
+              className={styles.isolateChip}
+              onClick={onExitIsolate}
+              title={`Isolate mode is hiding ${isolatedCount} layer${isolatedCount > 1 ? "s" : ""} — click to exit`}
+            >
+              Isolated
+            </button>
+          )}
+          <span
+            className={styles.chip}
+            data-status-save
+            data-saved={saveState.ok ? "true" : "false"}
+            title={`Save state (autosave in Preferences) · Doc ${fmtBytes(width * height * 4)} / ${fmtBytes(Math.max(1, layerCount) * width * height * 4)}`}
+          >
+            <span className={saveState.ok ? styles.okDot : styles.dirtyDot} aria-hidden />
+            {saveState.label}
+          </span>
+        </div>
+      </footer>
+    );
+  }
+
   return (
     <footer className={styles.statusbar} data-tour="status">
       <div className={styles.left}>
         <span className={styles.swatchPip} style={swatchBg(foreground)} />
         <span className={styles.mono}>{toHex6(parseColor(foreground)).toUpperCase()}</span>
-        <span className={styles.muted}>{Math.round(parseColor(foreground).a * 100)}%</span>
+        <span className={`${styles.muted} ${styles.pct}`}>{Math.round(parseColor(foreground).a * 100)}%</span>
         <span className={styles.sep}>|</span>
         <span>
           {unit === "px"
@@ -122,8 +202,10 @@ export default function StatusBar({
 
       <div className={styles.center}>
         <MousePointer2 size={12} />
-        <span className={styles.mono}>X {cursor ? cursor.x : "—"}</span>
-        <span className={styles.mono}>Y {cursor ? cursor.y : "—"}</span>
+        {/* Fixed-width cells: the coordinates change on every mouse move, and a
+            growing number would slide everything after it back and forth. */}
+        <span className={`${styles.mono} ${styles.coord}`}>X {cursor ? cursor.x : "—"}</span>
+        <span className={`${styles.mono} ${styles.coord}`}>Y {cursor ? cursor.y : "—"}</span>
         <span className={styles.sep}>|</span>
         {tool === "measure" && measure ? (
           (() => {
@@ -195,6 +277,7 @@ export default function StatusBar({
             value={zoom}
             onChange={(e) => onZoomChange(Number(e.target.value))}
             aria-label="Zoom"
+            style={{ "--pct": `${((zoom - 12) / (10000 - 12)) * 100}%` } as React.CSSProperties}
           />
           <EditableValue
             className={styles.mono}
@@ -202,6 +285,7 @@ export default function StatusBar({
             min={12}
             max={10000}
             display={`${zoom}%`}
+            reserve={reserveCh(12, 10000, 1, "%")}
             onCommit={onZoomChange}
             ariaLabel="Zoom percentage"
           />

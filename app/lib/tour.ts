@@ -44,13 +44,13 @@ export const TOUR_STEPS: TourStep[] = [
     id: "topbar",
     target: "topbar",
     title: "Menus & search",
-    body: "Every command lives in the menu bar — or press Ctrl+K and fuzzy-search it. Undo/redo and the theme toggle sit on the right.",
+    body: "Every command lives in the menu bar — or press Ctrl+K (or click the search field in the middle) and fuzzy-search it. Undo/redo, the theme toggle and Export sit on the right.",
   },
   {
     id: "toolbar",
     target: "toolbar",
     title: "Tools",
-    body: "Move, selections, brushes, healing, text, shapes… hover any tool for its name and single-letter shortcut. The two swatches at the bottom are your foreground and background colours (X swaps them).",
+    body: "Move, selections, brushes, healing, text, shapes… Tools that share a job share a button: one with a mark in its corner holds more — right-click it, or press and hold, to pick another. Hover any tool for its name and single-letter shortcut. The two swatches at the bottom are your foreground and background colours (X swaps them).",
   },
   {
     id: "options",
@@ -73,8 +73,8 @@ export const TOUR_STEPS: TourStep[] = [
   {
     id: "status",
     target: "status",
-    title: "Status bar",
-    body: "Zoom (click the number to type one), document size, colour space, cursor position and the save state live down here.",
+    title: "Readouts",
+    body: "The document's size and colour space, the cursor position or selection while there is one, and the save state float at the foot of the canvas, either side of the zoom controls.",
   },
   {
     id: "finish",
@@ -101,20 +101,20 @@ export const MOBILE_TOUR_STEPS: TourStep[] = [
   {
     id: "topbar",
     target: "topbar",
-    title: "Menus & search",
-    body: "☰ opens the menus. Faster: tap Search and type what you want — “curves”, “flatten”, “export” — and every command and tool is one tap away.",
+    title: "Menus, search & your document",
+    body: "☰ opens the menus — and Search, at the top of them: type what you want, “curves”, “flatten”, “export”, and every command and tool is one tap away. Tap the document's name to switch documents, or to rename it.",
   },
   {
     id: "mobilebar",
     target: "mobilebar",
     title: "Your main controls",
-    body: "Three ways in, and that is the lot. Tools opens every tool, named. Pan moves the picture without giving up your brush. Panels slides the panels up from the bottom.",
+    body: "Move, Select, Brush and Eraser are one tap away. The hand pans the picture without giving up your tool; the grid opens every tool, named; the stack slides the panels up.",
   },
   {
     id: "options",
     target: "options",
     title: "Tool settings",
-    body: "The button on the right names the tool you are holding — tap it for that tool's full settings, sliders the width of the screen. Anything you must not lose, like Crop's Apply, stays pinned to the bar.",
+    body: "This card holds the settings of the tool you are holding. Drag its grip to show more or less of them, or tap the grip to fold it away. Anything you must not lose, like Crop's Apply, stays beside the tool's name, and the Shift, Alt and Ctrl keys sit along its foot.",
   },
   {
     id: "canvas",
@@ -126,7 +126,7 @@ export const MOBILE_TOUR_STEPS: TourStep[] = [
     id: "status",
     target: "mobilestatus",
     title: "Where you are",
-    body: "The document's name and size, and whether your work is saved. The zoom controls sit just below — or pinch the canvas and watch the number follow.",
+    body: "The picture's size and how far you are zoomed in. Pinch the canvas and watch the number follow — tap it to fit the picture back on screen. The document's name, and whether it is saved, sit in the header.",
   },
   {
     id: "finish",

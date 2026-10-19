@@ -104,6 +104,8 @@ test("nothing denies the panel drawer a vertical pan", async ({ app }) => {
   const { page } = app;
   await page.locator('[data-tour="mobilebar"] button', { hasText: "Panels" }).first().click();
   await app.settle(700);
+  // A panel taller than the sheet, so there is something to pan.
+  expect(await app.openPanelById("color"), "the Color panel opens").toBe(true);
   const p = await page.evaluate(() => {
     const dock = document.querySelector('[data-tour="dock"]')!;
     const allows = (v: string) => v === "auto" || v === "manipulation" || v.includes("pan-y");

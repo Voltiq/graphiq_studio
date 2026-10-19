@@ -35,6 +35,23 @@ test.afterEach(async ({ app }) => {
   expect(app.consoleErrors, "no console errors").toEqual([]);
 });
 
+/** Fold an open panel, so a drag source and its target fit on one screen. */
+async function collapse(app: App, name: string): Promise<void> {
+  const btn = app.page.getByRole("button", { name: `Collapse ${name}` }).first();
+  if (await btn.count()) {
+    await btn.click();
+    await app.settle(300);
+  }
+}
+
+/* The default dock opens with Color and Layers expanded, which puts most of
+   the panels these drags aim at below the fold. Fold Layers so the dock is the
+   short list of headers the drags were written against; Color stays open,
+   because a group's body has to be visible to see it change. */
+test.beforeEach(async ({ app }) => {
+  await collapse(app, "Layers");
+});
+
 const sectionOf = (page: Page, name: string) =>
   page
     .locator('[data-tour="dock"] section')
@@ -313,6 +330,7 @@ test("Reset workspace clears the grouping", async ({ app }) => {
 });
 
 test("the bottom band announces 'after', and cancelling leaves nothing marked", async ({ app }) => {
+  await collapse(app, "Color"); // Info is the tenth panel down
   const hint = await dragPanel(app, "Color", "Info", "bottom", true);
   expect(hint, "hovering a panel's bottom edge").toContain("after");
   await app.page.keyboard.press("Escape");

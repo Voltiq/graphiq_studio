@@ -65,7 +65,7 @@ import {
 
 const ONE_YEAR = 60 * 60 * 24 * 365;
 
-/** Theme options as Magiq's preview cards: a mini mock UI + radio + label. */
+/** Theme options as preview cards: a mini mock UI + radio + label. */
 const THEME_OPTIONS: { id: Theme; name: string }[] = [
   { id: "light", name: "Light" },
   { id: "dark", name: "Dark" },
@@ -692,7 +692,7 @@ export default function PreferencesDialog({
                         accentReports.find((r) => r.id === a.id)?.report ??
                         accentSafety(hex, semantics, prefs.colorVision);
                       const badged = isBadged(report.minDeltaE);
-                      const shown = simulateHex(hex, prefs.colorVision);
+                      const shown = simulateHex(a.fill, prefs.colorVision);
                       return (
                         <button
                           key={a.id}

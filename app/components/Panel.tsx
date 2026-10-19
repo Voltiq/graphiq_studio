@@ -148,6 +148,7 @@ export default function Panel({
             <button
               type="button"
               className={styles.headBtn}
+              data-float-btn
               title={floating ? "Dock this panel back" : "Float this panel over the canvas"}
               aria-label={floating ? `Dock ${title}` : `Float ${title}`}
               onClick={onFloat}

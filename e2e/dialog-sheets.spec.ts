@@ -247,8 +247,8 @@ test.describe("phone 390×844", () => {
   /* `:has(> header)` scopes the sheet rule. The palette wears role="dialog" with
      no title bar, so it must NOT be dressed as a sheet. */
   test("the command palette is not dressed as a dialog sheet", async ({ app }) => {
-    await app.page.locator('button[aria-label="Open the command palette"]').click();
-    await app.settle(700);
+    await app.openPalette();
+    await app.settle(300);
     const pal = await app.page.evaluate(() => {
       const d = document.querySelector('[role="dialog"][aria-label="Command palette"]');
       if (!d) return null;

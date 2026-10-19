@@ -1,3 +1,5 @@
+@use "../styles/ds" as ds;
+
 .optionsbar {
   height: var(--optionsbar-h);
   flex-shrink: 0;
@@ -9,6 +11,18 @@
   border-bottom: 1px solid var(--border);
   overflow: hidden;
   z-index: 40;
+
+  /* Desktop: a floating card under the top bar. Its box plus the gap below it
+     is exactly --optionsbar-h, so --chrome-top still says where the stage
+     begins. */
+  @include ds.desktop-shell {
+    height: calc(var(--optionsbar-h) - var(--chrome-gap));
+    margin: 0 var(--chrome-side) var(--chrome-gap);
+    padding: 7px 10px 7px 8px;
+    gap: 18px;
+    @include ds.card(var(--surface), var(--r-xl));
+    box-shadow: var(--shadow-sm), var(--inset-hi);
+  }
 }
 
 .penHint {
@@ -17,24 +31,30 @@
   white-space: nowrap;
 }
 
-/* Current tool: a selected-state identity chip anchoring the bar. */
+/* Current tool: the identity chip anchoring the bar — the tool's glyph on a
+   small accent tile, then its name. */
 .toolBadge {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   flex-shrink: 0;
-  height: 28px;
-  padding: 0 11px;
+  height: 32px;
+  padding: 0 12px 0 5px;
   line-height: 1;
   border-radius: var(--r-md);
-  background: var(--selected-bg);
-  border: 1px solid var(--accent);
-  font-size: 12px;
-  font-weight: var(--weight-semibold);
-  color: var(--accent);
+  background: var(--surface-2);
+  box-shadow: var(--inset-hi);
+  font-size: 13px;
+  font-weight: var(--weight-regular);
+  color: var(--text);
 
   svg {
-    color: var(--accent);
+    box-sizing: content-box;
+    padding: 4px;
+    border-radius: 7px;
+    color: var(--accent-contrast);
+    background: var(--accent-fill);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 25%);
   }
 }
 
@@ -50,8 +70,8 @@
   padding: 0 10px;
   line-height: 1;
   border-radius: var(--r-pill);
-  background: var(--selected-bg);
-  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
   font-size: 12px;
   font-weight: var(--weight-semibold);
   color: var(--accent);
@@ -59,7 +79,7 @@
   transition: background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
 
   &:hover {
-    background: var(--selected-bg-2);
+    background: color-mix(in oklab, var(--accent-solid) 26%, transparent);
   }
 
   &:active {
@@ -78,7 +98,7 @@
   border: 1px solid rgb(255 0 0 / 90%);
 }
 
-/* The dismiss ✕ reads quieter than the label until the pill is hovered. */
+/* The dismiss cross reads quieter than the label until the pill is hovered. */
 .maskPillX {
   opacity: 0.55;
   transition: opacity var(--t-fast) var(--ease);
@@ -93,7 +113,7 @@
 .controls {
   display: flex;
   align-items: center;
-  gap: var(--sp-3);
+  gap: 18px;
   overflow-x: auto;
   overflow-y: hidden;
   padding: var(--sp-2) var(--sp-3);
@@ -115,30 +135,16 @@
   }
 }
 
+/* A quiet secondary button (presets, Reset, …): the raised face. */
 .preset {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 12px;
+  @include ds.btn(28px);
+  padding: 0 11px;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   color: var(--text-2);
-  background: var(--wash);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  white-space: nowrap;
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
-    border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
 
   &:hover {
     color: var(--text);
-    background: var(--wash-2);
-    border-color: var(--border-strong);
-  }
-
-  &:active {
-    transform: scale(0.97);
   }
 }
 
@@ -148,7 +154,9 @@
   white-space: nowrap;
 }
 
-/* Measure tool: compact A / L / W / H readout. */
+/* Measure tool: compact A / L / W / H readout. Each number holds its width
+   (OptionsBar sets the min-widths in ch), so the row does not twitch while the
+   ruler is dragged. */
 .measureReadout {
   display: flex;
   align-items: baseline;
@@ -162,48 +170,40 @@
   }
 
   b {
-    font-weight: 600;
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-weight: var(--weight-medium);
     color: var(--text);
-    margin-right: 6px;
+    margin-right: 8px;
   }
 }
 
 .iconBtn {
-  display: inline-grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  flex-shrink: 0;
-  color: var(--text-2);
-  background: var(--wash);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
-    border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+  @include ds.icon-btn(32px);
 
-  &:hover {
-    color: var(--text);
-    background: var(--wash-2);
-    border-color: var(--border-strong);
-  }
-
-  &:active {
-    transform: scale(0.93);
-  }
-
-  /* toggled-on = selected state, matching the tool rail */
+  /* toggled-on = the accent tint, quieter than the active tool's solid fill */
   &[data-active="true"] {
     color: var(--accent);
-    background: var(--selected-bg);
-    border-color: var(--accent);
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent-line);
   }
 }
 
 /* A tight cluster of icon toggles (e.g. text Bold / Italic / Underline). */
 .fmtGroup {
   display: inline-flex;
-  gap: 4px;
+  gap: 2px;
+  padding: 2px;
   flex-shrink: 0;
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  box-shadow: var(--inset-lo);
+
+  .iconBtn {
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+  }
 }
 
 /* ---- OpenType popover (text tool): feature toggles + variable axes ------- */
@@ -223,20 +223,18 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: var(--sp-3);
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
+  padding: 14px;
+  @include ds.overlay;
+  @include ds.pop-in(otIn);
 }
+
+@include ds.pop-keyframes(otIn);
 
 .otTitle {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
-  font-weight: var(--weight-semibold);
-  color: var(--text-2);
+  @include ds.eyebrow;
 
   &::after {
     content: "";
@@ -249,7 +247,7 @@
 .otGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px 10px;
+  gap: 8px 10px;
 }
 
 .otAxisRow {
@@ -259,43 +257,21 @@
 }
 
 .otReset {
-  display: inline-grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  color: var(--text-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-
-  &:hover {
-    color: var(--text);
-    background: var(--wash);
-    border-color: var(--border-strong);
-  }
+  @include ds.icon-btn(24px, var(--r-sm));
 }
 
 .otHint {
-  font-size: 11px;
+  font-size: 11.5px;
   line-height: 1.45;
   color: var(--text-3);
 }
 
 /* Primary action variant of .preset (e.g. the crop Apply button). */
 .apply {
-  color: var(--accent-contrast);
-  background: var(--accent);
-  border-color: transparent;
-  font-weight: 600;
+  @include ds.btn-primary;
 
   &:hover {
     color: var(--accent-contrast);
-    background: var(--accent-2);
-    border-color: transparent;
-  }
-
-  &:active {
-    transform: scale(0.97);
   }
 }
 
@@ -304,9 +280,10 @@
 .shapeGrid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
-  gap: 5px;
-  max-height: 190px;
+  gap: 6px;
+  max-height: 200px;
   overflow-y: auto;
+  padding: 2px;
 }
 
 .shapeCell {
@@ -319,22 +296,23 @@
   width: 100%;
   aspect-ratio: 1;
   border-radius: var(--r-md);
-  border: 1px solid var(--border);
   background: var(--surface-2);
+  box-shadow: var(--inset-lo), inset 0 0 0 1px var(--border);
   color: var(--text-2);
   cursor: pointer;
-  transition: border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
-    background var(--t-fast) var(--ease);
+  transition: box-shadow var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease), transform var(--t-fast) var(--spring);
 
   &:hover {
-    border-color: var(--border-strong);
     color: var(--text);
+    transform: translateY(-1px);
+    box-shadow: var(--inset-lo), inset 0 0 0 1px var(--line-2);
   }
 
   &[data-on="true"] {
-    border-color: var(--accent);
     color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px var(--accent-line);
   }
 }
 
@@ -344,11 +322,12 @@
   right: -5px;
   display: grid;
   place-items: center;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
-  background: var(--danger);
+  background: var(--danger-bold);
   color: #fff;
+  box-shadow: var(--shadow-sm);
   cursor: pointer;
   opacity: 0;
   transition: opacity var(--t-fast) var(--ease);
@@ -397,7 +376,7 @@
   /* Locked reads as heavier than armed, since it outlives the next gesture. */
   &[data-mode="locked"] {
     color: var(--on-accent, #fff);
-    background: var(--accent);
+    background: var(--accent-fill);
     border-color: var(--accent);
   }
 }
@@ -464,8 +443,10 @@
     background: var(--selected-bg);
     border-color: var(--accent);
   }
-}
-
+}
+
+
+
 /* The name itself is what gets clipped, never the icon: an ellipsised word
    still identifies the tool, and the icon identifies it even when the word is
    gone entirely. The sheet's own header spells it out in full. */
@@ -710,7 +691,7 @@
 /* The pinned commit action reads as the primary one. */
 [data-mobile-options] .iconBtn.apply {
   color: var(--accent-contrast);
-  background: var(--accent);
+  background: var(--accent-fill);
   border-color: var(--accent);
 }
 
@@ -797,4 +778,251 @@
    saying separately. */
 .optionsbar[data-mobile-options][data-sheet-open] .modifierChips {
   z-index: 120;
+}
+
+/* ==========================================================================
+   PHONE: the tool's options as a card on the foot of the stage
+   As in the design: a card floating just above the tool dock. From the top:
+   a grip (drag to resize, tap to fold), the header (the tool, and anything
+   pinned like Crop's Apply), the controls in rows of label / track / value,
+   and a labelled row of Shift / Alt / Ctrl keys at the foot. While a drawer
+   is open the controls step aside, so the drawer has the room and the keys
+   stay in reach.
+   ========================================================================== */
+.optionsbar[data-mobile-options] {
+  @include ds.phone-shell {
+    position: fixed;
+    left: calc(18px + var(--safe-l));
+    right: calc(18px + var(--safe-r));
+    bottom: calc(var(--kb-inset, 0px) + var(--chrome-bottom) + 8px);
+    /* Over the stage, under the header (60) and so under the menu sheet it
+       opens; a drawer raises it over its scrim (globals.scss). */
+    z-index: 55;
+    height: auto;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 0;
+    padding: 0 14px 10px;
+    overflow: hidden;
+    @include ds.card(var(--surface), 24px);
+    box-shadow: var(--shadow), var(--inset-hi);
+  }
+}
+
+/* The grip: the whole width of the card is the handle, the pill is its mark. */
+.cardGrip {
+  @include ds.phone-shell {
+    flex: none;
+    display: grid;
+    place-items: center;
+    height: 22px;
+    margin: 0 -14px;
+    touch-action: none;
+    cursor: grab;
+    border-radius: 24px 24px 0 0;
+
+    &::before {
+      content: "";
+      width: 36px;
+      height: 5px;
+      border-radius: var(--r-pill);
+      background: var(--line-2);
+      transition: background var(--t-fast) var(--ease), width var(--t-fast) var(--ease);
+    }
+
+    &:active::before {
+      width: 44px;
+      background: var(--border-strong);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--focus-color);
+      outline-offset: -4px;
+    }
+  }
+}
+
+/* The header: the tool (its glyph on an accent tile, then its name) and what
+   is pinned beside it. */
+.cardHead {
+  @include ds.phone-shell {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+  }
+}
+
+.optionsbar[data-mobile-options] .sheetToggle {
+  @include ds.phone-shell {
+    flex: 1 1 auto;
+    min-width: 0;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 0 4px;
+    background: none;
+    border: 0;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.01em;
+    color: var(--text);
+
+    &:active {
+      background: var(--wash);
+    }
+  }
+}
+
+.cardTile {
+  @include ds.phone-shell {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    color: var(--accent-contrast);
+    background: var(--accent-fill);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 25%), var(--accent-glow);
+  }
+}
+
+/* Open, it points down ("fold this away"); folded, up ("there is more"). */
+.cardChevron {
+  @include ds.phone-shell {
+    flex: none;
+    margin-left: auto;
+    color: var(--text-3);
+    transition: transform var(--t-med) var(--ease);
+  }
+}
+
+.sheetToggle[aria-expanded="false"] .cardChevron {
+  transform: rotate(180deg);
+}
+
+/* The controls. Their height is the card's size: set by the grip, animated
+   between states but not while a finger is dragging it. */
+.optionsbar[data-mobile-options] .sheet {
+  @include ds.phone-shell {
+    position: relative;
+    inset: auto;
+    z-index: auto;
+    flex: none;
+    max-height: calc(100svh - var(--chrome-top) - var(--chrome-bottom) - 230px);
+    display: flex;
+    flex-direction: column;
+    margin: 0 -14px;
+    padding: 0 14px;
+    overflow: hidden;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    animation: none;
+    transition: height var(--t-med) var(--ease);
+
+    &[data-dragging] {
+      transition: none;
+    }
+  }
+}
+
+.optionsbar[data-mobile-options] .sheetBody {
+  @include ds.phone-shell {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 6px 2px 8px;
+    gap: 10px 8px;
+    --sheet-label: 70px;
+  }
+}
+
+/* A drawer is open: the controls step aside (header and keys stay), so the
+   drawer gets the height and the keys can still be pressed beside it. */
+:global(html[data-mobile="true"][data-drawer]) .optionsbar[data-mobile-options] .sheet {
+  display: none;
+}
+
+/* A phone on its side has no room for the controls under the picture: the
+   card keeps its header and keys there, and the grip has nothing to size. */
+@media (max-height: 500px) {
+  :global(html[data-mobile="true"]) .optionsbar[data-mobile-options] .sheet,
+  :global(html[data-mobile="true"]) .optionsbar[data-mobile-options] .cardGrip {
+    display: none;
+  }
+
+  :global(html[data-mobile="true"]) .optionsbar[data-mobile-options] {
+    padding-top: 4px;
+  }
+}
+
+/* Shift / Alt / Ctrl: a labelled row of key caps at the foot of the card. */
+.keysRow {
+  @include ds.phone-shell {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+}
+
+.keysLabel {
+  @include ds.phone-shell {
+    flex: none;
+    width: 62px;
+    @include ds.eyebrow;
+  }
+}
+
+.optionsbar[data-mobile-options] .modifierChips {
+  @include ds.phone-shell {
+    position: static;
+    flex: 1 1 auto;
+    display: flex;
+    gap: 6px;
+    padding: 0;
+    background: none;
+    box-shadow: none;
+  }
+}
+
+.optionsbar[data-mobile-options] .modifierChip {
+  @include ds.phone-shell {
+    flex: 1 1 0;
+    min-width: 0;
+    margin: 0;
+    padding: 0 8px;
+    border-radius: 12px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-weight: var(--weight-medium);
+    color: var(--text-2);
+    @include ds.shine(var(--raised));
+    box-shadow: var(--shadow-sm), var(--inset-hi);
+    transition: transform var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+
+    &:active {
+      transform: translateY(1px) scale(0.98);
+    }
+
+    &[data-mode="armed"] {
+      color: var(--accent);
+      border-color: var(--accent-line);
+      background: var(--accent-soft);
+      box-shadow: inset 0 0 0 1px var(--accent-line);
+    }
+
+    &[data-mode="locked"] {
+      color: var(--accent-contrast);
+      border-color: transparent;
+      background: var(--accent-fill);
+      box-shadow: inset 0 1px 0 rgb(255 255 255 / 25%), var(--accent-glow);
+    }
+  }
 }

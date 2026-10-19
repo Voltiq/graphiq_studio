@@ -1,25 +1,36 @@
+@use "../styles/ds" as ds;
+
 .label {
   font-size: 12px;
+  font-weight: var(--weight-medium);
   color: var(--text-2);
   white-space: nowrap;
   user-select: none;
 }
 
+/* Numeric readouts never move their neighbours: the digits are tabular, and
+   the box reserves the width of the LONGEST value the control can show (the
+   caller passes it as `min-width` in `ch`, see reserveCh() in Controls.tsx), so
+   "9px" growing to "200px" happens inside a fixed box instead of shoving the
+   track and everything after it. */
 .value {
   font-size: 12px;
   font-family: var(--font-mono);
+  font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
   color: var(--text);
   min-width: 34px;
   text-align: right;
+  white-space: nowrap;
 }
 
 /* Click-to-type value readout (shared by Slider + the custom sliders in the
    status bar / Layers panel). The caller's own class supplies font + colour;
    these add the click affordance and the editing field. */
 .valueClickable {
+  display: inline-block;
   cursor: text;
-  border-radius: var(--r-sm);
+  border-radius: var(--r-xs);
   transition: color var(--t-fast) var(--ease);
 
   &:hover {
@@ -33,15 +44,17 @@
 
 .valueInput {
   width: 46px;
-  padding: 0 3px;
+  height: 22px;
+  padding: 0 4px;
   font-size: 12px;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
   color: var(--text);
   background: var(--surface-2);
-  border: 1px solid var(--accent);
+  border: 1px solid var(--accent-line);
   border-radius: var(--r-sm);
+  box-shadow: 0 0 0 3px var(--accent-soft);
   outline: none;
 
   &::-webkit-inner-spin-button,
@@ -55,24 +68,29 @@
 .slider {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-width: 150px;
 
   &.compact {
     min-width: 120px;
   }
 
-  /* Inline (options-bar) variant: label · value · short track in one row.
-     Only the TRACK flexes (down to a floor); the label+value never shrink, so
-     text can't clip. The options bar pins every other control at its natural
-     width (.controls > * { flex-shrink: 0 }), so a too-narrow bar first shortens
-     the tracks a little, then scrolls — it never crushes controls together.
-     `flex-shrink: 1` here outranks that rule by specificity. */
+  /* Inline (options-bar) variant: label, track, value in one row, as in the
+     design's tool options. Only the TRACK flexes (down to a floor); the label
+     and the reserved-width value never shrink, so text cannot clip and a
+     growing number cannot push anything. The options bar pins every other
+     control at its natural width (.controls > * { flex-shrink: 0 }), so a
+     too-narrow bar first shortens the tracks a little, then scrolls — it never
+     crushes controls together. `flex-shrink: 1` here outranks that rule by
+     specificity. */
   &.inline {
     flex-direction: row;
     align-items: center;
     gap: 10px;
     flex-shrink: 1;
+    /* Never narrower than label + the shortest track + the readout: below
+       that the readout would spill into the next control. */
+    min-width: min-content;
 
     .sliderHead {
       gap: 8px;
@@ -80,18 +98,71 @@
     }
 
     .label {
-      color: var(--text-2);
+      color: var(--text-3);
     }
 
     .value {
-      min-width: 38px;
       color: var(--text);
+      --value-min: 40px; /* the bar's readout column (EditableValue reads it) */
     }
 
+    /* 104px when there is room, down to 56px when the bar is short of it.
+       `width: 0` + a basis (rather than `width: 104px`) is what lets the
+       wrapper's min-content be the 56px floor instead of the full track. */
     input[type="range"] {
-      width: 104px;
+      flex: 0 1 104px;
+      width: 0;
       min-width: 56px;
-      flex-shrink: 1;
+    }
+
+    /* Phone: inside the tool's options card, rows of label, track and value,
+       as in the design — a 70px label column and a 52px readout column, so the
+       tracks start and end on the same lines down the card. */
+    @include ds.phone-shell {
+      .sliderHead {
+        display: contents;
+      }
+
+      .label {
+        order: 0;
+        flex: 0 0 70px;
+        font-size: 13px;
+        color: var(--text-2);
+      }
+
+      input[type="range"] {
+        order: 1;
+      }
+
+      .value {
+        order: 2;
+        flex: 0 0 auto;
+        font-size: 13px;
+        --value-min: 52px;
+      }
+    }
+
+    /* Desktop reads label, track, value. (The touch options sheet lays the
+       head out as its own column — OptionsBar.module.scss .sheetBody — so the
+       head box has to survive there.) */
+    @include ds.desktop-shell {
+      .sliderHead {
+        display: contents;
+      }
+
+      .label {
+        order: 0;
+        flex-shrink: 0;
+      }
+
+      input[type="range"] {
+        order: 1;
+      }
+
+      .value {
+        order: 2;
+        flex-shrink: 0;
+      }
     }
   }
 }
@@ -100,68 +171,26 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
 }
 
 .slider input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
+  @include ds.range;
   width: 100%;
-  height: 4px;
-  border-radius: var(--r-pill);
-  background: linear-gradient(
-    to right,
-    var(--accent) 0%,
-    var(--accent) var(--pct, 50%),
-    var(--track) var(--pct, 50%),
-    var(--track) 100%
-  );
-  cursor: pointer;
-  outline: none;
 }
 
-/* Bipolar: fill outward from the centre, with a faint centre tick. */
+/* Bipolar: fill outward from the centre, with a centre tick. */
 .slider.bipolar input[type="range"] {
   background:
-    linear-gradient(var(--border-strong), var(--border-strong)) 50% / 1px 8px no-repeat,
+    linear-gradient(var(--text-3), var(--text-3)) 50% / 2px 100% no-repeat,
     linear-gradient(
-      to right,
-      var(--track) 0,
-      var(--track) var(--lo, 50%),
-      var(--accent) var(--lo, 50%),
-      var(--accent) var(--hi, 50%),
-      var(--track) var(--hi, 50%),
-      var(--track) 100%
-    );
-}
-
-/* Magiq slider thumb: white, raised, 12px. */
-.slider input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #fff;
-  border: none;
-  box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
-  transition: transform var(--t-fast) var(--ease);
-}
-
-.slider input[type="range"]::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
-}
-
-.slider input[type="range"]:active::-webkit-slider-thumb {
-  transform: scale(1.3);
-}
-
-.slider input[type="range"]::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #fff;
-  border: none;
-  box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
+      90deg,
+      transparent var(--lo, 50%),
+      var(--accent-lo) var(--lo, 50%),
+      var(--accent-hi) var(--hi, 50%),
+      transparent var(--hi, 50%)
+    ),
+    var(--track);
 }
 
 /* ------------------------------ Number field ------------------------------ */
@@ -171,24 +200,15 @@
   gap: var(--sp-2);
 }
 
-/* textfield-standard: background-input fill + border-input outline; focus
-   swaps the outline to border-focused (no glow). */
+/* A recessed well; focus lights the rim and adds the accent halo. */
 .numBox {
   display: inline-flex;
   align-items: center;
-  height: 30px;
-  padding: 0 8px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
-
-  &:hover {
-    border-color: var(--accent);
-  }
+  padding: 0 9px;
+  @include ds.field(30px);
 
   &:focus-within {
-    border-color: var(--focus-color);
+    @include ds.field-focus;
   }
 
   input {
@@ -197,8 +217,9 @@
     background: none;
     border: none;
     outline: none;
-    font-size: 12px;
+    font-size: 12.5px;
     font-family: var(--font-mono);
+    font-weight: var(--weight-medium);
     font-variant-numeric: tabular-nums;
     color: var(--text);
   }
@@ -206,8 +227,9 @@
 
 .unit {
   font-size: 11px;
+  font-family: var(--font-mono);
   color: var(--text-3);
-  padding-left: 2px;
+  padding-left: 4px;
 }
 
 /* ----------------------- Select (custom dropdown) ------------------------- */
@@ -230,27 +252,24 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  height: 30px;
   padding: 0 9px 0 11px;
-  font-size: 12px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  color: var(--text);
+  font-size: 12.5px;
+  font-weight: var(--weight-medium);
   cursor: pointer;
-  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
-
-  &:hover {
-    border-color: var(--accent);
-  }
+  @include ds.field(32px);
 
   &[aria-expanded="true"] {
-    border-color: var(--focus-color);
+    @include ds.field-focus;
   }
 
   svg {
-    color: var(--text-2);
+    color: var(--text-3);
     flex-shrink: 0;
+    transition: transform var(--t-med) var(--ease);
+  }
+
+  &[aria-expanded="true"] svg {
+    transform: rotate(180deg);
   }
 }
 
@@ -260,7 +279,7 @@
   text-overflow: ellipsis;
 }
 
-/* Portalled popup — surface-overlay + shadow-overlay, radius-large (menus). */
+/* Portalled popup — the shared overlay card. */
 .selectMenu {
   zoom: var(--ui-zoom, 1); /* body-portalled — opts into the interface scale */
   /* A dropdown must paint above whatever surface opened it, and a Select can be
@@ -270,53 +289,31 @@
      OpenType popover. Only the tooltip layer (10000) stays above. */
   z-index: 9500;
   min-width: 150px;
-  max-height: 300px;
+  max-height: 320px;
   overflow-y: auto;
-  padding: 4px;
   display: flex;
   flex-direction: column;
   gap: 1px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
-  animation: selDrop var(--t-short) var(--ease);
+  @include ds.overlay(var(--r-lg));
+  padding: 5px;
+  @include ds.pop-in(selDrop);
   transform-origin: top left;
 }
 
-@keyframes selDrop {
-  from {
-    opacity: 0;
-    transform: translateY(-4px) scale(0.985);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
+@include ds.pop-keyframes(selDrop);
 
-/* Neutral hover; the chosen option carries the brand-blue check. */
+/* Soft accent hover; the chosen option carries the accent check. */
 .selectOption {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: var(--sp-5);
-  width: 100%;
-  height: 30px;
-  padding: 0 10px;
-  font-size: 12px;
-  border-radius: var(--r-md);
-  color: var(--text);
-  text-align: left;
   white-space: nowrap;
-  transition: background var(--t-fast) var(--ease);
+  @include ds.menu-item(30px);
+  font-size: 12.5px;
+  padding: 0 9px;
+  border-radius: 8px;
 
-  &:hover {
-    background: var(--wash);
-  }
-
-  &:active {
-    background: var(--wash-2);
+  &[data-active="true"] {
+    font-weight: var(--weight-semibold);
   }
 
   svg {
@@ -333,79 +330,47 @@
 }
 
 .segmented {
-  display: inline-flex;
-  padding: 2px;
-  gap: 2px;
-  background: var(--wash);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  @include ds.seg;
 
   button {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 24px;
-    padding: 0 9px;
-    font-size: 12px;
-    border-radius: var(--r-sm);
-    color: var(--text-2);
-    transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
-      box-shadow var(--t-fast) var(--ease);
+    @include ds.seg-btn(24px);
 
-    &:hover {
-      color: var(--text);
-    }
-
-    /* Magiq: the active segment is a SOLID accent fill. */
     &[data-active="true"] {
-      color: var(--accent-contrast);
-      background: var(--accent);
-      font-weight: var(--weight-semibold);
+      @include ds.seg-on;
     }
   }
 }
 
 /* -------------------------------- Toggle ---------------------------------- */
+/* A real switch (the element already says role="switch"): a pill track with a
+   knob that travels on a spring and stretches while pressed. */
 .toggle {
   display: inline-flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 10px;
+
+  &:active .toggleBox::after {
+    width: 16px;
+  }
+
+  &:active .toggleBox[data-on="true"]::after {
+    transform: translateX(10px);
+  }
 }
 
-/* ADS checkbox: 16px, radius-small, border-input outline; checked fills with
-   background-selected-bold and shows the inverse tick. */
 .toggleBox {
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
-  border: 1px solid var(--input);
-  color: var(--accent-contrast);
-  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
-    transform var(--t-fast) var(--ease);
+  @include ds.switch(32px, 18px);
 
-  .toggle:hover & {
-    background: var(--surface-hover);
-  }
-
-  .toggle:active & {
-    transform: scale(0.92);
-  }
-
-  &[data-on="true"] {
-    background: var(--accent);
-    border-color: var(--accent);
+  .toggle:hover &:not([data-on="true"]) {
+    background: color-mix(in oklab, var(--raised-2), var(--text) 8%);
   }
 
   .toggle:hover &[data-on="true"] {
-    background: var(--accent-2);
-    border-color: var(--accent-2);
+    filter: brightness(1.08);
   }
 }
 
-/* Color chip — a bare swatch + mono hex. */
+/* Color chip — a lit swatch + mono hex. */
 .colorChip {
   display: inline-flex;
   align-items: center;
@@ -416,23 +381,25 @@
   cursor: pointer;
 
   &:hover .colorDot {
-    border-color: var(--accent);
-    transform: scale(1.05);
+    transform: translateY(-1px) scale(1.06);
   }
 }
 
 .colorDot {
   width: 24px;
   height: 24px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-sm);
-  transition: border-color var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+  border-radius: var(--r-sm);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 12%),
+    0 0 0 1px var(--border),
+    0 1px 2px rgb(0 0 0 / 30%);
+  transition: transform var(--t-fast) var(--spring);
 }
 
 .colorHex {
   font-size: 12px;
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   color: var(--text);
 }
 
@@ -474,6 +441,9 @@ html[data-touch="true"] input[type="range"] {
      too and no call site can fall short.) */
   padding: 19px 0;
   background-clip: content-box;
+  /* The desktop track's recessed shadow would trace the whole padded box, not
+     the visible line. */
+  box-shadow: none;
 
   /* ---- why the radius is a fraction, and why it is not `--r-pill` ----
      This is what made the ends POINTY. `border-radius` describes the BORDER
@@ -510,6 +480,17 @@ html[data-touch="true"] input[type="range"][type="range"]::-webkit-slider-thumb 
 html[data-touch="true"] input[type="range"][type="range"]::-moz-range-thumb {
   width: 20px;
   height: 20px;
+}
+
+/* The phone's thumb, as in the design: 24px, wearing its accent halo at rest
+   so it reads as the thing to take hold of. */
+html[data-mobile="true"] input[type="range"][type="range"]::-webkit-slider-thumb {
+  width: 24px;
+  height: 24px;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 16%),
+    0 3px 8px rgb(0 0 0 / 35%),
+    0 0 0 6px var(--accent-soft);
 }
 
 /* ---- the value readout is a control, and a finger has to be able to hit it ----

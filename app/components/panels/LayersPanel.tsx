@@ -35,7 +35,7 @@ import {
   X,
 } from "lucide-react";
 import styles from "../RightDock.module.scss";
-import { EditableValue, Select } from "../Controls";
+import { EditableValue, Select, reserveCh } from "../Controls";
 import { cssGradient } from "../GradientControl";
 import { swatchBg } from "../../lib/color";
 import { uiZoom } from "../../lib/ui-scale";
@@ -375,6 +375,7 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
               min={0}
               max={100}
               display={`${active.opacity}%`}
+              reserve={reserveCh(0, 100, 1, "%")}
               onCommit={(n) => api.update(active.id, { opacity: n })}
               ariaLabel="Layer opacity percentage"
             />

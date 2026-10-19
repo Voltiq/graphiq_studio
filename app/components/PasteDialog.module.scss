@@ -1,3 +1,8 @@
+@use "../styles/ds" as ds;
+
+/* The shared dialog shell — about twenty dialogs import this module for their
+   overlay, card, header, body, footer and buttons. */
+
 .overlay {
   position: fixed;
   /* Ends above a keyboard, so the dialog centres in what is visible. */
@@ -6,6 +11,8 @@
   display: grid;
   place-items: center;
   background: var(--blanket);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
   animation: fade var(--t-med) var(--ease);
 }
 
@@ -18,13 +25,12 @@
   }
 }
 
+/* The dialog: the overlay card with the generous corner. */
 .dialog {
-  width: 360px;
+  width: 380px;
   max-width: calc(100vw - 32px);
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  box-shadow: var(--shadow);
+  @include ds.card(var(--surface-3), var(--r-2xl));
+  box-shadow: var(--shadow), var(--inset-hi);
   animation: pop var(--t-med) var(--ease-pop);
   overflow: hidden;
 }
@@ -44,37 +50,22 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--sp-3) var(--sp-4);
-  border-bottom: 1px solid var(--border);
+  gap: var(--sp-3);
+  padding: 14px 14px 10px 20px;
 
   h2 {
-    font-size: 14px;
-    font-weight: var(--weight-bold);
+    font-size: 15px;
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.012em;
   }
 }
 
 .close {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--r-md);
-  color: var(--text-2);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
-    transform var(--t-fast) var(--ease);
-
-  &:hover {
-    background: var(--wash);
-    color: var(--text);
-  }
-
-  &:active {
-    transform: scale(0.9);
-  }
+  @include ds.icon-btn(30px);
 }
 
 .body {
-  padding: var(--sp-4);
+  padding: 6px 20px 18px;
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
@@ -91,8 +82,10 @@
   height: 96px;
   flex-shrink: 0;
   border-radius: var(--r-lg);
-  border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow-sm);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 8%),
+    0 0 0 1px var(--border),
+    var(--shadow-sm);
   background-color: var(--checker-a);
   background-image: repeating-conic-gradient(
     var(--checker-b) 0% 25%,
@@ -109,7 +102,7 @@
 
 .dim {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   color: var(--text);
@@ -121,16 +114,14 @@
 }
 
 .groupLabel {
-  font-size: 12px;
-  font-weight: var(--weight-semibold);
-  color: var(--text-2);
-  margin-top: 2px;
+  @include ds.eyebrow;
+  margin-top: 4px;
 }
 
 /* Quiet footnote under a section (e.g. "set a default in Preferences"). */
 .note {
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 11.5px;
+  line-height: 1.5;
   color: var(--text-3);
 }
 
@@ -140,58 +131,25 @@
   gap: 6px;
 }
 
+/* A choice card: recessed until chosen, then tinted with the accent rim. */
 .option {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding: 10px 11px;
+  padding: 10px 12px;
   text-align: left;
-  border-radius: var(--r-lg);
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
-
-  &:hover {
-    border-color: var(--border-strong);
-    background: var(--surface-3);
-  }
+  @include ds.choice-card;
 
   &[data-active="true"] {
-    border-color: var(--accent);
-    background: var(--selected-bg);
-    box-shadow: 0 0 0 1px var(--accent);
+    @include ds.choice-card-on;
   }
 }
 
-/* ADS radio: 16px, border-input outline; selected fills with
-   background-selected-bold and shows a 6px inverse dot. */
 .radio {
-  position: relative;
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  border: 1px solid var(--input);
-  background: var(--surface-2);
-  transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
-
-  &::after {
-    content: "";
-    position: absolute;
-    inset: 4px;
-    border-radius: 50%;
-    background: var(--accent-contrast);
-    transform: scale(0);
-    transition: transform var(--t-med) var(--ease-pop);
-  }
+  @include ds.radio;
 
   .option[data-active="true"] & {
-    border-color: var(--accent);
-    background: var(--accent);
-
-    &::after {
-      transform: scale(1);
-    }
+    @include ds.radio-on;
   }
 }
 
@@ -201,8 +159,8 @@
   gap: 1px;
 
   strong {
-    font-size: 14px;
-    font-weight: var(--weight-medium);
+    font-size: 13px;
+    font-weight: var(--weight-semibold);
     color: var(--text);
   }
   em {
@@ -250,24 +208,29 @@
   }
 
   &[data-on="true"] {
-    background: var(--selected-bg);
+    background: var(--accent-soft);
   }
 }
 
+/* Checkbox: recessed square; checked, the accent gradient with a white tick. */
 .check {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--input);
+  border-radius: 6px;
+  border: 1px solid var(--line-2);
+  background: var(--surface-2);
+  box-shadow: var(--inset-lo);
   color: var(--accent-contrast);
-  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-med) var(--ease);
 
   &[data-on="true"] {
-    background: var(--accent);
-    border-color: var(--accent);
+    border-color: transparent;
+    background: var(--accent-fill);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 25%), 0 3px 8px -3px var(--accent-solid);
   }
 }
 
@@ -275,59 +238,37 @@
   width: 22px;
   height: 22px;
   flex-shrink: 0;
-  border-radius: var(--r-md);
-  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 12%), 0 0 0 1px var(--border);
   background: linear-gradient(135deg, #ff9a6c, #845ec2);
 }
 
 .checkName {
   flex: 1;
   min-width: 0;
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Footer: actions on the right, on a faintly sunken band. */
 .foot {
   display: flex;
   justify-content: flex-end;
   gap: var(--sp-2);
-  padding: var(--sp-3) var(--sp-4);
+  padding: 12px 16px;
   border-top: 1px solid var(--border);
+  background: color-mix(in oklab, var(--surface-2) 60%, transparent);
 }
 
 .btn {
-  height: 32px;
-  padding: 0 12px;
-  font-size: 14px;
-  font-weight: var(--weight-medium);
-  border-radius: var(--r-md);
-  color: var(--text-2);
-  background: transparent;
-  border: 1px solid var(--border);
-  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
-    transform var(--t-fast) var(--ease);
-
-  &:hover {
-    background: var(--wash);
-    border-color: var(--border-strong);
-  }
-
-  &:active {
-    transform: scale(0.98);
-  }
+  @include ds.btn(34px);
+  padding: 0 15px;
+  font-size: 13px;
 }
 
 .primary {
-  color: var(--accent-contrast);
-  background: var(--accent);
-  border-color: transparent;
-  font-weight: 600;
-
-  &:hover {
-    background: var(--accent-2);
-    border-color: transparent;
-  }
+  @include ds.btn-primary;
 }

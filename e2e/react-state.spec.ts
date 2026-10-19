@@ -47,6 +47,7 @@ test("the properties name field follows the selected layer", async ({ app }) => 
   const { page } = app;
   await app.run("layer-new");
   await app.run("layer-new");
+  await app.expandPanel("Properties"); // folded in the default dock
   /* The rename input carries no `type` attribute, so `input[type="text"]` does
      NOT match it — target its class instead. */
   const rename = page.locator('[data-tour="dock"] input[class*="propsName"]').first();
@@ -179,8 +180,8 @@ test("the overlay draws frame chrome for the CURRENTLY selected layer", async ({
     await page.mouse.move(box.x + box.width * 0.8 + 3, box.y + box.height * 0.85 + 3);
     await app.settle(900);
   };
-  await page.getByRole("button", { name: /^Frame/ }).first().click();
-  await app.settle(500);
+  await app.pickTool("Frame"); // in the Crop slot's flyout
+  await app.settle(200);
   await page.mouse.move(box.x + box.width * 0.25, box.y + box.height * 0.25);
   await page.mouse.down();
   await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.7, { steps: 10 });

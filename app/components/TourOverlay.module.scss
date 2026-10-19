@@ -1,3 +1,5 @@
+@use "../styles/ds" as ds;
+
 /* Interactive tour: dimmed blanket with a spotlight cutout + a floating card. */
 
 .blanket {
@@ -25,11 +27,8 @@
   position: fixed;
   width: 340px;
   max-width: calc(100vw - 24px);
-  padding: 14px 16px 12px;
-  background: var(--surface-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  box-shadow: var(--shadow);
+  padding: 16px 18px 14px;
+  @include ds.overlay(var(--r-xl));
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -66,30 +65,16 @@
   background: var(--border-strong);
 
   &[data-on="true"] {
-    background: var(--accent);
+    background: var(--accent-fill);
   }
 }
 
 .btn {
-  padding: 5px 11px;
-  font-size: 12px;
-  font-weight: var(--weight-medium);
-  border-radius: var(--r-md);
-  color: var(--text-2);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
-
-  &:hover {
-    background: var(--wash);
-    color: var(--text);
-  }
+  @include ds.btn(30px);
+  padding: 0 12px;
+  font-size: 12.5px;
 }
 
 .primary {
-  color: var(--accent-contrast);
-  background: var(--accent);
-
-  &:hover {
-    background: color-mix(in srgb, var(--accent) 88%, #000);
-    color: var(--accent-contrast);
-  }
+  @include ds.btn-primary;
 }

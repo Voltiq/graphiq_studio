@@ -1,3 +1,5 @@
+@use "../styles/ds" as ds;
+
 .statusbar {
   height: var(--statusbar-h);
   flex-shrink: 0;
@@ -7,10 +9,17 @@
   padding: 0 var(--sp-3);
   background: var(--sidebar);
   border-top: 1px solid var(--border);
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
   z-index: 50;
+
+  /* Desktop: quiet text straight on the app background, under the cards. */
+  @include ds.desktop-shell {
+    background: none;
+    border-top: 0;
+    padding: 0 calc(var(--sp-4) + 2px);
+  }
 }
 
 .left,
@@ -19,6 +28,7 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  white-space: nowrap;
 }
 
 .center {
@@ -36,6 +46,19 @@
 .mono {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+/* "X -1234": the widest a coordinate gets, held so the row never shifts. */
+.coord {
+  display: inline-block;
+  min-width: 7ch;
+}
+
+/* "100%": same idea for the foreground's alpha. */
+.pct {
+  display: inline-block;
+  min-width: 4ch;
+  font-family: var(--font-mono);
 }
 
 .muted {
@@ -58,9 +81,14 @@
   }
 }
 
-/* Faint pipe separator. */
+/* Separator: a short hairline (the glyph stays in the DOM for copy/paste). */
 .sep {
-  color: var(--border-strong);
+  display: inline-block;
+  width: 1px;
+  height: 12px;
+  margin: 0 2px;
+  font-size: 0;
+  background: var(--line-2);
   user-select: none;
 }
 
@@ -68,7 +96,7 @@
   width: 12px;
   height: 12px;
   border-radius: var(--r-xs);
-  border: 1px solid var(--border-strong);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 14%), 0 0 0 1px var(--line-2);
 }
 
 .saved {
@@ -85,41 +113,22 @@
   gap: var(--sp-2);
 
   input[type="range"] {
-    -webkit-appearance: none;
-    appearance: none;
+    @include ds.range;
     width: 90px;
-    height: 3px;
-    border-radius: var(--r-pill);
-    background: var(--surface-3);
-    outline: none;
-    cursor: pointer;
+    height: 4px;
   }
 
   input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: var(--shadow-sm);
-    transition: transform var(--t-fast) var(--ease);
-  }
-
-  input[type="range"]:hover::-webkit-slider-thumb {
-    transform: scale(1.18);
+    width: 12px;
+    height: 12px;
   }
 
   input[type="range"]::-moz-range-thumb {
-    width: 11px;
-    height: 11px;
-    border: none;
-    border-radius: 50%;
-    background: var(--accent);
+    width: 12px;
+    height: 12px;
   }
 
   .mono {
-    min-width: 38px;
     text-align: right;
   }
 }
@@ -129,14 +138,14 @@
 .isolateChip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 1px 7px;
+  gap: 5px;
+  padding: 1px 8px;
   font-size: 11px;
   font-weight: var(--weight-semibold);
   line-height: 1.5;
-  border-radius: var(--r-pill, 999px);
-  border: 1px solid var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: var(--r-pill);
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
   color: var(--accent);
   cursor: pointer;
   transition: background var(--t-fast) var(--ease);
@@ -147,9 +156,92 @@
     height: 5px;
     border-radius: 50%;
     background: currentColor;
+    box-shadow: 0 0 6px currentColor;
   }
 
   &:hover {
-    background: color-mix(in srgb, var(--accent) 30%, transparent);
+    background: color-mix(in oklab, var(--accent-solid) 30%, transparent);
   }
+}
+
+/* ---- Desktop: glass chips over the foot of the stage ----------------------
+   The stage's `statusHost` places this row 16px in from the well's edges; the
+   zoom pill sits centred between the two groups. Only the chips take the
+   pointer — the gap between them is still canvas. */
+.chips {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.chipGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+
+  /* The left group stacks: the document chip stays at the foot, and the
+     cursor / selection chip appears ABOVE it, so on a narrow stage it can
+     never run into the zoom pill. */
+  &:first-child {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+  }
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--r-pill);
+  font-size: 11.5px;
+  font-weight: var(--weight-medium);
+  color: var(--text-2);
+  white-space: nowrap;
+  pointer-events: auto;
+  @include ds.glass;
+
+  svg {
+    color: var(--text-3);
+  }
+
+  .mono {
+    color: var(--text);
+  }
+}
+
+.chipDot {
+  opacity: 0.4;
+}
+
+.chipMuted {
+  color: var(--text-3);
+}
+
+/* Saved: a small green light with a halo. Unsaved: an empty ring. */
+.okDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--success) 18%, transparent);
+}
+
+.dirtyDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--text-3);
+}
+
+.chips .isolateChip {
+  height: 28px;
+  padding: 0 12px;
+  pointer-events: auto;
 }

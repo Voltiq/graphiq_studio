@@ -5,37 +5,37 @@ import localFont from "next/font/local";
 import { getServerAccent, getServerTheme, getServerUiScale } from "./lib/theme.server";
 import "./globals.scss";
 
-// Self-hosted Atlassian Sans / Atlassian Mono (variable TTFs in app/fonts) —
-// the product typefaces per DESIGN.md. No third-party fonts.
-const atlassianSans = localFont({
-  variable: "--font-atlassian-sans",
+// Self-hosted Geist / Geist Mono (variable TTFs + their OFL licences in
+// app/fonts) — the product typefaces per DESIGN.md. No third-party requests.
+const geistSans = localFont({
+  variable: "--font-geist-sans",
   display: "swap",
   src: [
     {
-      path: "./fonts/AtlassianSans.v3.ttf",
-      weight: "100 1000",
+      path: "./fonts/Geist-VariableFont_wght.ttf",
+      weight: "100 900",
       style: "normal",
     },
     {
-      path: "./fonts/AtlassianSansItalic.v3.ttf",
-      weight: "100 1000",
+      path: "./fonts/Geist-Italic-VariableFont_wght.ttf",
+      weight: "100 900",
       style: "italic",
     },
   ],
 });
 
-const atlassianMono = localFont({
-  variable: "--font-atlassian-mono",
+const geistMono = localFont({
+  variable: "--font-geist-mono",
   display: "swap",
   src: [
     {
-      path: "./fonts/AtlassianMono.v2.ttf",
-      weight: "100 1000",
+      path: "./fonts/GeistMono-VariableFont_wght.ttf",
+      weight: "100 900",
       style: "normal",
     },
     {
-      path: "./fonts/AtlassianMonoItalic.v2.ttf",
-      weight: "100 1000",
+      path: "./fonts/GeistMono-Italic-VariableFont_wght.ttf",
+      weight: "100 900",
       style: "italic",
     },
   ],
@@ -140,7 +140,7 @@ export default async function RootLayout({
       data-accent={accent}
       data-uiscale={uiScale}
       data-motion="on"
-      className={`${atlassianSans.variable} ${atlassianMono.variable}`}
+      className={`${geistSans.variable} ${geistMono.variable}`}
       suppressHydrationWarning
     >
       <head>
@@ -172,14 +172,15 @@ export default async function RootLayout({
                  mouse-sized controls, 23 kinds of them under 44px. */
               `if(matchMedia(${JSON.stringify(TOUCH_QUERY)}).matches)d.dataset.touch="true";` +
               `if(matchMedia(${JSON.stringify(TABLET_QUERY)}).matches)d.dataset.tablet="true";` +
-              /* Rulers default off on any TOUCH device, and that has to be settled here
-                 rather than in an effect. Flipping it after mount resized the
-                 stage AFTER the one cold-load fit had already run against the
-                 taller box, leaving the artwork 22px — one ruler — off centre.
+              /* Rulers default off (as in the design, and as in Photoshop) until
+                 the user turns them on, and that has to be settled here rather
+                 than in an effect. Flipping it after mount resized the stage
+                 AFTER the one cold-load fit had already run against the taller
+                 box, leaving the artwork 22px — one ruler — off centre.
                  A stored choice is read from the same key the editor uses, so
                  the pre-paint answer and the React answer agree. The editor
                  drops this attribute once its own state owns the decision. */
-              `if(matchMedia(${JSON.stringify(TOUCH_QUERY)}).matches){var r=null;` +
+              `{var r=null;` +
               `try{r=JSON.parse(localStorage.getItem("pe-view")||"{}").rulers}catch(e2){}` +
               `if(typeof r!=="boolean")d.dataset.rulersDefault="off"}` +
               `}catch(e){}})()`,
@@ -214,8 +215,8 @@ export default async function RootLayout({
           }}
         />
       </head>
-      {/* atlassianSans.className applies the font directly (immune to var() chains). */}
-      <body className={atlassianSans.className}>{children}</body>
+      {/* geistSans.className applies the font directly (immune to var() chains). */}
+      <body className={geistSans.className}>{children}</body>
     </html>
   );
 }

@@ -1,3 +1,5 @@
+@use "../styles/ds" as ds;
+
 .picker {
   display: flex;
   flex-direction: column;
@@ -13,10 +15,9 @@
   width: 100%;
   height: 160px;
   border-radius: var(--r-lg);
-  border: 1px solid var(--border-strong);
   overflow: hidden;
   cursor: crosshair;
-  box-shadow: var(--inset);
+  box-shadow: 0 0 0 1px var(--border);
 }
 
 .svHue {
@@ -38,11 +39,12 @@
 
 .svHandle {
   position: absolute;
+  z-index: 1;
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  border: 2px solid #fff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.4);
+  border: 2.5px solid #fff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 25%), 0 2px 6px rgb(0 0 0 / 45%);
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
@@ -68,10 +70,10 @@
 .hue,
 .alpha {
   position: relative;
-  height: 10px;
+  height: 12px;
   border-radius: var(--r-pill);
   cursor: pointer;
-  box-shadow: inset 0 0 0 1px var(--border);
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 18%);
 }
 
 .hue {
@@ -96,15 +98,16 @@
   border-radius: inherit;
 }
 
+/* A white ring the strip's own colour shows through. */
 .stripHandle {
   position: absolute;
   top: 50%;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: var(--bg);
-  border: 2px solid var(--text);
-  box-shadow: var(--shadow-sm);
+  background: transparent;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 22%), 0 2px 6px rgb(0 0 0 / 40%), inset 0 0 0 1px rgb(0 0 0 / 18%);
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
@@ -124,25 +127,15 @@
 
   select {
     appearance: none;
-    height: 30px;
-    padding: 0 22px 0 10px;
+    padding: 0 24px 0 10px;
     font-size: 12px;
-    font-weight: 500;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    color: var(--text);
+    font-weight: var(--weight-semibold);
     cursor: pointer;
     outline: none;
-    transition: border-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
-
-    &:hover {
-      background: var(--surface-3);
-    }
+    @include ds.field(30px);
 
     &:focus-visible {
-      border-color: var(--accent);
-      box-shadow: var(--focus-ring);
+      @include ds.field-focus;
     }
   }
 
@@ -167,20 +160,11 @@
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  height: 30px;
   padding: 0 8px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
-
-  &:hover {
-    border-color: var(--border-strong);
-  }
+  @include ds.field(30px);
 
   &:focus-within {
-    border-color: var(--accent);
-    box-shadow: var(--focus-ring);
+    @include ds.field-focus;
   }
 
   input {
@@ -199,7 +183,7 @@
 
 .affix {
   font-size: 12px;
-  color: var(--text-2);
+  color: var(--text-3);
   font-family: var(--font-mono);
   flex-shrink: 0;
 }
@@ -230,26 +214,7 @@
 }
 
 .swatchBtn {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--border);
-  color: var(--text-2);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
-    border-color var(--t-fast) var(--ease);
-
-  &:hover:not(:disabled) {
-    background: var(--wash);
-    color: var(--text);
-    border-color: var(--border-strong);
-  }
-
-  &:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
+  @include ds.icon-btn(24px, var(--r-sm));
 }
 
 .swatchSub {
@@ -263,24 +228,29 @@
   gap: 6px;
 }
 
+/* Swatches hop up a little on hover, on the spring. */
 .swatch {
   aspect-ratio: 1;
-  border-radius: var(--r-md);
-  border: 1px solid var(--border-strong);
-  background-clip: padding-box;
-  transition: transform var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+  border-radius: 8px;
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 12%),
+    0 0 0 1px var(--border),
+    0 1px 2px rgb(0 0 0 / 30%);
+  transition: transform var(--t-fast) var(--spring), box-shadow var(--t-fast) var(--ease);
 
   &:hover {
-    transform: scale(1.1);
-    box-shadow: var(--shadow-sm);
+    transform: translateY(-2px) scale(1.08);
   }
 
   &:active {
-    transform: scale(0.98);
+    transform: scale(0.96);
   }
 
   &[data-selected="true"] {
-    box-shadow: 0 0 0 1px var(--surface), 0 0 0 3px var(--accent);
+    box-shadow:
+      inset 0 0 0 1px rgb(255 255 255 / 12%),
+      0 0 0 2px var(--surface),
+      0 0 0 4px var(--accent);
   }
 }
 

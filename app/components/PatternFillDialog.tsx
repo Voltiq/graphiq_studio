@@ -16,6 +16,7 @@ import { X } from "lucide-react";
 import PatternPicker from "./PatternPicker";
 import { DEFAULT_PLACEMENT, loadPatternTile, type PatternPlacement } from "../lib/patterns";
 import styles from "./PatternFillDialog.module.scss";
+import { rangeFill } from "../lib/range-fill";
 
 export interface PatternFillResult {
   tile: CanvasImageSource;
@@ -99,6 +100,7 @@ export default function PatternFillDialog({
               max={400}
               step={1}
               value={scale}
+              style={rangeFill(scale, 10, 400)}
               aria-label="Pattern scale"
               onChange={(e) => setScale(+e.target.value)}
             />
@@ -113,6 +115,7 @@ export default function PatternFillDialog({
               max={360}
               step={1}
               value={rotate}
+              style={rangeFill(rotate, 0, 360)}
               aria-label="Pattern angle"
               onChange={(e) => setRotate(+e.target.value)}
             />

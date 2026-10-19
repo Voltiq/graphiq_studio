@@ -150,11 +150,25 @@ test("the shell is decided before the first paint, and the picture lands centred
     if (!stage || !board) return null;
     const v = stage.getBoundingClientRect();
     const a = board.getBoundingClientRect();
-    return { left: a.left - v.left, right: v.right - a.right, top: a.top - v.top, bottom: v.bottom - a.bottom };
+    /* The phone keeps the readout chip at the stage's top and the options
+       card at its foot clear of the picture; the fit centres in between. */
+    const root = getComputedStyle(document.documentElement);
+    const fitTop = parseFloat(root.getPropertyValue("--fit-top")) || 0;
+    const card = parseFloat(root.getPropertyValue("--m-options-h")) || 0;
+    const fitFoot = card ? card + 16 : 0;
+    return {
+      left: a.left - v.left,
+      right: v.right - a.right,
+      top: a.top - v.top - fitTop,
+      bottom: v.bottom - a.bottom - fitFoot,
+    };
   });
   expect(gaps, "the artwork is in the stage").not.toBeNull();
   expect(Math.abs(gaps!.left - gaps!.right), `centred across (${JSON.stringify(gaps)})`).toBeLessThanOrEqual(1);
-  expect(Math.abs(gaps!.top - gaps!.bottom), "centred down").toBeLessThanOrEqual(1);
+  /* 1.5, not 1: the artwork is fractional at a fitted zoom (1080 × 16% is
+     172.8px) while the pan lands on a whole pixel, so the two gaps can differ
+     by a full pixel plus float noise. An off-centre fit misses by tens. */
+  expect(Math.abs(gaps!.top - gaps!.bottom), "centred down, between the chip and the options card").toBeLessThanOrEqual(1.5);
 
   /* The other half: the callback that no longer fires on the starting size
      must still fire on a real change, or rotating would leave the view off-centre. */

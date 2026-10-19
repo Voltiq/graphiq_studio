@@ -35,12 +35,13 @@ export default function SheetHandle({
   const drag = useRef<{ y: number; h: number; moved: boolean } | null>(null);
 
   /* The pixel height of each detent, right now. Measured rather than assumed:
-     `full` depends on --chrome-top and --chrome-bottom, and those move with the
-     safe-area insets when a phone is rotated. */
+     `full` runs from --chrome-top down to where the drawers end
+     (--m-drawer-bottom: above the tool's options card), and both move with the
+     safe-area insets when a phone is rotated and with the card's height. */
   const heights = (): Record<Detent, number> => {
     const probe = document.createElement("div");
     probe.style.cssText =
-      "position:fixed;top:var(--chrome-top);bottom:var(--chrome-bottom);left:0;width:1px;visibility:hidden";
+      "position:fixed;top:var(--chrome-top);bottom:var(--m-drawer-bottom, var(--chrome-bottom));left:0;width:1px;visibility:hidden";
     document.body.appendChild(probe);
     const band = probe.getBoundingClientRect().height;
     probe.remove();

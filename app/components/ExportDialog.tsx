@@ -190,18 +190,13 @@ export default function ExportDialog({
     ctx.drawImage(composite, x, y, w, h);
   }, [composite, effTransparent, matte]);
 
+  /* Layout only — the look (and the focus halo) is `.gq-field` in
+     globals.scss. No inline font-size: Safari on iOS zooms the page for a
+     field under 16px, and an inline value outranks the touch floor there. */
   const field: React.CSSProperties = {
     width: "100%",
     height: 34,
     padding: "0 10px",
-    /* No inline font-size: Safari on iOS zooms the page for a field under
-       16px, and an inline value outranks the touch floor in globals.scss.
-       The stylesheet sizes this now. */
-    color: "var(--text)",
-    background: "var(--surface-2)",
-    border: "1px solid var(--border)",
-    borderRadius: "var(--r-sm)",
-    outline: "none",
   };
 
   // Batch filename previews (deduped for display).
@@ -296,7 +291,7 @@ export default function ExportDialog({
               <span className={styles.groupLabel}>Preset</span>
               <div style={{ display: "flex", gap: "var(--sp-2)", alignItems: "center" }}>
                 <select
-                  style={{ ...field, padding: "0 8px", flex: 1 }}
+                  className="gq-field" style={{ ...field, padding: "0 8px", flex: 1 }}
                   value=""
                   onChange={(e) => {
                     const p = allPresets.find((x) => x.id === e.target.value);
@@ -349,7 +344,7 @@ export default function ExportDialog({
 
               <span className={styles.groupLabel}>Format</span>
               <select
-                style={{ ...field, padding: "0 8px" }}
+                className="gq-field" style={{ ...field, padding: "0 8px" }}
                 value={format.id}
                 onChange={(e) => setFormat(formatById(e.target.value))}
                 aria-label="Format"
@@ -376,7 +371,7 @@ export default function ExportDialog({
                   max={1000}
                   value={scalePct}
                   onChange={(e) => setScalePct(Math.max(1, Math.min(1000, Number(e.target.value) || 100)))}
-                  style={{ ...field, width: 90 }}
+                  className="gq-field" style={{ ...field, width: 90 }}
                   aria-label="Scale percent"
                 />
                 <span style={{ fontSize: 12, color: "var(--text-3)" }}>%</span>
@@ -384,7 +379,7 @@ export default function ExportDialog({
 
               <span className={styles.groupLabel}>File name</span>
               <input
-                style={field}
+                className="gq-field" style={field}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onFocus={(e) => e.target.select()}
@@ -395,7 +390,7 @@ export default function ExportDialog({
             <>
               <span className={styles.groupLabel}>File name template</span>
               <input
-                style={field}
+                className="gq-field" style={field}
                 value={template}
                 onChange={(e) => setTemplate(e.target.value)}
                 aria-label="Filename template"
@@ -411,7 +406,7 @@ export default function ExportDialog({
                   return (
                     <div key={t.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
                       <select
-                        style={{ ...field, width: 96, padding: "0 6px" }}
+                        className="gq-field" style={{ ...field, width: 96, padding: "0 6px" }}
                         value={t.formatId}
                         onChange={(e) => patch({ formatId: e.target.value })}
                         aria-label="Target format"
@@ -429,7 +424,7 @@ export default function ExportDialog({
                         max={1000}
                         value={t.scalePct}
                         onChange={(e) => patch({ scalePct: Math.max(1, Math.min(1000, Number(e.target.value) || 100)) })}
-                        style={{ ...field, width: 68 }}
+                        className="gq-field" style={{ ...field, width: 68 }}
                         aria-label="Target scale percent"
                       />
                       <span style={{ fontSize: 12, color: "var(--text-3)" }}>%</span>
@@ -440,13 +435,13 @@ export default function ExportDialog({
                           max={100}
                           value={t.quality}
                           onChange={(e) => patch({ quality: Math.max(1, Math.min(100, Number(e.target.value) || 85)) })}
-                          style={{ ...field, width: 60 }}
+                          className="gq-field" style={{ ...field, width: 60 }}
                           title="Quality %"
                           aria-label="Target quality percent"
                         />
                       )}
                       <input
-                        style={{ ...field, flex: 1, minWidth: 60 }}
+                        className="gq-field" style={{ ...field, flex: 1, minWidth: 60 }}
                         value={t.suffix}
                         placeholder="suffix"
                         onChange={(e) => patch({ suffix: e.target.value })}

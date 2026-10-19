@@ -25,6 +25,7 @@ import { X } from "lucide-react";
 import type { RawDevelopOptions } from "../lib/dng";
 import type { RawSession } from "../lib/rawdev";
 import styles from "./RawDevelopDialog.module.scss";
+import { rangeFill } from "../lib/range-fill";
 
 /** Longest edge of the preview. Small enough to redevelop inside a drag. */
 const PREVIEW_EDGE = 900;
@@ -157,6 +158,7 @@ export default function RawDevelopDialog({ session, fileName, onDone }: RawDevel
               max={EV_MAX}
               step={0.05}
               value={ev}
+              style={rangeFill(ev, EV_MIN, EV_MAX)}
               aria-label="Exposure"
               onChange={(e) => setEv(+e.target.value)}
             />
@@ -174,6 +176,7 @@ export default function RawDevelopDialog({ session, fileName, onDone }: RawDevel
               max={0.5}
               step={0.005}
               value={warm}
+              style={rangeFill(warm, -0.5, 0.5)}
               aria-label="Temperature"
               onChange={(e) => setWarm(+e.target.value)}
             />
@@ -188,6 +191,7 @@ export default function RawDevelopDialog({ session, fileName, onDone }: RawDevel
               max={0.5}
               step={0.005}
               value={tint}
+              style={rangeFill(tint, -0.5, 0.5)}
               aria-label="Tint"
               onChange={(e) => setTint(+e.target.value)}
             />

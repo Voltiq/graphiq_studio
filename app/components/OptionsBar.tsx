@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import {
   Hexagon,
@@ -158,8 +158,15 @@ import {
   type TextFxPreset,
 } from "../lib/text-fx";
 import { clampX } from "../lib/safeArea";
-import { registerDismissible } from "../lib/dismiss";
 import ModifierChips from "./ModifierChips";
+
+/** The phone's options card: whether it is open, and how tall its controls are. */
+const CARD_OPEN_KEY = "graphiq:phone-options-open";
+const CARD_BODY_KEY = "graphiq:phone-options-height";
+/** About three rows of controls when nothing has been chosen yet. */
+const DEFAULT_BODY = 168;
+/** Below this a drag folds the card rather than leaving a sliver of controls. */
+const MIN_BODY = 56;
 
 /** In the options bar every slider is the compact inline (label-beside) variant. */
 function Slider(props: React.ComponentProps<typeof BaseSlider>) {
@@ -1424,33 +1431,109 @@ export default function OptionsBar({
      destructive actions are PINNED beside it, because those are the ones you
      need without going looking — and losing a crop is not a thing to make
      somebody hunt for. */
-  const [sheetOpen, setSheetOpen] = useState(false);
-  /* Back closes it before it closes anything else, the same registry the
-     drawers and the menu sheet use. */
-  useEffect(() => {
-    if (!sheetOpen) return;
-    return registerDismissible(() => setSheetOpen(false));
-  }, [sheetOpen]);
-  /* A different tool means different options; the sheet does not survive it.
-     Adjusted during render rather than in an effect, so the sheet is already
-     shut in the paint that shows the new tool — an effect would flash the old
-     tool's options inside it for a frame. */
-  const [sheetTool, setSheetTool] = useState(tool);
-  if (sheetTool !== tool) {
-    setSheetTool(tool);
-    setSheetOpen(false);
-  }
-  useEffect(() => {
-    if (!sheetOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        setSheetOpen(false);
+  /* ---- The phone's options card -----------------------------------------
+     The tool's options live in a card on the foot of the stage. It is OPEN by
+     default — the controls are why it is there — and its grip resizes it:
+     drag to show more or fewer rows, drag it shut, or tap to fold it to its
+     header and back. Both the height and whether it is folded are remembered,
+     and survive changing tools: the card is part of the screen, not a sheet
+     that has to be summoned each time. */
+  const [cardOpen, setCardOpenState] = useState<boolean>(() => {
+    try {
+      return typeof window === "undefined" || localStorage.getItem(CARD_OPEN_KEY) !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const [bodyH, setBodyH] = useState<number>(() => {
+    try {
+      const v = typeof window === "undefined" ? NaN : Number(localStorage.getItem(CARD_BODY_KEY));
+      return Number.isFinite(v) && v >= MIN_BODY ? v : DEFAULT_BODY;
+    } catch {
+      return DEFAULT_BODY;
+    }
+  });
+  const setCardOpen = (open: boolean) => {
+    setCardOpenState(open);
+    try {
+      localStorage.setItem(CARD_OPEN_KEY, open ? "1" : "0");
+    } catch {}
+  };
+  const keepBody = (h: number) => {
+    setBodyH(h);
+    try {
+      localStorage.setItem(CARD_BODY_KEY, String(h));
+    } catch {}
+  };
+  /** The tallest the controls may grow: half the screen, so the picture always
+   *  keeps the rest. */
+  const maxBody = () => Math.max(MIN_BODY, Math.round(window.innerHeight * 0.5));
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const grip = useRef<{ y: number; h: number; moved: boolean } | null>(null);
+  /* The drag writes the height straight onto the element — a state update per
+     pointermove would re-render the whole bar every frame — and commits once,
+     on release. */
+  const onGripDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    grip.current = { y: e.clientY, h: cardOpen ? (bodyRef.current?.offsetHeight ?? bodyH) : 0, moved: false };
+    bodyRef.current?.setAttribute("data-dragging", "");
+  };
+  const onGripMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const g = grip.current;
+    const body = bodyRef.current;
+    if (!g || !body) return;
+    const dy = g.y - e.clientY; // up is taller
+    if (Math.abs(dy) > 4) g.moved = true;
+    if (!g.moved) return;
+    body.inert = false;
+    body.style.height = `${Math.max(0, Math.min(maxBody(), g.h + dy))}px`;
+  };
+  const onGripUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const g = grip.current;
+    const body = bodyRef.current;
+    grip.current = null;
+    if (!g) return;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    body?.removeAttribute("data-dragging");
+    if (!g.moved) {
+      setCardOpen(!cardOpen); // a tap folds it, or opens it again
+      return;
+    }
+    /* The drag wrote straight to the element, behind React's back, so the
+       element is left holding exactly what React will render next — React
+       only patches what changed, and a height or `inert` it thinks it already
+       set would otherwise stay whatever the drag left behind. */
+    const ended = Math.max(0, Math.min(maxBody(), g.h + (g.y - e.clientY)));
+    if (ended < MIN_BODY) {
+      if (body) {
+        body.style.height = "0px";
+        body.inert = true;
       }
+      setCardOpen(false); // dragged (nearly) shut
+    } else {
+      const h = Math.round(ended);
+      if (body) body.style.height = `${h}px`;
+      keepBody(h);
+      setCardOpen(true);
+    }
+  };
+  /* The phone's options card sits on the tool dock, and two things have to
+     clear it: the canvas fit (so the picture opens above it, not under it) and
+     the commit pair. Its height is published as `--m-options-h` for both. */
+  const cardRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!mobile || !el) return;
+    const root = document.documentElement;
+    const publish = () => root.style.setProperty("--m-options-h", `${el.offsetHeight}px`);
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      root.style.removeProperty("--m-options-h");
     };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [sheetOpen]);
+  }, [mobile]);
 
   /** The actions that stay on the bar. Deliberately few: an action is pinned
    *  when NOT finding it loses work or strands a session. */
@@ -1572,68 +1655,78 @@ export default function OptionsBar({
   if (mobile) {
     return (
       <div
+        ref={cardRef}
         className={styles.optionsbar}
         data-tour="options"
         data-mobile-options
-        data-sheet-open={sheetOpen || undefined}
+        data-card-open={cardOpen || undefined}
       >
-        {/* The tool's name lives on the button that opens the tool's options,
-            rather than on a badge of its own. A separate badge WAS tried and
-            measured badly: at 390px "Rectangular marquee" plus an Options
-            button left 38px for the controls between them. Folded into the one
-            control it costs nothing extra, because it replaces the word
-            "Options" rather than sitting beside it — and it reads better, since
-            the button now says what it will open. */}
-        <div className={styles.controls}>
-          {pinned}
+        {/* The grip: drag to resize the card, tap to fold it. A slider to
+            assistive tech, so it can be driven from a keyboard too. */}
+        <div
+          className={styles.cardGrip}
+          data-options-grip
+          role="slider"
+          tabIndex={0}
+          aria-label="Tool options height"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={cardOpen ? Math.round((bodyH / 400) * 100) : 0}
+          aria-valuetext={cardOpen ? `${bodyH}px of controls` : "folded"}
+          onPointerDown={onGripDown}
+          onPointerMove={onGripMove}
+          onPointerUp={onGripUp}
+          onPointerCancel={onGripUp}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowUp") keepBody(Math.min(maxBody(), (cardOpen ? bodyH : 0) + 40));
+            else if (e.key === "ArrowDown" && bodyH - 40 < MIN_BODY) setCardOpen(false);
+            else if (e.key === "ArrowDown") keepBody(bodyH - 40);
+            else if (e.key === "Enter" || e.key === " ") setCardOpen(!cardOpen);
+            else return;
+            if (e.key === "ArrowUp") setCardOpen(true);
+            e.preventDefault();
+          }}
+        />
+        {/* The header: the tool, and what must never be hunted for (Crop's
+            Apply). The name opens and folds the card, like the grip. */}
+        <div className={styles.cardHead}>
           <button
             type="button"
             className={styles.sheetToggle}
             data-options-open
-            aria-expanded={sheetOpen}
+            aria-expanded={cardOpen}
             /* The visible text is the tool's name, so the accessible name has to
                supply what the label no longer says: that this opens options. */
             aria-label={`${meta.name} options`}
-            onClick={() => setSheetOpen((o) => !o)}
+            onClick={() => setCardOpen(!cardOpen)}
           >
-            <Icon size={15} strokeWidth={1.9} />
+            <span className={styles.cardTile}>
+              <Icon size={14} />
+            </span>
             <span className={styles.toggleName}>{meta.name}</span>
+            <ChevronDown size={16} className={styles.cardChevron} />
           </button>
+          {pinned}
         </div>
-        {/* AFTER the tool, not before it. The chips are a fixed 3×44px whatever
-            the tool is, and leading with them meant the row opened on three
-            keys borrowed from a keyboard this device does not have, with the
-            thing you are actually holding — the tool, and the way into its
-            settings — pushed to the right and shrinking to fit. Measured at
-            320px: the marquee's name was clipped from 174px to 128px and
-            Crop's vanished entirely, leaving a bare icon, while Shift/Alt/Ctrl
-            kept every one of their 148px. Identity first, as on the desktop
-            bar; the modifiers group at the far end and the slack collects in
-            one deliberate gap between them instead of a ragged right margin. */}
-        <ModifierChips />
-        {sheetOpen && (
-          <>
-            <div
-              className={styles.sheetScrim}
-              onPointerDown={() => setSheetOpen(false)}
-              aria-hidden="true"
-            />
-            <div className={styles.sheet} data-options-sheet role="group" aria-label={`${meta.name} options`}>
-              <div className={styles.sheetHead}>
-                <span className={styles.sheetTitle}>{meta.name}</span>
-                <button
-                  type="button"
-                  className={styles.iconBtn}
-                  onClick={() => setSheetOpen(false)}
-                  aria-label="Close options"
-                >
-                  <X size={15} />
-                </button>
-              </div>
-              <div className={styles.sheetBody}>{options}</div>
-            </div>
-          </>
-        )}
+        <div
+          ref={bodyRef}
+          className={styles.sheet}
+          data-options-sheet
+          role="group"
+          aria-label={`${meta.name} options`}
+          aria-hidden={!cardOpen || undefined}
+          inert={!cardOpen || undefined}
+          style={{ height: cardOpen ? bodyH : 0 }}
+        >
+          <div className={styles.sheetBody}>{options}</div>
+        </div>
+        {/* Shift / Alt / Ctrl get a row of their own, named for what they are,
+            rather than crowding the tool's header. They stay at the foot of
+            the card whether it is open or folded. */}
+        <div className={styles.keysRow}>
+          <span className={styles.keysLabel}>Keys</span>
+          <ModifierChips />
+        </div>
       </div>
     );
   }
@@ -1643,7 +1736,7 @@ export default function OptionsBar({
       {/* Shift/Alt/Ctrl for a finger. Hidden unless the shell is mobile. */}
       <ModifierChips />
       <div className={styles.toolBadge}>
-        <Icon size={16} strokeWidth={2} />
+        <Icon size={14} strokeWidth={2.2} />
         <span>{meta.name}</span>
       </div>
       {quickMask && (
@@ -3067,14 +3160,17 @@ function renderOptions(
       return info ? (
         <>
           <div className={styles.measureReadout}>
+            {/* Widths held for the longest value each can take ("-179.9°",
+                "99999 px", "-9999"), so dragging the ruler never shifts the
+                row or the buttons after it. */}
             <span>A</span>
-            <b>{info.angle.toFixed(1)}°</b>
+            <b style={{ minWidth: "7ch", textAlign: "right" }}>{info.angle.toFixed(1)}°</b>
             <span>L</span>
-            <b>{Math.round(info.length)} px</b>
+            <b style={{ minWidth: "8ch", textAlign: "right" }}>{Math.round(info.length)} px</b>
             <span>W</span>
-            <b>{Math.round(info.dx)}</b>
+            <b style={{ minWidth: "6ch", textAlign: "right" }}>{Math.round(info.dx)}</b>
             <span>H</span>
-            <b>{Math.round(info.dy)}</b>
+            <b style={{ minWidth: "6ch", textAlign: "right" }}>{Math.round(info.dy)}</b>
           </div>
           <Divider />
           <button

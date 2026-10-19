@@ -19,6 +19,8 @@ export const SETTINGS_KEYS: readonly string[] = [
   "graphiq:panel-open", // panel collapsed state
   "graphiq:panel-layout", // dock membership (left/right) + floating positions
   "graphiq:workspaces", // named workspace snapshots
+  "graphiq:phone-options-open", // the phone's tool-options card: open or folded
+  "graphiq:phone-options-height", // ...and how tall its controls are
   "pe-view", // rulers / grid / snap
   "pe-panels", // Window-menu panel visibility
   "pe-colorspace", // working colour space

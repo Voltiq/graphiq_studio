@@ -1,3 +1,5 @@
+@use "../styles/ds" as ds;
+
 .app {
   /* The SMALL viewport, not `100vh`. On a phone `vh` is the LARGE viewport —
      the height the page would have if the URL bar were retracted — so with the
@@ -24,6 +26,20 @@
   flex: 1;
   display: flex;
   min-height: 0;
+
+  /* Desktop: the rail, stage and docks are separate cards with a gap between
+     them, on the app background. The foot is the shell's bottom margin
+     (--statusbar-h): the status readouts float inside the stage there. */
+  @include ds.desktop-shell {
+    gap: var(--chrome-gap);
+    padding: 0 var(--chrome-side) var(--statusbar-h);
+  }
+
+  /* Phone: the stage ends where the tool dock's band begins, 10px above the
+     dock itself. */
+  @include ds.phone-shell {
+    padding-bottom: var(--chrome-bottom);
+  }
 }
 
 /* Second (left) dock column — panels portal in from RightDock's layout model.
@@ -41,6 +57,20 @@
 
   &:empty {
     display: none;
+  }
+
+  /* Same card stack as the right dock (RightDock.module.scss .dock). */
+  @include ds.desktop-shell {
+    gap: var(--chrome-gap);
+    padding: 2px 14px 18px;
+    margin: -2px -14px -18px;
+    width: calc(var(--dock-w) + 28px);
+    /* ...and the same inset for anything scrolled into view (a focused or
+       dragged panel), or it lands in the shadow gutter, partly off-screen. */
+    scroll-padding: 2px 0 18px;
+    background: none;
+    border: 0;
+    scrollbar-width: none;
   }
 }
 

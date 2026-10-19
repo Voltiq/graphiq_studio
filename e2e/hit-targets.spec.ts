@@ -166,7 +166,9 @@ test.describe("on a phone", () => {
       for (const b of r.bad) reachBad.push(`${id}: ${b}`);
     }
     expect([...new Set(bad)], "panel controls under 44×44").toEqual([]);
-    expect(seen, "enough panel controls were measured").toBeGreaterThanOrEqual(200);
+    /* 180: on the phone a panel shows without its fold caret and float pin
+       (the chip strip chooses the panel), two fewer controls per panel. */
+    expect(seen, "enough panel controls were measured").toBeGreaterThanOrEqual(180);
     expect(tested, "panel controls hit-tested").toBeGreaterThanOrEqual(50);
     expect([...new Set(reachBad)], "every panel control is reachable at its own centre").toEqual([]);
   });
@@ -245,8 +247,8 @@ test.describe("on a phone", () => {
        So the floor is spent on an invisible pseudo-element: the PAINT stays the
        track, the REACH is 44px, and only elementFromPoint sees the second. */
     const { page } = app;
-    await page.locator('button[aria-label="Open the command palette"]').tap();
-    await app.settle(500);
+    await app.openPalette();
+    await app.settle(100);
     await page.locator('input[aria-label="Search commands"]').fill("Preferences");
     await app.settle(500);
     await page.locator('[role="option"]').first().tap();
@@ -317,8 +319,11 @@ test.describe("on a phone", () => {
       await page.evaluate(() => window.history.back());
       await app.settle(500);
     }
-    await page.locator("[data-options-open]").tap();
-    await app.settle(900);
+    // The options card opens by default; unfold it only if it was folded.
+    if ((await page.locator("[data-options-open]").getAttribute("aria-expanded")) !== "true") {
+      await page.locator("[data-options-open]").tap();
+      await app.settle(900);
+    }
     const s = await page.evaluate(() => {
       const els = [...document.querySelectorAll<HTMLInputElement>('input[type="range"]')].filter((e) => e.getBoundingClientRect().width > 0);
       if (!els.length) return null;
@@ -389,9 +394,9 @@ test.describe("on a desktop", () => {
         const r = el.getBoundingClientRect();
         return `${Math.round(r.width)}×${Math.round(r.height)}`;
       }, sel);
-    expect(await one('[data-tour="dock"] button[class*="panelCaret"]'), "panel carets").toBe("24×24");
+    expect(await one('[data-tour="dock"] button[class*="panelCaret"]'), "panel carets").toBe("28×28");
     expect(await one('[data-tour="toolbar"] button[class*="swatch"]'), "toolbar swatches").toBe("24×24");
-    expect(await one('[data-tour="canvas"] [class*="zoomBar"] button'), "zoom buttons").toBe("27×27");
+    expect(await one('[data-tour="canvas"] [class*="zoomBar"] button'), "zoom buttons").toBe("30×30");
     const s = await sweepHere(app.page);
     expect(s.bad.length, `${s.bad.length} of ${s.seen} desktop controls are under 44px, as before`).toBeGreaterThanOrEqual(10);
   });

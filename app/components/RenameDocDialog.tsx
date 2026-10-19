@@ -31,18 +31,13 @@ export default function RenameDocDialog({
     onClose();
   };
 
+  /* Layout only — the look (and the focus halo) is `.gq-field` in
+     globals.scss. No inline font-size: Safari on iOS zooms the page for a
+     field under 16px, and an inline value outranks the touch floor there. */
   const field: React.CSSProperties = {
     width: "100%",
     height: 34,
     padding: "0 10px",
-    /* No inline font-size: Safari on iOS zooms the page for a field under
-       16px, and an inline value outranks the touch floor in globals.scss.
-       The stylesheet sizes this now. */
-    color: "var(--text)",
-    background: "var(--surface-2)",
-    border: "1px solid var(--border)",
-    borderRadius: "var(--r-sm)",
-    outline: "none",
   };
 
   return (
@@ -70,7 +65,7 @@ export default function RenameDocDialog({
           <span className={styles.groupLabel}>Name</span>
           <input
             autoFocus
-            style={field}
+            className="gq-field" style={field}
             value={name}
             onChange={(e) => setName(e.target.value)}
             onFocus={(e) => e.target.select()}

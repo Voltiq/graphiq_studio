@@ -13,18 +13,9 @@ import { test, expect, type App } from "./fixtures";
 
 test.use({ viewport: { width: 1500, height: 950 } });
 
-/** Choose a tool by its toolbar button, opening its group's flyout if it is
- *  not the one showing. */
-async function pick(app: App, name: string): Promise<void> {
-  const { page } = app;
-  const direct = page.locator('[data-tour="toolbar"]').getByRole("button", { name: new RegExp(`^${name}\\b`) });
-  if (await direct.count()) {
-    await direct.first().click();
-  } else {
-    await page.getByRole("menuitem", { name: new RegExp(`^${name}\\b`) }).first().click({ timeout: 5_000 });
-  }
-  await app.settle(300);
-}
+/** Choose a tool by its rail slot, opening the slot's flyout if it is not
+ *  the one showing. */
+const pick = (app: App, name: string) => app.pickTool(name);
 
 const option = (app: App, label: string) =>
   app.page.locator(`[data-tour="options"] input[type="range"][aria-label="${label}"]`).first();

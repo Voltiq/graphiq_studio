@@ -158,13 +158,16 @@ test.describe("on a phone", () => {
     };
     await pickTool(app, /^Rectangular marquee\b|^Marquee\b/);
     const c = await centre(app);
-    await dragCanvas(app, c.x - 90, c.y - 90, c.x + 90, c.y + 90);
+    /* ±80 keeps the drag on the artwork: the phone fits it inside a stage
+       10px in from the sides, 173px tall here, and a marquee begins on the
+       picture. */
+    await dragCanvas(app, c.x - 80, c.y - 80, c.x + 80, c.y + 80);
     const whole = await selected();
     expect(whole, "a marquee makes a selection").toBeGreaterThan(0);
     /* The top-left quadrant: subtracting it leaves an L of three quarters;
        replacing with it leaves one quarter. */
     await chip(page, "Alt").tap(); // armed
-    await dragCanvas(app, c.x - 90, c.y - 90, c.x, c.y);
+    await dragCanvas(app, c.x - 80, c.y - 80, c.x, c.y);
     const cut = await selected();
     expect(cut / whole, `${whole} px → ${cut} px: ~0.75 is a subtract, ~0.25 a replace`).toBeGreaterThan(0.6);
     expect(cut / whole).toBeLessThan(0.9);

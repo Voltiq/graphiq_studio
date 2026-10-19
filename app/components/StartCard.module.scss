@@ -1,3 +1,5 @@
+@use "../styles/ds" as ds;
+
 /* The phone's launch card.
    Sits over the canvas area, above the artwork and below every dialog, so the
    menu sheet and the drawers still open on top of it if the user goes looking
@@ -12,7 +14,8 @@
   right: 0;
   bottom: var(--chrome-bottom);
   left: 0;
-  z-index: 20;
+  /* Over the tool's options card (55), under the header (60). */
+  z-index: 57;
   display: grid;
   place-items: center;
   padding: var(--sp-4);
@@ -28,11 +31,9 @@
   gap: var(--sp-2);
   width: 100%;
   max-width: 320px;
-  padding: var(--sp-4);
-  border-radius: var(--r-lg);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-md);
+  padding: 20px;
+  @include ds.card(var(--surface-3), var(--r-2xl));
+  box-shadow: var(--shadow), var(--inset-hi);
 }
 
 .title {
@@ -65,24 +66,18 @@
 
 .primary {
   @extend %row;
-  color: var(--accent-contrast);
-  background: var(--accent);
-  border: 1px solid var(--accent);
+  @include ds.btn-primary;
   font-weight: var(--weight-semibold);
-
-  &:active {
-    filter: brightness(0.94);
-  }
 }
 
 .action {
   @extend %row;
   color: var(--text);
-  background: var(--surface-3);
-  border: 1px solid var(--border);
+  @include ds.shine(var(--raised));
+  box-shadow: var(--shadow-sm), var(--inset-hi);
 
   &:active {
-    background: var(--wash);
+    --fill: var(--raised-2);
   }
 }
 
@@ -131,11 +126,7 @@
 
 .groupLabel {
   padding: 0 var(--sp-3) var(--sp-1);
-  font-size: 11px;
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-3);
+  @include ds.eyebrow;
 }
 
 .recent {

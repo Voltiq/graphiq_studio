@@ -1,34 +1,48 @@
+@use "styles/ds" as ds;
+
 /* ===========================================================================
-   Global styles & design tokens — Atlassian × Magiq Studio
-   The palette, elevation and type rules come from DESIGN.md / DESIGN.dark.md;
-   the interaction styling follows the Magiq Studio reference UI: ACTIVE IS A
-   SOLID ACCENT FILL (tools, tabs, menu hover — accent bg + inverse text),
-   inputs and wells sit on the `container` surface, sliders are a quiet track
-   with an accent fill and a white raised thumb. Depth is earned (raised /
-   overlay shadows only), motion is quiet and can be reduced per preference.
+   Global styles & design tokens — Graphiq design system
+   Two palettes, Graphite (dark) and Porcelain (light), one accent. The look:
+   quiet neutral surfaces, depth from soft layered shadows rather than heavy
+   borders, a 1px "edge shine" on raised things (a top-lit gradient border),
+   accent FILLS as a gentle top-to-bottom gradient with white text, and springy
+   but short motion. The full reference is DESIGN.md; app/styles/_ds.scss holds
+   the shared component mixins (shine, buttons, fields, sliders, switches,
+   segmented controls, menus) that the modules include.
 
    Theme  = [data-theme]  light | dark | system  (system follows the OS)
-   Accent = [data-accent] blue | teal | green | purple | magenta | orange
+   Accent = [data-accent] iris | blue | teal | green | purple | magenta | orange
    Motion = [data-motion] on | off (the "Reduce motion" preference)
    CVD    = [data-cvd] none | protanopia | deuteranopia | tritanopia |
             achromatopsia — retunes the semantic triad so it stays readable
    Contrast = [data-contrast] normal | high — firms borders/text/focus ring
-   All three render server-side from cookies/prefs — no flash of wrong look.
+   All render server-side from cookies/prefs — no flash of the wrong look.
 
    Token names are the app-wide contract (consumed by every *.module.scss):
-     --bg (app background)       = surface-sunken
-     --surface                   = panels / chrome
+     --bg / --bg-grad            = app background (flat / with the accent glow)
+     --surface                   = panels, cards, chrome
      --surface-2                 = container (inputs, wells, chip groups)
-     --surface-3                 = overlay (menus, dialogs)
-     --canvas-void               = sunken (the image well)
-     --border / --border-strong  = border / border-bold
-     --input                     = border-input
+     --surface-3                 = overlay (menus, dialogs, popovers)
+     --raised / --raised-2       = button face / its hover; pressed segments
+     --canvas-void               = the image well behind the document
+     --border / --border-strong  = hairline / firmer line (hover, swatches)
+     --line-2                    = the in-between line (hovered fields)
+     --input                     = field outline
      --track                     = slider / progress track
-     --wash / --wash-2           = neutral-subtle hovered / pressed
-     --text / --text-2 / --text-3 = text / subtle / subtlest
-     --accent (+ -2, -rgb, -contrast) = the chosen accent (brand)
-     --selected-bg               = accent-tinted selected fill (color-mix)
-     --shadow-sm / --shadow      = shadow-raised / shadow-overlay
+     --wash / --wash-2           = translucent hover / pressed tint
+     --text / --text-2 / --text-3 = primary / secondary / tertiary text
+     --accent                    = accent as TEXT, ICON, BORDER, RING — tuned to
+                                   read on each theme's surfaces
+     --accent-solid              = accent as a FILL (white text on it ≥ 5:1)
+     --accent-hi / --accent-lo   = the fill's light and dark ends
+     --accent-fill               = the fill gradient (hi → lo) for big fills
+     --accent-soft / --accent-line = translucent tint / 55% line for selection
+     --accent-glow               = the soft coloured drop under accent fills
+     --accent-contrast           = text on an accent fill (white)
+     --selected-bg               = opaque accent-tinted selected fill
+     --shine-top / --shine-bot   = edge-shine gradient stops
+     --inset-hi / --inset-lo     = top highlight / recessed well shadow
+     --shadow-sm / --shadow-md / --shadow = elevation 1 / 2 / 3 (overlay)
    =========================================================================== */
 
 :root {
@@ -49,15 +63,16 @@
     --ui-zoom: 1.25;
   }
 
-  /* Radii — ADS t-shirt scale by component class:
-     xs 2px kbd/badges · sm 4px lozenges/tooltips · md 6px buttons/inputs/menus
-     lg 8px cards/wells · xl 12px modals */
-  --r-xs: 2px;
-  --r-sm: 4px;
-  --r-md: 6px;
-  --r-lg: 8px;
-  --r-xl: 12px;
-  --r-2xl: 16px;
+  /* Radii — soft, slightly generous corners; bigger things get rounder:
+     xs 4px kbd/badges · sm 6px tags/tooltips/small chips · md 10px buttons,
+     inputs, menu rows · lg 12px wells, segmented groups · xl 16px menus,
+     popovers, cards · 2xl 22px dialogs and the big chrome cards */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-2xl: 22px;
   --r-pill: 999px;
 
   /* Spacing — 8px-base steps */
@@ -67,24 +82,25 @@
   --sp-4: 16px;
   --sp-5: 24px;
 
-  /* Motion — ADS durations/easings; Magiq menus drop in ~130-150ms. */
-  --t-fast: 100ms; /* hovers, presses */
-  --t-short: 150ms; /* popups, dropdown menus */
-  --t-med: 200ms; /* reveals, fades, modals */
-  --t-slow: 250ms; /* theme switch, layout-ish moves */
-  --ease: cubic-bezier(0.4, 1, 0.6, 1); /* out-practical: everyday moves */
-  --ease-pop: cubic-bezier(0, 0.4, 0, 1); /* out-bold: prominent entrances */
-  --ease-in: cubic-bezier(0.6, 0, 0.8, 0.6); /* in-practical: exits */
+  /* Motion — short, out-weighted, with a small overshoot for things that
+     should feel physical (thumbs, switches, swatches). */
+  --t-fast: 120ms; /* hovers, presses */
+  --t-short: 160ms; /* popups, dropdown menus */
+  --t-med: 220ms; /* reveals, fades, modals, switch travel */
+  --t-slow: 300ms; /* theme switch, layout-ish moves */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1); /* everyday moves */
+  --ease-pop: cubic-bezier(0, 0.4, 0, 1); /* prominent entrances */
+  --ease-in: cubic-bezier(0.6, 0, 0.8, 0.6); /* exits */
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1); /* overshoot: thumbs, knobs */
 
-  /* Typography — Atlassian Sans / Atlassian Mono (self-hosted). */
-  --font-sans: var(--font-atlassian-sans, "atlassianSans"), system-ui, -apple-system, "Segoe UI",
+  /* Typography — Geist / Geist Mono (self-hosted, OFL; app/fonts). */
+  --font-sans: var(--font-geist-sans, "geistSans"), ui-sans-serif, system-ui, -apple-system, "Segoe UI",
     sans-serif;
-  --font-mono: var(--font-atlassian-mono, "atlassianMono"), "SFMono-Regular", ui-monospace,
-    monospace;
+  --font-mono: var(--font-geist-mono, "geistMono"), ui-monospace, "SFMono-Regular", Menlo, monospace;
   --weight-regular: 400;
   --weight-medium: 500;
   --weight-semibold: 600;
-  --weight-bold: 653;
+  --weight-bold: 650;
 
   /* Sizing of chrome */
   --topbar-h: 48px;
@@ -93,6 +109,9 @@
   --toolbar-w: 48px;
   --dock-w: 320px;
   --mobilebar-h: 56px; /* bottom tool/panel bar (mobile only) */
+  /* The gap the desktop shell leaves between its floating cards (rail, stage,
+     dock, options bar). Zero on the touch shells, which stay edge to edge. */
+  --chrome-gap: 8px;
 
   /* ---- Safe area ----------------------------------------------------------
      The display's unusable edges: notch, home indicator, rounded corners.
@@ -145,162 +164,207 @@
   --vv-h: 100dvh;
   --chrome-bottom: calc(var(--statusbar-h) + var(--safe-b));
 
-  /* ------------------------- Accent: Blue (default) -----------------------
-     Each accent provides a light-theme and a dark-theme pair (hex + rgb);
-     the theme blocks below pick the right one via --accent-l/--accent-d. */
-  --accent-l: #1868db;
-  --accent-l-rgb: 24, 104, 219;
-  --accent-d: #669df1;
-  --accent-d-rgb: 102, 157, 241;
+  /* ------------------------- Accent: Iris (default) -----------------------
+     ONE hex per accent: the fill. Every accent is dark enough that white text
+     on it measures ≥ 5:1, so primary buttons, the active tool and checked
+     controls carry white labels in both themes. The text/border role
+     (`--accent`) is derived per theme in the mixins below. */
+  --accent-solid: #6457f0;
+  --accent-rgb: 100, 87, 240;
 
   color-scheme: dark;
 }
 
+/* ---- The desktop shell's chrome -------------------------------------------
+   A 54px top bar; the options card (48px) plus the 12px gap under it; and a
+   16px foot where a status bar used to be — the desktop's readouts float
+   inside the stage as chips now (StatusBar `variant="chips"`). The cards keep
+   12px apart and 16px from the window's sides. Phone and tablet keep the root
+   values above. */
+html:not([data-mobile="true"]):not([data-tablet="true"]) {
+  --topbar-h: 54px;
+  --optionsbar-h: 60px;
+  --statusbar-h: 16px;
+  --toolbar-w: 58px;
+  --dock-w: 292px;
+  --chrome-gap: 12px;
+  --chrome-side: 16px;
+}
+
 /* ------------------------------ Accents ----------------------------------
-   Magiq's six: blue (default) · teal · green · purple · magenta · orange.
-   Light values are the ADS `*-bolder` hues; dark values the brighter pairs. */
+   Iris (default) · blue · teal · green · purple · magenta · orange. Each fill
+   holds ≥ 5:1 against white text and ≥ 6:1 for its derived text role on both
+   themes' surfaces (checked when they were picked; see DESIGN.md). Keep these
+   in step with ACCENTS in app/lib/theme.ts. */
+[data-accent="blue"] {
+  --accent-solid: #2563eb;
+  --accent-rgb: 37, 99, 235;
+}
+
 [data-accent="teal"] {
-  --accent-l: #2898bd;
-  --accent-l-rgb: 40, 152, 189;
-  --accent-d: #42b2d7;
-  --accent-d-rgb: 66, 178, 215;
+  --accent-solid: #0f766e;
+  --accent-rgb: 15, 118, 110;
 }
 
 [data-accent="green"] {
-  --accent-l: #22a06b;
-  --accent-l-rgb: 34, 160, 107;
-  --accent-d: #2abb7f;
-  --accent-d-rgb: 42, 187, 127;
+  --accent-solid: #15803d;
+  --accent-rgb: 21, 128, 61;
 }
 
 [data-accent="purple"] {
-  --accent-l: #964ac0;
-  --accent-l-rgb: 150, 74, 192;
-  --accent-d: #bf63f3;
-  --accent-d-rgb: 191, 99, 243;
+  --accent-solid: #9333ea;
+  --accent-rgb: 147, 51, 234;
 }
 
 [data-accent="magenta"] {
-  --accent-l: #cd519d;
-  --accent-l-rgb: 205, 81, 157;
-  --accent-d: #da62ac;
-  --accent-d-rgb: 218, 98, 172;
+  --accent-solid: #c2336a;
+  --accent-rgb: 194, 51, 106;
 }
 
 [data-accent="orange"] {
-  --accent-l: #e06c00;
-  --accent-l-rgb: 224, 108, 0;
-  --accent-d: #f68909;
-  --accent-d-rgb: 246, 137, 9;
+  --accent-solid: #c2410c;
+  --accent-rgb: 194, 65, 12;
+}
+
+/* Derived accent roles — the same in both themes, so they live outside the
+   mixins. color-mix in OKLab keeps the hue steady while it lightens/darkens. */
+@mixin accent-roles {
+  --accent-hi: color-mix(in oklab, var(--accent-solid), white 12%);
+  --accent-lo: color-mix(in oklab, var(--accent-solid), black 14%);
+  --accent-fill: linear-gradient(180deg, var(--accent-hi), var(--accent-lo));
+  --accent-line: color-mix(in oklab, var(--accent-solid) 55%, transparent);
+  --accent-glow: 0 2px 8px -3px color-mix(in oklab, var(--accent-solid) 70%, transparent);
+  --accent-contrast: #ffffff;
+  /* Hover/pressed of an accent fill. */
+  --accent-2: color-mix(in oklab, var(--accent-solid), white 10%);
+  --focus-color: var(--accent);
 }
 
 /* ---------------------------- Theme mixins --------------------------------
-   DESIGN.md (light) and DESIGN.dark.md (dark) values. `system` applies light
-   by default and the dark mixin under prefers-color-scheme. */
+   Porcelain (light) and Graphite (dark). `system` applies light by default and
+   the dark mixin under prefers-color-scheme. */
 @mixin theme-light {
   color-scheme: light;
+  @include accent-roles;
 
-  --accent: var(--accent-l);
-  --accent-rgb: var(--accent-l-rgb);
-  --accent-contrast: #ffffff;
-  --accent-2: color-mix(in srgb, var(--accent) 86%, #000); /* hovered/pressed */
-  --focus-color: var(--accent);
-  --selected-bg: color-mix(in srgb, var(--accent) 12%, var(--surface));
-  --selected-bg-2: color-mix(in srgb, var(--accent) 22%, var(--surface));
+  --accent: var(--accent-lo); /* text/icon/border on white: ≥ 6.9:1 */
+  --accent-soft: color-mix(in oklab, var(--accent-solid) 12%, transparent);
+  --selected-bg: color-mix(in oklab, var(--accent-solid) 10%, var(--surface));
+  --selected-bg-2: color-mix(in oklab, var(--accent-solid) 18%, var(--surface));
 
-  --bg: #f8f8f8; /* app background = sunken */
-  --bg-grad: var(--bg);
-  --surface: #ffffff; /* panels / chrome */
-  --surface-2: #f0f1f2; /* container: inputs, wells, chip groups */
+  --bg: #eceef2; /* app background */
+  --bg-grad: radial-gradient(1100px 560px at 72% -14%, color-mix(in oklab, var(--accent-solid) 7%, transparent), transparent 62%),
+    var(--bg);
+  --surface: #ffffff; /* panels / chrome cards */
+  --surface-2: #f5f6f8; /* container: inputs, wells, chip groups */
   --surface-3: #ffffff; /* overlay: menus, dialogs */
-  --surface-hover: #f0f1f2;
+  --raised: #eceef2; /* button face */
+  --raised-2: #e2e5ea; /* button hover, selected segment */
+  --surface-hover: var(--raised);
   --sidebar: var(--surface);
-  --canvas-void: #f8f8f8; /* sunken: the image well */
-  --track: #dddee1; /* slider / progress track */
+  --canvas-void: #e6e9ee; /* the image well */
+  --track: #e2e5ea; /* slider / progress track */
   --checker-a: #ffffff;
-  --checker-b: #dddee1;
+  --checker-b: #e2e5ea;
 
-  --border: #0b120e24;
-  --border-strong: #7d818a;
-  --input: #8c8f97;
-  --wash: #0515240f;
-  --wash-2: #0b120e24;
+  --border: rgb(17 19 24 / 8%);
+  --line-2: rgb(17 19 24 / 14%);
+  --border-strong: rgb(17 19 24 / 22%);
+  --input: rgb(17 19 24 / 12%);
+  --wash: rgb(17 19 24 / 5%);
+  --wash-2: rgb(17 19 24 / 9%);
 
-  --text: #292a2e;
-  --text-2: #505258;
-  --text-3: #6b6e76;
-  --text-disabled: #080f214a;
+  --text: #111318;
+  --text-2: #4a505e;
+  --text-3: #646b79;
+  --text-disabled: rgb(17 19 24 / 34%);
 
-  --danger: #c9372c;
-  --danger-rgb: 201, 55, 44;
-  --danger-text: #ae2e24;
-  --danger-bold: #c9372c;
-  --success: #6a9a23;
-  --success-bold: #5b7f24;
-  --warning: #e06c00;
+  --danger: #d9363e;
+  --danger-rgb: 217, 54, 62;
+  --danger-text: #c02a31;
+  --danger-bold: #c8353a;
+  --success: #0b7a47;
+  --success-bold: #0b7a47;
+  --warning: #9a5f00;
+  --info: #2563eb;
 
-  --shadow-sm: 0px 1px 1px #1e1f2140, 0px 0px 1px #1e1f214f; /* raised */
-  --shadow-md: 0px 8px 12px #1e1f2126, 0px 0px 1px #1e1f214f;
-  --shadow: 0px 8px 12px #1e1f2126, 0px 0px 1px #1e1f214f; /* overlay */
+  --shine-top: #ffffff;
+  --shine-bot: rgb(17 19 24 / 11%);
+  --inset-hi: inset 0 1px 0 rgb(255 255 255 / 90%);
+  --inset-lo: inset 0 1px 2px rgb(16 24 40 / 7%);
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 7%); /* elevation 1 */
+  --shadow-md: 0 1px 2px rgb(16 24 40 / 5%), 0 8px 20px -6px rgb(16 24 40 / 12%); /* 2 */
+  --shadow: 0 2px 4px rgb(16 24 40 / 6%), 0 20px 44px -12px rgb(16 24 40 / 25%); /* 3: overlay */
   --glow: 0 0 0 0 transparent; /* retired */
-  --inset: 0 0 0 0 transparent;
+  --inset: var(--inset-lo);
+  --dots: rgb(17 19 24 / 8%);
 
   --frost: #ffffff;
-  --blanket: #050c1f75;
-  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus-color);
+  --glass: color-mix(in oklab, var(--surface) 76%, transparent);
+  --blanket: rgb(17 19 24 / 32%);
+  --focus-ring: 0 0 0 3px var(--accent-soft); /* the field focus halo */
 }
 
 @mixin theme-dark {
   color-scheme: dark;
+  @include accent-roles;
 
-  --accent: var(--accent-d);
-  --accent-rgb: var(--accent-d-rgb);
-  --accent-contrast: #1f1f21; /* text-inverse */
-  --accent-2: color-mix(in srgb, var(--accent) 82%, #fff);
-  --focus-color: var(--accent);
-  --selected-bg: color-mix(in srgb, var(--accent) 14%, var(--surface));
-  --selected-bg-2: color-mix(in srgb, var(--accent) 24%, var(--surface));
+  --accent: color-mix(in oklab, var(--accent-solid), white 38%); /* ≥ 6.3:1 on surfaces */
+  --accent-soft: color-mix(in oklab, var(--accent-solid) 18%, transparent);
+  --selected-bg: color-mix(in oklab, var(--accent-solid) 16%, var(--surface));
+  --selected-bg-2: color-mix(in oklab, var(--accent-solid) 26%, var(--surface));
 
-  --bg: #18191a; /* sunken */
-  --bg-grad: var(--bg);
-  --surface: #1f1f21;
-  --surface-2: #303134; /* container */
-  --surface-3: #2b2c2f; /* overlay */
-  --surface-hover: #2b2c2f;
+  --bg: #0d0e11;
+  --bg-grad: radial-gradient(1100px 560px at 72% -14%, color-mix(in oklab, var(--accent-solid) 10%, transparent), transparent 62%),
+    var(--bg);
+  --surface: #15171c;
+  --surface-2: #1b1e24; /* container */
+  --surface-3: #1b1e24; /* overlay */
+  --raised: #22262d; /* button face */
+  --raised-2: #2b3038; /* button hover, selected segment */
+  --surface-hover: var(--raised);
   --sidebar: var(--surface);
-  --canvas-void: #18191a;
-  --track: #3d3f43;
-  --checker-a: #2b2c2f;
-  --checker-b: #1f1f21;
+  --canvas-void: #101216;
+  --track: #2b3038;
+  --checker-a: #262a31;
+  --checker-b: #1c1f25;
 
-  --border: #e3e4f21f;
-  --border-strong: #7e8188;
-  --input: #7e8188;
-  --wash: #ceced912;
-  --wash-2: #e3e4f21f;
+  --border: rgb(255 255 255 / 7%);
+  --line-2: rgb(255 255 255 / 12%);
+  --border-strong: rgb(255 255 255 / 20%);
+  --input: rgb(255 255 255 / 9%);
+  --wash: rgb(255 255 255 / 5.5%);
+  --wash-2: rgb(255 255 255 / 9%);
 
-  --text: #cecfd2;
-  --text-2: #a9abaf;
-  --text-3: #96999e;
-  --text-disabled: #e5e9f640;
+  --text: #f1f2f4;
+  --text-2: #aeb3bd;
+  --text-3: #8a909b;
+  --text-disabled: rgb(241 242 244 / 30%);
 
-  --danger: #f15b50;
-  --danger-rgb: 241, 91, 80;
-  --danger-text: #fd9891;
-  --danger-bold: #f87168;
-  --success: #82b536;
-  --success-bold: #94c748;
-  --warning: #fbc828;
+  --danger: #ff6b6b;
+  --danger-rgb: 255, 107, 107;
+  --danger-text: #ff8f8f;
+  --danger-bold: #c8353a;
+  --success: #3dd68c;
+  --success-bold: #3dd68c;
+  --warning: #f5b740;
+  --info: #5ba8ff;
 
-  --shadow-sm: 0px 1px 1px #0104043b, 0px 0px 1px #0104043b;
-  --shadow-md: 0px 0px 0px 1px #bdbdbd1f, 0px 8px 12px #0104042a, 0px 0px 1px 1px #0104043b;
-  --shadow: 0px 0px 0px 1px #bdbdbd1f, 0px 8px 12px #0104042a, 0px 0px 1px 1px #0104043b;
+  --shine-top: rgb(255 255 255 / 14%);
+  --shine-bot: rgb(255 255 255 / 3%);
+  --inset-hi: inset 0 1px 0 rgb(255 255 255 / 5%);
+  --inset-lo: inset 0 1px 2px rgb(0 0 0 / 28%);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 45%);
+  --shadow-md: 0 1px 2px rgb(0 0 0 / 35%), 0 8px 20px -6px rgb(0 0 0 / 50%);
+  --shadow: 0 2px 4px rgb(0 0 0 / 30%), 0 20px 44px -12px rgb(0 0 0 / 70%);
   --glow: 0 0 0 0 transparent;
-  --inset: 0 0 0 0 transparent;
+  --inset: var(--inset-lo);
+  --dots: rgb(255 255 255 / 5%);
 
-  --frost: #2b2c2f;
-  --blanket: #10121499;
-  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus-color);
+  --frost: #1b1e24;
+  --glass: color-mix(in oklab, var(--surface) 76%, transparent);
+  --blanket: rgb(5 6 8 / 62%);
+  --focus-ring: 0 0 0 3px var(--accent-soft); /* the field focus halo */
 }
 
 /* ------------------------- Colour-vision safe palettes ---------------------
@@ -356,30 +420,35 @@
    ring is thicker so keyboard position is unmissable. */
 @mixin contrast-high-light {
   --border: #6b6e76;
+  --line-2: #44464d;
   --border-strong: #292a2e;
   --input: #44464d;
-  --wash: #05152417;
-  --wash-2: #0b120e33;
+  --wash: rgb(17 19 24 / 9%);
+  --wash-2: rgb(17 19 24 / 20%);
   --track: #b9bcc2;
   --text-2: #35363b;
   --text-3: #44464d;
-  --text-disabled: #080f2180;
-  --selected-bg: color-mix(in srgb, var(--accent) 20%, var(--surface));
-  --selected-bg-2: color-mix(in srgb, var(--accent) 34%, var(--surface));
+  --text-disabled: rgb(17 19 24 / 50%);
+  --shine-bot: #6b6e76;
+  --selected-bg: color-mix(in oklab, var(--accent-solid) 20%, var(--surface));
+  --selected-bg-2: color-mix(in oklab, var(--accent-solid) 34%, var(--surface));
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 5px var(--focus-color);
 }
 @mixin contrast-high-dark {
   --border: #9ea1a8;
+  --line-2: #b0b3ba;
   --border-strong: #d6d8dd;
   --input: #b0b3ba;
-  --wash: #ceced926;
-  --wash-2: #e3e4f236;
+  --wash: rgb(255 255 255 / 12%);
+  --wash-2: rgb(255 255 255 / 20%);
   --track: #6b6e76;
   --text-2: #e2e3e7;
   --text-3: #cdced3;
-  --text-disabled: #e5e9f680;
-  --selected-bg: color-mix(in srgb, var(--accent) 24%, var(--surface));
-  --selected-bg-2: color-mix(in srgb, var(--accent) 38%, var(--surface));
+  --text-disabled: rgb(241 242 244 / 50%);
+  --shine-top: rgb(255 255 255 / 45%);
+  --shine-bot: rgb(255 255 255 / 25%);
+  --selected-bg: color-mix(in oklab, var(--accent-solid) 26%, var(--surface));
+  --selected-bg-2: color-mix(in oklab, var(--accent-solid) 40%, var(--surface));
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 5px var(--focus-color);
 }
 
@@ -511,12 +580,12 @@ textarea {
 }
 
 ::selection {
-  background: rgba(var(--accent-rgb), 0.3);
+  background: color-mix(in oklab, var(--accent-solid) 40%, transparent);
 }
 
 /* ------------------------- Keyboard focus ring ----------------------------
-   2px accent ring, offset 2px from the box (ADS focus contract; the ring
-   follows the chosen accent, as in Magiq). Keyboard focus only. */
+   2px accent ring, offset 2px from the box, following the element's own
+   corners (an outline traces border-radius). Keyboard focus only. */
 button:focus-visible,
 a:focus-visible,
 select:focus-visible,
@@ -524,7 +593,6 @@ summary:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--focus-color);
   outline-offset: 2px;
-  border-radius: var(--r-md);
 }
 
 input:focus-visible:not([type="range"]):not([type="checkbox"]):not([type="radio"]),
@@ -536,6 +604,74 @@ input[type="range"]:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
   border-radius: var(--r-pill);
+}
+
+/* ------------------------------ Form fields --------------------------------
+   `.gq-field` — the design system's recessed field for the plain native inputs
+   and selects that dialogs build inline (Export, Save as, Rename …), so they
+   match the module-styled ones: container fill, hairline, inner shadow, and an
+   accent rim with a soft halo on focus. Selects get a drawn chevron. Layout
+   (width, padding, flex) stays with the caller. */
+.gq-field {
+  height: 34px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--input);
+  border-radius: var(--r-md);
+  box-shadow: var(--inset-lo);
+  outline: none;
+  font-size: 13px;
+  transition: border-color var(--t-med) var(--ease), box-shadow var(--t-med) var(--ease);
+
+  &:hover {
+    border-color: var(--line-2);
+  }
+
+  &:focus,
+  &:focus-visible {
+    border-color: var(--accent-line);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+}
+
+/* Number fields drop the browser's spin arrows: the arrow keys still step. */
+input.gq-field[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+
+  &::-webkit-inner-spin-button,
+  &::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+}
+
+select.gq-field {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 30px !important;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238a909b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+}
+
+/* ------------------------------- Icons -------------------------------------
+   The icon set draws at 1.6px, finer than lucide's default 2px, to sit with
+   Geist's weight. Only icons left at the default are touched — one that asks
+   for a heavier stroke (a check mark, say) keeps it. */
+svg.lucide[stroke-width="2"] {
+  stroke-width: 1.6px;
+}
+
+/* ------------------------------ Range inputs -------------------------------
+   Every slider in the app gets the design system's track and thumb by default
+   (`range` in styles/_ds.scss). Zero specificity, so a module that styles its
+   own still wins; the fill follows `--pct`, which callers set (Controls.tsx
+   Slider, lib/range-fill.ts) and which reads as an empty track when unset. */
+:where(input[type="range"]) {
+  @include ds.range;
 }
 
 /* --------------------------- Thin scrollbars ------------------------------ */
@@ -685,9 +821,27 @@ html[data-touch="true"] {
    behind a scrim. Open state is `html[data-drawer="tools" | "panels"]`.
    ========================================================================== */
 html[data-mobile="true"] {
-  /* The desktop status bar is replaced by the bottom mobile bar, so the foot
-     of the chrome is a different height here — one override, and everything
-     anchored to --chrome-bottom follows. */
+  /* The phone's chrome, as the design draws it: a 66px header straight on the
+     background (14px of air above its 44px row, 8 below), no options row —
+     the tool's options are a card inside the stage — and an 88px foot that
+     holds the glass tool dock (10px above it, 16px below it). The desktop
+     status bar is replaced by that dock, so the foot of the chrome is a
+     different height here — one override, and everything anchored to
+     --chrome-bottom follows. */
+  --topbar-h: 66px;
+  --optionsbar-h: 0px;
+  --mobilebar-h: 88px;
+  /* What the canvas fit keeps clear inside the stage: the readout chip at the
+     top, and the options card at the foot (its live height replaces this
+     default once OptionsBar has measured it). */
+  --fit-top: 50px;
+  --m-options-h: 299px; /* the open card's own height */
+  /* Where the drawers end: above the options card, which sits on the dock. A
+     drawer that ran down to the dock covered the card — and with it the
+     Shift / Alt / Ctrl chips, exactly when a panel's modifier-taps are on
+     screen. Stacked, the drawer, the card and the dock are all reachable at
+     once. */
+  --m-drawer-bottom: calc(var(--chrome-bottom) + var(--m-options-h) + 16px);
   --chrome-bottom: calc(var(--mobilebar-h) + var(--safe-b));
   /* The edge-swipe strips exist only here. See :root for what reads this. */
   --edge-strip: 20px;
@@ -710,21 +864,11 @@ html[data-mobile="true"] {
     display: none;
   }
 
-  /* The zoom pill clears the MobileBar. The canvas stage runs the full height
-     here — it ends at the bottom of the screen, with the bar drawn over it —
-     so a pill at a flat `bottom: 16px` sat at y=774–828 against a bar starting
-     at 788, and lost the stacking contest 5 to 130. Measured before the fix:
-     a press at the centre of Zoom out, Zoom in AND Fit on screen all reached
-     `button.tool`, so none of the three could be used with a finger, and the
-     percentage readout was painted underneath the bar. */
+  /* No zoom pill on the phone: the zoom is in the readout chip at the top of
+     the stage, which fits the picture when tapped, and the bottom of the stage
+     belongs to the tool's options card. */
   [data-zoombar] {
-    bottom: calc(var(--chrome-bottom) + 16px);
-  }
-
-  /* Options bar already scrolls horizontally — just guarantee it can't be
-     squeezed to nothing next to a narrow viewport. */
-  [data-tour="options"] {
-    min-height: var(--optionsbar-h);
+    display: none;
   }
 
   /* The modifier chips exist only where there is no keyboard to hold. */
@@ -732,22 +876,25 @@ html[data-mobile="true"] {
     display: inline-flex;
   }
 
-  /* ---- Toolbar → left drawer ---- */
+  /* ---- Toolbar → a card that slides in from the left ----
+     Between the header and the dock, 10px in from the side (and clear of a
+     cutout), like the stage beside it. */
   [data-tour="toolbar"] {
     position: fixed;
     top: var(--chrome-top);
-    left: 0;
-    bottom: var(--chrome-bottom);
-    /* Grown by the side inset and padded by it, rather than moved: the drawer's
-       background still reaches the edge of the display while its buttons clear
-       a cutout. Padding alone would squeeze the 46px buttons inside the fixed
-       76px box, since box-sizing is border-box. */
-    width: calc(76px + var(--safe-l));
-    padding-left: var(--safe-l);
-    transform: translateX(-100%);
+    left: calc(10px + var(--safe-l));
+    bottom: var(--m-drawer-bottom);
+    width: 76px;
+    transform: translateX(calc(-100% - 12px - var(--safe-l)));
     transition: transform var(--t-med) var(--ease-pop);
     z-index: 120;
-    box-shadow: var(--shadow);
+    border: 1px solid transparent;
+    border-radius: 24px;
+    background:
+      linear-gradient(var(--surface), var(--surface)) padding-box,
+      linear-gradient(180deg, var(--shine-top), var(--shine-bot)) border-box;
+    box-shadow: var(--shadow), var(--inset-hi);
+    overflow: hidden;
     will-change: transform;
   }
 
@@ -778,26 +925,34 @@ html[data-mobile="true"] {
     --sheet-h: 50vh;
   }
   &[data-sheet="full"] {
-    --sheet-h: calc(100vh - var(--chrome-top) - var(--chrome-bottom));
+    --sheet-h: calc(100vh - var(--chrome-top) - var(--m-drawer-bottom));
   }
 
   [data-tour="dock"] {
     position: fixed;
     top: auto;
-    left: 0;
-    right: 0;
-    bottom: var(--chrome-bottom);
+    left: calc(10px + var(--safe-l));
+    right: calc(10px + var(--safe-r));
+    bottom: var(--m-drawer-bottom);
     width: auto;
     height: var(--sheet-h);
-    max-height: calc(100vh - var(--chrome-top) - var(--chrome-bottom));
-    padding-left: var(--safe-l);
-    padding-right: var(--safe-r);
+    max-height: calc(100vh - var(--chrome-top) - var(--m-drawer-bottom));
     transform: translateY(100%);
-    transition: transform var(--t-med) var(--ease-pop), height var(--t-med) var(--ease-pop);
-    border-top-left-radius: var(--r-lg);
-    border-top-right-radius: var(--r-lg);
+    /* Closed, it rests where the dock is — which no longer hides it, the dock
+       being a floating pill — so it is also made invisible, after its slide. */
+    visibility: hidden;
+    transition:
+      transform var(--t-med) var(--ease-pop),
+      height var(--t-med) var(--ease-pop),
+      visibility 0s linear var(--t-med);
+    /* A floating card above the dock, like the tool options in the stage. */
+    border: 1px solid transparent;
+    border-radius: 24px;
+    background:
+      linear-gradient(var(--surface), var(--surface)) padding-box,
+      linear-gradient(180deg, var(--shine-top), var(--shine-bot)) border-box;
     z-index: 120;
-    box-shadow: var(--shadow);
+    box-shadow: var(--shadow), var(--inset-hi);
     will-change: transform;
   }
 
@@ -812,6 +967,12 @@ html[data-mobile="true"] {
      to the next detent. Both, because a drag is the gesture people try and a
      tap is the one that always works. */
   .gq-m-sheet-handle {
+    /* Stays at the top of the sheet while its panel scrolls under it. */
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    background: var(--surface);
+    border-radius: 24px 24px 0 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -826,10 +987,10 @@ html[data-mobile="true"] {
 
     &::before {
       content: "";
-      width: 40px;
-      height: 4px;
+      width: 36px;
+      height: 5px;
       border-radius: var(--r-pill);
-      background: var(--border-strong);
+      background: var(--line-2);
     }
   }
 
@@ -846,8 +1007,8 @@ html[data-mobile="true"] {
      screens of scrolling, named only by a keyboard shortcut the device has no
      way to press. */
   [data-tour="toolbar"][data-mobile-rail] {
-    width: calc(min(320px, 86vw) + var(--safe-l));
-    padding-left: var(--safe-l);
+    /* As wide as the stage under it: four tiles to a row. */
+    width: min(440px, calc(100vw - 20px - var(--safe-l) - var(--safe-r)));
 
     /* The rail centres its 46px buttons, which makes every child shrink to its
        own content — and a grid that has shrunk to one column's width lays out
@@ -855,8 +1016,8 @@ html[data-mobile="true"] {
        stacked to 1495px of scroll until this was stretched. */
     align-items: stretch;
 
-    /* The rail packed its groups with separators; the sheet is two labelled
-       sections and needs ordinary padding instead. */
+    /* The rail packs its groups with separators; the sheet is titled groups
+       of tiles and needs ordinary padding instead. */
     [class*="tools"] {
       align-items: stretch;
       padding: var(--sp-2) var(--sp-2) var(--sp-3);
@@ -961,16 +1122,45 @@ html[data-touch="true"] {
   }
 }
 
-/* Rulers off by default on a phone, decided before the first paint.
+/* A phone on its side: 390px of height, 154 of it header and dock. There the
+   drawers run down to the dock over the options card (the room above the card
+   would be a sliver), and the card goes under them while one is open. */
+@media (max-height: 500px) {
+  html[data-mobile="true"] {
+    --m-drawer-bottom: var(--chrome-bottom);
+  }
+
+  html[data-mobile="true"][data-drawer] [data-tour="options"] {
+    z-index: 55;
+  }
+}
+
+/* The phone's menu sheet is a floating card too: between the header and the
+   dock, 10px in from the sides, like every other surface on the phone shell.
+   The tablet keeps the full-width sheet from the touch rules above. */
+html[data-mobile="true"][data-touch="true"] [data-menubar][data-sheet="true"] {
+  left: calc(10px + var(--safe-l));
+  right: calc(10px + var(--safe-r));
+  bottom: var(--chrome-bottom);
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 24px;
+  background:
+    linear-gradient(var(--surface-3), var(--surface-3)) padding-box,
+    linear-gradient(180deg, var(--shine-top), var(--shine-bot)) border-box;
+  box-shadow: var(--shadow), var(--inset-hi);
+}
+
+/* Rulers off by default (every shell), decided before the first paint.
    `data-rulers-default` is stamped by the inline script in layout.tsx and
    removed by the editor as soon as its own `data-rulers` state takes over — it
    exists only to bridge that gap, because the stage's size comes from this grid
    template and the cold-load fit measures it immediately. Settling it an effect
    later left the artwork one ruler (22px) off centre.
 
-   Rulers cost 22px of height and 22px of width on a 390px screen, and a ruler
-   is for measuring against a pointer you can place precisely — which a
-   fingertip is not. View ▸ Rulers still turns them on, and that choice sticks. */
+   The design shows the stage without them, as Photoshop starts; on a phone
+   they would also cost 22px of each axis of a 390px screen. View ▸ Show rulers
+   turns them on, and that choice sticks. */
 html[data-rulers-default="off"] {
   [data-stagewrap] {
     grid-template-columns: 0 1fr;
@@ -1008,8 +1198,9 @@ html[data-mobile="true"][data-commit] .gq-m-commit {
      typing, so the keyboard is up, and `--chrome-bottom` alone put the pair
      **232px behind it** — Done and Cancel unreachable at exactly the moment
      they are the way out. The MobileBar sits at `--kb-inset` for the same
-     reason, so this stacks on top of it. */
-  bottom: calc(var(--kb-inset, 0px) + var(--chrome-bottom) + var(--sp-3));
+     reason, so this stacks on top of it — and above the tool's options card
+     (`--m-options-h`, published by OptionsBar), which sits on the dock. */
+  bottom: calc(var(--kb-inset, 0px) + var(--chrome-bottom) + 8px + var(--m-options-h, 90px) + var(--sp-3));
   z-index: 118;
   display: flex;
   gap: var(--sp-2);
@@ -1022,15 +1213,11 @@ html[data-mobile="true"][data-commit] .gq-m-commit {
     font-size: 22px;
     line-height: 1;
     color: var(--text);
-    background: var(--surface-3);
-    border: 1px solid var(--border);
     border-radius: 50%;
-    box-shadow: var(--shadow-md);
+    @include ds.glass;
 
     &[data-primary] {
-      color: #fff;
-      background: var(--accent);
-      border-color: var(--accent);
+      @include ds.btn-primary;
     }
   }
 }
@@ -1040,6 +1227,8 @@ html[data-mobile="true"][data-drawer="tools"] [data-tour="toolbar"] {
   transform: none;
 }
 html[data-mobile="true"][data-drawer="panels"] [data-tour="dock"] {
+  visibility: visible;
+  transition-delay: 0s;
   transform: none;
 }
 
