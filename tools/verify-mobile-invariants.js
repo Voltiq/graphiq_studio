@@ -2,7 +2,7 @@
  *
  * THE ITEM'S PREMISE, CHECKED FIRST: "a harness that only screenshots proves
  * nothing". Nothing here screenshots. Five rails already assert most of these
- * geometrically — `verify-hit-targets` (23 checks), `e2e/touch-targets.spec.ts`,
+ * geometrically — `e2e/hit-targets.spec.ts`, `e2e/touch-targets.spec.ts`,
  * `e2e/safe-area.spec.ts` (with real CDP notch insets), `e2e/viewport.spec.ts`
  * and `e2e/dialog-sheets.spec.ts` (14) — 104 checks, all green before this file
  * existed. So this rail is NOT a rewrite of them, and duplicating them would be
@@ -12,7 +12,7 @@
  *
  * WHAT IS ACTUALLY NEW, measured rather than assumed:
  *
- *   1. THE FULL DEVICE PROFILE. `verify-hit-targets` and the rest run at
+ *   1. THE FULL DEVICE PROFILE. `e2e/hit-targets.spec.ts` and the rest run at
  *      `deviceScaleFactor: 1` without `isMobile` — a desktop browser that
  *      accepts touch. Everything here runs on `DEVICES.phone` from
  *      tools/mobile.js: dpr 3, isMobile, an iPhone user agent.
@@ -25,7 +25,7 @@
  *      primary button is hit-tested, which is the item's fifth invariant and the
  *      one genuinely not covered.
  *
- *   3. INSIDE DIALOGS. The 44px sweep in `verify-hit-targets` runs over the
+ *   3. INSIDE DIALOGS. The 44px sweep in `e2e/hit-targets.spec.ts` runs over the
  *      shell's surfaces. A dialog's contents are swept here as well.
  *
  * A LESSON THAT COST A FALSE POSITIVE, recorded so the next reader does not
@@ -97,7 +97,7 @@ const SWEEP = (floor) => {
 
          A STRONGER TEST WAS TRIED AND GIVEN UP, which is worth recording rather
          than quietly dropping. Hit-testing 18px above and below the centre —
-         what `verify-hit-targets` does to the switches — flagged exactly two
+         what `e2e/hit-targets.spec.ts` does to the switches — flagged exactly two
          controls in 43 dialogs: Liquify's "Show mesh" and Warp's angle readout.
          Both sit hard against a sticky dialog footer, and the footer is what
          the probe landed on. Neither is unreachable: both pass the centre hit
