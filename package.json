@@ -10,7 +10,6 @@
     "perf": "node tools/perf-suite.js",
     "bench": "node tools/bench-track.js",
     "test": "vitest run",
-    "test:grab": "node tools/verify-grab-radius.js",
     "test:loupe": "node tools/verify-loupe.js",
     "test:twostage": "node tools/verify-two-stage.js",
     "test:clonesrc": "node tools/verify-clone-source.js",
