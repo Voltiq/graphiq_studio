@@ -1,7 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Bandage,
-  Eye,
   MousePointer2,
   SquareDashedMousePointer,
   Pipette,
@@ -16,6 +15,7 @@ import {
   History,
   SunMedium,
 } from "lucide-react";
+import { Eye } from "./icons";
 import {
   BrushIcon,
   CropIcon,

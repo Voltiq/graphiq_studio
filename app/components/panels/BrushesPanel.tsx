@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, Download, Plus, Trash2, Upload } from "lucide-react";
+import { Plus } from "lucide-react";
+import { Check, Download, Trash2, Upload } from "../../lib/icons";
 import styles from "../RightDock.module.scss";
 import { downloadBlob } from "../../lib/project";
 import {

@@ -3,12 +3,9 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import {
   Blend,
-  Check,
   Contrast,
-  Download,
   Equal,
   FolderInput,
-  Layers,
   Palette,
   Pipette,
   Plus,
@@ -16,10 +13,9 @@ import {
   RotateCcw,
   SlidersHorizontal,
   SwatchBook,
-  Trash2,
-  Upload,
   X,
 } from "lucide-react";
+import { Check, Download, Layers, Trash2, Upload } from "../../lib/icons";
 import { Slider } from "../Controls";
 import FilterExportDialog from "../FilterExportDialog";
 import styles from "../RightDock.module.scss";

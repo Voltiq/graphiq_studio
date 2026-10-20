@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Play, Save, Trash2, X } from "lucide-react";
+import { Play, Save, X } from "lucide-react";
+import { Trash2 } from "../lib/icons";
 import styles from "./PasteDialog.module.scss";
 import prefStyles from "./PreferencesDialog.module.scss";
 import type { DockLayout, PanelVisibility } from "./RightDock";

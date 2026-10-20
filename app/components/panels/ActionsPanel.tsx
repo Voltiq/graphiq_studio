@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Play, Square, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Play, Square, X } from "lucide-react";
+import { Trash2 } from "../../lib/icons";
 import styles from "../RightDock.module.scss";
 import { Select } from "../Controls";
 import { FKEY_CHOICES, type ActionsApi } from "../../lib/actions";

@@ -1,7 +1,8 @@
 "use client";
 
 import { Component, useEffect, useState, type ReactNode } from "react";
-import { AlertTriangle, Check, ClipboardCopy, Download, RotateCcw } from "lucide-react";
+import { AlertTriangle, ClipboardCopy, RotateCcw } from "lucide-react";
+import { Check, Download } from "../lib/icons";
 import styles from "./ErrorBoundary.module.scss";
 import {
   collectRecovery,

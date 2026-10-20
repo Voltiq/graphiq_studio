@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Copy, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
+import { Copy, Trash2 } from "../../lib/icons";
 import styles from "../RightDock.module.scss";
 import {
   COMP_ATTRS,

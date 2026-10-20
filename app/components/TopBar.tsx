@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Download, Menu as MenuIcon, PanelRight, Redo2, Search, Undo2, X } from "lucide-react";
+import { ChevronDown, PanelRight, X } from "lucide-react";
+import { Check, Download, Menu as MenuIcon, Redo2, Search, Undo2 } from "../lib/icons";
 import styles from "./TopBar.module.scss";
 import { registerDismissible } from "../lib/dismiss";
 import logo from "../icon.png";

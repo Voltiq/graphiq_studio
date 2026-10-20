@@ -3,8 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Blend as BlendIcon,
-  Check,
-  Download,
   Gem,
   Layers2,
   PaintBucket,
@@ -16,10 +14,10 @@ import {
   SquareDot,
   Sun,
   SunDim,
-  Upload,
   X,
   type LucideIcon,
 } from "lucide-react";
+import { Check, Download, Upload } from "../lib/icons";
 import styles from "./LayerStyleDialog.module.scss";
 import BlendIfControl from "./BlendIfControl";
 import type { BlendIf } from "../lib/blendif";

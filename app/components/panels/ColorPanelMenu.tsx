@@ -2,15 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import {
-  ArrowLeftRight,
-  ClipboardPaste,
-  Code,
-  Copy,
-  MoreHorizontal,
-  Plus,
-  RotateCcw,
-} from "lucide-react";
+import { ArrowLeftRight, ClipboardPaste, Code, Plus, RotateCcw } from "lucide-react";
+import { Copy, MoreHorizontal } from "../../lib/icons";
 import styles from "../RightDock.module.scss";
 import { parseColor, toHex6, toHex8, toRgbaCss } from "../../lib/color";
 import { addSwatch } from "../../lib/swatches";

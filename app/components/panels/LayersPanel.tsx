@@ -14,37 +14,39 @@ import {
 import { createPortal } from "react-dom";
 import {
   ArrowDownToLine,
-  Check,
   ChevronDown,
   ChevronRight,
-  CircleDashed,
-  Contrast,
   CornerDownRight,
-  Copy,
-  Eye,
-  EyeOff,
   Focus,
-  Folder,
-  FolderMinus,
-  FolderOpen,
-  FolderPlus,
   Grid2x2,
   ScanEye,
-  Layers as LayersIcon,
-  Link2,
-  Lock,
-  LockOpen,
   Move,
   Paintbrush,
   PaintBucket,
   Pencil,
   FlaskConical,
-  Search,
   Sparkles,
-  Trash2,
-  Unlink2,
   X,
 } from "lucide-react";
+import {
+  Check,
+  Copy,
+  Eye,
+  EyeOff,
+  Folder,
+  FolderMinus,
+  FolderOpen,
+  FolderPlus,
+  Layers as LayersIcon,
+  Link2,
+  Lock,
+  LockOpen,
+  Search,
+  Trash2,
+  Unlink2,
+  MaskIcon,
+  AdjustmentIcon,
+} from "../../lib/icons";
 import styles from "../RightDock.module.scss";
 import { Select } from "../Controls";
 import { cssGradient } from "../GradientControl";
@@ -154,16 +156,6 @@ function flattenRows(nodes: LayerNode[], vis: { match: Set<string>; visible: Set
       out.push(...flattenRows(n.children, vis, depth + 1));
   }
   return out;
-}
-
-/** The design's mask glyph: a rounded square with a disc in it. */
-function MaskIcon({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden>
-      <rect x="3" y="3" width="18" height="18" rx="5" />
-      <circle cx="12" cy="12" r="4.5" />
-    </svg>
-  );
 }
 
 /* ---- Thumbnails -------------------------------------------------------------
@@ -840,7 +832,7 @@ export default function LayersPanel({
                     </span>
                   ) : isAdjustment ? (
                     <span className={styles.layerTile} data-kind="adjustment" title="Adjustment layer">
-                      <Contrast size={15} />
+                      <AdjustmentIcon size={15} />
                     </span>
                   ) : (
                     <span
@@ -1122,7 +1114,7 @@ export default function LayersPanel({
           disabled={!activeLayerId || !!active?.mask}
           onClick={() => api.addMask("reveal")}
         >
-          <MaskIcon />
+          <MaskIcon size={16} />
         </button>
         <button
           type="button"
@@ -1132,7 +1124,7 @@ export default function LayersPanel({
           aria-expanded={!!adjustAt}
           onClick={(e) => setAdjustAt(adjustAt ? null : below(e))}
         >
-          <Contrast size={16} />
+          <AdjustmentIcon size={16} />
         </button>
         <button
           type="button"
@@ -1213,7 +1205,7 @@ export default function LayersPanel({
                       onCommand(c.action);
                     }}
                   >
-                    <Contrast size={13} /> {c.label.charAt(0).toUpperCase() + c.label.slice(1)}
+                    <AdjustmentIcon size={13} /> {c.label.charAt(0).toUpperCase() + c.label.slice(1)}
                   </button>
                 ))}
               </div>
@@ -1287,7 +1279,7 @@ export default function LayersPanel({
           </button>
           {menu.node.type === "adjustment" && (
             <button type="button" onClick={() => run(() => api.editAdjustment(menu.node.id))}>
-              <Contrast size={13} /> Edit Adjustment…
+              <AdjustmentIcon size={13} /> Edit Adjustment…
             </button>
           )}
           {isFillLayer(menu.node) && (
@@ -1352,13 +1344,13 @@ export default function LayersPanel({
           {menu.node.mask ? (
             <>
               <button type="button" onClick={() => run(api.loadMaskAsSelection)}>
-                <CircleDashed size={13} /> Mask to Selection
+                <MaskIcon size={13} /> Mask to Selection
               </button>
               <button type="button" onClick={() => run(() => api.toggleMaskEnabled(menu.node.id))}>
-                <CircleDashed size={13} /> {menu.node.mask.enabled ? "Disable mask" : "Enable mask"}
+                <MaskIcon size={13} /> {menu.node.mask.enabled ? "Disable mask" : "Enable mask"}
               </button>
               <button type="button" onClick={() => run(api.applyMask)}>
-                <CircleDashed size={13} /> Apply Mask
+                <MaskIcon size={13} /> Apply Mask
               </button>
               <button type="button" className={styles.menuDanger} onClick={() => run(api.removeMask)}>
                 <Trash2 size={13} /> Delete Mask
@@ -1367,10 +1359,10 @@ export default function LayersPanel({
           ) : (
             <>
               <button type="button" onClick={() => run(() => api.addMask("reveal"))}>
-                <CircleDashed size={13} /> Add Layer Mask
+                <MaskIcon size={13} /> Add Layer Mask
               </button>
               <button type="button" onClick={() => run(() => api.addMask("selection"))}>
-                <CircleDashed size={13} /> Mask from Selection
+                <MaskIcon size={13} /> Mask from Selection
               </button>
             </>
           )}

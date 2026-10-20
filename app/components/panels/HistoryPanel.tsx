@@ -11,16 +11,13 @@ import {
   FileClock,
   GitBranch,
   ClipboardPaste,
-  Copy,
   Eraser,
   FlipHorizontal2,
   FlipVertical2,
-  FolderPlus,
   Frame,
   History,
   Image as ImageIcon,
   ImagePlus,
-  Layers,
   Maximize2,
   Move,
   PaintBucket,
@@ -34,10 +31,10 @@ import {
   Shapes,
   SlidersHorizontal,
   SquareDashed,
-  Trash2,
   Ungroup,
   type LucideIcon,
 } from "lucide-react";
+import { Copy, FolderPlus, Layers, Trash2 } from "../../lib/icons";
 import styles from "../RightDock.module.scss";
 import { groupLog, logSummary } from "../../lib/history-log";
 

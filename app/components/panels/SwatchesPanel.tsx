@@ -1,16 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type RefObject } from "react";
-import {
-  ChevronDown,
-  ChevronRight,
-  Download,
-  FolderPlus,
-  Image as ImageIcon,
-  Plus,
-  Trash2,
-  Upload,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, Image as ImageIcon, Plus } from "lucide-react";
+import { Download, FolderPlus, Trash2, Upload } from "../../lib/icons";
 import styles from "../RightDock.module.scss";
 import { Select } from "../Controls";
 import { swatchBg } from "../../lib/color";

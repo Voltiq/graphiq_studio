@@ -10,7 +10,6 @@ import {
   Palette,
   Sparkle,
   Grip,
-  PenLine,
   Shapes,
   Star,
   Waves,
@@ -29,7 +28,6 @@ import {
   ArrowLeftRight,
   Bold,
   CaseUpper,
-  Check,
   Circle,
   FlaskConical,
   Italic,
@@ -49,6 +47,7 @@ import {
   Underline,
   X,
 } from "lucide-react";
+import { Check, PressureIcon } from "../lib/icons";
 import styles from "./OptionsBar.module.scss";
 import {
   CROP_RATIOS,
@@ -440,7 +439,7 @@ function PressureControl({
         aria-label="Pen pressure"
         onClick={toggleOpen}
       >
-        <PenLine size={15} />
+        <PressureIcon size={15} />
       </button>
       {open &&
         createPortal(

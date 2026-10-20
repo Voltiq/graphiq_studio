@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { RotateCcw, Search, X } from "lucide-react";
+import { RotateCcw, X } from "lucide-react";
+import { Search } from "../lib/icons";
 import styles from "./PreferencesDialog.module.scss";
 import {
   effectiveLabel,

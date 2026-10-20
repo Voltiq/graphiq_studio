@@ -5,12 +5,9 @@ import {
   BookOpen,
   Brush,
   Database,
-  FolderOpen,
-  Layers,
   Monitor,
   Palette,
   Rocket,
-  Search,
   SlidersHorizontal,
   Sparkles,
   SquareDashed,
@@ -18,6 +15,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import { FolderOpen, Layers, Search } from "../lib/icons";
 import styles from "./PreferencesDialog.module.scss";
 import { filterTopics, GUIDE, TOPICS, type HelpTopic } from "../lib/help";
 

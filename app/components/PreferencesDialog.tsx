@@ -3,12 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  Check,
   ClipboardPaste,
-  FolderOpen,
   Gauge,
   Crosshair,
-  Eye,
   Grid2x2,
   Grid3x3,
   HardDrive,
@@ -20,6 +17,7 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
+import { Check, FolderOpen, Eye } from "../lib/icons";
 import styles from "./PreferencesDialog.module.scss";
 import { applyTheme, currentTheme, resolvedDark } from "./ThemeToggle";
 import { ColorChip, Slider, Toggle } from "./Controls";

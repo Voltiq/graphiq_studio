@@ -14,7 +14,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, Trash2, Upload } from "lucide-react";
+import { Download, Trash2, Upload } from "../lib/icons";
 import {
   PATTERN_EXT,
   builtinPatternMetas,

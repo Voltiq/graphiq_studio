@@ -11,7 +11,6 @@ import {
   Contrast,
   Eraser,
   Grid3x3,
-  Layers,
   Plus,
   Radio,
   ScanLine,
@@ -23,12 +22,12 @@ import {
   SprayCan,
   Sun,
   Zap,
-  Trash2,
   Wand2,
   Waves,
   X,
   type LucideIcon,
 } from "lucide-react";
+import { Layers, Trash2 } from "../lib/icons";
 import styles from "./LayerStyleDialog.module.scss";
 import { ColorChip, Segmented, Select, Slider, Toggle } from "./Controls";
 import { BLEND_MODES, type LayerGroup, type LayerLeaf } from "../lib/layers";

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Trash2, X } from "lucide-react";
+import { Plus, X } from "lucide-react";
+import { Trash2 } from "../lib/icons";
 import styles from "./PasteDialog.module.scss";
 import { ColorChip, Segmented, Slider, Toggle } from "./Controls";
 import { availableFormats, renderExport, type ExportFormat, type ExportOptions } from "../lib/imageio";

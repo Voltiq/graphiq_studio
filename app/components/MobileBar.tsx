@@ -1,22 +1,11 @@
 "use client";
 
-import { Hand, createLucideIcon } from "lucide-react";
 import styles from "./MobileBar.module.scss";
 import { ALL_TOOLS, type ToolId } from "../lib/tools";
+// The dock's own glyphs for its two destinations, and Pan's hand, as in the design.
+import { AllToolsIcon, HandIcon as Hand, PanelsIcon } from "../lib/icons";
 
 export type MobileDrawer = "tools" | "panels" | null;
-
-/** The dock's own glyphs for its two destinations, as in the design. */
-const AllToolsIcon = createLucideIcon("gq-all-tools", [
-  ["rect", { x: "4", y: "4", width: "6", height: "6", rx: "1.5", key: "a" }],
-  ["rect", { x: "14", y: "4", width: "6", height: "6", rx: "1.5", key: "b" }],
-  ["rect", { x: "4", y: "14", width: "6", height: "6", rx: "1.5", key: "c" }],
-  ["rect", { x: "14", y: "14", width: "6", height: "6", rx: "1.5", key: "d" }],
-]);
-const PanelsIcon = createLucideIcon("gq-panels", [
-  ["path", { d: "m12 3 9 5-9 5-9-5z", key: "a" }],
-  ["path", { d: "m3 16 9 5 9-5M3 12l9 5 9-5", key: "b" }],
-]);
 
 /** The tools a finger reaches for most, one tap away instead of two. The rest
  *  are in the tools sheet. */

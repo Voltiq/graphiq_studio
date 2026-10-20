@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { Download, Plus, Upload } from "lucide-react";
+import { Plus } from "lucide-react";
+import { Download, Upload } from "../lib/icons";
 import styles from "./ColorPicker.module.scss";
 import { Select } from "./Select";
 import {

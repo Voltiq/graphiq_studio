@@ -8,20 +8,17 @@ import { type WorkingSpace } from "../lib/colorspace";
 import {
   BarChart3,
   Compass,
-  FolderMinus,
-  FolderPlus,
   History,
   Info,
-  Layers,
   Palette,
   Plus,
-  Search,
   Settings2,
   SlidersHorizontal,
   SwatchBook,
   Brush,
   Zap,
 } from "lucide-react";
+import { FolderMinus, FolderPlus, Layers, Search } from "../lib/icons";
 import styles from "./RightDock.module.scss";
 import Panel, { type PanelTab } from "./Panel";
 import ColorPanel, { type ColorView } from "./panels/ColorPanel";

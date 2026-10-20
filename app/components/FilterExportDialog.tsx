@@ -1,7 +1,8 @@
 ﻿"use client";
 
 import { useState } from "react";
-import { Check, X } from "lucide-react";
+import { X } from "lucide-react";
+import { Check } from "../lib/icons";
 import styles from "./PasteDialog.module.scss";
 import { adjustToThumbFilter, type AdjustPreset } from "../lib/adjust";
 import { exportPresets } from "../lib/filterio";

@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeftRight, Check, Dices, Download, Plus, Save, Upload, X } from "lucide-react";
+import { ArrowLeftRight, Dices, Plus, Save, X } from "lucide-react";
+import { Check, Download, Upload } from "../lib/icons";
 import styles from "./GradientControl.module.scss";
 import { rangeFill } from "../lib/range-fill";
 import ColorPopover from "./ColorPopover";

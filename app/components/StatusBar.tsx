@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BoxSelect, Check, CircleDashed, MousePointer2, Ruler } from "lucide-react";
+import { BoxSelect, CircleDashed, MousePointer2, Ruler } from "lucide-react";
+import { Check } from "../lib/icons";
 import styles from "./StatusBar.module.scss";
 import { EditableValue, reserveCh } from "./Controls";
 import { WORKING_SPACE_LABELS, type WorkingSpace } from "../lib/colorspace";

@@ -2,7 +2,8 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
+import { Check } from "../lib/icons";
 import styles from "./Controls.module.scss";
 import { uiZoom } from "../lib/ui-scale";
 import { clampX, clampY, visibleBand } from "../lib/safeArea";

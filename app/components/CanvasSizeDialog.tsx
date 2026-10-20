@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { sharedCeiling } from "../lib/canvas-ceiling";
-import { Link2, Link2Off, X } from "lucide-react";
+import { X } from "lucide-react";
+import { Link2, Link2Off } from "../lib/icons";
 import styles from "./CanvasSizeDialog.module.scss";
 import { Select } from "./Select";
 

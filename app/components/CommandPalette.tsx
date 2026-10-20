@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, CornerDownLeft, History, Search, type LucideIcon } from "lucide-react";
+import { CornerDownLeft, History, type LucideIcon } from "lucide-react";
+import { Check, Search } from "../lib/icons";
 import styles from "./CommandPalette.module.scss";
 import { fuzzyMatch, highlightRuns } from "../lib/fuzzy";
 

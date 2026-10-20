@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Search } from "lucide-react";
+import { ChevronDown } from "lucide-react";
+import { Check, Search } from "../lib/icons";
 import styles from "./FontPicker.module.scss";
 import { uiZoom } from "../lib/ui-scale";
 import {

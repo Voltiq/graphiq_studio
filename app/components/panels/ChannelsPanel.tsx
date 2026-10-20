@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
+import { Plus } from "lucide-react";
+import { Eye, EyeOff, Trash2 } from "../../lib/icons";
 import styles from "../RightDock.module.scss";
 import type { ChannelHistogram, EngineHandle } from "../../lib/paint";
 import { findNode, type LayerNode, type LayersApi } from "../../lib/layers";

@@ -4,13 +4,13 @@ import { useState } from "react";
 import {
   CornerDownRight,
   Contrast,
-  Folder,
   Image as ImageIcon,
   Shapes,
   SlidersHorizontal,
   Sparkles,
   Wand2,
 } from "lucide-react";
+import { Folder } from "../../lib/icons";
 import styles from "../RightDock.module.scss";
 import { Select, Slider, Toggle } from "../Controls";
 import { findNode, type LayersApi, type LayerNode, BLEND_MODES } from "../../lib/layers";

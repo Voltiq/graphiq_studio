@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { CircleDashed, PaintBucket, PenTool, Pencil, Save, Trash2 } from "lucide-react";
+import { CircleDashed, PaintBucket, PenTool, Pencil, Save } from "lucide-react";
+import { Trash2 } from "../../lib/icons";
 import styles from "../RightDock.module.scss";
 import { pathBounds, pathToSvgD, WORK_PATH_ID, type PathsApi, type PathSelectOp } from "../../lib/paths";
 
