@@ -149,7 +149,11 @@ test("the gradient popover opens fully on screen", async ({ app }) => {
  *  once measured zero whatever the overlay drew. */
 const overlayInk = (app: App) =>
   app.page.evaluate(() => {
-    const cs = [...document.querySelectorAll("canvas")].filter((c) => !c.hasAttribute("data-loupe"));
+    // The stage's canvases only: the Layers rows draw their thumbnails on
+    // canvases too, and those come later in the page.
+    const cs = [...document.querySelectorAll("canvas")].filter(
+      (c) => !c.hasAttribute("data-loupe") && !c.hasAttribute("data-thumb-id"),
+    );
     const el = cs[cs.length - 1];
     const d = el.getContext("2d")!.getImageData(0, 0, el.width, el.height).data;
     let n = 0;

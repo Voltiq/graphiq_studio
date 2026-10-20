@@ -343,6 +343,11 @@
 .headBtn {
   @include ds.icon-btn(24px, var(--r-sm));
 
+  &[data-on] {
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+
   &:disabled {
     opacity: 0.4;
     cursor: default;
@@ -525,62 +530,138 @@
 .colorPanel {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: 12px;
 }
 
-.targets {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
-
-/* Segmented Primary / Secondary toggle: the inset well, the chosen side raised. */
-.segment {
-  flex: 1;
+/* Picker / Swatches, in the panel's header: the design's segmented well. */
+.viewSeg {
   @include ds.seg;
+  flex: none;
 }
 
-.target {
-  flex: 1;
-  @include ds.seg-btn(28px);
-  font-weight: var(--weight-medium);
+.viewSegBtn {
+  @include ds.seg-btn(26px);
 
-  &[data-active="true"] {
+  &[aria-pressed="true"] {
     @include ds.seg-on;
-    font-weight: var(--weight-semibold);
   }
 }
 
-.targetSwatch {
-  width: 12px;
-  height: 12px;
-  flex-shrink: 0;
-  border-radius: var(--r-xs);
-  border: 1px solid var(--border-strong);
+/* Primary and secondary as the familiar overlapping pair: the colour being
+   edited in front (top-left), the other behind it (bottom-right) — click it
+   to edit that one — and a swap in the free corner. 34px, the value row's
+   height. */
+.slotPair {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 34px;
 }
 
-.targetLabel {
-  font-size: 12px;
-  font-weight: 500;
+.slotFront,
+.slotBack {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 8px;
+  box-shadow:
+    inset 0 0 0 1px var(--hairline-lit),
+    0 0 0 2px var(--surface),
+    0 2px 6px -2px rgb(0 0 0 / 50%);
 }
 
-.swap {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  border-radius: var(--r-lg);
-  border: 1px solid var(--border);
-  color: var(--text-2);
-  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease),
-    transform var(--t-slow) var(--ease-pop);
+.slotFront {
+  z-index: 1;
+  top: 0;
+  left: 0;
+}
+
+.slotBack {
+  right: 0;
+  bottom: 0;
+  cursor: pointer;
+  transition: transform var(--t-fast) var(--spring);
 
   &:hover {
-    background: var(--wash);
+    transform: translate(1px, 1px) scale(1.06);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--focus-color);
+    outline-offset: 2px;
+  }
+}
+
+.slotSwap {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 5px;
+  color: var(--text-3);
+  transition: color var(--t-fast) var(--ease), transform var(--t-slow) var(--ease-pop);
+
+  &:hover {
     color: var(--text);
     transform: rotate(180deg);
   }
+}
+
+/* On a touchscreen the 44px floor would blow the back chip up into a 44px
+   block. Its reach grows by padding instead, the paint staying on the 24px
+   content box, so a fingertip anywhere over the pair switches the slot; the
+   swap steps aside there (it is in the ⋯ menu, and on the toolbar). */
+:global(html[data-touch="true"]) {
+  .slotBack {
+    box-sizing: border-box;
+    width: 44px;
+    height: 44px;
+    padding: 10px;
+    margin: -10px;
+    /* The paint is clipped to the content box, whose corner radius is this
+       less the padding: 18 − 10 = the 8px of the chip it stands for. */
+    border-radius: 18px;
+    background-clip: content-box;
+    background-origin: content-box;
+    box-shadow: none;
+    outline: 2px solid var(--surface);
+    outline-offset: -10px;
+  }
+
+  .slotSwap {
+    display: none;
+  }
+}
+
+/* The Swatches view leads with what you are colouring: the pair, the slot's
+   name and its value. */
+.swatchCurrent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.swatchCurrentText {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.swatchCurrentName {
+  font-size: 12.5px;
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.swatchCurrentHex {
+  font: var(--weight-medium) 11.5px var(--font-mono);
+  color: var(--text-3);
 }
 
 /* ------------------------------ Adjustments ------------------------------- */
@@ -833,10 +914,13 @@
 }
 
 /* -------------------------------- Layers ---------------------------------- */
+/* The Layers panel, as the design draws it: blend mode, opacity and locks in
+   one row; 44px rows — the eye, the layer drawn small, its name, and what it
+   carries as quiet badges at the end; and a footer of the layer's verbs. */
 .layers {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-3);
+  gap: 12px;
 }
 
 .layersEmpty {
@@ -875,83 +959,75 @@
 
 .layerControls {
   display: flex;
-  flex-direction: column;
-  gap: var(--sp-3);
-  padding-bottom: var(--sp-3);
-  border-bottom: 1px solid var(--border);
+  align-items: center;
+  gap: 8px;
 }
 
-.blend {
-  position: relative;
+.layerBlend {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Opacity: a mono "100 %" field. Drag across it to scrub, click to type. */
+.opacityField {
   display: flex;
   align-items: center;
+  gap: 4px;
+  flex: none;
+  width: 76px;
+  padding: 0 10px;
+  @include ds.field(32px);
+  border-radius: 10px;
+  cursor: ew-resize;
+  touch-action: pan-y;
 
-  select {
-    appearance: none;
-    width: 100%;
-    padding: 0 28px 0 11px;
-    font-size: 12.5px;
-    font-weight: var(--weight-medium);
-    cursor: pointer;
-    outline: none;
-    @include ds.field(30px);
-
-    &:focus-visible {
-      @include ds.field-focus;
-    }
-  }
-
-  svg {
-    position: absolute;
-    right: 9px;
-    color: var(--text-3);
-    pointer-events: none;
+  &:focus-within {
+    @include ds.field-focus;
+    cursor: text;
   }
 }
 
-.opacity {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
+/* On a touchscreen the typing target inside it reaches the 44px floor too. */
+:global(html[data-touch="true"]) .opacityField {
+  width: 92px;
 }
 
-.opacityLabel {
-  font-size: 12px;
-  color: var(--text-2);
-  flex-shrink: 0;
-}
-
-.opacityValue {
-  font-size: 12px;
-  font-family: var(--font-mono);
+.opacityInput {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  background: none;
+  border: 0;
+  outline: none;
+  cursor: inherit;
+  font: var(--weight-medium) 13px/1 var(--font-mono);
   font-variant-numeric: tabular-nums;
   color: var(--text);
-  min-width: 38px;
-  text-align: right;
 }
 
-.opacity input[type="range"] {
-  @include ds.range;
-  flex: 1;
+.opacityFix {
+  flex: none;
+  font: var(--weight-medium) 12px var(--font-mono);
+  color: var(--text-3);
 }
 
-/* ---------------- Lock row (Photoshop-style) -------------------------------- */
-.lockRow {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
-
-.lockLabel {
-  font-size: 12px;
+/* The lock list's button: open padlock at rest, the accent padlock when any
+   lock is on. */
+.lockButton {
+  @include ds.icon-btn(32px, 10px);
   color: var(--text-2);
-  flex-shrink: 0;
-}
 
-.lockBtns {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+  &[aria-expanded="true"] {
+    background: var(--raised);
+    color: var(--text);
+  }
+
+  &[data-on] {
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
 }
 
 .lockBtn {
@@ -990,26 +1066,47 @@
   }
 }
 
+/* The lock list: one row per lock, its state as a tick. */
+.lockItem {
+  .lockCheck {
+    display: grid;
+    place-items: center;
+    width: 14px;
+    margin-left: auto;
+    color: var(--accent);
+  }
+
+  &[data-on="true"] > svg:first-child {
+    color: var(--accent);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+}
+
+/* A popup's small heading, and a long list that scrolls inside it. */
+.menuHead {
+  padding: 6px 10px 4px;
+  @include ds.eyebrow;
+}
+
+.menuScroll {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: min(300px, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 /* Small padlock shown on any row that has an active lock. */
 .rowLock {
   display: grid;
   place-items: center;
   flex-shrink: 0;
   color: var(--text-3);
-}
-
-/* Chain icon on a linked row — click to unlink. */
-.rowLink {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  color: var(--accent);
-  opacity: 0.85;
-  transition: opacity var(--t-fast) var(--ease);
-
-  &:hover {
-    opacity: 1;
-  }
 }
 
 /* Context-menu lock toggles (mirrors the label swatch row). */
@@ -1041,23 +1138,28 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 230px;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
   overflow-y: auto;
-  margin: 0 calc(-1 * var(--sp-1));
+  scrollbar-width: thin;
 }
 
 .layerItem {
   position: relative;
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  padding: 5px var(--sp-2);
-  border-radius: var(--r-lg);
+  gap: 2px;
+  min-height: 44px;
+  padding: 3px;
+  border-radius: 13px;
   cursor: pointer;
-  transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+  transition:
+    background var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
 
   &:hover {
-    background: var(--wash);
+    background: var(--surface-2);
   }
 
   /* Selected: the soft accent tint inside a translucent accent rim. */
@@ -1078,21 +1180,353 @@
       left: 2px;
       top: 50%;
       transform: translateY(-50%);
-      width: 2.5px;
-      height: 18px;
+      width: 3px;
+      height: 16px;
       border-radius: var(--r-pill);
       background: var(--accent-fill);
     }
   }
 
+  /* Hidden: the picture fades and the name steps back; the eye stays clear. */
   &[data-hidden="true"] {
-    opacity: 0.45;
+    .layerThumb,
+    .layerTile,
+    .maskChip {
+      opacity: 0.3;
+    }
+
+    .layerName {
+      color: var(--text-3);
+    }
   }
 
   &[data-dragging="true"] {
     opacity: 0.4;
     background: var(--surface-3);
   }
+}
+
+.layerEye {
+  @include ds.icon-btn(32px, 10px);
+  color: var(--text-2);
+
+  &:hover {
+    color: var(--text);
+  }
+}
+
+.layerMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding-right: 6px;
+}
+
+/* A group's fold, and the space it keeps on every other row so the pictures
+   line up (only while the document has a group at all). */
+.layerCaret {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 24px;
+  margin-right: -4px;
+  border-radius: 6px;
+  color: var(--text-3);
+  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+
+  &:is(button):hover {
+    color: var(--text);
+    background: var(--wash);
+  }
+}
+
+.clipElbow {
+  flex: none;
+  margin-right: -3px;
+  color: var(--text-3);
+}
+
+/* The picture: a 36×26 tile with a lit hairline. Pixel layers draw themselves
+   into it (over the checkerboard); fills show their fill; text shows a T. */
+.layerThumb,
+.layerTile {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 26px;
+  border-radius: 7px;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 30%);
+  transition: opacity var(--t-med) var(--ease);
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px var(--hairline-lit);
+    pointer-events: none;
+  }
+
+  canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+}
+
+.layerThumb {
+  background-color: var(--checker-a);
+  background-image: repeating-conic-gradient(var(--checker-b) 0% 25%, var(--checker-a) 0% 50%);
+  background-size: 6px 6px;
+
+  &[data-kind="text"] {
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, var(--surface-3), var(--raised-2));
+  }
+}
+
+.thumbGlyph {
+  font-size: 12px;
+  font-weight: var(--weight-bold);
+  color: var(--text);
+}
+
+.layerTile {
+  display: grid;
+  place-items: center;
+  background: var(--surface-3);
+  color: var(--text-2);
+
+  &[data-kind="adjustment"] {
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+}
+
+/* Which surface paint tools target — the pixels or a mask — wears the ring. */
+.layerThumb[data-active="true"],
+.layerTile[data-active="true"],
+.maskThumb[data-active="true"] .maskChip {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Mask VIEW mode (Alt-click): the canvas is showing this mask grayscale. */
+.maskThumb[data-viewing="true"] .maskChip {
+  outline: 2px dashed var(--accent);
+  outline-offset: 1px;
+}
+
+/* A mask, drawn small beside its layer: white reveals, black hides. The
+   button is only the reach — on a touchscreen the 44px floor grows it — and
+   the chip inside is the picture: the same shape as the layer's, so the two
+   read as a pair, on a neutral ground where the document's shape leaves room
+   (black there would read as "hidden"). */
+.maskThumb {
+  display: grid;
+  place-items: center;
+  flex: none;
+  padding: 0;
+  background: none;
+  transition: opacity var(--t-med) var(--ease);
+
+  &:hover:not([data-active="true"]) .maskChip {
+    outline: 1px solid var(--accent-line);
+    outline-offset: 1px;
+  }
+}
+
+.maskChip {
+  position: relative;
+  display: block;
+  width: 36px;
+  height: 26px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--surface-3);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 30%);
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px var(--hairline-lit);
+    pointer-events: none;
+  }
+
+  canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .maskThumb[data-disabled="true"] & canvas {
+    opacity: 0.45;
+  }
+
+  /* The filter mask (it confines the smart filters) reads apart from the layer
+     mask at a glance: a dashed rim and a flask. */
+  .maskThumb[data-kind="filter"] &::after {
+    border: 1px dashed rgb(255 255 255 / 55%);
+    box-shadow: none;
+  }
+}
+
+.maskBadge {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  color: #fff;
+  filter: drop-shadow(0 0 1px rgb(0 0 0 / 90%));
+}
+
+.maskOff {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--danger);
+  font-size: 15px;
+  font-weight: var(--weight-bold);
+  line-height: 1;
+}
+
+/* The chain between a layer and its mask. */
+.maskLink {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 12px;
+  margin: 0 -5px;
+  color: var(--text-3);
+  transition: color var(--t-fast) var(--ease);
+
+  &[data-on="true"] {
+    color: var(--accent);
+  }
+
+  &:hover {
+    color: var(--text);
+  }
+}
+
+.layerName {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.layerRename {
+  flex: 1;
+  min-width: 0;
+  padding: 0 8px;
+  font-size: 13px;
+  @include ds.field(26px);
+  @include ds.field-focus;
+  border-radius: 8px;
+  outline: none;
+}
+
+/* What a layer carries, at the end of its row: a reduced opacity as quiet
+   mono text, then small badges — clip, link, smart filters, fx — that open or
+   undo what they stand for, and a padlock when anything is locked. */
+.layerBadges {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  margin-left: auto;
+}
+
+.layerOpacity {
+  font: var(--weight-medium) 10.5px var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.layerBadge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font: var(--weight-semibold) 10px var(--font-mono);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+
+  &:hover {
+    background: var(--raised-2);
+    color: var(--text);
+  }
+
+  &[data-on="true"] {
+    color: var(--accent);
+  }
+}
+
+/* The verbs: link, effects, mask, new fill/adjustment, duplicate, isolate,
+   delete — spread across the foot of the card. */
+.layerFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* Seven buttons at the 44px touch floor are 308px; a 360px phone's sheet
+     has a little less, so the row wraps rather than losing its last one. */
+  flex-wrap: wrap;
+  gap: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+
+  button {
+    @include ds.icon-btn(32px, 10px);
+
+    &:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+
+    /* A toggle that is on (layers linked, isolate mode). */
+    &[data-on] {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    &[aria-expanded="true"] {
+      background: var(--raised);
+    }
+  }
+}
+
+/* A flexible gap in a panel's footer row (the Brushes panel's). */
+.footerSpacer {
+  flex: 1;
+}
+
+.footerFx {
+  font: var(--weight-semibold) 12px var(--font-mono);
+}
+
+.footerDanger:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--danger) 14%, transparent);
+  color: var(--danger);
 }
 
 .menuScrim {
@@ -1164,215 +1598,6 @@
     opacity: 1;
     transform: none;
   }
-}
-
-.layerCaret {
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 22px;
-  flex-shrink: 0;
-  color: var(--text-3);
-  transition: color var(--t-fast) var(--ease);
-
-  &:hover {
-    color: var(--text);
-  }
-}
-
-.layerEye {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: var(--r-sm);
-  color: var(--text-2);
-  flex-shrink: 0;
-  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
-
-  &:hover {
-    color: var(--text);
-    background: var(--wash-2);
-  }
-}
-
-.layerGroupIcon {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  flex-shrink: 0;
-  border-radius: 8px;
-  background: var(--raised);
-  box-shadow: var(--inset-hi), 0 0 0 1px var(--border);
-  color: var(--text-2);
-}
-
-/* Thumbnails: small lit tiles with a hairline, like swatches. */
-.layerThumb {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  flex-shrink: 0;
-  border: 1px solid var(--line-2);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 22%);
-  background-color: var(--checker-a);
-  background-image: repeating-conic-gradient(
-    var(--checker-b) 0% 25%,
-    var(--checker-a) 0% 50%
-  );
-  background-size: 8px 8px;
-}
-
-/* The active-surface ring: which of pixels / mask paint tools currently target. */
-.layerThumb[data-active="true"],
-.maskThumb[data-active="true"] {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-  border-color: var(--accent);
-}
-
-/* Mask VIEW mode (Alt-click): the canvas is showing this mask grayscale. */
-.maskThumb[data-viewing="true"] {
-  outline: 2px dashed var(--accent);
-  outline-offset: 1px;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
-}
-
-/* A layer-mask chip beside the pixel thumbnail (grayscale gradient placeholder). */
-.maskThumb {
-  position: relative;
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-  border-radius: 7px;
-  border: 1px solid var(--line-2);
-  background: linear-gradient(135deg, #fff 0%, #808080 50%, #111 100%);
-  transition: border-color var(--t-fast) var(--ease);
-
-  &[data-disabled="true"] {
-    opacity: 0.45;
-  }
-
-  &:hover {
-    border-color: var(--accent);
-  }
-
-  /* Filter mask (smart filters): dashed chip + flask glyph tells it apart from
-     the layer mask at a glance. */
-  &[data-kind="filter"] {
-    border-style: dashed;
-    display: grid;
-    place-items: center;
-    color: color-mix(in srgb, #1a1a1a 78%, transparent);
-  }
-}
-
-.maskOff {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: var(--danger);
-  font-size: 15px;
-  font-weight: var(--weight-bold);
-  line-height: 1;
-}
-
-/* Chain toggle between the pixel and mask thumbnails. */
-.maskLink {
-  display: grid;
-  place-items: center;
-  width: 16px;
-  flex-shrink: 0;
-  color: var(--text-3);
-  transition: color var(--t-fast) var(--ease);
-
-  &[data-on="true"] {
-    color: var(--accent);
-  }
-
-  &:hover {
-    color: var(--text);
-  }
-}
-
-/* Two-line text column: name + "{kind} · {opacity}%" meta. */
-.layerMeta {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-.layerName {
-  min-width: 0;
-  font-size: 12.5px;
-  font-weight: var(--weight-medium);
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.layerItem[data-hidden="true"] .layerName {
-  color: var(--text-2);
-}
-
-.layerSub {
-  font-size: 11px;
-  color: var(--text-2);
-  text-transform: capitalize;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.layerRename {
-  min-width: 0;
-  width: 100%;
-  height: 22px;
-  padding: 0 6px;
-  font-size: 12px;
-  background: var(--surface);
-  border: 1px solid var(--accent);
-  border-radius: var(--r-sm);
-  color: var(--text);
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.layerFooter {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding-top: var(--sp-2);
-  border-top: 1px solid var(--border);
-
-  button {
-    @include ds.icon-btn(30px);
-
-    &:last-child:hover:not(:disabled) {
-      background: color-mix(in oklab, var(--danger) 14%, transparent);
-      color: var(--danger);
-    }
-
-    &:disabled {
-      opacity: 0.4;
-      cursor: default;
-    }
-
-    /* Active toggle (e.g. layers currently linked). */
-    &[data-on] {
-      color: var(--accent);
-    }
-  }
-}
-
-.footerSpacer {
-  flex: 1;
 }
 
 /* -------------------------------- History --------------------------------- */
@@ -2229,9 +2454,15 @@ input.savedName {
 }
 
 /* ---------------- Layers panel: filter row + colour labels ------------------ */
+.layerFilterBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
 .layerFilter {
   display: flex;
-  gap: var(--sp-2);
+  gap: 8px;
   align-items: center;
 }
 
@@ -2240,17 +2471,14 @@ input.savedName {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 5px;
-  height: 26px;
-  padding: 0 7px;
-  background: var(--wash);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  gap: 8px;
+  padding: 0 10px;
+  @include ds.field(32px);
+  border-radius: 10px;
   color: var(--text-3);
 
   &:focus-within {
-    border-color: var(--accent);
-    box-shadow: var(--focus-ring);
+    @include ds.field-focus;
   }
 
   input {
@@ -2259,7 +2487,7 @@ input.savedName {
     background: none;
     border: none;
     outline: none;
-    font-size: 12px;
+    font-size: 13px;
     color: var(--text);
 
     &::placeholder {

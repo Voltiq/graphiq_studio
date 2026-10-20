@@ -273,6 +273,30 @@
   }
 }
 
+/* Inline: just the value and a chevron, for a select set inside another
+   field (the colour value's format: HEX ▾ 6B8DFF). The field around it draws
+   the chrome. */
+.select[data-variant="inline"] .selectBox {
+  height: 100%;
+  gap: 2px;
+  padding: 0 2px 0 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+
+  &:hover,
+  &[aria-expanded="true"] {
+    color: var(--text);
+    border: 0;
+    box-shadow: none;
+  }
+}
+
 .selectValue {
   white-space: nowrap;
   overflow: hidden;

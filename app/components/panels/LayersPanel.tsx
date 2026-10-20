@@ -1,9 +1,20 @@
 "use client";
 
-import { type CSSProperties, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDownToLine,
+  Check,
   ChevronDown,
   ChevronRight,
   CircleDashed,
@@ -22,11 +33,11 @@ import {
   Layers as LayersIcon,
   Link2,
   Lock,
+  LockOpen,
   Move,
   Paintbrush,
   PaintBucket,
   Pencil,
-  Plus,
   FlaskConical,
   Search,
   Sparkles,
@@ -35,16 +46,16 @@ import {
   X,
 } from "lucide-react";
 import styles from "../RightDock.module.scss";
-import { EditableValue, Select, reserveCh } from "../Controls";
+import { Select } from "../Controls";
 import { cssGradient } from "../GradientControl";
-import { swatchBg } from "../../lib/color";
+import { clamp, swatchBg } from "../../lib/color";
 import { uiZoom } from "../../lib/ui-scale";
 import {
   BLEND_MODES,
   clipGroupsOf,
   EMPTY_LAYER_FILTER,
   filterLayerTree,
-  fillLabel,
+  filterMaskKey,
   findNode,
   hasAnyLock,
   isFillLayer,
@@ -66,6 +77,9 @@ import { resolveIsolation } from "../../lib/isolate";
 import { hasEnabledFx } from "../../lib/effects";
 import { hasEnabledFilters } from "../../lib/filters";
 import { clampX, clampY } from "../../lib/safeArea";
+import { registerDismissible } from "../../lib/dismiss";
+import { MENUS } from "../../lib/menus";
+import type { EngineHandle } from "../../lib/paint";
 
 type ClipRole = "none" | "base" | "member";
 interface Row {
@@ -76,20 +90,28 @@ interface Row {
   dim: boolean;
 }
 
-// Photoshop-style lock row: transparency & pixels apply to pixel layers only;
+// Photoshop-style locks: transparency & pixels apply to pixel layers only;
 // position & all apply to every kind. `all` overrides the individual three.
-const LOCK_DEFS: { flag: LockFlag; label: string; Icon: typeof Lock; pixelOnly?: boolean }[] = [
-  { flag: "transparency", label: "transparency", Icon: Grid2x2, pixelOnly: true },
-  { flag: "pixels", label: "image pixels", Icon: Paintbrush, pixelOnly: true },
-  { flag: "position", label: "position", Icon: Move },
-  { flag: "all", label: "all", Icon: Lock },
+const LOCK_DEFS: { flag: LockFlag; label: string; name: string; Icon: typeof Lock; pixelOnly?: boolean }[] = [
+  { flag: "transparency", label: "transparency", name: "Transparency", Icon: Grid2x2, pixelOnly: true },
+  { flag: "pixels", label: "image pixels", name: "Image pixels", Icon: Paintbrush, pixelOnly: true },
+  { flag: "position", label: "position", name: "Position", Icon: Move },
+  { flag: "all", label: "all", name: "Everything", Icon: Lock },
 ];
+
+/** The Layer menu's adjustment-layer commands, for the footer's "new fill or
+ *  adjustment" menu — read from the menu itself, so the two never disagree. */
+const ADJUSTMENT_COMMANDS: { label: string; action: string }[] = MENUS.flatMap((m) =>
+  m.items.flatMap((it) =>
+    "action" in it && typeof it.action === "string" && it.action.startsWith("adj-")
+      ? [{ label: it.label.replace(/^Adjustment:\s*/i, ""), action: it.action }]
+      : [],
+  ),
+);
 
 /** Background style previewing a fill spec in the layer thumbnail. */
 function fillPreview(fill: FillSpec): CSSProperties {
-  return fill.kind === "solid"
-    ? swatchBg(fill.color)
-    : { backgroundImage: cssGradient(fill.gradient.stops) };
+  return fill.kind === "solid" ? swatchBg(fill.color) : { backgroundImage: cssGradient(fill.gradient.stops) };
 }
 
 /** Human-readable summary of a layer's active locks (row indicator tooltip). */
@@ -116,11 +138,7 @@ const KIND_BY_OPTION: Record<string, LayerFilter["kind"]> = {
  *  Under an active filter, only `vis.visible` rows appear (non-matches dimmed) —
  *  and matched rows inside COLLAPSED groups are revealed so a search always
  *  shows its hits. */
-function flattenRows(
-  nodes: LayerNode[],
-  vis: { match: Set<string>; visible: Set<string> } | null,
-  depth = 0,
-): Row[] {
+function flattenRows(nodes: LayerNode[], vis: { match: Set<string>; visible: Set<string> } | null, depth = 0): Row[] {
   const role = new Map<string, ClipRole>();
   for (const g of clipGroupsOf(nodes)) {
     if (g.members.length) {
@@ -138,10 +156,278 @@ function flattenRows(
   return out;
 }
 
-export default function LayersPanel({ api }: { api: LayersApi }) {
+/** The design's mask glyph: a rounded square with a disc in it. */
+function MaskIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden>
+      <rect x="3" y="3" width="18" height="18" rx="5" />
+      <circle cx="12" cy="12" r="4.5" />
+    </svg>
+  );
+}
+
+/* ---- Thumbnails -------------------------------------------------------------
+   A row's thumbnail is the layer itself, drawn small: a 72×52 canvas (36×26 at
+   2×) fitted from the engine's own raster, and its masks likewise.
+
+   Drawing a large raster small is not free — a 12-megapixel layer is a real
+   copy to scale down — so a thumbnail is drawn when its row first appears,
+   the active layer's again a moment after the engine reports a change (a
+   stroke lands in the layer you are working on), and the rest are swept up
+   one at a time in idle moments a little later, which catches anything an
+   undo or a merge changed elsewhere without ever holding up a stroke. */
+type ThumbKind = "layer" | "mask" | "filterMask";
+
+function sourceFor(eng: EngineHandle, id: string, kind: ThumbKind): HTMLCanvasElement | null {
+  if (kind === "layer") return eng.getLayerImageCanvas(id);
+  if (kind === "mask") return eng.getMaskImageCanvas(id);
+  return eng.getMaskImageCanvas(filterMaskKey(id));
+}
+
+function drawThumb(cv: HTMLCanvasElement, src: HTMLCanvasElement | null) {
+  const ctx = cv.getContext("2d");
+  if (!ctx) return;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (!src || !src.width || !src.height) return;
+  const s = Math.min(cv.width / src.width, cv.height / src.height);
+  const w = Math.max(1, Math.round(src.width * s));
+  const h = Math.max(1, Math.round(src.height * s));
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "medium";
+  ctx.drawImage(src, Math.round((cv.width - w) / 2), Math.round((cv.height - h) / 2), w, h);
+}
+
+function useThumbnails(
+  engineRef: RefObject<EngineHandle | null> | undefined,
+  listRef: RefObject<HTMLElement | null>,
+  activeId: string | null,
+) {
+  const drawn = useRef(new WeakSet<HTMLCanvasElement>());
+  const activeRef = useRef(activeId);
+  useEffect(() => {
+    activeRef.current = activeId;
+  }, [activeId]);
+
+  const canvases = useCallback(
+    () => [...(listRef.current?.querySelectorAll<HTMLCanvasElement>("canvas[data-thumb-id]") ?? [])],
+    [listRef],
+  );
+  const draw = useCallback(
+    (cv: HTMLCanvasElement) => {
+      const eng = engineRef?.current;
+      if (!eng) return;
+      drawThumb(cv, sourceFor(eng, cv.dataset.thumbId!, cv.dataset.thumbKind as ThumbKind));
+      drawn.current.add(cv);
+    },
+    [engineRef],
+  );
+
+  // New rows (and a new document's rows) get their picture on first paint.
+  useEffect(() => {
+    for (const cv of canvases()) if (!drawn.current.has(cv)) draw(cv);
+  });
+
+  useEffect(() => {
+    if (!engineRef) return;
+    let unsub = () => {};
+    let retry = 0;
+    let soon = 0;
+    let later = 0;
+    let idle = 0;
+    let cancelled = false;
+    const ric: (cb: IdleRequestCallback) => number =
+      typeof window.requestIdleCallback === "function"
+        ? (cb) => window.requestIdleCallback(cb, { timeout: 2000 })
+        : (cb) => window.setTimeout(() => cb({ didTimeout: true, timeRemaining: () => 8 } as IdleDeadline), 50);
+    const cic = (id: number) =>
+      typeof window.cancelIdleCallback === "function" ? window.cancelIdleCallback(id) : window.clearTimeout(id);
+
+    /** One thumbnail per idle slice, until every row has been redrawn. */
+    const sweep = () => {
+      const queue = canvases();
+      const step: IdleRequestCallback = (dl) => {
+        while (queue.length && (dl.didTimeout || dl.timeRemaining() > 6)) {
+          const cv = queue.shift()!;
+          if (cv.isConnected) draw(cv);
+          if (dl.didTimeout) break;
+        }
+        idle = queue.length && !cancelled ? ric(step) : 0;
+      };
+      cic(idle);
+      idle = ric(step);
+    };
+    const onChange = () => {
+      window.clearTimeout(soon);
+      soon = window.setTimeout(() => {
+        const id = activeRef.current;
+        if (id) for (const cv of canvases()) if (cv.dataset.thumbId === id) draw(cv);
+      }, 250);
+      window.clearTimeout(later);
+      later = window.setTimeout(sweep, 1200);
+    };
+    const attach = () => {
+      if (cancelled) return;
+      const eng = engineRef.current;
+      if (eng) {
+        unsub = eng.subscribe(onChange);
+        for (const cv of canvases()) draw(cv);
+      } else retry = window.setTimeout(attach, 150);
+    };
+    attach();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(retry);
+      window.clearTimeout(soon);
+      window.clearTimeout(later);
+      cic(idle);
+      unsub();
+    };
+  }, [engineRef, canvases, draw]);
+}
+
+/* ---- A popup anchored to a point -------------------------------------------
+   The context menu, the lock list and the new-adjustment list share it: kept
+   on screen, and closed by a click away — or by Escape and a phone's back
+   gesture, both of which close the most recently registered layer first
+   (lib/dismiss.ts) before the editor would act on the document, so an Escape
+   that closes the menu does not also drop the selection. */
+function Popup({
+  at,
+  label,
+  onClose,
+  children,
+}: {
+  at: { x: number; y: number };
+  label: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  // Clamp to the viewport once the size is known, before paint. The menu is
+  // UI-scale-zoomed: gBCR is viewport px, but offsets on a zoomed element
+  // render ×z, so divide when writing them.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const z = uiZoom();
+    const { width, height } = el.getBoundingClientRect();
+    el.style.left = `${clampX(at.x, width, 8) / z}px`;
+    el.style.top = `${clampY(at.y, height, 8) / z}px`;
+  }, [at]);
+  useEffect(() => registerDismissible(onClose), [onClose]);
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <>
+      <div
+        className={styles.menuScrim}
+        onClick={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+      />
+      <div ref={ref} className={styles.layerMenu} style={{ left: at.x, top: at.y }} role="menu" aria-label={label}>
+        {children}
+      </div>
+    </>,
+    document.body,
+  );
+}
+
+/**
+ * The layer's opacity as the design draws it: a mono field reading "100 %".
+ * Drag across it to scrub (half a percent a pixel), or click and type;
+ * arrows step by 1, Shift+arrows by 10.
+ */
+function OpacityField({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const input = useRef<HTMLInputElement>(null);
+  const scrub = useRef<{ x: number; v: number; moved: boolean } | null>(null);
+  const set = (n: number) => onChange(clamp(Math.round(n), 0, 100));
+  const commit = () => {
+    if (draft !== null && draft.trim() !== "") set(Number(draft));
+    setDraft(null);
+  };
+  return (
+    <div
+      className={styles.opacityField}
+      title="Layer opacity — drag sideways, or click and type"
+      onPointerDown={(e) => {
+        if (document.activeElement === input.current || e.button !== 0) return;
+        e.preventDefault(); // no focus yet: a drag scrubs, a click types
+        e.currentTarget.setPointerCapture(e.pointerId);
+        scrub.current = { x: e.clientX, v: value, moved: false };
+      }}
+      onPointerMove={(e) => {
+        const s = scrub.current;
+        if (!s) return;
+        const dx = e.clientX - s.x;
+        if (!s.moved && Math.abs(dx) < 3) return;
+        s.moved = true;
+        set(s.v + dx / 2);
+      }}
+      onPointerUp={(e) => {
+        const s = scrub.current;
+        scrub.current = null;
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+        if (s && !s.moved) {
+          input.current?.focus();
+          input.current?.select();
+        }
+      }}
+      onPointerCancel={() => (scrub.current = null)}
+    >
+      <input
+        ref={input}
+        className={styles.opacityInput}
+        value={draft ?? String(value)}
+        inputMode="numeric"
+        aria-label="Layer opacity"
+        onFocus={() => setDraft(String(value))}
+        onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, "").slice(0, 3))}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          e.stopPropagation(); // single-letter tool shortcuts stay out
+          if (e.key === "Enter") {
+            commit();
+            input.current?.blur();
+          } else if (e.key === "Escape") {
+            setDraft(null);
+            input.current?.blur();
+          } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+            e.preventDefault();
+            const n = clamp(Number(draft ?? value) + (e.key === "ArrowUp" ? 1 : -1) * (e.shiftKey ? 10 : 1), 0, 100);
+            setDraft(String(n));
+            set(n);
+          }
+        }}
+      />
+      <span className={styles.opacityFix}>%</span>
+    </div>
+  );
+}
+
+export default function LayersPanel({
+  api,
+  engineRef,
+  onCommand,
+  filterOpen = false,
+  onFilterOpen,
+}: {
+  api: LayersApi;
+  /** The paint engine, for the rows' thumbnails (none without it). */
+  engineRef?: RefObject<EngineHandle | null>;
+  /** Runs a menu command: the footer's adjustment-layer list. */
+  onCommand?: (id: string) => void;
+  /** The filter row, opened from the panel header's search button. */
+  filterOpen?: boolean;
+  onFilterOpen?: (open: boolean) => void;
+}) {
   const { layers, activeLayerId, selectedLayerIds } = api;
   const active = activeLayerId ? findNode(layers, activeLayerId) : null;
   const selected = new Set(selectedLayerIds);
+  const listRef = useRef<HTMLUListElement>(null);
+  useThumbnails(engineRef, listRef, activeLayerId);
 
   const [dragId, setDragId] = useState<string | null>(null);
 
@@ -246,24 +532,16 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number; node: LayerNode } | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // Keep the menu fully on screen: clamp to the viewport once its size is known.
-  // Runs before paint, so the corrected position is what the user actually sees.
-  // The menu is UI-scale-zoomed: gBCR is viewport px already, but style offsets
-  // on a zoomed element render ×z, so divide when writing them.
-  useLayoutEffect(() => {
-    if (!menu) return;
-    const el = menuRef.current;
-    if (!el) return;
-    const margin = 8;
-    const z = uiZoom();
-    const { width, height } = el.getBoundingClientRect();
-    const left = clampX(menu.x, width, margin);
-    const top = clampY(menu.y, height, margin);
-    el.style.left = `${left / z}px`;
-    el.style.top = `${top / z}px`;
-  }, [menu]);
+  const [lockAt, setLockAt] = useState<{ x: number; y: number } | null>(null);
+  const [adjustAt, setAdjustAt] = useState<{ x: number; y: number } | null>(null);
+  const closeMenu = () => setMenu(null);
+  const closeLock = () => setLockAt(null);
+  const closeAdjust = () => setAdjustAt(null);
+  /** Open a popup under (or, kept on screen, near) the button that asked. */
+  const below = (e: React.MouseEvent<HTMLElement>, alignRight = false) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return { x: alignRight ? r.right - 220 : r.left, y: r.bottom + 6 };
+  };
 
   const startRename = (n: LayerNode) => {
     setEditingId(n.id);
@@ -296,23 +574,35 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
   // ---- Search / filter row (name + kind + colour label) ---------------------
   const [filter, setFilter] = useState<LayerFilter>(EMPTY_LAYER_FILTER);
   const filterActive = layerFilterActive(filter);
+  // Closing the row clears the filter: rows hidden by a filter you can no
+  // longer see would read as layers gone missing.
+  const [prevOpen, setPrevOpen] = useState(filterOpen);
+  if (filterOpen !== prevOpen) {
+    setPrevOpen(filterOpen);
+    if (!filterOpen) setFilter(EMPTY_LAYER_FILTER);
+  }
   const vis = useMemo(() => filterLayerTree(layers, filter), [layers, filter]);
   const toggleLabelFilter = (l: LayerLabel) =>
     setFilter((f) => ({
       ...f,
       labels: f.labels.includes(l) ? f.labels.filter((x) => x !== l) : [...f.labels, l],
     }));
-  // Any labels in use? (the colour-dot strip only appears when relevant)
-  const anyLabels = useMemo(() => {
-    let found = false;
+  // Which labels and whether any group are in use (the label dots and the
+  // caret column only appear when they mean something).
+  const { anyLabels, anyGroups } = useMemo(() => {
+    let labels = false;
+    let groups = false;
     const walk = (ns: LayerNode[]) => {
       for (const n of ns) {
-        if (n.label) found = true;
-        if (n.type === "group") walk(n.children);
+        if (n.label) labels = true;
+        if (n.type === "group") {
+          groups = true;
+          walk(n.children);
+        }
       }
     };
     walk(layers);
-    return found;
+    return { anyLabels: labels, anyGroups: groups };
   }, [layers]);
 
   // Apply a colour label to every selected node (menu acts on the selection).
@@ -342,134 +632,134 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
 
   // Link button: bind 2+ selected layers, or unlink when everything selected is
   // already linked (so a single linked layer can be unlinked here too).
-  const selectedNodes = selectedLayerIds
-    .map((id) => findNode(layers, id))
-    .filter((n): n is LayerNode => !!n);
+  const selectedNodes = selectedLayerIds.map((id) => findNode(layers, id)).filter((n): n is LayerNode => !!n);
   const allSelLinked = selectedNodes.length > 0 && selectedNodes.every((n) => isLinked(n));
   const canToggleLink = selectedLayerIds.length >= 2 || allSelLinked;
 
+  /** The four lock toggles for a node, as rows of a popup (lock button, context menu). */
+  const lockItems = (n: LayerNode) =>
+    LOCK_DEFS.map(({ flag, label, name, Icon, pixelOnly }) => {
+      const allOn = !!n.locks?.all;
+      const rawOn = !!n.locks?.[flag];
+      const na = pixelOnly && n.type !== "layer"; // no pixels to lock
+      const on = flag === "all" ? allOn : allOn || rawOn;
+      // Individual flags are frozen (but shown locked) while Lock-all is on.
+      const disabled = na || (flag !== "all" && allOn);
+      return (
+        <button
+          key={flag}
+          type="button"
+          role="menuitemcheckbox"
+          aria-checked={on}
+          className={styles.lockItem}
+          data-on={on}
+          disabled={disabled}
+          title={
+            na
+              ? `Lock ${label} applies to pixel layers only`
+              : flag === "all"
+                ? on
+                  ? "Unlock all"
+                  : "Lock all"
+                : `${on ? "Unlock" : "Lock"} ${label}`
+          }
+          onClick={() => api.setLock(n.id, flag, flag === "all" ? !allOn : !rawOn)}
+        >
+          <Icon size={13} />
+          <span>{name}</span>
+          <span className={styles.lockCheck}>{on && <Check size={13} />}</span>
+        </button>
+      );
+    });
+
+  const anyLockOn = !!active && hasAnyLock(active);
+
   return (
     <div className={styles.layers}>
-      {active && (
-        <div className={styles.layerControls}>
-          <Select
-            block
-            options={BLEND_MODES}
-            value={active.blend}
-            onChange={(s) => api.update(active.id, { blend: s })}
-          />
-          <div className={styles.opacity}>
-            <span className={styles.opacityLabel}>Opacity</span>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={active.opacity}
-              onChange={(e) => api.update(active.id, { opacity: Number(e.target.value) })}
-              style={{ "--pct": `${active.opacity}%` } as React.CSSProperties}
-              aria-label="Layer opacity"
-            />
-            <EditableValue
-              className={styles.opacityValue}
-              value={active.opacity}
-              min={0}
-              max={100}
-              display={`${active.opacity}%`}
-              reserve={reserveCh(0, 100, 1, "%")}
-              onCommit={(n) => api.update(active.id, { opacity: n })}
-              ariaLabel="Layer opacity percentage"
+      {filterOpen && (
+        <div className={styles.layerFilterBlock}>
+          <div className={styles.layerFilter}>
+            <label className={styles.layerFilterBox}>
+              <Search size={14} />
+              <input
+                autoFocus
+                value={filter.query}
+                placeholder="Filter layers…"
+                aria-label="Filter layers by name"
+                onChange={(e) => setFilter((f) => ({ ...f, query: e.target.value }))}
+                onKeyDown={(e) => {
+                  e.stopPropagation(); // keep single-letter tool shortcuts out
+                  if (e.key === "Escape") {
+                    if (filterActive) setFilter(EMPTY_LAYER_FILTER);
+                    else onFilterOpen?.(false);
+                  }
+                }}
+              />
+              {filterActive && (
+                <button
+                  type="button"
+                  onClick={() => setFilter(EMPTY_LAYER_FILTER)}
+                  aria-label="Clear layer filter"
+                  title="Clear filter"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </label>
+            <Select
+              options={[...KIND_OPTIONS]}
+              value={KIND_OPTIONS.find((o) => KIND_BY_OPTION[o] === filter.kind) ?? "All kinds"}
+              onChange={(o) => setFilter((f) => ({ ...f, kind: KIND_BY_OPTION[o] ?? "all" }))}
             />
           </div>
-          <div className={styles.lockRow} role="group" aria-label="Layer locks">
-            <span className={styles.lockLabel}>Lock</span>
-            <div className={styles.lockBtns}>
-              {LOCK_DEFS.map(({ flag, label, Icon, pixelOnly }) => {
-                const allOn = !!active.locks?.all;
-                const rawOn = !!active.locks?.[flag];
-                const na = pixelOnly && active.type !== "layer"; // no pixels to lock
-                const on = flag === "all" ? allOn : allOn || rawOn;
-                // Individual flags are frozen (but shown locked) while Lock-all is on.
-                const disabled = na || (flag !== "all" && allOn);
-                return (
-                  <button
-                    key={flag}
-                    type="button"
-                    className={styles.lockBtn}
-                    data-on={on}
-                    aria-pressed={on}
-                    disabled={disabled}
-                    title={
-                      na
-                        ? `Lock ${label} applies to pixel layers only`
-                        : flag === "all"
-                          ? on
-                            ? "Unlock all"
-                            : "Lock all"
-                          : `${on ? "Unlock" : "Lock"} ${label}`
-                    }
-                    onClick={() => api.setLock(active.id, flag, flag === "all" ? !allOn : !rawOn)}
-                  >
-                    <Icon size={13} />
-                  </button>
-                );
-              })}
+          {(anyLabels || filter.labels.length > 0) && (
+            <div className={styles.labelFilterRow} aria-label="Filter by colour label">
+              {LAYER_LABELS.map((l) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  className={styles.labelFilterDot}
+                  data-active={filter.labels.includes(l.id)}
+                  style={{ background: l.color }}
+                  title={`Show ${l.name.toLowerCase()}-labelled layers`}
+                  aria-pressed={filter.labels.includes(l.id)}
+                  onClick={() => toggleLabelFilter(l.id)}
+                />
+              ))}
             </div>
-          </div>
+          )}
         </div>
       )}
 
-      <div className={styles.layerFilter}>
-        <div className={styles.layerFilterBox}>
-          <Search size={12} />
-          <input
-            value={filter.query}
-            placeholder="Filter layers…"
-            aria-label="Filter layers by name"
-            onChange={(e) => setFilter((f) => ({ ...f, query: e.target.value }))}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setFilter(EMPTY_LAYER_FILTER);
-              e.stopPropagation(); // keep single-letter tool shortcuts out
-            }}
-          />
-          {filterActive && (
-            <button
-              type="button"
-              onClick={() => setFilter(EMPTY_LAYER_FILTER)}
-              aria-label="Clear layer filter"
-              title="Clear filter"
-            >
-              <X size={11} />
-            </button>
-          )}
-        </div>
-        <Select
-          options={[...KIND_OPTIONS]}
-          value={KIND_OPTIONS.find((o) => KIND_BY_OPTION[o] === filter.kind) ?? "All kinds"}
-          onChange={(o) => setFilter((f) => ({ ...f, kind: KIND_BY_OPTION[o] ?? "all" }))}
-        />
-      </div>
-      {(anyLabels || filter.labels.length > 0) && (
-        <div className={styles.labelFilterRow} aria-label="Filter by colour label">
-          {LAYER_LABELS.map((l) => (
-            <button
-              key={l.id}
-              type="button"
-              className={styles.labelFilterDot}
-              data-active={filter.labels.includes(l.id)}
-              style={{ background: l.color }}
-              title={`Show ${l.name.toLowerCase()}-labelled layers`}
-              aria-pressed={filter.labels.includes(l.id)}
-              onClick={() => toggleLabelFilter(l.id)}
-            />
-          ))}
+      {active && (
+        <div className={styles.layerControls}>
+          <div className={styles.layerBlend}>
+            <Select block options={BLEND_MODES} value={active.blend} onChange={(s) => api.update(active.id, { blend: s })} />
+          </div>
+          <OpacityField value={active.opacity} onChange={(n) => api.update(active.id, { opacity: n })} />
+          <button
+            type="button"
+            className={styles.lockButton}
+            data-on={anyLockOn || undefined}
+            aria-haspopup="menu"
+            aria-expanded={!!lockAt}
+            aria-label={anyLockOn ? `Locks: ${lockSummary(active)}` : "Lock the layer"}
+            title={anyLockOn ? lockSummary(active) : "Lock transparency, pixels or position"}
+            onClick={(e) => setLockAt(lockAt ? null : below(e, true))}
+          >
+            {anyLockOn ? <Lock size={15} /> : <LockOpen size={15} />}
+          </button>
         </div>
       )}
 
       {rows.length > 0 ? (
-        <ul className={styles.layerList}>
+        <ul ref={listRef} className={styles.layerList} data-carets={anyGroups || undefined}>
           {rows.map(({ node: l, depth, clip, dim }) => {
             const isGroup = l.type === "group";
             const isAdjustment = l.type === "adjustment";
+            const isText = l.type === "layer" && l.vector?.type === "text";
+            const masked = !!(l.mask || l.filterMask);
+            const pixelsActive = masked ? l.id === activeLayerId && api.maskSurface === "pixels" : undefined;
             return (
               <li
                 key={l.id}
@@ -480,7 +770,6 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                 data-dim={dim || (isolatedOut ? isolatedOut.has(l.id) : false)}
                 data-dragging={l.id === dragId}
                 data-layer-id={l.id}
-                style={{ paddingLeft: 8 + depth * 14 + (clip === "member" ? 14 : 0) } as React.CSSProperties}
                 draggable={editingId !== l.id && !filterActive}
                 onPointerDown={(e) => onRowPointerDown(e, l.id)}
                 onClick={(e) => onRowClick(e, l.id)}
@@ -506,28 +795,6 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                   setDragId(null);
                 }}
               >
-                {clip === "member" && (
-                  <CornerDownRight
-                    size={12}
-                    aria-label="Clipped to layer below"
-                    style={{ color: "var(--text-3)", flexShrink: 0 }}
-                  />
-                )}
-                {isGroup ? (
-                  <button
-                    type="button"
-                    className={styles.layerCaret}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      api.update(l.id, { expanded: !l.expanded });
-                    }}
-                    aria-label={l.expanded ? "Collapse group" : "Expand group"}
-                  >
-                    {l.expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                  </button>
-                ) : (
-                  <span className={styles.layerCaret} />
-                )}
                 <button
                   type="button"
                   className={styles.layerEye}
@@ -536,155 +803,182 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                     api.update(l.id, { visible: !l.visible });
                   }}
                   aria-label={l.visible ? "Hide layer" : "Show layer"}
+                  aria-pressed={!l.visible}
                 >
-                  {l.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                  {l.visible ? <Eye size={16} /> : <EyeOff size={16} />}
                 </button>
-                {isGroup ? (
-                  <span
-                    className={styles.layerGroupIcon}
-                    data-active={l.mask || l.filterMask ? l.id === activeLayerId && api.maskSurface === "pixels" : undefined}
-                  >
-                    {l.expanded ? <FolderOpen size={16} /> : <Folder size={16} />}
-                  </span>
-                ) : isAdjustment ? (
-                  <span className={styles.layerGroupIcon} title="Adjustment layer">
-                    <Contrast size={16} />
-                  </span>
-                ) : (
-                  <span
-                    className={styles.layerThumb}
-                    data-active={l.mask || l.filterMask ? l.id === activeLayerId && api.maskSurface === "pixels" : undefined}
-                    style={isFillLayer(l) ? fillPreview(l.fill) : undefined}
-                    title={isFillLayer(l) ? "Fill layer — double-click to edit" : undefined}
-                    onDoubleClick={
-                      isFillLayer(l)
-                        ? (e) => {
-                            e.stopPropagation();
-                            api.editFill(l.id);
-                          }
-                        : undefined
-                    }
-                    onClick={
-                      l.mask || l.filterMask
-                        ? (e) => {
-                            e.stopPropagation();
-                            api.select(l.id, "replace");
-                            api.chooseSurface(l.id, "pixels");
-                          }
-                        : undefined
-                    }
-                  />
-                )}
-                {isAdjustment && l.type === "adjustment" && (
-                  <button
-                    type="button"
-                    className={styles.maskLink}
-                    data-on={l.clipped}
-                    title={
-                      l.clipped
-                        ? "Clipped to the layer below — click to affect all layers below"
-                        : "Affects all layers below — click to clip to the layer directly below"
-                    }
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      api.setAdjustmentClipped(l.id, !l.clipped);
-                    }}
-                  >
-                    <CornerDownRight size={12} />
-                  </button>
-                )}
-                {l.mask && (
-                  <>
-                    <button
-                      type="button"
-                      className={styles.maskLink}
-                      data-on={l.mask.linked}
-                      title={l.mask.linked ? "Mask linked — click to unlink" : "Mask unlinked — click to link"}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        api.toggleMaskLinked(l.id);
-                      }}
+                <div
+                  className={styles.layerMain}
+                  style={{ paddingLeft: 6 + depth * 14 + (clip === "member" ? 14 : 0) }}
+                >
+                  {anyGroups &&
+                    (isGroup ? (
+                      <button
+                        type="button"
+                        className={styles.layerCaret}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          api.update(l.id, { expanded: !l.expanded });
+                        }}
+                        aria-label={l.expanded ? "Collapse group" : "Expand group"}
+                      >
+                        {l.expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </button>
+                    ) : (
+                      <span className={styles.layerCaret} />
+                    ))}
+                  {clip === "member" && (
+                    <CornerDownRight
+                      size={12}
+                      className={styles.clipElbow}
+                      aria-label="Clipped to layer below"
+                    />
+                  )}
+                  {isGroup ? (
+                    <span className={styles.layerTile} data-active={pixelsActive} title="Group">
+                      {l.expanded ? <FolderOpen size={15} /> : <Folder size={15} />}
+                    </span>
+                  ) : isAdjustment ? (
+                    <span className={styles.layerTile} data-kind="adjustment" title="Adjustment layer">
+                      <Contrast size={15} />
+                    </span>
+                  ) : (
+                    <span
+                      className={styles.layerThumb}
+                      data-kind={isFillLayer(l) ? "fill" : isText ? "text" : "pixels"}
+                      data-active={pixelsActive}
+                      style={isFillLayer(l) ? fillPreview(l.fill) : undefined}
+                      title={
+                        isFillLayer(l)
+                          ? "Fill layer — double-click to edit"
+                          : masked
+                            ? "The layer's pixels — click to paint them"
+                            : undefined
+                      }
+                      onDoubleClick={
+                        isFillLayer(l)
+                          ? (e) => {
+                              e.stopPropagation();
+                              api.editFill(l.id);
+                            }
+                          : undefined
+                      }
+                      onClick={
+                        masked
+                          ? (e) => {
+                              e.stopPropagation();
+                              api.select(l.id, "replace");
+                              api.chooseSurface(l.id, "pixels");
+                            }
+                          : undefined
+                      }
                     >
-                      {l.mask.linked ? <Link2 size={12} /> : <Unlink2 size={12} />}
-                    </button>
+                      {isText ? (
+                        <span className={styles.thumbGlyph}>T</span>
+                      ) : isFillLayer(l) ? null : (
+                        <canvas width={72} height={52} data-thumb-id={l.id} data-thumb-kind="layer" />
+                      )}
+                    </span>
+                  )}
+                  {l.mask && (
+                    <>
+                      <button
+                        type="button"
+                        className={styles.maskLink}
+                        data-on={l.mask.linked}
+                        title={l.mask.linked ? "Mask linked — click to unlink" : "Mask unlinked — click to link"}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          api.toggleMaskLinked(l.id);
+                        }}
+                      >
+                        {l.mask.linked ? <Link2 size={11} /> : <Unlink2 size={11} />}
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.maskThumb}
+                        data-active={l.id === activeLayerId && api.maskSurface === "mask"}
+                        data-disabled={!l.mask.enabled}
+                        data-viewing={api.maskViewId === l.id || undefined}
+                        title={
+                          l.mask.enabled
+                            ? api.maskViewId === l.id
+                              ? "Viewing the mask — Alt-click (or click a thumbnail) to return"
+                              : "Layer mask — click to paint it, Alt-click to view it on the canvas, Shift-click to disable"
+                            : "Layer mask (disabled) — Shift-click to enable"
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (e.shiftKey) {
+                            api.toggleMaskEnabled(l.id);
+                            return;
+                          }
+                          if (e.altKey) {
+                            api.select(l.id, "replace");
+                            api.toggleMaskView(l.id);
+                            return;
+                          }
+                          api.select(l.id, "replace");
+                          api.chooseSurface(l.id, "mask");
+                        }}
+                      >
+                        <span className={styles.maskChip}>
+                          <canvas width={72} height={52} data-thumb-id={l.id} data-thumb-kind="mask" />
+                          {!l.mask.enabled && <span className={styles.maskOff}>✕</span>}
+                        </span>
+                      </button>
+                    </>
+                  )}
+                  {l.type !== "adjustment" && l.filterMask && (
                     <button
                       type="button"
                       className={styles.maskThumb}
-                      data-active={l.id === activeLayerId && api.maskSurface === "mask"}
-                      data-disabled={!l.mask.enabled}
-                      data-viewing={api.maskViewId === l.id || undefined}
+                      data-kind="filter"
+                      data-active={l.id === activeLayerId && api.maskSurface === "filterMask"}
+                      data-disabled={!l.filterMask.enabled}
                       title={
-                        l.mask.enabled
-                          ? api.maskViewId === l.id
-                            ? "Viewing the mask — Alt-click (or click a thumbnail) to return"
-                            : "Layer mask — click to paint it, Alt-click to view it on the canvas, Shift-click to disable"
-                          : "Layer mask (disabled) — Shift-click to enable"
+                        l.filterMask.enabled
+                          ? "Filter mask (confines the smart filters) — click to paint it, Shift-click to disable"
+                          : "Filter mask (disabled) — Shift-click to enable"
                       }
                       onClick={(e) => {
                         e.stopPropagation();
                         if (e.shiftKey) {
-                          api.toggleMaskEnabled(l.id);
-                          return;
-                        }
-                        if (e.altKey) {
-                          api.select(l.id, "replace");
-                          api.toggleMaskView(l.id);
+                          api.toggleFilterMaskEnabled(l.id);
                           return;
                         }
                         api.select(l.id, "replace");
-                        api.chooseSurface(l.id, "mask");
+                        api.chooseSurface(l.id, "filterMask");
                       }}
                     >
-                      {!l.mask.enabled && <span className={styles.maskOff}>✕</span>}
+                      <span className={styles.maskChip}>
+                        <canvas width={72} height={52} data-thumb-id={l.id} data-thumb-kind="filterMask" />
+                        {l.filterMask.enabled ? (
+                          <FlaskConical size={11} className={styles.maskBadge} />
+                        ) : (
+                          <span className={styles.maskOff}>✕</span>
+                        )}
+                      </span>
                     </button>
-                  </>
-                )}
-                {l.type !== "adjustment" && l.filterMask && (
-                  <button
-                    type="button"
-                    className={styles.maskThumb}
-                    data-kind="filter"
-                    data-active={l.id === activeLayerId && api.maskSurface === "filterMask"}
-                    data-disabled={!l.filterMask.enabled}
-                    title={
-                      l.filterMask.enabled
-                        ? "Filter mask (confines the smart filters) — click to paint it, Shift-click to disable"
-                        : "Filter mask (disabled) — Shift-click to enable"
-                    }
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (e.shiftKey) {
-                        api.toggleFilterMaskEnabled(l.id);
-                        return;
-                      }
-                      api.select(l.id, "replace");
-                      api.chooseSurface(l.id, "filterMask");
-                    }}
-                  >
-                    {l.filterMask.enabled ? (
-                      <FlaskConical size={13} />
-                    ) : (
-                      <span className={styles.maskOff}>✕</span>
-                    )}
-                  </button>
-                )}
-                {l.label && (
-                  <span
-                    className={styles.labelDot}
-                    style={{ background: labelColor(l.label) }}
-                    title={`${LAYER_LABELS.find((x) => x.id === l.label)?.name ?? ""} label`}
-                  />
-                )}
-                <div className={styles.layerMeta}>
+                  )}
+                  {l.label && (
+                    <span
+                      className={styles.labelDot}
+                      style={{ background: labelColor(l.label) }}
+                      title={`${LAYER_LABELS.find((x) => x.id === l.label)?.name ?? ""} label`}
+                    />
+                  )}
                   {editingId === l.id ? (
                     <input
                       className={styles.layerRename}
                       autoFocus
                       value={draftName}
+                      aria-label="Layer name"
                       onChange={(e) => setDraftName(e.target.value)}
                       onClick={(e) => e.stopPropagation()}
                       onBlur={commitRename}
                       onKeyDown={(e) => {
+                        e.stopPropagation();
                         if (e.key === "Enter") commitRename();
                         if (e.key === "Escape") setEditingId(null);
                       }}
@@ -693,7 +987,7 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                     <span
                       className={styles.layerName}
                       style={clip === "base" ? { textDecoration: "underline" } : undefined}
-                      title={clip === "base" ? "Clip-group base" : undefined}
+                      title={clip === "base" ? "Clip-group base" : "Double-click to rename"}
                       onDoubleClick={(e) => {
                         e.stopPropagation();
                         startRename(l);
@@ -702,64 +996,82 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
                       {l.name}
                     </span>
                   )}
-                  <span className={styles.layerSub}>
-                    {isAdjustment
-                      ? "Adjustment"
-                      : isGroup
-                        ? "Group"
-                        : isFillLayer(l)
-                          ? fillLabel(l.fill)
-                          : "Layer"}{" "}
-                    · {l.opacity}%
+                  <span className={styles.layerBadges}>
+                    {l.opacity < 100 && (
+                      <span className={styles.layerOpacity} title={`Opacity ${l.opacity}%`}>
+                        {l.opacity}%
+                      </span>
+                    )}
+                    {isAdjustment && (
+                      <button
+                        type="button"
+                        className={styles.layerBadge}
+                        data-on={l.clipped}
+                        title={
+                          l.clipped
+                            ? "Clipped to the layer below — click to affect all layers below"
+                            : "Affects all layers below — click to clip to the layer directly below"
+                        }
+                        aria-label={l.clipped ? "Clipped to the layer below" : "Clip to the layer below"}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          api.setAdjustmentClipped(l.id, !l.clipped);
+                        }}
+                      >
+                        <CornerDownRight size={12} />
+                      </button>
+                    )}
+                    {isLinked(l) && (
+                      <button
+                        type="button"
+                        className={styles.layerBadge}
+                        data-on
+                        title="Linked — moves with its link-mates; click to unlink"
+                        aria-label="Linked layer — click to unlink"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          api.unlinkLayer(l.id);
+                        }}
+                      >
+                        <Link2 size={12} />
+                      </button>
+                    )}
+                    {!isAdjustment && hasEnabledFilters(l.filters) && (
+                      <button
+                        type="button"
+                        className={styles.layerBadge}
+                        title="Smart filters — click to edit"
+                        aria-label="Smart filters"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          api.openFilters(l.id);
+                        }}
+                      >
+                        <FlaskConical size={12} />
+                      </button>
+                    )}
+                    {!isAdjustment && hasEnabledFx(l.effects) && (
+                      <button
+                        type="button"
+                        className={styles.layerBadge}
+                        data-fx
+                        title="Layer effects — click to edit"
+                        aria-label="Layer effects"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          api.openLayerStyle(l.id);
+                        }}
+                      >
+                        fx
+                      </button>
+                    )}
+                    {hasAnyLock(l) && (
+                      <span className={styles.rowLock} title={lockSummary(l)} aria-label={lockSummary(l)} role="img">
+                        <Lock size={13} />
+                      </span>
+                    )}
                   </span>
                 </div>
-                {hasAnyLock(l) && (
-                  <span className={styles.rowLock} title={lockSummary(l)} aria-label={lockSummary(l)}>
-                    <Lock size={11} />
-                  </span>
-                )}
-                {isLinked(l) && (
-                  <button
-                    type="button"
-                    className={styles.rowLink}
-                    title="Linked — moves with its link-mates; click to unlink"
-                    aria-label="Linked layer — click to unlink"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      api.unlinkLayer(l.id);
-                    }}
-                  >
-                    <Link2 size={12} />
-                  </button>
-                )}
-                {!isAdjustment && hasEnabledFilters(l.filters) && (
-                  <button
-                    type="button"
-                    className={styles.maskLink}
-                    data-on={true}
-                    title="Smart filters — click to edit"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      api.openFilters(l.id);
-                    }}
-                  >
-                    <FlaskConical size={13} />
-                  </button>
-                )}
-                {!isAdjustment && hasEnabledFx(l.effects) && (
-                  <button
-                    type="button"
-                    className={styles.maskLink}
-                    data-on={true}
-                    title="Layer effects — click to edit"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      api.openLayerStyle(l.id);
-                    }}
-                  >
-                    <Sparkles size={13} />
-                  </button>
-                )}
               </li>
             );
           })}
@@ -770,9 +1082,7 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
             <Search size={20} />
           </span>
           <p>No layers match</p>
-          <span className={styles.layersEmptyHint}>
-            Adjust the filter above, or clear it to see every layer.
-          </span>
+          <span className={styles.layersEmptyHint}>Adjust the filter above, or clear it to see every layer.</span>
         </div>
       ) : (
         <div className={styles.layersEmpty}>
@@ -780,15 +1090,58 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
             <LayersIcon size={20} />
           </span>
           <p>No layers yet</p>
-          <span className={styles.layersEmptyHint}>
-            Create a layer to start building this canvas.
-          </span>
+          <span className={styles.layersEmptyHint}>Create a layer to start building this canvas.</span>
         </div>
       )}
 
       <div className={styles.layerFooter}>
-        <button type="button" title="New layer" onClick={api.add}>
-          <Plus size={15} />
+        <button
+          type="button"
+          title={allSelLinked ? "Unlink layers" : "Link layers — move them together without grouping"}
+          aria-label={allSelLinked ? "Unlink layers" : "Link layers"}
+          data-on={allSelLinked || undefined}
+          disabled={!canToggleLink}
+          onClick={() => api.toggleLinkSelected()}
+        >
+          {allSelLinked ? <Unlink2 size={16} /> : <Link2 size={16} />}
+        </button>
+        <button
+          type="button"
+          className={styles.footerFx}
+          title="Layer style…"
+          aria-label="Layer effects"
+          disabled={!activeLayerId || active?.type === "adjustment"}
+          onClick={() => activeLayerId && api.openLayerStyle(activeLayerId)}
+        >
+          fx
+        </button>
+        <button
+          type="button"
+          title={active?.mask ? "Layer already has a mask" : "Add layer mask (reveal all)"}
+          aria-label="Add layer mask"
+          disabled={!activeLayerId || !!active?.mask}
+          onClick={() => api.addMask("reveal")}
+        >
+          <MaskIcon />
+        </button>
+        <button
+          type="button"
+          title="New fill or adjustment layer"
+          aria-label="New fill or adjustment layer"
+          aria-haspopup="menu"
+          aria-expanded={!!adjustAt}
+          onClick={(e) => setAdjustAt(adjustAt ? null : below(e))}
+        >
+          <Contrast size={16} />
+        </button>
+        <button
+          type="button"
+          title={multi ? "Duplicate layers" : "Duplicate layer"}
+          aria-label={multi ? "Duplicate layers" : "Duplicate layer"}
+          disabled={!selectedLayerIds.length}
+          onClick={() => api.duplicate()}
+        >
+          <Copy size={16} />
         </button>
         <button
           type="button"
@@ -801,230 +1154,232 @@ export default function LayersPanel({ api }: { api: LayersApi }) {
           data-on={api.isolatedIds ? true : undefined}
           onClick={() => api.toggleIsolate()}
         >
-          {api.isolatedIds ? <ScanEye size={15} /> : <Focus size={15} />}
+          {api.isolatedIds ? <ScanEye size={16} /> : <Focus size={16} />}
         </button>
         <button
           type="button"
-          title={active?.type === "group" ? "Ungroup" : "Group"}
-          disabled={!activeLayerId}
-          onClick={() => {
-            if (active?.type === "group") api.ungroup(active.id);
-            else api.group();
-          }}
-        >
-          <FolderPlus size={15} />
-        </button>
-        <button
-          type="button"
-          title={
-            allSelLinked
-              ? "Unlink layers"
-              : "Link layers — move them together without grouping"
-          }
-          data-on={allSelLinked || undefined}
-          disabled={!canToggleLink}
-          onClick={() => api.toggleLinkSelected()}
-        >
-          {allSelLinked ? <Unlink2 size={15} /> : <Link2 size={15} />}
-        </button>
-        <button
-          type="button"
-          title={active?.mask ? "Layer already has a mask" : "Add layer mask (reveal all)"}
-          disabled={!activeLayerId || !!active?.mask}
-          onClick={() => api.addMask("reveal")}
-        >
-          <CircleDashed size={15} />
-        </button>
-        <button
-          type="button"
-          title="Layer style…"
-          disabled={!activeLayerId || active?.type === "adjustment"}
-          onClick={() => activeLayerId && api.openLayerStyle(activeLayerId)}
-        >
-          <Sparkles size={15} />
-        </button>
-        <span className={styles.footerSpacer} />
-        <button
-          type="button"
-          title="Delete layer"
+          className={styles.footerDanger}
+          title={multi ? "Delete layers" : "Delete layer"}
+          aria-label={multi ? "Delete layers" : "Delete layer"}
           disabled={!selectedLayerIds.length}
           onClick={() => api.remove()}
         >
-          <Trash2 size={15} />
+          <Trash2 size={16} />
         </button>
       </div>
 
-      {menu &&
-        typeof document !== "undefined" &&
-        createPortal(
-          <>
-          <div
-            className={styles.menuScrim}
-            onClick={() => setMenu(null)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setMenu(null);
+      {lockAt && active && (
+        <Popup at={lockAt} label="Layer locks" onClose={closeLock}>
+          <span className={styles.menuHead}>Lock</span>
+          {lockItems(active)}
+        </Popup>
+      )}
+
+      {adjustAt && (
+        <Popup at={adjustAt} label="New fill or adjustment layer" onClose={closeAdjust}>
+          <span className={styles.menuHead}>Fill layer</span>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              closeAdjust();
+              api.addFill("solid");
             }}
-          />
-          <div ref={menuRef} className={styles.layerMenu} style={{ left: menu.x, top: menu.y }} role="menu">
-            <button type="button" onClick={() => run(() => startRename(menu.node))}>
-              <Pencil size={13} /> Rename
-            </button>
-            <div className={styles.menuLabelRow} aria-label="Colour label">
-              <button
-                type="button"
-                className={styles.menuLabelNone}
-                data-active={!menu.node.label}
-                title="No label"
-                onClick={() => run(() => applyLabel(undefined))}
-              >
-                <X size={10} />
-              </button>
-              {LAYER_LABELS.map((l) => (
-                <button
-                  key={l.id}
-                  type="button"
-                  className={styles.menuLabelDot}
-                  data-active={menu.node.label === l.id}
-                  style={{ background: l.color }}
-                  title={`${l.name} label${multi ? " (all selected)" : ""}`}
-                  onClick={() => run(() => applyLabel(l.id))}
-                />
-              ))}
-            </div>
-            <div className={styles.menuLockRow} aria-label="Lock">
-              <span className={styles.menuLockLabel}>Lock</span>
-              {LOCK_DEFS.map(({ flag, label, Icon, pixelOnly }) => {
-                // Read the live node so toggles stay in sync without closing the menu.
-                const node = findNode(layers, menu.node.id) ?? menu.node;
-                const allOn = !!node.locks?.all;
-                const rawOn = !!node.locks?.[flag];
-                const na = pixelOnly && node.type !== "layer";
-                const on = flag === "all" ? allOn : allOn || rawOn;
-                const disabled = na || (flag !== "all" && allOn);
-                return (
+          >
+            <PaintBucket size={13} /> Solid colour…
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              closeAdjust();
+              api.addFill("gradient");
+            }}
+          >
+            <PaintBucket size={13} /> Gradient…
+          </button>
+          {onCommand && (
+            <>
+              <div className={styles.menuSep} />
+              <span className={styles.menuHead}>Adjustment layer</span>
+              <div className={styles.menuScroll}>
+                {ADJUSTMENT_COMMANDS.map((c) => (
                   <button
-                    key={flag}
+                    key={c.action}
                     type="button"
-                    className={styles.lockBtn}
-                    data-on={on}
-                    disabled={disabled}
-                    title={
-                      na
-                        ? `Lock ${label} applies to pixel layers only`
-                        : flag === "all"
-                          ? on
-                            ? "Unlock all"
-                            : "Lock all"
-                          : `${on ? "Unlock" : "Lock"} ${label}`
-                    }
-                    onClick={() => api.setLock(node.id, flag, flag === "all" ? !allOn : !rawOn)}
+                    role="menuitem"
+                    onClick={() => {
+                      closeAdjust();
+                      onCommand(c.action);
+                    }}
                   >
-                    <Icon size={12} />
+                    <Contrast size={13} /> {c.label.charAt(0).toUpperCase() + c.label.slice(1)}
                   </button>
-                );
-              })}
-            </div>
-            <button type="button" onClick={() => run(api.duplicate)}>
-              <Copy size={13} /> {multi ? "Duplicate layers" : "Duplicate"}
+                ))}
+              </div>
+            </>
+          )}
+        </Popup>
+      )}
+
+      {menu && (
+        <Popup at={menu} label="Layer" onClose={closeMenu}>
+          <button type="button" onClick={() => run(() => startRename(menu.node))}>
+            <Pencil size={13} /> Rename
+          </button>
+          <div className={styles.menuLabelRow} aria-label="Colour label">
+            <button
+              type="button"
+              className={styles.menuLabelNone}
+              data-active={!menu.node.label}
+              title="No label"
+              onClick={() => run(() => applyLabel(undefined))}
+            >
+              <X size={10} />
             </button>
-            {menu.node.type === "adjustment" && (
-              <button type="button" onClick={() => run(() => api.editAdjustment(menu.node.id))}>
-                <Contrast size={13} /> Edit Adjustment…
-              </button>
-            )}
-            {isFillLayer(menu.node) && (
-              <button type="button" onClick={() => run(() => api.editFill(menu.node.id))}>
-                <PaintBucket size={13} /> Edit Fill…
-              </button>
-            )}
-            <button type="button" onClick={() => run(() => api.toggleClip(menu.node.id))}>
-              <CornerDownRight size={13} /> {menu.node.clipped ? "Release clipping mask" : "Create clipping mask"}
-            </button>
-            <div className={styles.menuSep} />
-            {isLinked(menu.node) ? (
-              <button type="button" onClick={() => run(() => api.unlinkLayer(menu.node.id))}>
-                <Unlink2 size={13} /> Unlink layer
-              </button>
-            ) : (
-              multi && (
-                <button type="button" onClick={() => run(api.toggleLinkSelected)}>
-                  <Link2 size={13} /> Link layers
-                </button>
-              )
-            )}
-            <button type="button" onClick={() => run(api.group)}>
-              <FolderPlus size={13} /> {multi ? "Group selection" : "Group"}
-            </button>
-            {menu.node.type === "group" && (
-              <button type="button" onClick={() => run(() => api.ungroup(menu.node.id))}>
-                <FolderMinus size={13} /> Ungroup
-              </button>
-            )}
-            <button type="button" onClick={() => run(api.merge)}>
-              <ArrowDownToLine size={13} /> {multi ? "Merge layers" : "Merge down"}
-            </button>
-            <button type="button" onClick={() => run(api.flatten)}>
-              <LayersIcon size={13} /> Flatten Image
-            </button>
-            {menu.node.type !== "adjustment" && (
-              <>
-                <div className={styles.menuSep} />
-                <button type="button" onClick={() => run(() => api.openLayerStyle(menu.node.id))}>
-                  <Sparkles size={13} /> Layer Style…
-                </button>
-                <button type="button" onClick={() => run(() => api.copyLayerStyle(menu.node.id))}>
-                  <Copy size={13} /> Copy Layer Style
-                </button>
-                {api.canPasteStyle && (
-                  <button type="button" onClick={() => run(() => api.pasteLayerStyle(menu.node.id))}>
-                    <Sparkles size={13} /> Paste Layer Style
-                  </button>
-                )}
-                {hasEnabledFx(menu.node.effects) && (
-                  <button type="button" onClick={() => run(() => api.clearLayerStyle(menu.node.id))}>
-                    <Trash2 size={13} /> Clear Layer Style
-                  </button>
-                )}
-                <button type="button" onClick={() => run(() => api.openFilters(menu.node.id))}>
-                  <FlaskConical size={13} /> Smart Filters…
-                </button>
-              </>
-            )}
-            <div className={styles.menuSep} />
-            {menu.node.mask ? (
-              <>
-                <button type="button" onClick={() => run(api.loadMaskAsSelection)}>
-                  <CircleDashed size={13} /> Mask to Selection
-                </button>
-                <button type="button" onClick={() => run(() => api.toggleMaskEnabled(menu.node.id))}>
-                  <CircleDashed size={13} /> {menu.node.mask.enabled ? "Disable mask" : "Enable mask"}
-                </button>
-                <button type="button" onClick={() => run(api.applyMask)}>
-                  <CircleDashed size={13} /> Apply Mask
-                </button>
-                <button type="button" className={styles.menuDanger} onClick={() => run(api.removeMask)}>
-                  <Trash2 size={13} /> Delete Mask
-                </button>
-              </>
-            ) : (
-              <>
-                <button type="button" onClick={() => run(() => api.addMask("reveal"))}>
-                  <CircleDashed size={13} /> Add Layer Mask
-                </button>
-                <button type="button" onClick={() => run(() => api.addMask("selection"))}>
-                  <CircleDashed size={13} /> Mask from Selection
-                </button>
-              </>
-            )}
-            <div className={styles.menuSep} />
-            <button type="button" className={styles.menuDanger} onClick={() => run(api.remove)}>
-              <Trash2 size={13} /> {multi ? "Delete layers" : "Delete"}
-            </button>
+            {LAYER_LABELS.map((l) => (
+              <button
+                key={l.id}
+                type="button"
+                className={styles.menuLabelDot}
+                data-active={menu.node.label === l.id}
+                style={{ background: l.color }}
+                title={`${l.name} label${multi ? " (all selected)" : ""}`}
+                onClick={() => run(() => applyLabel(l.id))}
+              />
+            ))}
           </div>
-          </>,
-          document.body,
-        )}
+          <div className={styles.menuLockRow} aria-label="Lock">
+            <span className={styles.menuLockLabel}>Lock</span>
+            {LOCK_DEFS.map(({ flag, label, Icon, pixelOnly }) => {
+              // Read the live node so toggles stay in sync without closing the menu.
+              const node = findNode(layers, menu.node.id) ?? menu.node;
+              const allOn = !!node.locks?.all;
+              const rawOn = !!node.locks?.[flag];
+              const na = pixelOnly && node.type !== "layer";
+              const on = flag === "all" ? allOn : allOn || rawOn;
+              const disabled = na || (flag !== "all" && allOn);
+              return (
+                <button
+                  key={flag}
+                  type="button"
+                  className={styles.lockBtn}
+                  data-on={on}
+                  disabled={disabled}
+                  title={
+                    na
+                      ? `Lock ${label} applies to pixel layers only`
+                      : flag === "all"
+                        ? on
+                          ? "Unlock all"
+                          : "Lock all"
+                        : `${on ? "Unlock" : "Lock"} ${label}`
+                  }
+                  onClick={() => api.setLock(node.id, flag, flag === "all" ? !allOn : !rawOn)}
+                >
+                  <Icon size={12} />
+                </button>
+              );
+            })}
+          </div>
+          <button type="button" onClick={() => run(api.duplicate)}>
+            <Copy size={13} /> {multi ? "Duplicate layers" : "Duplicate"}
+          </button>
+          {menu.node.type === "adjustment" && (
+            <button type="button" onClick={() => run(() => api.editAdjustment(menu.node.id))}>
+              <Contrast size={13} /> Edit Adjustment…
+            </button>
+          )}
+          {isFillLayer(menu.node) && (
+            <button type="button" onClick={() => run(() => api.editFill(menu.node.id))}>
+              <PaintBucket size={13} /> Edit Fill…
+            </button>
+          )}
+          <button type="button" onClick={() => run(() => api.toggleClip(menu.node.id))}>
+            <CornerDownRight size={13} /> {menu.node.clipped ? "Release clipping mask" : "Create clipping mask"}
+          </button>
+          <div className={styles.menuSep} />
+          {isLinked(menu.node) ? (
+            <button type="button" onClick={() => run(() => api.unlinkLayer(menu.node.id))}>
+              <Unlink2 size={13} /> Unlink layer
+            </button>
+          ) : (
+            multi && (
+              <button type="button" onClick={() => run(api.toggleLinkSelected)}>
+                <Link2 size={13} /> Link layers
+              </button>
+            )
+          )}
+          <button type="button" onClick={() => run(api.group)}>
+            <FolderPlus size={13} /> {multi ? "Group selection" : "Group"}
+          </button>
+          {menu.node.type === "group" && (
+            <button type="button" onClick={() => run(() => api.ungroup(menu.node.id))}>
+              <FolderMinus size={13} /> Ungroup
+            </button>
+          )}
+          <button type="button" onClick={() => run(api.merge)}>
+            <ArrowDownToLine size={13} /> {multi ? "Merge layers" : "Merge down"}
+          </button>
+          <button type="button" onClick={() => run(api.flatten)}>
+            <LayersIcon size={13} /> Flatten Image
+          </button>
+          {menu.node.type !== "adjustment" && (
+            <>
+              <div className={styles.menuSep} />
+              <button type="button" onClick={() => run(() => api.openLayerStyle(menu.node.id))}>
+                <Sparkles size={13} /> Layer Style…
+              </button>
+              <button type="button" onClick={() => run(() => api.copyLayerStyle(menu.node.id))}>
+                <Copy size={13} /> Copy Layer Style
+              </button>
+              {api.canPasteStyle && (
+                <button type="button" onClick={() => run(() => api.pasteLayerStyle(menu.node.id))}>
+                  <Sparkles size={13} /> Paste Layer Style
+                </button>
+              )}
+              {hasEnabledFx(menu.node.effects) && (
+                <button type="button" onClick={() => run(() => api.clearLayerStyle(menu.node.id))}>
+                  <Trash2 size={13} /> Clear Layer Style
+                </button>
+              )}
+              <button type="button" onClick={() => run(() => api.openFilters(menu.node.id))}>
+                <FlaskConical size={13} /> Smart Filters…
+              </button>
+            </>
+          )}
+          <div className={styles.menuSep} />
+          {menu.node.mask ? (
+            <>
+              <button type="button" onClick={() => run(api.loadMaskAsSelection)}>
+                <CircleDashed size={13} /> Mask to Selection
+              </button>
+              <button type="button" onClick={() => run(() => api.toggleMaskEnabled(menu.node.id))}>
+                <CircleDashed size={13} /> {menu.node.mask.enabled ? "Disable mask" : "Enable mask"}
+              </button>
+              <button type="button" onClick={() => run(api.applyMask)}>
+                <CircleDashed size={13} /> Apply Mask
+              </button>
+              <button type="button" className={styles.menuDanger} onClick={() => run(api.removeMask)}>
+                <Trash2 size={13} /> Delete Mask
+              </button>
+            </>
+          ) : (
+            <>
+              <button type="button" onClick={() => run(() => api.addMask("reveal"))}>
+                <CircleDashed size={13} /> Add Layer Mask
+              </button>
+              <button type="button" onClick={() => run(() => api.addMask("selection"))}>
+                <CircleDashed size={13} /> Mask from Selection
+              </button>
+            </>
+          )}
+          <div className={styles.menuSep} />
+          <button type="button" className={styles.menuDanger} onClick={() => run(api.remove)}>
+            <Trash2 size={13} /> {multi ? "Delete layers" : "Delete"}
+          </button>
+        </Popup>
+      )}
     </div>
   );
 }

@@ -21,6 +21,7 @@ export const SETTINGS_KEYS: readonly string[] = [
   "graphiq:workspaces", // named workspace snapshots
   "graphiq:phone-options-open", // the phone's tool-options card: open or folded
   "graphiq:phone-options-height", // ...and how tall its controls are
+  "graphiq:color-view", // the Color panel: Picker or Swatches
   "pe-view", // rulers / grid / snap
   "pe-panels", // Window-menu panel visibility
   "pe-colorspace", // working colour space

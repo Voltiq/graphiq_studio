@@ -20,6 +20,8 @@ export function Select({
   block = false,
   value,
   onChange,
+  variant,
+  ariaLabel,
 }: {
   label?: string;
   options: string[];
@@ -28,6 +30,10 @@ export function Select({
   block?: boolean;
   value?: string;
   onChange?: (s: string) => void;
+  /** "inline": a bare label + chevron with no field chrome, for a select that
+   *  lives INSIDE another field (the colour panel's value format). */
+  variant?: "inline";
+  ariaLabel?: string;
 }) {
   const [internal, setInternal] = useState(defaultValue ?? options[0]);
   const v = value !== undefined ? value : internal;
@@ -104,7 +110,7 @@ export function Select({
   }, [open]);
 
   return (
-    <div className={styles.select} data-block={block || undefined}>
+    <div className={styles.select} data-block={block || undefined} data-variant={variant}>
       {label && <span className={styles.label}>{label}</span>}
       <button
         ref={btnRef}
@@ -113,10 +119,11 @@ export function Select({
         style={width ? { width } : undefined}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-label={ariaLabel ? `${ariaLabel}: ${v}` : undefined}
         onClick={() => setOpen((o) => !o)}
       >
         <span className={styles.selectValue}>{v}</span>
-        <ChevronDown size={14} />
+        <ChevronDown size={variant === "inline" ? 12 : 14} />
       </button>
       {open &&
         typeof document !== "undefined" &&

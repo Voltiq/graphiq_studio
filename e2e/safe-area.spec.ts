@@ -343,9 +343,15 @@ test.describe("phone, landscape", () => {
     await app.settle(700);
     await app.setSafeArea({ top: 0, right: FAT, bottom: 0, left: 0 });
     /* The panels sheet is an accordion and starts shut, so a collapsed panel's
-       controls are ABSENT. Layers carries a listbox trigger flush right. */
+       controls are ABSENT. Layers carries a listbox trigger flush right: the
+       kind filter, in the filter row its header's magnifier opens (clicked in
+       the page — the drawer's scrim refuses an actionability-checked click). */
     await app.setSheetDetent("full");
     expect(await app.openPanelById("layers"), "the Layers panel opens").toBe(true);
+    await page.evaluate(() =>
+      document.querySelector<HTMLButtonElement>('[data-tour="dock"] button[aria-label="Filter layers"]')?.click(),
+    );
+    await app.settle(300);
     const anchor = await page.evaluate(async () => {
       const all = [...document.querySelectorAll('[data-tour="dock"] button[aria-haspopup="listbox"]')].filter(
         (b) => b.getBoundingClientRect().width > 0,

@@ -49,6 +49,13 @@ const transients: [string, (app: App) => Promise<Locator>][] = [
     },
   ],
   [
+    "the Layers panel's new fill / adjustment menu",
+    async (app) => {
+      await app.page.locator('[data-panel-id="layers"] button[aria-label="New fill or adjustment layer"]').click();
+      return app.page.getByRole("menu", { name: "New fill or adjustment layer" });
+    },
+  ],
+  [
     "a menu-bar menu",
     async (app) => {
       await app.page.locator("[data-menubar] > div > button", { hasText: "Select" }).first().click();

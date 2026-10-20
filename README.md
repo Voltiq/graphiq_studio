@@ -153,7 +153,8 @@ Brush‑style tools share `[` / `]` for size, `{` / `}` for hardness and the dig
 
 - A **tree** of pixel layers, nestable **groups**, **adjustment layers** and **fill layers** (solid colour or gradient).
 - **19 blend modes**, per‑layer opacity, visibility, drag‑to‑reorder (including re‑parenting into groups), multi‑select, and inline rename.
-- **Colour labels**, a **search/filter** row, **lock** flags (transparency, pixels, position, all) and **linked layers** that move as one.
+- Every row **previews the layer and its mask**, with small badges for effects, smart filters, links and locks; the opacity is a field you can drag across or type into.
+- **Colour labels**, a **search/filter** row (the magnifier in the panel's header), **lock** flags (transparency, pixels, position, all — behind the padlock) and **linked layers** that move as one.
 - New / Duplicate / Delete / **Group** (`Ctrl+G`) / Ungroup / **Merge Down** (`Ctrl+E`) / **Merge visible** / **Stamp visible** (`Ctrl+Alt+Shift+E`) / Flatten.
 - **Isolate** a layer (`Ctrl+Alt+L`) to work on it alone, and save whole arrangements as **Layer Comps**.
 

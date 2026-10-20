@@ -8,21 +8,23 @@ import { type WorkingSpace } from "../lib/colorspace";
 import {
   BarChart3,
   Compass,
+  FolderMinus,
+  FolderPlus,
   History,
   Info,
   Layers,
   Palette,
   Plus,
+  Search,
   Settings2,
   SlidersHorizontal,
   SwatchBook,
   Brush,
-  Trash2,
   Zap,
 } from "lucide-react";
 import styles from "./RightDock.module.scss";
 import Panel, { type PanelTab } from "./Panel";
-import ColorPanel from "./panels/ColorPanel";
+import ColorPanel, { type ColorView } from "./panels/ColorPanel";
 import ColorPanelMenu from "./panels/ColorPanelMenu";
 import SwatchesPanel from "./panels/SwatchesPanel";
 import InfoPanel from "./panels/InfoPanel";
@@ -43,7 +45,7 @@ import CompsPanel from "./panels/CompsPanel";
 import type { CompsApi } from "../lib/comps";
 import { Camera, Spline, type LucideIcon } from "lucide-react";
 import type { NavigatorView, Rect } from "../lib/view";
-import type { LayersApi } from "../lib/layers";
+import { findNode as findLayer, type LayersApi } from "../lib/layers";
 import type { ChannelSelectOp, SavedChannel } from "../lib/channels";
 import type { BrushSettings, EngineHandle, HistorySummary } from "../lib/paint";
 import type { Adjustments } from "../lib/adjust";
@@ -141,6 +143,7 @@ const PANEL_ICONS: Record<PanelId, LucideIcon> = {
 const ORDER_KEY = "graphiq:panel-order";
 const OPEN_KEY = "graphiq:panel-open";
 const LAYOUT_KEY = "graphiq:panel-layout"; // dock membership + floating positions
+const COLOR_VIEW_KEY = "graphiq:color-view"; // the Color panel's Picker / Swatches
 const LEGACY_ORDER_KEY = "aperture:panel-order"; // pre-rebrand fallbacks
 const LEGACY_OPEN_KEY = "aperture:panel-open";
 
@@ -244,6 +247,15 @@ const DEFAULT_OPEN: Record<PanelId, boolean> = {
   metadata: false,
   info: false,
 };
+
+/** Read the Color panel's saved view (Picker unless Swatches was chosen). */
+function loadColorView(): ColorView {
+  try {
+    return window.localStorage.getItem(COLOR_VIEW_KEY) === "swatches" ? "swatches" : "picker";
+  } catch {
+    return "picker";
+  }
+}
 
 /** Read the saved panel order, dropping unknown ids and appending any new ones. */
 function loadOrder(): PanelId[] {
@@ -379,6 +391,8 @@ interface Props {
   dockRef?: RefObject<DockApi | null>;
   /** Transient status message (clipboard results from the Color panel menu). */
   onToast: (message: string) => void;
+  /** Run a menu command by id — the Layers panel's new-adjustment menu. */
+  onCommand?: (id: string) => void;
 }
 
 /**
@@ -479,8 +493,25 @@ export default function RightDock({
   floatHost = null,
   dockRef,
   onToast,
+  onCommand,
 }: Props) {
   const [order, setOrder] = useState<PanelId[]>(DEFAULT_ORDER);
+  /* The Color panel's view (Picker / Swatches), remembered: someone who works
+     from a palette should find it where they left it. Restored after mount
+     with the rest of the dock's layout (below), never during the first
+     render: the server renders the Picker, and a first client render that
+     read storage and drew the Swatches failed hydration — React then
+     re-rendered the whole page from the root. */
+  const [colorView, setColorViewState] = useState<ColorView>("picker");
+  const setColorView = (v: ColorView) => {
+    setColorViewState(v);
+    try {
+      localStorage.setItem(COLOR_VIEW_KEY, v);
+    } catch {}
+  };
+  /* The Layers panel's filter row is opened from its header (the search
+     button), so the header and the body share this. */
+  const [layerFilterOpen, setLayerFilterOpen] = useState(false);
   /* Dev-only commit counter, in the same family as CanvasArea's __gq hooks.
      The question it answers: does a closed panel drawer keep re-rendering
      while a stroke is being painted? (Measured: twice across a thirty-step
@@ -542,6 +573,7 @@ export default function RightDock({
      back.) */
   /* eslint-disable react-hooks/set-state-in-effect -- see above */
   useEffect(() => {
+    setColorViewState(loadColorView());
     setOrder(loadOrder());
     setOpenMap(loadOpen());
     const l = loadLayout();
@@ -966,14 +998,30 @@ export default function RightDock({
             title="Color"
             icon={Palette}
             actions={
-              <ColorPanelMenu
-                foreground={foreground}
-                background={background}
-                onForeground={onForeground}
-                onBackground={onBackground}
-                active={activeSlot}
-                onToast={onToast}
-              />
+              <>
+                <div className={styles.viewSeg} role="group" aria-label="Color view">
+                  {(["picker", "swatches"] as const).map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      className={styles.viewSegBtn}
+                      aria-pressed={colorView === v}
+                      data-color-view={v}
+                      onClick={() => setColorView(v)}
+                    >
+                      {v === "picker" ? "Picker" : "Swatches"}
+                    </button>
+                  ))}
+                </div>
+                <ColorPanelMenu
+                  foreground={foreground}
+                  background={background}
+                  onForeground={onForeground}
+                  onBackground={onBackground}
+                  active={activeSlot}
+                  onToast={onToast}
+                />
+              </>
             }
             {...dp}
           >
@@ -984,6 +1032,7 @@ export default function RightDock({
               onBackground={onBackground}
               active={activeSlot}
               onActive={onActiveSlot}
+              view={colorView}
             />
           </Panel>
         ) : null;
@@ -1059,17 +1108,43 @@ export default function RightDock({
             icon={Layers}
             actions={
               <>
+                <button
+                  type="button"
+                  className={styles.headBtn}
+                  data-on={layerFilterOpen || undefined}
+                  aria-pressed={layerFilterOpen}
+                  title={layerFilterOpen ? "Close the filter" : "Filter layers by name, kind or colour label"}
+                  aria-label="Filter layers"
+                  onClick={() => setLayerFilterOpen((o) => !o)}
+                >
+                  <Search size={15} />
+                </button>
+                {(() => {
+                  const act = layers.activeLayerId ? findLayer(layers.layers, layers.activeLayerId) : null;
+                  const isGroup = act?.type === "group";
+                  return (
+                    <IconBtn
+                      title={isGroup ? "Ungroup" : "New group from the selection (Ctrl+G)"}
+                      onClick={() => (isGroup && act ? layers.ungroup(act.id) : layers.group())}
+                    >
+                      {isGroup ? <FolderMinus size={15} /> : <FolderPlus size={15} />}
+                    </IconBtn>
+                  );
+                })()}
                 <IconBtn title="New layer" onClick={layers.add}>
-                  <Plus size={14} />
-                </IconBtn>
-                <IconBtn title="Delete layer" onClick={() => layers.remove()}>
-                  <Trash2 size={14} />
+                  <Plus size={16} />
                 </IconBtn>
               </>
             }
             {...dp}
           >
-            <LayersPanel api={layers} />
+            <LayersPanel
+              api={layers}
+              engineRef={engineRef}
+              onCommand={onCommand}
+              filterOpen={layerFilterOpen}
+              onFilterOpen={setLayerFilterOpen}
+            />
           </Panel>
         ) : null;
       case "history":

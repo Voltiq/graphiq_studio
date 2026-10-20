@@ -8164,6 +8164,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           floatHost={floatHost}
           dockRef={dockRef}
           onToast={showToast}
+          onCommand={(id) => handleMenuActionRef.current(id)}
         />
       </div>
       {(() => {

@@ -270,6 +270,9 @@ html:not([data-mobile="true"]):not([data-tablet="true"]) {
   --border: rgb(17 19 24 / 8%);
   --line-2: rgb(17 19 24 / 14%);
   --border-strong: rgb(17 19 24 / 22%);
+  /* The edge drawn INSIDE a colour chip or thumbnail: lit on a dark card, a
+     dark line on a white one, so a white swatch or mask keeps its edge. */
+  --hairline-lit: rgb(17 19 24 / 12%);
   --input: rgb(17 19 24 / 12%);
   --wash: rgb(17 19 24 / 5%);
   --wash-2: rgb(17 19 24 / 9%);
@@ -332,6 +335,7 @@ html:not([data-mobile="true"]):not([data-tablet="true"]) {
   --border: rgb(255 255 255 / 7%);
   --line-2: rgb(255 255 255 / 12%);
   --border-strong: rgb(255 255 255 / 20%);
+  --hairline-lit: rgb(255 255 255 / 12%);
   --input: rgb(255 255 255 / 9%);
   --wash: rgb(255 255 255 / 5.5%);
   --wash-2: rgb(255 255 255 / 9%);
