@@ -400,7 +400,10 @@
    gentle spring, critically damped so the card does not wobble; folding
    closes on a quicker ease (lib/use-presence keeps it mounted meanwhile). The
    contents are clipped only while they move, so focus rings and hovering
-   swatches are not shaved off a panel at rest. */
+   swatches are not shaved off a panel at rest — and only top and bottom: the
+   fold is vertical, and things that sit half outside the content box at its
+   sides (the colour picker's slider knobs at either end) must not be cut off
+   while it moves. `clip`, unlike `hidden`, lets the other axis stay visible. */
 .panelFold {
   display: grid;
   grid-template-rows: 1fr;
@@ -433,15 +436,17 @@
   }
 
   .panelFold[data-state="closed"] > & {
-    overflow: hidden;
+    overflow-x: visible;
+    overflow-y: clip;
   }
 }
 
-/* Clipped for the length of the unfold, then free (step-end holds the start
-   value to the end; after that the base `visible` applies). */
+/* Clipped (vertically) for the length of the unfold, then free (step-end
+   holds the start value to the end; after that the base `visible` applies). */
 @keyframes foldClip {
   from {
-    overflow: hidden;
+    overflow-x: visible;
+    overflow-y: clip;
   }
 }
 

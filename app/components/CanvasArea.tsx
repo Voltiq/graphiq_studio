@@ -8670,7 +8670,7 @@ export default function CanvasArea({
       <div className={styles.tabs} data-tabs data-count={docs.length}>
         {docs.map((d) =>
           editingTabId === d.id ? (
-            <div key={d.id} className={styles.tab} data-active={true}>
+            <div key={d.id} className={styles.tab} data-active={true} data-editing>
               <span className={styles.tabDot} />
               <input
                 ref={renameInputRef}

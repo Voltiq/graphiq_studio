@@ -107,19 +107,55 @@
   text-overflow: ellipsis;
 }
 
+/* Renaming: the tab itself becomes the field — its chip takes the field's
+   focus ring and its name turns editable in place, at the tab's own height.
+   A separate input box used to sit inside the tab, and on a touchscreen the
+   44px floor and 16px type made it a 44px slab overflowing a 32px chip. */
+.tab[data-editing] {
+  background: var(--surface-2);
+  box-shadow:
+    inset 0 0 0 1px var(--accent-line),
+    0 0 0 3px var(--accent-soft);
+  cursor: text;
+}
+
 .tabRename {
+  /* As wide as the name being typed (where the browser can), within limits. */
+  field-sizing: content;
   width: 11ch;
-  min-width: 60px;
+  min-width: 6ch;
   max-width: 200px;
-  height: 22px;
-  padding: 0 6px;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
   font: inherit;
   color: var(--text);
-  background: var(--surface-2);
-  border: 1px solid var(--accent-line);
-  border-radius: var(--r-sm);
+  caret-color: var(--accent);
+  background: none;
+  border: 0;
+  border-radius: 0;
   outline: none;
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: none;
+
+  /* An explicit width would win over the content sizing. */
+  @supports (field-sizing: content) {
+    width: auto;
+  }
+}
+
+/* On a touchscreen a field's type must be 16px (smaller and Safari zooms the
+   page, which this app can never undo — globals.scss), so the tab names there
+   are 15px: the name barely changes size when it turns into a field, and the
+   tab is as tall as its neighbours (the 44px reach). */
+:global(html[data-touch="true"]) {
+  .tab {
+    min-height: 44px;
+    font-size: 15px;
+  }
+
+  .tabRename {
+    font-size: 16px;
+  }
 }
 
 .tabClose {

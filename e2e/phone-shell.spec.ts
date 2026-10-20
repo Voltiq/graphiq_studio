@@ -211,3 +211,42 @@ test.describe("on an iPhone 13 mini", () => {
     await expect(name, "the next tap is a tap again").toHaveAttribute("aria-expanded", "false");
   });
 });
+
+/* Reported: renaming a document in the tab strip on a phone showed "a way too
+   huge" text box — the touch floor (44px, 16px type) made the inline input a
+   slab overflowing its 32px tab. The tab itself is the field now. */
+test("renaming a document in the tab strip: the tab becomes the field, no bigger than a tab", async ({ app }) => {
+  await app.newDoc();
+  await app.settle(500);
+  const active = app.page.locator('[data-tabs] button[data-active="true"]');
+  await active.tap();
+  await app.settle(400);
+  const input = app.page.locator("[data-tabs] input");
+  await expect(input, "the name is editable in place").toBeFocused();
+  const g = await app.page.evaluate(() => {
+    const box = (el: Element) => el.getBoundingClientRect();
+    const input = document.querySelector("[data-tabs] input")!;
+    const tab = input.closest("[data-editing]")!;
+    const other = document.querySelector('[data-tabs] button[data-active="false"]')!;
+    const fs = (el: Element) => parseFloat(getComputedStyle(el).fontSize);
+    const r = box(input);
+    const t = box(tab);
+    return {
+      inside: r.top >= t.top - 0.5 && r.bottom <= t.bottom + 0.5,
+      tabH: Math.round(t.height),
+      otherH: Math.round(box(other).height),
+      inputFont: fs(input),
+      tabFont: fs(other),
+      inputBorder: getComputedStyle(input).borderTopWidth,
+    };
+  });
+  expect(g.inside, "the field sits inside its tab").toBe(true);
+  expect(g.tabH, "the editing tab is as tall as its neighbours").toBe(g.otherH);
+  expect(g.inputFont - g.tabFont, "the name barely changes size").toBeLessThanOrEqual(1);
+  expect(g.inputFont, "...and is never under 16px (Safari would zoom the page)").toBeGreaterThanOrEqual(16);
+  expect(g.inputBorder, "no box of its own").toBe("0px");
+  await input.fill("Poster");
+  await app.page.keyboard.press("Enter");
+  await app.settle(300);
+  expect((await app.docs()).map((d) => d.name), "renamed").toContain("Poster");
+});

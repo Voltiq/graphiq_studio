@@ -191,3 +191,32 @@ test("a theme switch changes every surface in the same frame, cross-faded as one
   expect(await page.evaluate(() => (window as unknown as { __vt: number }).__vt), "cross-faded as one").toBe(1);
   await expect(page.locator("html"), "transitions are back afterwards").not.toHaveAttribute("data-look-switching", { timeout: 2000 });
 });
+
+/* Reported: while the Color panel unfolded, its slider knobs were cut off at
+   the far left and right of the strips (they sit half outside them), and only
+   showed whole once it had finished. The fold clips while it moves — but only
+   top and bottom: `overflow-y: clip` with the sides left visible. */
+test("unfolding clips the panel top and bottom only, so knobs at the strips' ends stay whole", async ({ app }) => {
+  const page = app.page;
+  await page.locator('[data-panel-id="color"] button[aria-label="Collapse Color"]').click();
+  await app.settle(700);
+  const clipWhile = async (label: string) => {
+    const c = await page.evaluate(() => {
+      const inner = document.querySelector('[data-panel-id="color"] [class*="panelFoldInner"]');
+      if (!inner) return null;
+      const cs = getComputedStyle(inner);
+      return { x: cs.overflowX, y: cs.overflowY };
+    });
+    expect(c, `${label}: the body is folding`).not.toBeNull();
+    expect(c, `${label}: clipped vertically only`).toEqual({ x: "visible", y: "clip" });
+  };
+  await page.locator('[data-panel-id="color"] button[aria-label="Expand Color"]').click();
+  await clipWhile("unfolding");
+  await app.settle(800);
+  expect(
+    await page.evaluate(() => getComputedStyle(document.querySelector('[data-panel-id="color"] [class*="panelFoldInner"]')!).overflowY),
+    "and nothing is clipped at rest",
+  ).toBe("visible");
+  await page.locator('[data-panel-id="color"] button[aria-label="Collapse Color"]').click();
+  await clipWhile("folding");
+});
