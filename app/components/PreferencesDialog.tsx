@@ -20,6 +20,7 @@ import {
 import { Check, FolderOpen, Eye } from "../lib/icons";
 import styles from "./PreferencesDialog.module.scss";
 import { applyTheme, currentTheme, resolvedDark } from "./ThemeToggle";
+import { switchLook } from "../lib/look";
 import { ColorChip, Slider, Toggle } from "./Controls";
 import { ACCENTS, ACCENT_COOKIE, DEFAULT_ACCENT, isAccent, type Accent, type Theme } from "../lib/theme";
 import { PRESSURE_CURVES, effectivePressure, type PressureCurve } from "../lib/pointer";
@@ -93,7 +94,7 @@ function liveAccent(): Accent {
 }
 
 function applyAccent(a: Accent) {
-  document.documentElement.setAttribute("data-accent", a);
+  switchLook(() => document.documentElement.setAttribute("data-accent", a));
   document.cookie = `${ACCENT_COOKIE}=${a}; path=/; max-age=${ONE_YEAR}; SameSite=Lax`;
 }
 

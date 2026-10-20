@@ -131,3 +131,63 @@ test("with Reduce motion on, things close at once", async ({ app }) => {
   await app.page.waitForTimeout(50);
   expect(await app.page.locator(menuSel).count(), "no exit to wait for").toBe(0);
 });
+
+/* Reported: "when switching between light and dark mode some elements take
+   longer to switch their colours than others". Every surface carried its own
+   transition (the page 300ms, fields 220ms, buttons 120ms, many none), so the
+   change rolled across the interface. Now each one reaches its new colour in
+   the SAME frame, and the browser cross-fades the two looks as one picture. */
+test("a theme switch changes every surface in the same frame, cross-faded as one", async ({ app }) => {
+  const page = app.page;
+  await page.evaluate(() => {
+    const w = window as unknown as { __vt: number };
+    w.__vt = 0;
+    const d = document as Document & { startViewTransition?: (cb: () => void) => unknown };
+    const orig = d.startViewTransition?.bind(document);
+    if (orig)
+      d.startViewTransition = (cb: () => void) => {
+        w.__vt++;
+        return orig(cb);
+      };
+  });
+  const probe = () =>
+    page.evaluate(
+      () =>
+        new Promise<{ name: string; frames: string[] }[]>((done) => {
+          const pick = (name: string, sel: string, prop: "backgroundColor" | "color" | "borderColor") => {
+            const el = document.querySelector<HTMLElement>(sel)!;
+            return { name, read: () => getComputedStyle(el)[prop] };
+          };
+          const probes = [
+            pick("page", "body", "backgroundColor"),
+            pick("panel card", '[data-panel-id="layers"]', "backgroundColor"),
+            pick("panel title", '[data-panel-id="layers"] [class*="panelTitle"]', "color"),
+            pick("menu name", "[data-menubar] button", "color"),
+            pick("field", '[data-panel-id="color"] [data-format]', "borderColor"),
+            pick("button", '[data-panel-id="color"] [data-color-view="picker"]', "backgroundColor"),
+          ];
+          const out = probes.map((p) => ({ name: p.name, frames: [] as string[] }));
+          const t0 = performance.now();
+          const tick = () => {
+            probes.forEach((p, i) => out[i].frames.push(p.read()));
+            if (performance.now() - t0 < 700) requestAnimationFrame(tick);
+            else done(out);
+          };
+          requestAnimationFrame(tick);
+        }),
+    );
+  const toggle = page.locator('button[aria-label^="Switch to"]').first();
+  const [series] = await Promise.all([probe(), toggle.click()]);
+  // For each surface: the first frame it shows its final colour (and keeps it).
+  const settle = series.map(({ name, frames }) => {
+    const last = frames[frames.length - 1];
+    let i = frames.length - 1;
+    while (i > 0 && frames[i - 1] === last) i--;
+    return { name, frame: i, changed: frames[0] !== last };
+  });
+  expect(settle.filter((s) => s.changed).length, `the surfaces changed: ${JSON.stringify(settle)}`).toBeGreaterThanOrEqual(4);
+  const frames = settle.filter((s) => s.changed).map((s) => s.frame);
+  expect(Math.max(...frames) - Math.min(...frames), `all in one frame: ${JSON.stringify(settle)}`).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __vt: number }).__vt), "cross-faded as one").toBe(1);
+  await expect(page.locator("html"), "transitions are back afterwards").not.toHaveAttribute("data-look-switching", { timeout: 2000 });
+});

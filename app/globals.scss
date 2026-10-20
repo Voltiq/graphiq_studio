@@ -591,7 +591,9 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   overflow: hidden;
-  transition: background-color var(--t-slow) var(--ease), color var(--t-slow) var(--ease);
+  /* No transition of its own: a change of theme is one swap of the whole
+     look (lib/look.ts and the rule below), not a 300ms fade of the page
+     background under controls that switched in an instant. */
 }
 
 button {
@@ -722,6 +724,27 @@ svg.lucide[stroke-width="2"] {
 *::-webkit-scrollbar-thumb:hover {
   background: var(--text-3);
   background-clip: content-box;
+}
+
+/* ------------------------- Swapping the look --------------------------------
+   A change of theme, accent, contrast or colour vision repaints every surface
+   — and each one used to do it at its own speed (buttons 120ms, fields 220ms,
+   the page 300ms, many instantly), so the change rolled across the interface
+   in a ragged wave. For the swap (lib/look.ts sets the attribute), every
+   element's own transitions stand down, so all of it changes in the same
+   frame... */
+html[data-look-switching] *,
+html[data-look-switching] *::before,
+html[data-look-switching] *::after {
+  transition: none !important;
+}
+
+/* ...and where the browser has View Transitions, the old look cross-fades into
+   the new one as a single picture — a short, even dissolve rather than a snap. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 280ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ------------------------- Reduced motion ---------------------------------

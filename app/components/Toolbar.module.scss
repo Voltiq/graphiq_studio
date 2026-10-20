@@ -179,9 +179,9 @@
   gap: 1px;
   @include ds.menu;
   /* It slides out of its slot sideways, from the slot's edge. */
+  --origin: 0 22px;
   @include ds.pop-in(flyIn);
   @include ds.cascade(flyRow);
-  --origin: 0 22px;
 }
 
 @include ds.pop-keyframes(flyIn, $lift: 0px, $x: -10px);

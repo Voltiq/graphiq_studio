@@ -3,13 +3,15 @@
 import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 import { THEME_COOKIE, isTheme, type Theme } from "../lib/theme";
+import { switchLook } from "../lib/look";
 import styles from "./TopBar.module.scss";
 
 const ONE_YEAR = 60 * 60 * 24 * 365;
 
-/** Set + persist the theme (shared with the Preferences appearance tab). */
+/** Set + persist the theme (shared with the Preferences appearance tab) — the
+ *  whole interface at once, cross-faded where the browser can (lib/look). */
 export function applyTheme(next: Theme) {
-  document.documentElement.setAttribute("data-theme", next);
+  switchLook(() => document.documentElement.setAttribute("data-theme", next));
   document.cookie = `${THEME_COOKIE}=${next}; path=/; max-age=${ONE_YEAR}; SameSite=Lax`;
 }
 

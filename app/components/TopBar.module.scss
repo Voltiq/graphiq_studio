@@ -162,10 +162,10 @@
   overflow-y: auto;
   @include ds.menu;
   z-index: 80;
-  @include ds.pop-in(dropIn);
-  @include ds.cascade(dropRow, $rows: "> .menuCol > *", $step: 14ms);
   /* Out of the menu's own name, just above its corner. */
   --origin: 24px -8px;
+  @include ds.pop-in(dropIn);
+  @include ds.cascade(dropRow, $rows: "> .menuCol > *", $step: 14ms);
 }
 
 @include ds.pop-keyframes(dropIn);
@@ -487,9 +487,9 @@
   display: flex;
   flex-direction: column;
   @include ds.menu;
+  --origin: 32px -6px;
   @include ds.pop-in(dropIn);
   @include ds.cascade(dropRow);
-  --origin: 32px -6px;
 
   .menuItem {
     min-height: 44px;

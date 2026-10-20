@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { setLookAttribute, watchSystemLook } from "../lib/look";
 import { createPortal } from "react-dom";
 import styles from "./Editor.module.scss";
 import TopBar from "./TopBar";
@@ -4555,12 +4556,16 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // globals.scss reads to swap the semantic triad and firm up the theme. Same
   // client-side pattern as data-motion (theme/accent go through cookies because
   // only those two would flash on the very first paint).
+  // Changing either repaints every surface: as one swap of the look (lib/look),
+  // quietly on the first set.
   useEffect(() => {
-    document.documentElement.setAttribute("data-cvd", prefs.colorVision);
+    setLookAttribute("data-cvd", prefs.colorVision);
   }, [prefs.colorVision]);
   useEffect(() => {
-    document.documentElement.setAttribute("data-contrast", prefs.highContrast ? "high" : "normal");
+    setLookAttribute("data-contrast", prefs.highContrast ? "high" : "normal");
   }, [prefs.highContrast]);
+  // The OS flipping light/dark under a `system` theme lands in one frame too.
+  useEffect(() => watchSystemLook(), []);
 
   // Render-cache budget preference -> engine LRU limit (evicts when shrunk).
   useEffect(() => {
