@@ -31,3 +31,27 @@ describe("the shell's .app rule", () => {
     expect(rule).not.toMatch(/width:\s*100vw/);
   });
 });
+
+/* The phone's panels sheet is anchored to the bottom and sized in viewport
+   units, so a LARGE-viewport height is taller than what Safari shows: the
+   excess went off the top of the screen, taking the grip and the panel chips
+   with it (reported on an iPhone 13 mini, where the gap is ~100px). */
+const globals = readFileSync(join(__dirname, "..", "app", "globals.scss"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+const phone = globals.slice(globals.indexOf('html[data-mobile="true"] {'));
+const sheetDecls = [...phone.matchAll(/^\s*(--sheet-h|max-height):[^;{]*;/gm)]
+  .map((m) => m[0].trim())
+  .filter((d) => d.startsWith("--sheet-h") || d.includes("--m-drawer-bottom"));
+
+describe("the phone's panels sheet", () => {
+  it("has its detents and its cap", () => {
+    // default, peek, half and full, plus the cap on the dock itself
+    expect(sheetDecls.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("measures every one of them against the small viewport", () => {
+    for (const d of sheetDecls) {
+      expect(d, d).toMatch(/svh/);
+      expect(d, d).not.toMatch(/\d(d|l)?vh\b/);
+    }
+  });
+});

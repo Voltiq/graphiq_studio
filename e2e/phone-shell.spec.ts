@@ -132,3 +132,82 @@ test("the tools sheet groups the tools by what they are for", async ({ app }) =>
     /^Pencil options$/,
   );
 });
+
+/* An iPhone 13 mini in Safari: 375 wide, and 629 of its 812 is what the page
+   gets once the address and tab bars have taken theirs. The reports these
+   pin came from that phone. */
+test.describe("on an iPhone 13 mini", () => {
+  test.use({ viewport: { width: 375, height: 629 } });
+
+  const keysAndName = (app: App) =>
+    app.page.evaluate(() => {
+      const mid = (s: string) => {
+        const b = document.querySelector(s)!.getBoundingClientRect();
+        return Math.round(b.top + b.height / 2);
+      };
+      return {
+        name: mid("[data-options-open]"),
+        key: mid('[aria-label="Keyboard modifiers"] button'),
+        published: parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--m-options-h")),
+      };
+    });
+
+  test("folded, the card is one row: the tool with its keys beside it", async ({ app }) => {
+    const open = await cardHeight(app);
+    await app.page.locator("[data-options-open]").tap();
+    await app.settle(600);
+    const folded = await cardHeight(app);
+    expect(folded, `${open}px open → ${folded}px folded`).toBeLessThanOrEqual(70);
+    const r = await keysAndName(app);
+    expect(Math.abs(r.name - r.key), "Shift / Alt / Ctrl on the tool's row").toBeLessThanOrEqual(2);
+    await expect(card(app).locator('[aria-label="Keyboard modifiers"] button').first()).toBeVisible();
+    expect(Math.abs(r.published - folded), "...and the picture is fitted to the row").toBeLessThan(2);
+  });
+
+  test("the panels sheet: the chips are whole, on screen and on top", async ({ app }) => {
+    await dock(app).locator("button", { hasText: "Panels" }).first().tap();
+    await app.settle(800);
+    const g = await app.page.evaluate(() => {
+      const box = (s: string) => document.querySelector(s)!.getBoundingClientRect();
+      const strip = box('[role="tablist"][aria-label="Panels"]');
+      const chip = box('[data-panel-chip="layers"]');
+      const hit = document.elementFromPoint(chip.left + chip.width / 2, chip.top + chip.height / 2);
+      return {
+        strip: { top: strip.top, bottom: strip.bottom },
+        chip: { top: chip.top, bottom: chip.bottom, h: chip.height },
+        sheetTop: box('[data-tour="dock"]').top,
+        headerBottom: box('[data-tour="topbar"]').bottom,
+        onTop: !!hit?.closest('[data-panel-chip="layers"]'),
+      };
+    });
+    expect(g.sheetTop, "the sheet starts below the header").toBeGreaterThanOrEqual(g.headerBottom);
+    expect(g.chip.h, "a full-height chip").toBeGreaterThanOrEqual(44);
+    expect(g.chip.top, "...inside its strip").toBeGreaterThanOrEqual(g.strip.top);
+    expect(g.chip.bottom, "...not clipped by it").toBeLessThanOrEqual(g.strip.bottom);
+    expect(g.onTop, "...and nothing drawn over it").toBe(true);
+    // The card gives the sheet its room: one row while a drawer is open.
+    expect(await cardHeight(app)).toBeLessThanOrEqual(70);
+  });
+
+  test("the tool's name drags the card open, and a tap still folds it", async ({ app }) => {
+    const name = app.page.locator("[data-options-open]");
+    await name.tap();
+    await app.settle(600);
+    const folded = await cardHeight(app);
+    const b = (await name.boundingBox())!;
+    const x = b.x + b.width / 3;
+    const y = b.y + b.height / 2;
+    await app.touchDown(x, y);
+    await app.touchMove(x, y - 120, 8);
+    await app.touchUp();
+    await app.settle(600);
+    await expect(name, "dragged open").toHaveAttribute("aria-expanded", "true");
+    const opened = await cardHeight(app);
+    expect(opened - folded, `${folded}px → ${opened}px`).toBeGreaterThan(80);
+
+    await app.settle(2_500); // Chromium drops the click of a tap for ~2s after a touch drag
+    await name.tap();
+    await app.settle(600);
+    await expect(name, "the next tap is a tap again").toHaveAttribute("aria-expanded", "false");
+  });
+});

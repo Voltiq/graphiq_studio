@@ -1469,16 +1469,22 @@ export default function OptionsBar({
    *  keeps the rest. */
   const maxBody = () => Math.max(MIN_BODY, Math.round(window.innerHeight * 0.5));
   const bodyRef = useRef<HTMLDivElement>(null);
-  const grip = useRef<{ y: number; h: number; moved: boolean } | null>(null);
+  const grip = useRef<{ y: number; h: number; moved: boolean; tap: boolean } | null>(null);
+  /** A drag on the tool's name just ended, so the click it is followed by is
+   *  not also a tap that folds the card. Cleared by the next press. */
+  const dragged = useRef(false);
   /* The drag writes the height straight onto the element — a state update per
      pointermove would re-render the whole bar every frame — and commits once,
-     on release. */
-  const onGripDown = (e: React.PointerEvent<HTMLDivElement>) => {
+     on release. Two things can be dragged: the grip, whose tap folds the card,
+     and the tool's name, a bigger target once the card is one row, whose tap
+     is its own click. */
+  const onGripDown = (e: React.PointerEvent<HTMLElement>, tap = true) => {
+    dragged.current = false;
     e.currentTarget.setPointerCapture(e.pointerId);
-    grip.current = { y: e.clientY, h: cardOpen ? (bodyRef.current?.offsetHeight ?? bodyH) : 0, moved: false };
+    grip.current = { y: e.clientY, h: cardOpen ? (bodyRef.current?.offsetHeight ?? bodyH) : 0, moved: false, tap };
     bodyRef.current?.setAttribute("data-dragging", "");
   };
-  const onGripMove = (e: React.PointerEvent<HTMLDivElement>) => {
+  const onGripMove = (e: React.PointerEvent<HTMLElement>) => {
     const g = grip.current;
     const body = bodyRef.current;
     if (!g || !body) return;
@@ -1488,7 +1494,7 @@ export default function OptionsBar({
     body.inert = false;
     body.style.height = `${Math.max(0, Math.min(maxBody(), g.h + dy))}px`;
   };
-  const onGripUp = (e: React.PointerEvent<HTMLDivElement>) => {
+  const onGripUp = (e: React.PointerEvent<HTMLElement>) => {
     const g = grip.current;
     const body = bodyRef.current;
     grip.current = null;
@@ -1496,9 +1502,10 @@ export default function OptionsBar({
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     body?.removeAttribute("data-dragging");
     if (!g.moved) {
-      setCardOpen(!cardOpen); // a tap folds it, or opens it again
+      if (g.tap) setCardOpen(!cardOpen); // a tap folds it, or opens it again
       return;
     }
+    dragged.current = true;
     /* The drag wrote straight to the element, behind React's back, so the
        element is left holding exactly what React will render next — React
        only patches what changed, and a height or `inert` it thinks it already
@@ -1688,7 +1695,8 @@ export default function OptionsBar({
           }}
         />
         {/* The header: the tool, and what must never be hunted for (Crop's
-            Apply). The name opens and folds the card, like the grip. */}
+            Apply). The name opens and folds the card, and drags it taller or
+            shorter, like the grip. */}
         <div className={styles.cardHead}>
           <button
             type="button"
@@ -1698,7 +1706,14 @@ export default function OptionsBar({
             /* The visible text is the tool's name, so the accessible name has to
                supply what the label no longer says: that this opens options. */
             aria-label={`${meta.name} options`}
-            onClick={() => setCardOpen(!cardOpen)}
+            onPointerDown={(e) => onGripDown(e, false)}
+            onPointerMove={onGripMove}
+            onPointerUp={onGripUp}
+            onPointerCancel={onGripUp}
+            onClick={() => {
+              if (dragged.current) dragged.current = false;
+              else setCardOpen(!cardOpen);
+            }}
           >
             <span className={styles.cardTile}>
               <Icon size={14} />

@@ -114,7 +114,7 @@ export const MOBILE_TOUR_STEPS: TourStep[] = [
     id: "options",
     target: "options",
     title: "Tool settings",
-    body: "This card holds the settings of the tool you are holding. Drag its grip to show more or less of them, or tap the grip to fold it away. Anything you must not lose, like Crop's Apply, stays beside the tool's name, and the Shift, Alt and Ctrl keys sit along its foot.",
+    body: "This card holds the settings of the tool you are holding. Drag its grip to show more or less of them, or tap it to fold the card to one slim row. Anything you must not lose, like Crop's Apply, stays beside the tool's name, and the Shift, Alt and Ctrl keys sit along its foot.",
   },
   {
     id: "canvas",

@@ -785,9 +785,12 @@
    As in the design: a card floating just above the tool dock. From the top:
    a grip (drag to resize, tap to fold), the header (the tool, and anything
    pinned like Crop's Apply), the controls in rows of label / track / value,
-   and a labelled row of Shift / Alt / Ctrl keys at the foot. While a drawer
-   is open the controls step aside, so the drawer has the room and the keys
-   stay in reach.
+   and a labelled row of Shift / Alt / Ctrl keys at the foot.
+
+   Folded — or while a drawer is open, or on a phone on its side — it is ONE
+   row: the tool and the keys side by side under a slim grip, 62px against
+   the 131px of a header with a keys row under it. On an iPhone 13 mini's
+   629px that is 69px more picture, or 69px more drawer.
    ========================================================================== */
 .optionsbar[data-mobile-options] {
   @include ds.phone-shell {
@@ -799,10 +802,16 @@
        opens; a drawer raises it over its scrim (globals.scss). */
     z-index: 55;
     height: auto;
-    flex-direction: column;
-    flex-wrap: nowrap;
-    align-items: stretch;
-    gap: 0;
+    /* A grid, so the keys can move between the foot of the open card and the
+       end of the folded card's one row without the markup changing. */
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "grip grip"
+      "head head"
+      "body body"
+      "keys keys";
+    gap: 0 8px;
     padding: 0 14px 10px;
     overflow: hidden;
     @include ds.card(var(--surface), 24px);
@@ -810,10 +819,59 @@
   }
 }
 
+/* The one-row card. Three ways in, one look: folded by the person, a drawer
+   open (the drawer wants the height, the keys must stay pressable beside it),
+   or a phone on its side (390px tall, with no room for controls at all). The
+   controls sit in a third row that is empty here — height 0 when folded,
+   hidden under a drawer — so dragging the grip grows them below the row. */
+@mixin card-row {
+  grid-template-areas:
+    "grip grip"
+    "head keys"
+    "body body";
+  padding-bottom: 6px;
+
+  .cardGrip {
+    height: 12px;
+
+    &::before {
+      height: 4px;
+    }
+  }
+
+  .keysRow {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .keysLabel {
+    display: none;
+  }
+
+  .modifierChips {
+    flex: none;
+    gap: 4px;
+  }
+
+  .modifierChip {
+    flex: none;
+    min-width: 44px;
+    padding: 0 7px;
+    font-size: 12px;
+  }
+
+  /* Where the row is too narrow for a name AND Crop's pinned buttons, the
+     tile says which tool it is; the name would only have been an ellipsis. */
+  .cardHead:has([data-pin]) .toggleName {
+    display: none;
+  }
+}
+
+
 /* The grip: the whole width of the card is the handle, the pill is its mark. */
 .cardGrip {
   @include ds.phone-shell {
-    flex: none;
+    grid-area: grip;
     display: grid;
     place-items: center;
     height: 22px;
@@ -847,7 +905,8 @@
    is pinned beside it. */
 .cardHead {
   @include ds.phone-shell {
-    flex: none;
+    grid-area: head;
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -869,6 +928,9 @@
     font-weight: var(--weight-semibold);
     letter-spacing: -0.01em;
     color: var(--text);
+    /* The name is a second grip — drag it to size the card (OptionsBar) — so
+       a vertical drag on it must not become a browser gesture. */
+    touch-action: none;
 
     &:active {
       background: var(--wash);
@@ -908,10 +970,10 @@
    between states but not while a finger is dragging it. */
 .optionsbar[data-mobile-options] .sheet {
   @include ds.phone-shell {
+    grid-area: body;
     position: relative;
     inset: auto;
     z-index: auto;
-    flex: none;
     max-height: calc(100svh - var(--chrome-top) - var(--chrome-bottom) - 230px);
     display: flex;
     flex-direction: column;
@@ -948,7 +1010,7 @@
 }
 
 /* A phone on its side has no room for the controls under the picture: the
-   card keeps its header and keys there, and the grip has nothing to size. */
+   card is its one row there, and the grip has nothing to size. */
 @media (max-height: 500px) {
   :global(html[data-mobile="true"]) .optionsbar[data-mobile-options] .sheet,
   :global(html[data-mobile="true"]) .optionsbar[data-mobile-options] .cardGrip {
@@ -956,14 +1018,14 @@
   }
 
   :global(html[data-mobile="true"]) .optionsbar[data-mobile-options] {
-    padding-top: 4px;
+    padding-top: 6px;
   }
 }
 
 /* Shift / Alt / Ctrl: a labelled row of key caps at the foot of the card. */
 .keysRow {
   @include ds.phone-shell {
-    flex: none;
+    grid-area: keys;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -1024,5 +1086,29 @@
       background: var(--accent-fill);
       box-shadow: inset 0 1px 0 rgb(255 255 255 / 25%), var(--accent-glow);
     }
+  }
+}
+
+/* The one-row card, applied last so it wins its ties with the rules above. */
+:global(html[data-mobile="true"]) .optionsbar[data-mobile-options]:not([data-card-open]),
+:global(html[data-mobile="true"][data-drawer]) .optionsbar[data-mobile-options] {
+  @include card-row;
+}
+
+@media (max-height: 500px) {
+  :global(html[data-mobile="true"]) .optionsbar[data-mobile-options] {
+    @include card-row;
+  }
+}
+
+/* Under a drawer, and on a phone on its side, the row is all there is: no
+   controls to unfold, so no chevron promising them. */
+:global(html[data-mobile="true"][data-drawer]) .optionsbar[data-mobile-options] .cardChevron {
+  display: none;
+}
+
+@media (max-height: 500px) {
+  :global(html[data-mobile="true"]) .optionsbar[data-mobile-options] .cardChevron {
+    display: none;
   }
 }

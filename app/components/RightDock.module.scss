@@ -3120,6 +3120,11 @@ html[data-mobile="true"] {
     position: sticky;
     top: 28px;
     z-index: 3;
+    /* Never shrinks. The sheet is a flex column of a fixed height, and a panel
+       taller than it (Layers, Color) squeezed the strip to its padding — 13px —
+       where its own sideways scrolling clipped the 44px chips to a sliver
+       under the grip. */
+    flex: none;
     display: flex;
     gap: 6px;
     padding: 2px 12px 10px;

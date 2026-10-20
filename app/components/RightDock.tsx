@@ -653,6 +653,22 @@ export default function RightDock({
   /** Is this panel showing? On a phone, only the chosen one. */
   const isOpen = (id: PanelId): boolean => (mobile ? shownId === id : openMap[id]);
 
+  /* The chosen chip is always wholly in view. Fourteen chips are three
+     screens of strip on a phone, so the one showing — Layers, before anything
+     is chosen — need not be among the first few, and a chip half off the edge
+     reads as cut off rather than as "there is more this way". */
+  const chipsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const strip = chipsRef.current;
+    const chip = strip?.querySelector<HTMLElement>(`[data-panel-chip="${shownId}"]`);
+    if (!strip || !chip) return;
+    const pad = 12; // the strip's own side padding
+    const left = chip.offsetLeft - pad;
+    const right = chip.offsetLeft + chip.offsetWidth + pad - strip.clientWidth;
+    if (strip.scrollLeft > left) strip.scrollLeft = left;
+    else if (strip.scrollLeft < right) strip.scrollLeft = right;
+  }, [mobile, shownId]);
+
   /**
    * Open or close a panel.
    *
@@ -1228,7 +1244,7 @@ export default function RightDock({
             content below. One panel at a time, each a tap away — rather than
             fourteen folded headers to scroll past. */}
         {mobile && (
-          <div className={styles.panelChips} role="tablist" aria-label="Panels">
+          <div ref={chipsRef} className={styles.panelChips} role="tablist" aria-label="Panels">
             {phoneIds.map((id) => {
               const Icon = PANEL_ICONS[id];
               return (

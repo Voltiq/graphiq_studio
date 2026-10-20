@@ -92,7 +92,7 @@ Graphiq Studio picks its layout from the device in front of it — a mouse or a 
 
 - **Header** — the document's name (tap it to switch, create, rename or close documents), Undo, Redo and Export. ☰ opens the menus, with Search as their first row.
 - **Stage** — the picture in a rounded pane, with a size · zoom chip at the top: tap it to fit the picture back on screen. Pinch to zoom; press and hold with the eyedropper, pen or clone stamp for a magnifier under your fingertip.
-- **Options card** — the tool's settings in a card on the foot of the canvas, open by default. Drag its grip to show more or fewer of them, or tap to fold it; the size is remembered. **Shift**, **Alt** and **Ctrl** sit along its foot as keys: tap to hold one for your next gesture, tap again to lock it.
+- **Options card** — the tool's settings in a card on the foot of the canvas, open by default. Drag its grip or the tool's name to show more or fewer of them, or tap to fold it to one slim row; the size is remembered. **Shift**, **Alt** and **Ctrl** sit along its foot as keys: tap to hold one for your next gesture, tap again to lock it.
 - **Dock** — a floating glass dock with Move, Select, Brush and Eraser one tap away, plus Pan, **Tools** (every tool as a named tile, grouped by what it is for, with your colours at the top) and **Panels** (one panel at a time, picked from a row of chips).
 
 ### On a tablet

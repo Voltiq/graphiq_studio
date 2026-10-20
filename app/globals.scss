@@ -905,27 +905,37 @@ html[data-mobile="true"] {
      at once is the whole problem — and height is the axis a phone has to spare.
 
      Three heights, set by `html[data-sheet]` and read from --sheet-h:
-       peek  25vh — the canvas keeps 57% of the screen
-       half  50vh
+       peek  18svh — the canvas keeps 57% of the screen
+       half  50svh
        full  everything between the bars, which is what the drawer always was
 
      `top` is deliberately not set: the sheet is anchored to the bottom and
      sized, so a detent change animates the height rather than sliding the
-     whole panel. */
-  --sheet-h: 50vh;
+     whole panel.
+
+     Every height here is in `svh`, the SMALL viewport, like the shell itself
+     (Editor.module.scss). `vh` is the LARGE one — the screen with Safari's
+     bars retracted, which they never are here because nothing scrolls. On an
+     iPhone 13 mini in Safari that is ~100px more than can be seen, and since
+     the sheet is anchored to the bottom, the extra went off the TOP of the
+     screen: "full" pushed the grip and the panel chips out of sight, and the
+     sheet never looked unfolded. Desktop Chromium resolves both units to one
+     number, so only the source check (tests/shell-viewport-source.test.ts)
+     can tell them apart. */
+  --sheet-h: 50svh;
 
   &[data-sheet="peek"] {
-    /* 18vh, not 25. The stage starts below the tabs and the ruler, so the
+    /* 18, not 25. The stage starts below the tabs and the ruler, so the
        picture's visible height is measured from y=154 on a 844px screen — a
-       25vh sheet left it 423px, which is 50% of the screen and misses the mark
-       the item set. 18vh leaves 482px, or 57%. */
-    --sheet-h: 18vh;
+       25% sheet left it 423px, which is 50% of the screen and misses the mark
+       the item set. 18% leaves 482px, or 57%. */
+    --sheet-h: 18svh;
   }
   &[data-sheet="half"] {
-    --sheet-h: 50vh;
+    --sheet-h: 50svh;
   }
   &[data-sheet="full"] {
-    --sheet-h: calc(100vh - var(--chrome-top) - var(--m-drawer-bottom));
+    --sheet-h: calc(100svh - var(--chrome-top) - var(--m-drawer-bottom));
   }
 
   [data-tour="dock"] {
@@ -936,7 +946,7 @@ html[data-mobile="true"] {
     bottom: var(--m-drawer-bottom);
     width: auto;
     height: var(--sheet-h);
-    max-height: calc(100vh - var(--chrome-top) - var(--m-drawer-bottom));
+    max-height: calc(100svh - var(--chrome-top) - var(--m-drawer-bottom));
     transform: translateY(100%);
     /* Closed, it rests where the dock is — which no longer hides it, the dock
        being a floating pill — so it is also made invisible, after its slide. */
@@ -1111,7 +1121,7 @@ html[data-touch="true"] {
        within about one screen of each other whatever is open.
        `overscroll-behavior: contain` stops a flick inside a menu from carrying
        on into the sheet once it hits the end. */
-    max-height: 46vh;
+    max-height: 46svh;
     overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
