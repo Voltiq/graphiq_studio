@@ -706,6 +706,11 @@
     width: 32px;
     height: 32px;
     border-radius: 10px;
+    /* The pair is ONE finger target on a touchscreen: the chip behind spans
+       it (its 44px reach), and the chip in front, which has nothing to do of
+       its own, lets the tap through — so a tap anywhere on the pair switches
+       which colour is being edited, and the target's centre is its own. */
+    pointer-events: none;
   }
 
   .slotBack {

@@ -405,17 +405,30 @@ export default function GradientControl({
   const popoverRef = useRef<HTMLDivElement>(null);
 
   // Close on an outside click — but ignore clicks inside the nested colour
-  // picker (a portaled [role="dialog"]) so editing a stop keeps this open.
+  // picker (a portaled [role="dialog"]) so editing a stop keeps this open, and
+  // on a phone the tap on ITS blanket, which closes the picker and only that.
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as Element;
       if (wrapRef.current?.contains(t) || popoverRef.current?.contains(t)) return;
-      if (t.closest('[role="dialog"]')) return;
+      if (t.closest('[role="dialog"], [data-sheet-scrim]')) return;
+      setOpen(false);
+    };
+    // Escape closes it — as a dialog it owns the key (Editor's overlay check),
+    // so the editor no longer acts on it. A stop's colour picker open on top
+    // takes this Escape for itself.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (document.querySelector('[role="dialog"][aria-label="Color picker"]:not([data-state="closed"])')) return;
       setOpen(false);
     };
     document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open]);
 
   // Drop the anchor position as the popover closes, DURING render — otherwise
@@ -468,10 +481,15 @@ export default function GradientControl({
 
       {popShown && pos &&
         createPortal(
+          <>
+          {/* A phone sheet's blanket (only there) — see ColorPopover. */}
+          {!popClosing && <div className={styles.scrim} onMouseDown={() => setOpen(false)} />}
           <div
             ref={popoverRef}
             className={styles.popover}
             {...exitProps(popClosing)}
+            role="dialog"
+            aria-label="Gradient colours"
             style={{ position: "fixed", left: pos.left, top: pos.top }}
           >
             <button
@@ -503,7 +521,8 @@ export default function GradientControl({
                   : onGradient({ noise: undefined })
               }
             />
-          </div>,
+          </div>
+          </>,
           document.body,
         )}
     </div>

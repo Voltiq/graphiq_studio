@@ -75,17 +75,25 @@ test.describe("on a phone", () => {
     await app.run("layer-new");
     await openPanels(app);
     expect(await app.openPanelById("color"), "the Colour panel opens").toBe(true);
+    /* What a finger REACHES, not the strip's box: the strip keeps its slim pill
+       box (padding it made the visible ends oval) and reaches through an
+       invisible extension — so the check is what lies 16px above and below
+       its centre, the way the app's switches are checked. */
     const strips = await app.page.evaluate(() =>
-      /* The strips themselves: `.alphaTrack` and the handles also match a loose
-         "hue|alpha" search and are not hit targets — measuring those reported
-         a 10px strip that does not exist. */
-      [...document.querySelectorAll('[class*="hue"], [class*="alpha"]')]
-        .filter((el) => !/track|handle|checker/i.test(el.className.toString()))
-        .map((el) => Math.round(el.getBoundingClientRect().height))
-        .filter((h) => h > 0),
+      ["Hue", "Opacity"].map((name) => {
+        const el = document.querySelector<HTMLElement>(`[data-panel-id="color"] [role="slider"][aria-label="${name}"]`);
+        if (!el) return { name, reach: null };
+        el.scrollIntoView({ block: "center" });
+        const r = el.getBoundingClientRect();
+        const x = r.left + r.width * 0.3;
+        const y = r.top + r.height / 2;
+        return { name, reach: [-16, 0, 16].map((dy) => el.contains(document.elementFromPoint(x, y + dy))) };
+      }),
     );
-    expect(strips.length, "the strips are on screen").toBeGreaterThan(0);
-    for (const h of strips) expect(h, `strip heights ${strips.join(", ")}`).toBeGreaterThanOrEqual(24);
+    for (const s of strips) {
+      expect(s.reach, `the ${s.name} strip is on screen`).not.toBeNull();
+      expect(s.reach, `a touch 16px above, on, and below the ${s.name} strip reaches it`).toEqual([true, true, true]);
+    }
   });
 });
 

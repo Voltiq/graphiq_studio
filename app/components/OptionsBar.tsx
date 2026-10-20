@@ -591,108 +591,122 @@ function TipShapeControl({
                 onChange={(n) => setShape({ angle: n })}
               />
 
+              {/* Scatter, Texture and Dual tip each show their settings only
+                  while they are on: all of them at once stood 1007px tall. */}
               <span className={styles.otTitle}>Scatter</span>
               <Toggle
                 label="Scatter dabs"
                 checked={scat.enabled}
                 onChange={(v) => setScatter({ enabled: v })}
               />
-              <BaseSlider
-                inline
-                label="Amount"
-                unit="%"
-                min={0}
-                max={200}
-                value={scat.amount}
-                onChange={(n) => setScatter({ amount: n })}
-              />
-              <BaseSlider
-                inline
-                label="Count"
-                min={1}
-                max={16}
-                value={scat.count}
-                onChange={(n) => setScatter({ count: n })}
-              />
-              <Toggle
-                label="Both axes"
-                checked={scat.bothAxes}
-                onChange={(v) => setScatter({ bothAxes: v })}
-              />
+              {scat.enabled && (
+                <>
+                  <BaseSlider
+                    inline
+                    label="Amount"
+                    unit="%"
+                    min={0}
+                    max={200}
+                    value={scat.amount}
+                    onChange={(n) => setScatter({ amount: n })}
+                  />
+                  <BaseSlider
+                    inline
+                    label="Count"
+                    min={1}
+                    max={16}
+                    value={scat.count}
+                    onChange={(n) => setScatter({ count: n })}
+                  />
+                  <Toggle
+                    label="Both axes"
+                    checked={scat.bothAxes}
+                    onChange={(v) => setScatter({ bothAxes: v })}
+                  />
+                </>
+              )}
 
               <span className={styles.otTitle}>Texture</span>
               <Toggle label="Use texture" checked={tex.enabled} onChange={(v) => setTex({ enabled: v })} />
-              <Select
-                label="Pattern"
-                options={TEXTURE_PATTERNS.map((p) => TEXTURE_LABELS[p])}
-                value={TEXTURE_LABELS[tex.pattern]}
-                onChange={(name) => {
-                  const id = TEXTURE_PATTERNS.find((p) => TEXTURE_LABELS[p] === name);
-                  if (id) setTex({ pattern: id });
-                }}
-              />
-              <BaseSlider
-                inline
-                label="Scale"
-                unit="%"
-                min={10}
-                max={400}
-                value={tex.scale}
-                onChange={(n) => setTex({ scale: n })}
-              />
-              <BaseSlider
-                inline
-                label="Depth"
-                unit="%"
-                value={tex.depth}
-                onChange={(n) => setTex({ depth: n })}
-              />
-              <Toggle label="Invert" checked={tex.invert} onChange={(v) => setTex({ invert: v })} />
-              <span className={styles.otHint}>
-                The grain is fixed to the canvas, not to the brush — overlapping strokes hit the
-                same tooth, so paint builds up the way it would on a real surface.
-              </span>
+              {tex.enabled && (
+                <>
+                  <Select
+                    label="Pattern"
+                    options={TEXTURE_PATTERNS.map((p) => TEXTURE_LABELS[p])}
+                    value={TEXTURE_LABELS[tex.pattern]}
+                    onChange={(name) => {
+                      const id = TEXTURE_PATTERNS.find((p) => TEXTURE_LABELS[p] === name);
+                      if (id) setTex({ pattern: id });
+                    }}
+                  />
+                  <BaseSlider
+                    inline
+                    label="Scale"
+                    unit="%"
+                    min={10}
+                    max={400}
+                    value={tex.scale}
+                    onChange={(n) => setTex({ scale: n })}
+                  />
+                  <BaseSlider
+                    inline
+                    label="Depth"
+                    unit="%"
+                    value={tex.depth}
+                    onChange={(n) => setTex({ depth: n })}
+                  />
+                  <Toggle label="Invert" checked={tex.invert} onChange={(v) => setTex({ invert: v })} />
+                  <span className={styles.otHint}>
+                    The grain is fixed to the canvas, not to the brush — overlapping strokes hit the
+                    same tooth, so paint builds up the way it would on a real surface.
+                  </span>
+                </>
+              )}
 
               <span className={styles.otTitle}>Dual tip</span>
               <Toggle label="Use dual tip" checked={dual.enabled} onChange={(v) => setDual({ enabled: v })} />
-              <BaseSlider
-                inline
-                label="Size"
-                unit="%"
-                min={5}
-                max={200}
-                value={dual.size}
-                onChange={(n) => setDual({ size: n })}
-              />
-              <BaseSlider
-                inline
-                label="Hardness"
-                unit="%"
-                value={dual.hardness}
-                onChange={(n) => setDual({ hardness: n })}
-              />
-              <BaseSlider
-                inline
-                label="Scatter"
-                unit="%"
-                min={0}
-                max={200}
-                value={dual.scatter}
-                onChange={(n) => setDual({ scatter: n })}
-              />
-              <BaseSlider
-                inline
-                label="Count"
-                min={1}
-                max={32}
-                value={dual.count}
-                onChange={(n) => setDual({ count: n })}
-              />
-              <span className={styles.otHint}>
-                A second, scattered tip erodes the first into bristles. The pattern is fixed for
-                the whole stroke, so the gaps line up into streaks; each new stroke picks a
-                different one.
-              </span>
+              {dual.enabled && (
+                <>
+                  <BaseSlider
+                    inline
+                    label="Size"
+                    unit="%"
+                    min={5}
+                    max={200}
+                    value={dual.size}
+                    onChange={(n) => setDual({ size: n })}
+                  />
+                  <BaseSlider
+                    inline
+                    label="Hardness"
+                    unit="%"
+                    value={dual.hardness}
+                    onChange={(n) => setDual({ hardness: n })}
+                  />
+                  <BaseSlider
+                    inline
+                    label="Scatter"
+                    unit="%"
+                    min={0}
+                    max={200}
+                    value={dual.scatter}
+                    onChange={(n) => setDual({ scatter: n })}
+                  />
+                  <BaseSlider
+                    inline
+                    label="Count"
+                    min={1}
+                    max={32}
+                    value={dual.count}
+                    onChange={(n) => setDual({ count: n })}
+                  />
+                  <span className={styles.otHint}>
+                    A second, scattered tip erodes the first into bristles. The pattern is fixed for
+                    the whole stroke, so the gaps line up into streaks; each new stroke picks a
+                    different one.
+                  </span>
+                </>
+              )}
             </div>
           </>,
           document.body,

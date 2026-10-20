@@ -14,6 +14,7 @@ import styles from "./ColorPopover.module.scss";
 import ColorPicker from "./ColorPicker";
 import { uiZoom } from "../lib/ui-scale";
 import { clampX, clampY } from "../lib/safeArea";
+import { useIsMobile } from "../lib/useMediaQuery";
 
 type Align = "bottom-start" | "bottom-end" | "right-start" | "right-end";
 
@@ -45,6 +46,10 @@ export default function ColorPopover({
   const wrapRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
+  // On a phone it is a sheet from the dock (ColorPopover.module.scss), and the
+  // whole swatch library under the picker made that sheet 721px tall: one row
+  // of swatches comes along instead — the library is the Color panel's.
+  const mobile = useIsMobile();
 
   // Position the (portalled) popover next to the trigger, clamped to the
   // viewport. The portal escapes any overflow-clipping ancestor (the options
@@ -129,21 +134,27 @@ export default function ColorPopover({
       {popShown &&
         typeof document !== "undefined" &&
         createPortal(
-          <div
-            ref={popRef}
-            className={styles.popover}
-            {...exitProps(popClosing)}
-            role="dialog"
-            aria-label="Color picker"
-            style={{
-              position: "fixed",
-              top: pos?.top ?? 0,
-              left: pos?.left ?? 0,
-              visibility: pos ? "visible" : "hidden",
-            }}
-          >
-            <ColorPicker value={color} onChange={onChange} />
-          </div>,
+          <>
+            {/* The phone's blanket (only there): the tap that closes the sheet
+                lands on it, not on the canvas. The document listener above
+                does the closing. */}
+            {!popClosing && <div className={styles.scrim} data-sheet-scrim="" />}
+            <div
+              ref={popRef}
+              className={styles.popover}
+              {...exitProps(popClosing)}
+              role="dialog"
+              aria-label="Color picker"
+              style={{
+                position: "fixed",
+                top: pos?.top ?? 0,
+                left: pos?.left ?? 0,
+                visibility: pos ? "visible" : "hidden",
+              }}
+            >
+              <ColorPicker value={color} onChange={onChange} swatches={mobile ? "row" : "full"} />
+            </div>
+          </>,
           document.body,
         )}
     </div>

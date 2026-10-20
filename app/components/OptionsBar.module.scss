@@ -213,6 +213,7 @@
   position: fixed;
   inset: 0;
   z-index: 300;
+  @include ds.phone-scrim(otSheet);
 }
 
 .otPopover {
@@ -226,15 +227,37 @@
   padding: 14px;
   @include ds.overlay;
   @include ds.pop-in(otIn);
+  /* On a phone: a sheet over the options card, from the dock up. */
+  @include ds.phone-sheet(otSheet);
+  @include ds.phone-shell {
+    gap: 8px;
+    padding: 16px 16px 14px;
+
+    /* A slider's track takes the rest of its row. The options card caps it
+       at 104px because there it shares the row with other controls; here a
+       capped track left half the sheet empty beside its readout. */
+    input[type="range"] {
+      flex: 1 1 auto;
+    }
+  }
 }
 
 @include ds.pop-keyframes(otIn);
+@include ds.phone-sheet-keyframes(otSheet);
 
 .otTitle {
   display: flex;
   align-items: center;
   gap: 8px;
   @include ds.eyebrow;
+
+  /* On a phone, a section starts with a little air above it: at the sheet's
+     8px rhythm a title sat tight under the row before it. */
+  @include ds.phone-shell {
+    &:not(:first-child) {
+      margin-top: 6px;
+    }
+  }
 
   &::after {
     content: "";
@@ -248,12 +271,33 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px 10px;
+
+  /* Two columns of a 370px sheet: a long name ("Discretionary ligatures")
+     wraps under itself instead of running out past the sheet's edge. */
+  @include ds.phone-shell {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+
+    [role="switch"] {
+      text-align: left;
+    }
+
+    [role="switch"] > span:last-child {
+      white-space: normal;
+    }
+  }
 }
 
 .otAxisRow {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+
+  @include ds.phone-shell {
+    > :first-child:has(input[type="range"]) {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+  }
 }
 
 .otReset {

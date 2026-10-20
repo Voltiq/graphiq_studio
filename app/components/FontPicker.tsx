@@ -87,7 +87,9 @@ export default function FontPicker({
   };
 
   useEffect(() => {
-    if (!open) return;
+    // Not on a phone: focusing the search raises the keyboard, which takes
+    // half the screen from the list the sheet opened to show. Search is a tap.
+    if (!open || document.documentElement.dataset.mobile === "true") return;
     const t = window.setTimeout(() => inputRef.current?.focus(), 0);
     return () => window.clearTimeout(t);
   }, [open]);
@@ -99,8 +101,17 @@ export default function FontPicker({
       if (btnRef.current?.contains(t) || popRef.current?.contains(t)) return;
       setOpen(false);
     };
+    // Escape from outside the list too (the popover's own handler has it when
+    // focus is inside): on a phone the search is not focused on open.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !popRef.current?.contains(document.activeElement)) setOpen(false);
+    };
     document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open]);
 
   // Follow the keyboard highlight so arrowing past the fold still shows it.
@@ -164,10 +175,15 @@ export default function FontPicker({
       {popShown &&
         pos &&
         createPortal(
+          <>
+          {/* A phone sheet's blanket (only there) — see ColorPopover. */}
+          {!popClosing && <div className={styles.scrim} data-sheet-scrim="" />}
           <div
             ref={popRef}
             className={styles.popover}
             {...exitProps(popClosing)}
+            role="dialog"
+            aria-label="Fonts"
             style={{ position: "fixed", left: pos.left, top: pos.top, width: POPOVER_W }}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
@@ -223,7 +239,8 @@ export default function FontPicker({
             {system.length > 0 && (
               <div className={styles.systemNote}>{system.length} system fonts loaded</div>
             )}
-          </div>,
+          </div>
+          </>,
           document.body,
         )}
     </div>

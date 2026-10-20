@@ -56,9 +56,24 @@
   gap: var(--sp-2);
   @include ds.overlay(var(--r-xl));
   @include ds.pop-in(pop);
+  @include ds.phone-sheet(popSheet);
+  @include ds.phone-shell {
+    /* Over the options card it opens from (55) and the drawers (120). The
+       list scrolls, not the sheet: it takes whatever height the sheet has. */
+    z-index: 301;
+    padding: 12px;
+    overflow: hidden;
+  }
 }
 
 @include ds.pop-keyframes(pop);
+@include ds.phone-sheet-keyframes(popSheet);
+
+.scrim {
+  display: none;
+  z-index: 300;
+  @include ds.phone-scrim(popSheet);
+}
 
 .searchRow {
   position: relative;
@@ -95,6 +110,12 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+  @include ds.phone-shell {
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: 360px;
+    overscroll-behavior: contain;
+  }
 }
 
 .groupLabel {

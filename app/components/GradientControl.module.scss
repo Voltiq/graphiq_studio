@@ -34,9 +34,22 @@
   gap: var(--sp-3);
   @include ds.overlay(var(--r-xl));
   @include ds.pop-in(pop);
+  @include ds.phone-sheet(popSheet);
+  @include ds.phone-shell {
+    /* Over the options card it opens from (55) and the drawers (120). */
+    z-index: 301;
+    padding: 16px;
+  }
 }
 
 @include ds.pop-keyframes(pop);
+@include ds.phone-sheet-keyframes(popSheet);
+
+.scrim {
+  display: none;
+  z-index: 300;
+  @include ds.phone-scrim(popSheet);
+}
 
 .sourceBtn {
   display: flex;

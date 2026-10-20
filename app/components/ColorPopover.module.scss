@@ -15,9 +15,20 @@
   padding: var(--sp-3);
   @include ds.overlay(var(--r-xl));
   @include ds.pop-in(pop);
+  @include ds.phone-sheet(popSheet);
+  @include ds.phone-shell {
+    padding: 16px;
+  }
 }
 
 @include ds.pop-keyframes(pop);
+@include ds.phone-sheet-keyframes(popSheet);
+
+.scrim {
+  display: none;
+  z-index: 8999;
+  @include ds.phone-scrim(popSheet);
+}
 
 .bottom-start {
   top: calc(100% + 8px);

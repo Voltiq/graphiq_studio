@@ -388,3 +388,19 @@ html[data-mobile="true"] {
     border-width: 3px;
   }
 }
+
+/* A phone on its side: 390px of height. The colour sheet over the dock has
+   about 300 of it, and at 184px the field alone took more than half — the
+   value and the swatches were a scroll away. On a sheet 500px wide a shorter
+   field is still a big one. */
+@media (max-height: 500px) {
+  html[data-mobile="true"] {
+    .picker {
+      gap: 12px;
+    }
+
+    .sv {
+      height: 96px;
+    }
+  }
+}

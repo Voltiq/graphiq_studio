@@ -625,3 +625,107 @@
     @content;
   }
 }
+
+/* ---- Phone sheet ---------------------------------------------------------
+   A popover on a phone. Anchored under its trigger it was a desktop flyout on
+   a 390px screen — and the triggers live in the options card at the FOOT of
+   the stage, so "under the trigger" was off the bottom of the screen: at
+   390×844 Tip shape stood 1007px tall from y=628, OpenType, Warp text and Type
+   effects all ran past the edge, and the colour popover was 721px tall.
+
+   So on the phone shell a popover is one thing: a floating sheet rising from
+   the dock, 10px in from the sides like the drawers and the menu sheet, over
+   the options card it was opened from, never taller than the space between
+   the header and the dock (or the keyboard) — longer content scrolls inside
+   it. The inline left/top/width are desktop geometry, so they are overridden.
+   The popovers opt into the interface scale (`zoom`), and a zoomed element's
+   insets and lengths render ×zoom: everything here is ÷ --ui-zoom.
+
+   `phone-sheet` goes on the popover (after `pop-in`, which it replaces on the
+   phone); `phone-sheet-keyframes` once at the module's top level, same name. */
+@mixin phone-sheet($name) {
+  :global(html[data-mobile="true"]) & {
+    position: fixed;
+    left: calc((10px + var(--safe-l)) / var(--ui-zoom, 1)) !important;
+    right: calc((10px + var(--safe-r)) / var(--ui-zoom, 1)) !important;
+    top: auto !important;
+    bottom: calc((var(--kb-inset, 0px) + var(--chrome-bottom) + 8px) / var(--ui-zoom, 1)) !important;
+    width: auto !important;
+    /* A phone on its side is 844px wide: a sheet across all of it would be a
+       letterbox. Capped, the inset centres it (auto margins). */
+    max-width: calc(520px / var(--ui-zoom, 1));
+    margin-inline: auto;
+    max-height: calc(
+      (100svh - var(--chrome-top) - var(--chrome-bottom) - var(--kb-inset, 0px) - 16px) / var(--ui-zoom, 1)
+    );
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-radius: 24px;
+    transform-origin: 50% 100%;
+    animation:
+      #{$name} var(--dur-snappy) var(--spring-snappy) both,
+      #{$name}-reveal var(--dur-reveal) var(--ease-reveal) both;
+
+    &[data-state="closed"] {
+      animation: #{$name}-out var(--dur-exit) var(--ease-exit) both;
+    }
+
+    /* A phone on its side has 390px of height, 154 of it header and dock: a
+       sheet above the dock was 220px of scrolling. The blanket has the dock
+       out of reach while a sheet is up anyway, so here the sheet comes down
+       over it. */
+    @media (max-height: 500px) {
+      bottom: calc((var(--kb-inset, 0px) + var(--safe-b) + 8px) / var(--ui-zoom, 1)) !important;
+      max-height: calc((100svh - var(--chrome-top) - var(--safe-b) - var(--kb-inset, 0px) - 16px) / var(--ui-zoom, 1));
+    }
+  }
+}
+
+/* It rises from the dock with its corners drawing in from rounder still, and
+   sinks back when it goes. */
+@mixin phone-sheet-keyframes($name) {
+  @keyframes #{$name} {
+    from {
+      transform: translateY(32px) scale(0.96);
+      border-radius: 36px;
+    }
+  }
+  @keyframes #{$name}-reveal {
+    from {
+      opacity: 0;
+      filter: blur(6px);
+    }
+    to {
+      filter: none;
+    }
+  }
+  @keyframes #{$name}-out {
+    to {
+      opacity: 0;
+      transform: translateY(20px) scale(0.98);
+      filter: blur(3px);
+    }
+  }
+  @keyframes #{$name}-scrim {
+    from {
+      opacity: 0;
+    }
+  }
+}
+
+/* What sits behind a phone sheet: the drawers' blanket, so the sheet reads
+   as the one thing in hand — and something to tap, so the tap that closes it
+   lands HERE rather than on the canvas (where it would have been a dab of
+   paint). On a desktop a popover is dismissed by clicking anywhere and that
+   click carries on to what it hit, so a scrim that exists only for the phone
+   is `display: none` outside this. `$name` is the sheet's, whose keyframes
+   include the scrim's fade. */
+@mixin phone-scrim($name) {
+  :global(html[data-mobile="true"]) & {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: var(--blanket);
+    animation: #{$name}-scrim var(--dur-reveal) var(--ease-reveal) both;
+  }
+}
