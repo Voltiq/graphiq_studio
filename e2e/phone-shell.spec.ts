@@ -250,3 +250,71 @@ test("renaming a document in the tab strip: the tab becomes the field, no bigger
   await app.settle(300);
   expect((await app.docs()).map((d) => d.name), "renamed").toContain("Poster");
 });
+
+/* Reported: on a phone the Color panel's slider ends were oval, its swatch
+   row was cut off, its Picker / Swatches buttons were lopsided, and it was
+   hard to scroll — the whole picker refused vertical swipes. */
+test.describe("the Color panel on a phone", () => {
+  const openColour = async (app: App) => {
+    await dock(app).locator("button", { hasText: "Panels" }).first().tap();
+    await app.settle(800);
+    await app.setSheetDetent("full");
+    await app.page.locator('[data-panel-chip="color"]').tap();
+    await app.settle(700);
+  };
+  const fg = (app: App) => app.page.evaluate(() => window.graphiq!.foreground().toLowerCase());
+
+  test("round strips, whole swatches, an even Picker / Swatches control", async ({ app }) => {
+    await openColour(app);
+    const g = await app.page.evaluate(() => {
+      const panel = document.querySelector('[data-panel-id="color"]')!;
+      const hue = panel.querySelector<HTMLElement>('[aria-label="Hue"]')!;
+      const row = panel.querySelector('[class*="swRowItems"]')!.getBoundingClientRect();
+      const chips = [...panel.querySelectorAll('[class*="swRowItems"] button')]
+        .map((b) => b.getBoundingClientRect())
+        .filter((r) => r.top < row.bottom);
+      const seg = panel.querySelector('[role="group"][aria-label="Color view"]')!.getBoundingClientRect();
+      const halves = [...panel.querySelectorAll("[data-color-view]")].map((b) => Math.round(b.getBoundingClientRect().width));
+      const body = panel.querySelector('[class*="colorPanel"]')!.getBoundingClientRect();
+      return {
+        huePad: getComputedStyle(hue).paddingTop,
+        hueH: hue.getBoundingClientRect().height,
+        chipsWhole: chips.length > 0 && chips.every((r) => r.bottom <= row.bottom + 0.5),
+        chipH: Math.round(chips[0]?.height ?? 0),
+        segFull: seg.width >= body.width - 2,
+        halves,
+      };
+    });
+    expect(g.huePad, "the strip is its own box: a pill, not a pill cut from a padded box").toBe("0px");
+    expect(g.hueH, "...14px tall").toBe(14);
+    expect(g.chipsWhole, "every swatch in the row shows whole").toBe(true);
+    expect(g.chipH, "...at the 44px floor").toBe(44);
+    expect(g.segFull, "Picker / Swatches spans the panel").toBe(true);
+    expect(Math.abs(g.halves[0] - g.halves[1]), "...in two even halves").toBeLessThanOrEqual(1);
+  });
+
+  test("a vertical swipe over a strip scrolls the panel; a sideways drag sets the colour", async ({ app }) => {
+    await openColour(app);
+    await app.setSheetDetent("half"); // a sheet shorter than the panel: something to scroll
+    await app.settle(600);
+    const before = await fg(app);
+    const sheet = app.page.locator('[data-tour="dock"]');
+    const top0 = await sheet.evaluate((el) => el.scrollTop);
+    let b = (await app.page.locator('[data-panel-id="color"] [aria-label="Hue"]').boundingBox())!;
+    await app.touchDown(b.x + b.width * 0.3, b.y + b.height / 2);
+    await app.touchMove(b.x + b.width * 0.3, b.y + b.height / 2 - 160, 10);
+    await app.touchUp();
+    await app.settle(700);
+    expect(await sheet.evaluate((el) => el.scrollTop), "the panel scrolled").toBeGreaterThan(top0 + 40);
+    expect(await fg(app), "and the colour is untouched").toBe(before);
+
+    await app.settle(2_000); // Chromium drops the gesture after a touch scroll for a moment
+    b = (await app.page.locator('[data-panel-id="color"] [aria-label="Hue"]').boundingBox())!;
+    await app.touchDown(b.x + b.width * 0.1, b.y + b.height / 2);
+    await app.touchMove(b.x + b.width * 0.15, b.y + b.height / 2, 4);
+    await app.touchMove(b.x + b.width * 0.05, b.y + b.height / 2, 6);
+    await app.touchUp();
+    await app.settle(400);
+    expect(await fg(app), "a sideways drag on the strip changes the hue").not.toBe(before);
+  });
+});

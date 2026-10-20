@@ -92,6 +92,7 @@ function DragArea({
   valueMax,
   valueText,
   onStep,
+  axis = "xy",
 }: {
   className: string;
   onChange: (nx: number, ny: number) => void;
@@ -104,9 +105,18 @@ function DragArea({
   valueText?: string;
   /** dx / dy are ±1 (±10 with Shift); the caller decides what a step means. */
   onStep?: (dx: number, dy: number) => void;
+  /** "x" for a strip: only sideways movement is a drag (see below). */
+  axis?: "x" | "xy";
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  /* A finger landing on a strip may be the start of a scroll of the sheet the
+     picker lives in, not a drag of the strip — and it used to set the hue the
+     instant it touched down, so scrolling past the picker changed the colour.
+     The strip waits instead: moving sideways is a drag, lifting without
+     moving is a tap (the value lands there), and moving up or down is the
+     browser's to scroll (`touch-action: pan-y`), which cancels the pointer. */
+  const pending = useRef<{ x: number; y: number } | null>(null);
 
   const emit = (clientX: number, clientY: number) => {
     const el = ref.current;
@@ -136,18 +146,43 @@ function DragArea({
         onStep(dx, dy);
       }}
       onPointerDown={(e) => {
+        if (axis === "x" && e.pointerType === "touch") {
+          pending.current = { x: e.clientX, y: e.clientY };
+          return;
+        }
         dragging.current = true;
         e.currentTarget.setPointerCapture(e.pointerId);
         emit(e.clientX, e.clientY);
       }}
       onPointerMove={(e) => {
+        const p = pending.current;
+        if (p) {
+          const dx = Math.abs(e.clientX - p.x);
+          if (dx > 6 && dx > Math.abs(e.clientY - p.y)) {
+            pending.current = null;
+            dragging.current = true;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            emit(e.clientX, e.clientY);
+          }
+          return;
+        }
         if (dragging.current) emit(e.clientX, e.clientY);
       }}
       onPointerUp={(e) => {
+        if (pending.current) {
+          pending.current = null;
+          emit(e.clientX, e.clientY); // a tap: the value lands where it touched
+          return;
+        }
         dragging.current = false;
         if (e.currentTarget.hasPointerCapture(e.pointerId)) {
           e.currentTarget.releasePointerCapture(e.pointerId);
         }
+      }}
+      onPointerCancel={() => {
+        // The browser took the gesture (a scroll): nothing changes.
+        pending.current = null;
+        dragging.current = false;
       }}
     >
       {children}
@@ -349,6 +384,7 @@ export default function ColorPicker({
 
       <DragArea
         className={styles.hue}
+        axis="x"
         ariaLabel="Hue"
         onChange={(nx) => commit({ ...hsva, h: nx * 360 })}
         valueNow={Math.round(hsva.h)}
@@ -364,6 +400,7 @@ export default function ColorPicker({
 
       <DragArea
         className={styles.alpha}
+        axis="x"
         ariaLabel="Opacity"
         onChange={(nx) => commit({ ...hsva, a: nx })}
         valueNow={Math.round(hsva.a * 100)}

@@ -611,6 +611,21 @@
   }
 }
 
+/* On a touchscreen it is the panel's first row instead: full width, two even
+   halves at the 44px floor, like a phone's segmented control. */
+.viewSeg[data-wide] {
+  display: flex;
+  width: 100%;
+  padding: 3px;
+  border-radius: 14px;
+
+  .viewSegBtn {
+    flex: 1;
+    border-radius: 11px;
+    font-size: 14px;
+  }
+}
+
 /* Primary and secondary as the familiar overlapping pair: the colour being
    edited in front (top-left), the other behind it (bottom-right) — click it
    to edit that one — and a swap in the free corner. 34px, the value row's
@@ -681,20 +696,32 @@
    content box, so a fingertip anywhere over the pair switches the slot; the
    swap steps aside there (it is in the ⋯ menu, and on the toolbar). */
 :global(html[data-touch="true"]) {
+  /* The pair as tall as the fields beside it (44px), its chips 32px. */
+  .slotPair {
+    width: 44px;
+    height: 44px;
+  }
+
+  .slotFront {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+  }
+
   .slotBack {
     box-sizing: border-box;
     width: 44px;
     height: 44px;
-    padding: 10px;
-    margin: -10px;
+    padding: 6px;
+    margin: -6px;
     /* The paint is clipped to the content box, whose corner radius is this
-       less the padding: 18 − 10 = the 8px of the chip it stands for. */
-    border-radius: 18px;
+       less the padding: 16 − 6 = the 10px of the chip it stands for. */
+    border-radius: 16px;
     background-clip: content-box;
     background-origin: content-box;
     box-shadow: none;
     outline: 2px solid var(--surface);
-    outline-offset: -10px;
+    outline-offset: -6px;
   }
 
   .slotSwap {

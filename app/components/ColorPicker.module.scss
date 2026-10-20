@@ -10,7 +10,6 @@
   gap: 12px;
   width: 100%;
   user-select: none;
-  touch-action: none;
 }
 
 /* --------------------------- Saturation / value --------------------------- */
@@ -21,6 +20,9 @@
   border-radius: 12px;
   overflow: hidden;
   cursor: crosshair;
+  /* The one surface that moves in both directions: it takes the whole finger.
+     (Everywhere else on the picker a vertical swipe scrolls what it is in.) */
+  touch-action: none;
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 18%);
 
   &:focus-visible {
@@ -67,6 +69,8 @@
   border-radius: var(--r-pill);
   cursor: pointer;
   box-shadow: inset 0 0 0 1px rgb(0 0 0 / 18%);
+  /* Sideways is the strip's (DragArea `axis="x"`); up and down scrolls. */
+  touch-action: pan-y;
 
   &:focus-visible {
     outline: 2px solid var(--focus-color);
@@ -287,35 +291,100 @@ html[data-touch="true"] .alphaField {
   width: 84px;
 }
 
-/* The hue and alpha strips are 12px, which is the same problem as the sliders
-   and the same answer: the visible bar keeps its height, the reachable box does
-   not (12px track + 16px either side = the 44px floor). These are real elements
-   rather than inputs, so the padding goes on directly and the gradient is
-   clipped to the content box. */
-html[data-mobile="true"] {
-  .hue,
-  .alpha {
-    box-sizing: content-box;
-    padding: 16px 0;
-    background-clip: content-box;
-    /* The hairline would trace the padded reach, not the bar. */
-    box-shadow: none;
-  }
-  /* The alpha strip paints through an absolutely-positioned child, which fills
-     the padding box — inset it so the visible bar matches the hue's. */
-  .alpha .alphaTrack {
-    inset: 16px 0;
+/* ---- Touch ---------------------------------------------------------------
+   A strip is 12px; a fingertip needs 44. The reach is an invisible extension
+   of the strip (`::before`), so the strip keeps its own box — and with it its
+   pill shape. It used to be padding with the gradient clipped to the content
+   box, and the pill's radius was then worked out on the PADDED box, which left
+   the visible bar with flattened, oval ends. */
+html[data-touch="true"] {
+  .hue::before,
+  .alpha::before {
+    content: "";
+    position: absolute;
+    inset: -16px -8px;
   }
 
-  /* Swatches at the 44px floor: as many columns as fit, which is six on a
-     390px phone and eight again on anything wider. */
+  /* Swatches at the 44px floor, on a row that leaves room for them (and for
+     the hop): the 30px row cut the bottom off every chip. */
+  .sw {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+  }
+
+  .swRow {
+    gap: 8px;
+  }
+
+  .swRowItems {
+    height: 50px;
+    gap: 30px 8px;
+    /* As many whole chips as the row holds, spread evenly across it. */
+    justify-content: space-between;
+  }
+
+  .field {
+    height: 44px;
+    border-radius: 14px;
+  }
+
+  .alphaField {
+    width: 84px;
+  }
+
+  .chip {
+    width: 44px;
+    height: 44px;
+    border-radius: 14px;
+  }
+
+  /* Swatches at the floor: as many columns as fit, which is six on a 390px
+     phone and eight again on anything wider. */
   .swGrid {
     grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+    gap: 10px 8px;
   }
 
   .swGrid .sw {
     width: auto;
     height: auto;
     aspect-ratio: 1;
+  }
+}
+
+/* A phone: the picker has the width of the screen, so it has height to match,
+   and parts sized for a thumb — a taller square, slightly fuller strips with
+   bigger knobs, and more air between the two strips so a finger meant for one
+   does not land on the other (their reaches overlap by only 4px). */
+html[data-mobile="true"] {
+  .picker {
+    gap: 18px;
+  }
+
+  .sv {
+    height: 184px;
+    border-radius: 16px;
+  }
+
+  .hue,
+  .alpha {
+    height: 14px;
+  }
+
+  .hue + .alpha {
+    margin-top: 10px;
+  }
+
+  .stripHandle {
+    width: 24px;
+    height: 24px;
+    border-width: 3px;
+  }
+
+  .svHandle {
+    width: 22px;
+    height: 22px;
+    border-width: 3px;
   }
 }

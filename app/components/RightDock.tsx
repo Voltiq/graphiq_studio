@@ -506,6 +506,26 @@ export default function RightDock({
       localStorage.setItem(COLOR_VIEW_KEY, v);
     } catch {}
   };
+  /* Picker / Swatches. In a card's header on a desktop; on a touchscreen,
+     where its buttons take the 44px floor, a full-width control at the top of
+     the panel instead — beside the title it was cramped into a lopsided pair. */
+  const touchShell = !!(mobile || tablet);
+  const colorViewSeg = (
+    <div className={styles.viewSeg} role="group" aria-label="Color view" data-wide={touchShell || undefined}>
+      {(["picker", "swatches"] as const).map((v) => (
+        <button
+          key={v}
+          type="button"
+          className={styles.viewSegBtn}
+          aria-pressed={colorView === v}
+          data-color-view={v}
+          onClick={() => setColorView(v)}
+        >
+          {v === "picker" ? "Picker" : "Swatches"}
+        </button>
+      ))}
+    </div>
+  );
   /* The Layers panel's filter row is opened from its header (the search
      button), so the header and the body share this. */
   const [layerFilterOpen, setLayerFilterOpen] = useState(false);
@@ -996,20 +1016,7 @@ export default function RightDock({
             icon={Palette}
             actions={
               <>
-                <div className={styles.viewSeg} role="group" aria-label="Color view">
-                  {(["picker", "swatches"] as const).map((v) => (
-                    <button
-                      key={v}
-                      type="button"
-                      className={styles.viewSegBtn}
-                      aria-pressed={colorView === v}
-                      data-color-view={v}
-                      onClick={() => setColorView(v)}
-                    >
-                      {v === "picker" ? "Picker" : "Swatches"}
-                    </button>
-                  ))}
-                </div>
+                {!touchShell && colorViewSeg}
                 <ColorPanelMenu
                   foreground={foreground}
                   background={background}
@@ -1030,6 +1037,7 @@ export default function RightDock({
               active={activeSlot}
               onActive={onActiveSlot}
               view={colorView}
+              viewSwitch={touchShell ? colorViewSeg : undefined}
             />
           </Panel>
         ) : null;

@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { ArrowLeftRight } from "lucide-react";
 import styles from "../RightDock.module.scss";
 import ColorPicker, { SwatchLibrary } from "../ColorPicker";
@@ -24,6 +25,7 @@ export default function ColorPanel({
   active,
   onActive,
   view = "picker",
+  viewSwitch,
 }: {
   foreground: string;
   background: string;
@@ -33,6 +35,8 @@ export default function ColorPanel({
   active: "primary" | "secondary";
   onActive: (slot: "primary" | "secondary") => void;
   view?: ColorView;
+  /** On a touchscreen: the Picker / Swatches control, at the top of the panel. */
+  viewSwitch?: ReactNode;
 }) {
   const color = active === "primary" ? foreground : background;
   const setColor = active === "primary" ? onForeground : onBackground;
@@ -79,6 +83,7 @@ export default function ColorPanel({
 
   return (
     <div className={styles.colorPanel} data-view={view}>
+      {viewSwitch}
       {/* Key on the active target so switching Primary↔Secondary re-initialises
           the picker from that swatch (immune to stale internal edit state). */}
       {view === "picker" ? (
