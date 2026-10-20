@@ -321,10 +321,11 @@
   @include ds.overlay(var(--r-lg));
   padding: 5px;
   @include ds.pop-in(selDrop);
-  transform-origin: top left;
+  @include ds.cascade(selRow, $step: 12ms);
 }
 
-@include ds.pop-keyframes(selDrop);
+@include ds.pop-keyframes(selDrop, $radius: 20px, $lift: -6px, $scale: 0.94);
+@include ds.cascade-keyframes(selRow);
 
 /* Soft accent hover; the chosen option carries the accent check. */
 .selectOption {

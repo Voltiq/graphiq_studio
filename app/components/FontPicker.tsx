@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { exitProps, usePresence } from "../lib/use-presence";
 import { ChevronDown } from "lucide-react";
 import { Check, Search } from "../lib/icons";
 import styles from "./FontPicker.module.scss";
@@ -39,6 +40,8 @@ export default function FontPicker({
   families: string[];
 }) {
   const [open, setOpen] = useState(false);
+  // Still drawn for its exit after it closes.
+  const { mounted: popShown, closing: popClosing } = usePresence(open);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const [query, setQuery] = useState("");
   const [recent, setRecent] = useState<string[]>([]);
@@ -158,12 +161,13 @@ export default function FontPicker({
         <ChevronDown size={13} className={styles.chevron} />
       </button>
 
-      {open &&
+      {popShown &&
         pos &&
         createPortal(
           <div
             ref={popRef}
             className={styles.popover}
+            {...exitProps(popClosing)}
             style={{ position: "fixed", left: pos.left, top: pos.top, width: POPOVER_W }}
             onKeyDown={(e) => {
               if (e.key === "Escape") {

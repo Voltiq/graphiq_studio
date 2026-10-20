@@ -985,7 +985,9 @@
     border-radius: 0;
     box-shadow: none;
     animation: none;
-    transition: height var(--t-med) var(--ease);
+    /* Unfolding and resizing on the gentle spring; folding (to 0) on the same
+       curve reads fine at this size, and keeps one rule. */
+    transition: height var(--dur-gentle) var(--spring-gentle);
 
     &[data-dragging] {
       transition: none;

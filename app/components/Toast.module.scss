@@ -18,17 +18,28 @@
   color: var(--text);
   @include ds.glass;
   border-radius: var(--r-xl);
-  animation: toastIn var(--t-med) var(--ease-pop);
+  /* Glass dropping into place on the snappy spring, its blur clearing. */
+  animation:
+    toastIn var(--dur-snappy) var(--spring-snappy) both,
+    toastReveal var(--dur-reveal) var(--ease-reveal) both;
 }
 
 @keyframes toastIn {
   from {
-    opacity: 0;
-    transform: translate(-50%, -10px) scale(0.98);
+    transform: translate(-50%, -12px) scale(0.94);
   }
   to {
-    opacity: 1;
     transform: translate(-50%, 0);
+  }
+}
+
+@keyframes toastReveal {
+  from {
+    opacity: 0;
+    filter: blur(6px);
+  }
+  to {
+    filter: none;
   }
 }
 

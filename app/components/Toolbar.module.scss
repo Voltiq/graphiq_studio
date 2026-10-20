@@ -178,20 +178,14 @@
   flex-direction: column;
   gap: 1px;
   @include ds.menu;
+  /* It slides out of its slot sideways, from the slot's edge. */
   @include ds.pop-in(flyIn);
-  transform-origin: top left;
+  @include ds.cascade(flyRow);
+  --origin: 0 22px;
 }
 
-@keyframes flyIn {
-  from {
-    opacity: 0;
-    transform: translateX(-4px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
+@include ds.pop-keyframes(flyIn, $lift: 0px, $x: -10px);
+@include ds.cascade-keyframes(flyRow);
 
 .flyItem {
   @include ds.menu-item(34px);

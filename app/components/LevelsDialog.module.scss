@@ -19,9 +19,8 @@
 @keyframes fade {
   from {
     opacity: 0;
-  }
-  to {
-    opacity: 1;
+    -webkit-backdrop-filter: blur(0);
+    backdrop-filter: blur(0);
   }
 }
 
@@ -34,7 +33,7 @@
   @include ds.shine(var(--surface-3));
   border-radius: var(--r-2xl);
   box-shadow: var(--shadow), var(--inset-hi);
-  animation: pop var(--t-med) var(--ease-pop);
+  @include ds.dialog-in(pop);
   overflow: hidden;
   pointer-events: auto; /* stays interactive while the overlay lets picks through */
 
@@ -44,16 +43,7 @@
   }
 }
 
-@keyframes pop {
-  from {
-    opacity: 0;
-    transform: translateY(10px) scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
+@include ds.dialog-keyframes(pop);
 
 .head {
   display: flex;

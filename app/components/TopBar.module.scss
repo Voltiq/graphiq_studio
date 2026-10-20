@@ -118,7 +118,13 @@
      so it sits just under it and above the canvas. */
   z-index: 79;
   background: var(--blanket);
-  animation: dropIn var(--t-short) var(--ease);
+  animation: scrimIn var(--t-med) var(--ease);
+}
+
+@keyframes scrimIn {
+  from {
+    opacity: 0;
+  }
 }
 
 .menuRoot {
@@ -157,10 +163,13 @@
   @include ds.menu;
   z-index: 80;
   @include ds.pop-in(dropIn);
-  transform-origin: top left;
+  @include ds.cascade(dropRow, $rows: "> .menuCol > *", $step: 14ms);
+  /* Out of the menu's own name, just above its corner. */
+  --origin: 24px -8px;
 }
 
 @include ds.pop-keyframes(dropIn);
+@include ds.cascade-keyframes(dropRow);
 
 .menuCol {
   display: flex;
@@ -479,7 +488,8 @@
   flex-direction: column;
   @include ds.menu;
   @include ds.pop-in(dropIn);
-  transform-origin: top left;
+  @include ds.cascade(dropRow);
+  --origin: 32px -6px;
 
   .menuItem {
     min-height: 44px;

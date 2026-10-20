@@ -9,6 +9,7 @@ import ColorPopover from "./ColorPopover";
 import { swatchBg } from "../lib/color";
 import { uiZoom } from "../lib/ui-scale";
 import { clampY } from "../lib/safeArea";
+import { exitProps, useLinger } from "../lib/use-presence";
 
 const byId = (id: ToolId): Tool => ALL_TOOLS.find((t) => t.id === id)!;
 /** The rail's slots, flattened, as tools. */
@@ -74,6 +75,8 @@ export default function Toolbar({
     top: number;
     left: number;
   } | null>(null);
+  // Still drawn for its exit after it closes, from where it was.
+  const { shown: flyShown, closing: flyClosing } = useLinger(fly);
   const flyRef = useRef<HTMLDivElement>(null);
   const hold = useRef<{ timer: number; fired: boolean } | null>(null);
   const openFly = (si: number, el: HTMLElement) => {
@@ -268,17 +271,18 @@ export default function Toolbar({
         ))}
       </div>
 
-      {fly &&
+      {flyShown &&
         typeof document !== "undefined" &&
         createPortal(
           <div
             ref={flyRef}
             className={styles.flyout}
+            {...exitProps(flyClosing)}
             role="menu"
-            aria-label={`${shown(fly.si).name} tools`}
-            style={{ top: fly.top, left: fly.left }}
+            aria-label={`${shown(flyShown.si).name} tools`}
+            style={{ top: flyShown.top, left: flyShown.left }}
           >
-            {SLOTS[fly.si].map((t) => {
+            {SLOTS[flyShown.si].map((t) => {
               const Icon = t.icon;
               return (
                 <button

@@ -44,17 +44,28 @@
      a 300px inset, the list ended at y=570 against a keyboard starting at 544,
      and the rows under it could be scrolled to but never tapped. */
   max-height: 100%;
-  animation: drop var(--t-med) var(--ease-pop);
+  /* It drops out of the search field it was summoned from: top centre, on
+     the snappy spring, its blur clearing and corners settling. */
+  transform-origin: 50% 0;
+  animation:
+    drop var(--dur-snappy) var(--spring-snappy) both,
+    dropReveal var(--dur-reveal) var(--ease-reveal) both;
 }
 
 @keyframes drop {
   from {
+    transform: translateY(-10px) scale(0.95);
+    border-radius: 26px;
+  }
+}
+
+@keyframes dropReveal {
+  from {
     opacity: 0;
-    transform: translateY(-8px) scale(0.98);
+    filter: blur(6px);
   }
   to {
-    opacity: 1;
-    transform: none;
+    filter: none;
   }
 }
 

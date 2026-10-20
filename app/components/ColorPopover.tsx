@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { exitProps, usePresence } from "../lib/use-presence";
 import styles from "./ColorPopover.module.scss";
 import ColorPicker from "./ColorPicker";
 import { uiZoom } from "../lib/ui-scale";
@@ -38,6 +39,8 @@ export default function ColorPopover({
   align?: Align;
 }) {
   const [open, setOpen] = useState(false);
+  // Still drawn for its exit after it closes.
+  const { mounted: popShown, closing: popClosing } = usePresence(open);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -123,12 +126,13 @@ export default function ColorPopover({
       >
         {children}
       </button>
-      {open &&
+      {popShown &&
         typeof document !== "undefined" &&
         createPortal(
           <div
             ref={popRef}
             className={styles.popover}
+            {...exitProps(popClosing)}
             role="dialog"
             aria-label="Color picker"
             style={{

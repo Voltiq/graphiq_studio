@@ -418,19 +418,128 @@
 
 /* Pop-in for menus and popovers. Each module declares its own keyframes (CSS
    modules scope them), so this is the shared timing only. */
+/* ---- Popups: in on a spring, out quickly ---------------------------------
+   Everything that pops — context menus, dropdowns, flyouts, popovers — moves
+   the same way, so the app reads as one material:
+
+   IN   it grows out of the point it was opened from (`--origin`, set by the
+        caller to the click or the trigger; top-left by default), lifting into
+        place from a few px back with its corners drawing in from rounder to
+        their resting radius — the liquid settle — on the snappy spring, which
+        lands with a 3.4% overshoot rather than easing to a stop. Its opacity
+        and blur clear on a separate, short reveal: visible at once, settling
+        after. Only `from` keyframes for the shape: the `to` is the element's
+        own style, so one keyframe set fits every radius.
+   OUT  `data-state="closed"` (see lib/use-presence): back toward the origin,
+        fading and softening on a short ease-in — no bounce on the way out —
+        and taking no pointer while it goes, so the click that dismissed it
+        lands on whatever is underneath.
+   SWAP `data-instant`: moving between neighbours (the menu bar under a
+        sweeping pointer) is a swap, not an entrance.
+
+   `pop-in` goes on the popup; `pop-keyframes` once at the module's top level
+   with the same name (keyframe names are module-local). */
 @mixin pop-in($name) {
-  animation: $name var(--t-short) var(--ease);
+  transform-origin: var(--origin, top left);
+  animation:
+    #{$name} var(--dur-snappy) var(--spring-snappy) both,
+    #{$name}-reveal var(--dur-reveal) var(--ease-reveal) both;
+
+  &[data-state="closed"] {
+    animation: #{$name}-out var(--dur-exit) var(--ease-exit) both;
+    pointer-events: none;
+  }
+
+  &[data-instant] {
+    animation: none;
+  }
 }
 
-@mixin pop-keyframes($name) {
+@mixin pop-keyframes($name, $radius: 24px, $lift: -8px, $scale: 0.92, $x: 0px) {
   @keyframes #{$name} {
     from {
+      transform: translate($x, $lift) scale($scale);
+      border-radius: $radius;
+    }
+  }
+  @keyframes #{$name}-reveal {
+    from {
       opacity: 0;
-      transform: translateY(-4px) scale(0.98);
+      filter: blur(6px);
     }
     to {
-      opacity: 1;
-      transform: none;
+      filter: none;
+    }
+  }
+  @keyframes #{$name}-out {
+    to {
+      opacity: 0;
+      transform: translate($x * 0.5, $lift * 0.5) scale(0.97);
+      filter: blur(3px);
+    }
+  }
+}
+
+/* Dialogs: the same material, a heavier object. It rises into the middle of
+   the screen from a little below, its blur clearing and its generous corners
+   settling from rounder still, on the snappy spring. */
+@mixin dialog-in($name) {
+  transform-origin: 50% 40%;
+  animation:
+    #{$name} var(--dur-snappy) var(--spring-snappy) both,
+    #{$name}-reveal calc(var(--dur-reveal) + 40ms) var(--ease-reveal) both;
+}
+
+@mixin dialog-keyframes($name, $radius: 34px) {
+  @keyframes #{$name} {
+    from {
+      transform: translateY(16px) scale(0.94);
+      border-radius: $radius;
+    }
+  }
+  @keyframes #{$name}-reveal {
+    from {
+      opacity: 0;
+      filter: blur(8px);
+    }
+    to {
+      filter: none;
+    }
+  }
+}
+
+/* The rows of a menu arrive a beat after it, each a little after the one
+   above: a short cascade down the list that reads as the menu filling, capped
+   so a long menu is never kept waiting. On `$rows` (default: the direct
+   children). Pair with `pop-keyframes`-style module keyframes via
+   `cascade-keyframes`. */
+@mixin cascade($name, $rows: "> *", $count: 10, $step: 10ms) {
+  #{$rows} {
+    animation:
+      #{$name} var(--dur-snappy) var(--spring-snappy) both,
+      #{$name}-reveal var(--dur-reveal) var(--ease-reveal) both;
+    animation-delay: #{$count * $step};
+  }
+  @for $i from 1 through $count {
+    #{$rows}:nth-child(#{$i}) {
+      animation-delay: #{($i - 1) * $step};
+    }
+  }
+  &[data-instant] #{$rows},
+  &[data-state="closed"] #{$rows} {
+    animation: none;
+  }
+}
+
+@mixin cascade-keyframes($name) {
+  @keyframes #{$name} {
+    from {
+      transform: translateY(-5px);
+    }
+  }
+  @keyframes #{$name}-reveal {
+    from {
+      opacity: 0;
     }
   }
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
+import { exitProps, usePresence } from "../lib/use-presence";
 import { ArrowLeftRight, Dices, Plus, Save, X } from "lucide-react";
 import { Check, Download, Upload } from "../lib/icons";
 import styles from "./GradientControl.module.scss";
@@ -396,6 +397,8 @@ export default function GradientControl({
   bg: string;
 }) {
   const [open, setOpen] = useState(false);
+  // Still drawn for its exit after it closes.
+  const { mounted: popShown, closing: popClosing } = usePresence(open);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const swatchRef = useRef<HTMLButtonElement>(null);
@@ -463,11 +466,12 @@ export default function GradientControl({
         aria-label="Gradient colours"
       />
 
-      {open && pos &&
+      {popShown && pos &&
         createPortal(
           <div
             ref={popoverRef}
             className={styles.popover}
+            {...exitProps(popClosing)}
             style={{ position: "fixed", left: pos.left, top: pos.top }}
           >
             <button

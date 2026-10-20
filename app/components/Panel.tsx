@@ -1,6 +1,7 @@
 "use client";
 
-import { type DragEventHandler, type ReactNode } from "react";
+import { useState, type DragEventHandler, type ReactNode } from "react";
+import { FOLD_MS, usePresence } from "../lib/use-presence";
 import { ChevronDown, Pin, PinOff, type LucideIcon } from "lucide-react";
 import styles from "./RightDock.module.scss";
 
@@ -70,6 +71,16 @@ export default function Panel({
   const tabId = (id: string) => `panel-tab-${id}`;
   const bodyId = (id: string) => `panel-tabpanel-${id}`;
   const activeId = tabs?.find((t) => t.active)?.id;
+  /* Folding is animated: the body stays mounted through its fold-away, and
+     unfolding grows it from nothing. Only a fold the person asked for moves —
+     a panel that is open when the page loads is simply there. */
+  const { mounted: bodyShown, closing: folding } = usePresence(open, FOLD_MS);
+  const [prevOpen, setPrevOpen] = useState(open);
+  const [toggled, setToggled] = useState(false);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    setToggled(true);
+  }
   return (
     <section
       className={styles.panel}
@@ -158,19 +169,29 @@ export default function Panel({
           )}
         </div>
       </header>
-      {open &&
-        (grouped && activeId ? (
-          <div
-            className={styles.panelBody}
-            role="tabpanel"
-            id={bodyId(activeId)}
-            aria-labelledby={tabId(activeId)}
-          >
-            {children}
+      {bodyShown && (
+        <div
+          className={styles.panelFold}
+          data-state={folding ? "closed" : "open"}
+          data-animate={toggled || undefined}
+          inert={folding || undefined}
+        >
+          <div className={styles.panelFoldInner}>
+            {grouped && activeId ? (
+              <div
+                className={styles.panelBody}
+                role="tabpanel"
+                id={bodyId(activeId)}
+                aria-labelledby={tabId(activeId)}
+              >
+                {children}
+              </div>
+            ) : (
+              <div className={styles.panelBody}>{children}</div>
+            )}
           </div>
-        ) : (
-          <div className={styles.panelBody}>{children}</div>
-        ))}
+        </div>
+      )}
     </section>
   );
 }

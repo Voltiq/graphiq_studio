@@ -7,6 +7,7 @@ import { Check } from "../lib/icons";
 import styles from "./Controls.module.scss";
 import { uiZoom } from "../lib/ui-scale";
 import { clampX, clampY, visibleBand } from "../lib/safeArea";
+import { exitProps, usePresence } from "../lib/use-presence";
 
 /**
  * Custom dropdown — a styled trigger + a portalled, frosted-glass popup that
@@ -39,7 +40,9 @@ export function Select({
   const [internal, setInternal] = useState(defaultValue ?? options[0]);
   const v = value !== undefined ? value : internal;
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number; origin: string } | null>(null);
+  // Still drawn for its exit after it closes.
+  const { mounted, closing } = usePresence(open);
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
 
@@ -83,7 +86,10 @@ export function Select({
          its trigger — and it errs inside the edge rather than over it. */
       const pw = (popRef.current?.offsetWidth ?? 0) * z || r.width;
       const left = clampX(r.left, pw, margin);
-      setPos({ top: top / z, left: left / z, width: r.width / z });
+      /* It opens out of its trigger: from the trigger's middle, at the edge
+         it hangs from — the bottom when it had to flip above. */
+      const origin = `${(r.left + r.width / 2 - left) / z}px ${top < r.top ? "100%" : "0px"}`;
+      setPos({ top: top / z, left: left / z, width: r.width / z, origin });
     };
     place();
     window.addEventListener("resize", place);
@@ -126,20 +132,24 @@ export function Select({
         <span className={styles.selectValue}>{v}</span>
         <ChevronDown size={variant === "inline" ? 12 : 14} />
       </button>
-      {open &&
+      {mounted &&
         typeof document !== "undefined" &&
         createPortal(
           <div
             ref={popRef}
             className={styles.selectMenu}
             role="listbox"
-            style={{
-              position: "fixed",
-              top: pos?.top ?? 0,
-              left: pos?.left ?? 0,
-              minWidth: pos?.width,
-              visibility: pos ? "visible" : "hidden",
-            }}
+            {...exitProps(closing)}
+            style={
+              {
+                position: "fixed",
+                top: pos?.top ?? 0,
+                left: pos?.left ?? 0,
+                minWidth: pos?.width,
+                visibility: pos ? "visible" : "hidden",
+                "--origin": pos?.origin,
+              } as React.CSSProperties
+            }
           >
             {options.map((o) => (
               <button

@@ -116,13 +116,19 @@
   position: relative; /* the drop indicator below anchors to the panel */
 
   /* Desktop: each panel is its own card — 12px of padding, its title row
-     and body 12px apart, no rule between them. */
+     and body 12px apart (the body's own top padding, so the space folds away
+     WITH it), no rule between them. */
   @include ds.desktop-shell {
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    gap: 12px;
     padding: 12px;
+    /* The card's padding moves with its body: unfolding on the same gentle
+       spring, folding on the same quick ease. Because the card's HEIGHT now
+       changes continuously, its squircle corners do too — a 34px radius on a
+       card folding to 48px tall is clamped to half its height, and that clamp
+       used to snap from one to the other in a single frame. */
+    transition: padding var(--dur-gentle) var(--spring-gentle);
     @include ds.card(var(--surface), var(--r-2xl));
 
     @supports (corner-shape: squircle) {
@@ -132,6 +138,8 @@
 
     &[data-open="false"] {
       padding: 8px 12px;
+      transition-duration: var(--dur-fold);
+      transition-timing-function: var(--ease-fold);
     }
   }
 
@@ -220,8 +228,10 @@
   }
 }
 
+/* The chevron swings over on the bouncy spring: a small thing with a little
+   character, settling past its mark and back. */
 .chevron {
-  transition: transform var(--t-med) var(--ease);
+  transition: transform var(--dur-bouncy) var(--spring-bouncy);
 }
 
 .panel[data-open="false"] .chevron {
@@ -383,23 +393,72 @@
   }
 }
 
-.panelBody {
-  padding: var(--sp-3);
-  animation: bodyIn var(--t-med) var(--ease);
+/* ---- Folding ----
+   The body sits in a one-row grid whose track animates between 0fr and 1fr —
+   its real height, whatever that is, with no measuring. Unfolding (only when
+   the person folded or unfolded it: `data-animate`) grows from nothing on the
+   gentle spring, critically damped so the card does not wobble; folding
+   closes on a quicker ease (lib/use-presence keeps it mounted meanwhile). The
+   contents are clipped only while they move, so focus rings and hovering
+   swatches are not shaved off a panel at rest. */
+.panelFold {
+  display: grid;
+  grid-template-rows: 1fr;
 
-  @include ds.desktop-shell {
-    padding: 0;
+  &[data-animate] {
+    transition:
+      grid-template-rows var(--dur-gentle) var(--spring-gentle),
+      opacity var(--dur-gentle) var(--ease);
+
+    @starting-style {
+      grid-template-rows: 0fr;
+      opacity: 0;
+    }
+  }
+
+  &[data-state="closed"] {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition:
+      grid-template-rows var(--dur-fold) var(--ease-fold),
+      opacity var(--dur-fold) var(--ease-fold);
   }
 }
 
+.panelFoldInner {
+  min-height: 0;
+
+  .panelFold[data-animate] > & {
+    animation: foldClip var(--dur-gentle) step-end;
+  }
+
+  .panelFold[data-state="closed"] > & {
+    overflow: hidden;
+  }
+}
+
+/* Clipped for the length of the unfold, then free (step-end holds the start
+   value to the end; after that the base `visible` applies). */
+@keyframes foldClip {
+  from {
+    overflow: hidden;
+  }
+}
+
+.panelBody {
+  padding: var(--sp-3);
+  animation: bodyIn var(--dur-gentle) var(--spring-gentle);
+
+  @include ds.desktop-shell {
+    padding: 12px 0 0;
+  }
+}
+
+/* The contents settle down into the opening space a beat behind it. */
 @keyframes bodyIn {
   from {
     opacity: 0;
-    transform: translateY(-3px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
+    transform: translateY(-6px);
   }
 }
 
@@ -1546,8 +1605,9 @@
   flex-direction: column;
   gap: 1px;
   @include ds.overlay(var(--r-xl));
-  animation: menuPop var(--t-short) var(--ease);
-  transform-origin: top left;
+  /* Out of the click (the Popup sets --origin to it), rows cascading in. */
+  @include ds.pop-in(menuPop);
+  @include ds.cascade(menuRow, $step: 14ms);
 
   button {
     @include ds.menu-item(30px);
@@ -1589,16 +1649,8 @@
   }
 }
 
-@keyframes menuPop {
-  from {
-    opacity: 0;
-    transform: translateY(-3px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
+@include ds.pop-keyframes(menuPop);
+@include ds.cascade-keyframes(menuRow);
 
 /* -------------------------------- History --------------------------------- */
 /* Snapshots (pinned full states) sit above the step list in the History panel. */

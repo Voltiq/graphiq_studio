@@ -8,6 +8,7 @@ import styles from "../RightDock.module.scss";
 import { parseColor, toHex6, toHex8, toRgbaCss } from "../../lib/color";
 import { addSwatch } from "../../lib/swatches";
 import { clampX } from "../../lib/safeArea";
+import { exitProps, usePresence } from "../../lib/use-presence";
 
 /** Exactly the syntaxes parseColor understands — used to reject clipboard text
  *  BEFORE parsing, since parseColor falls back to black for anything it can't
@@ -35,7 +36,9 @@ export default function ColorPanelMenu({
   onToast: (message: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState({ left: 0, top: 0 });
+  const [pos, setPos] = useState({ left: 0, top: 0, origin: "100% 0px" });
+  // Still drawn for its exit after it closes.
+  const { mounted, closing } = usePresence(open);
   const btnRef = useRef<HTMLButtonElement>(null);
 
   const color = active === "primary" ? foreground : background;
@@ -58,10 +61,9 @@ export default function ColorPanelMenu({
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
       // Right-align the menu to the button; keep it on screen.
-      setPos({
-        left: clampX(r.right - 200, 200),
-        top: r.bottom + 4,
-      });
+      const left = clampX(r.right - 200, 200);
+      // It opens out of the ⋯ button, at its own top edge.
+      setPos({ left, top: r.bottom + 4, origin: `${r.left + r.width / 2 - left}px -6px` });
     }
     setOpen((o) => !o);
   };
@@ -108,14 +110,15 @@ export default function ColorPanelMenu({
       >
         <MoreHorizontal size={14} />
       </button>
-      {open &&
+      {mounted &&
         typeof document !== "undefined" &&
         createPortal(
           <>
-            <div className={styles.menuScrim} onClick={() => setOpen(false)} />
+            {!closing && <div className={styles.menuScrim} onClick={() => setOpen(false)} />}
             <div
               className={styles.layerMenu}
-              style={{ left: pos.left, top: pos.top }}
+              {...exitProps(closing)}
+              style={{ left: pos.left, top: pos.top, "--origin": pos.origin } as React.CSSProperties}
               role="menu"
               aria-label="Colour actions"
             >

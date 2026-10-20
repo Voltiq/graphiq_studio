@@ -80,6 +80,7 @@ import { hasEnabledFx } from "../../lib/effects";
 import { hasEnabledFilters } from "../../lib/filters";
 import { clampX, clampY } from "../../lib/safeArea";
 import { registerDismissible } from "../../lib/dismiss";
+import { exitProps, useLinger } from "../../lib/use-presence";
 import { MENUS } from "../../lib/menus";
 import type { EngineHandle } from "../../lib/paint";
 
@@ -287,11 +288,14 @@ function Popup({
   at,
   label,
   onClose,
+  closing = false,
   children,
 }: {
   at: { x: number; y: number };
   label: string;
   onClose: () => void;
+  /** Leaving: drawn for its exit animation, but no longer there to use. */
+  closing?: boolean;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -302,23 +306,40 @@ function Popup({
     const el = ref.current;
     if (!el) return;
     const z = uiZoom();
-    const { width, height } = el.getBoundingClientRect();
-    el.style.left = `${clampX(at.x, width, 8) / z}px`;
-    el.style.top = `${clampY(at.y, height, 8) / z}px`;
+    // Its own size, not its first animation frame's: it starts scaled down.
+    const r = el.getBoundingClientRect();
+    const t = getComputedStyle(el).transform;
+    const m = t && t !== "none" ? new DOMMatrixReadOnly(t) : null;
+    const left = clampX(at.x, r.width / (m?.a || 1), 8);
+    const top = clampY(at.y, r.height / (m?.d || 1), 8);
+    el.style.left = `${left / z}px`;
+    el.style.top = `${top / z}px`;
+    // It grows out of the point it was opened at — the click itself — even
+    // when it had to move to stay on screen.
+    el.style.setProperty("--origin", `${(at.x - left) / z}px ${(at.y - top) / z}px`);
   }, [at]);
-  useEffect(() => registerDismissible(onClose), [onClose]);
+  useEffect(() => (closing ? undefined : registerDismissible(onClose)), [onClose, closing]);
   if (typeof document === "undefined") return null;
   return createPortal(
     <>
+      {!closing && (
+        <div
+          className={styles.menuScrim}
+          onClick={onClose}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            onClose();
+          }}
+        />
+      )}
       <div
-        className={styles.menuScrim}
-        onClick={onClose}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          onClose();
-        }}
-      />
-      <div ref={ref} className={styles.layerMenu} style={{ left: at.x, top: at.y }} role="menu" aria-label={label}>
+        ref={ref}
+        className={styles.layerMenu}
+        style={{ left: at.x, top: at.y }}
+        role="menu"
+        aria-label={label}
+        {...exitProps(closing)}
+      >
         {children}
       </div>
     </>,
@@ -526,6 +547,10 @@ export default function LayersPanel({
   const [menu, setMenu] = useState<{ x: number; y: number; node: LayerNode } | null>(null);
   const [lockAt, setLockAt] = useState<{ x: number; y: number } | null>(null);
   const [adjustAt, setAdjustAt] = useState<{ x: number; y: number } | null>(null);
+  // Each popup is still drawn for its exit after it closes, where it was.
+  const { shown: menuShown, closing: menuClosing } = useLinger(menu);
+  const { shown: lockShown, closing: lockClosing } = useLinger(lockAt);
+  const { shown: adjustShown, closing: adjustClosing } = useLinger(adjustAt);
   const closeMenu = () => setMenu(null);
   const closeLock = () => setLockAt(null);
   const closeAdjust = () => setAdjustAt(null);
@@ -1160,15 +1185,15 @@ export default function LayersPanel({
         </button>
       </div>
 
-      {lockAt && active && (
-        <Popup at={lockAt} label="Layer locks" onClose={closeLock}>
+      {lockShown && active && (
+        <Popup at={lockShown} label="Layer locks" onClose={closeLock} closing={lockClosing}>
           <span className={styles.menuHead}>Lock</span>
           {lockItems(active)}
         </Popup>
       )}
 
-      {adjustAt && (
-        <Popup at={adjustAt} label="New fill or adjustment layer" onClose={closeAdjust}>
+      {adjustShown && (
+        <Popup at={adjustShown} label="New fill or adjustment layer" onClose={closeAdjust} closing={adjustClosing}>
           <span className={styles.menuHead}>Fill layer</span>
           <button
             type="button"
@@ -1214,16 +1239,16 @@ export default function LayersPanel({
         </Popup>
       )}
 
-      {menu && (
-        <Popup at={menu} label="Layer" onClose={closeMenu}>
-          <button type="button" onClick={() => run(() => startRename(menu.node))}>
+      {menuShown && (
+        <Popup at={menuShown} label="Layer" onClose={closeMenu} closing={menuClosing}>
+          <button type="button" onClick={() => run(() => startRename(menuShown.node))}>
             <Pencil size={13} /> Rename
           </button>
           <div className={styles.menuLabelRow} aria-label="Colour label">
             <button
               type="button"
               className={styles.menuLabelNone}
-              data-active={!menu.node.label}
+              data-active={!menuShown.node.label}
               title="No label"
               onClick={() => run(() => applyLabel(undefined))}
             >
@@ -1234,7 +1259,7 @@ export default function LayersPanel({
                 key={l.id}
                 type="button"
                 className={styles.menuLabelDot}
-                data-active={menu.node.label === l.id}
+                data-active={menuShown.node.label === l.id}
                 style={{ background: l.color }}
                 title={`${l.name} label${multi ? " (all selected)" : ""}`}
                 onClick={() => run(() => applyLabel(l.id))}
@@ -1245,7 +1270,7 @@ export default function LayersPanel({
             <span className={styles.menuLockLabel}>Lock</span>
             {LOCK_DEFS.map(({ flag, label, Icon, pixelOnly }) => {
               // Read the live node so toggles stay in sync without closing the menu.
-              const node = findNode(layers, menu.node.id) ?? menu.node;
+              const node = findNode(layers, menuShown.node.id) ?? menuShown.node;
               const allOn = !!node.locks?.all;
               const rawOn = !!node.locks?.[flag];
               const na = pixelOnly && node.type !== "layer";
@@ -1277,22 +1302,22 @@ export default function LayersPanel({
           <button type="button" onClick={() => run(api.duplicate)}>
             <Copy size={13} /> {multi ? "Duplicate layers" : "Duplicate"}
           </button>
-          {menu.node.type === "adjustment" && (
-            <button type="button" onClick={() => run(() => api.editAdjustment(menu.node.id))}>
+          {menuShown.node.type === "adjustment" && (
+            <button type="button" onClick={() => run(() => api.editAdjustment(menuShown.node.id))}>
               <AdjustmentIcon size={13} /> Edit Adjustment…
             </button>
           )}
-          {isFillLayer(menu.node) && (
-            <button type="button" onClick={() => run(() => api.editFill(menu.node.id))}>
+          {isFillLayer(menuShown.node) && (
+            <button type="button" onClick={() => run(() => api.editFill(menuShown.node.id))}>
               <PaintBucket size={13} /> Edit Fill…
             </button>
           )}
-          <button type="button" onClick={() => run(() => api.toggleClip(menu.node.id))}>
-            <CornerDownRight size={13} /> {menu.node.clipped ? "Release clipping mask" : "Create clipping mask"}
+          <button type="button" onClick={() => run(() => api.toggleClip(menuShown.node.id))}>
+            <CornerDownRight size={13} /> {menuShown.node.clipped ? "Release clipping mask" : "Create clipping mask"}
           </button>
           <div className={styles.menuSep} />
-          {isLinked(menu.node) ? (
-            <button type="button" onClick={() => run(() => api.unlinkLayer(menu.node.id))}>
+          {isLinked(menuShown.node) ? (
+            <button type="button" onClick={() => run(() => api.unlinkLayer(menuShown.node.id))}>
               <Unlink2 size={13} /> Unlink layer
             </button>
           ) : (
@@ -1305,8 +1330,8 @@ export default function LayersPanel({
           <button type="button" onClick={() => run(api.group)}>
             <FolderPlus size={13} /> {multi ? "Group selection" : "Group"}
           </button>
-          {menu.node.type === "group" && (
-            <button type="button" onClick={() => run(() => api.ungroup(menu.node.id))}>
+          {menuShown.node.type === "group" && (
+            <button type="button" onClick={() => run(() => api.ungroup(menuShown.node.id))}>
               <FolderMinus size={13} /> Ungroup
             </button>
           )}
@@ -1316,38 +1341,38 @@ export default function LayersPanel({
           <button type="button" onClick={() => run(api.flatten)}>
             <LayersIcon size={13} /> Flatten Image
           </button>
-          {menu.node.type !== "adjustment" && (
+          {menuShown.node.type !== "adjustment" && (
             <>
               <div className={styles.menuSep} />
-              <button type="button" onClick={() => run(() => api.openLayerStyle(menu.node.id))}>
+              <button type="button" onClick={() => run(() => api.openLayerStyle(menuShown.node.id))}>
                 <Sparkles size={13} /> Layer Style…
               </button>
-              <button type="button" onClick={() => run(() => api.copyLayerStyle(menu.node.id))}>
+              <button type="button" onClick={() => run(() => api.copyLayerStyle(menuShown.node.id))}>
                 <Copy size={13} /> Copy Layer Style
               </button>
               {api.canPasteStyle && (
-                <button type="button" onClick={() => run(() => api.pasteLayerStyle(menu.node.id))}>
+                <button type="button" onClick={() => run(() => api.pasteLayerStyle(menuShown.node.id))}>
                   <Sparkles size={13} /> Paste Layer Style
                 </button>
               )}
-              {hasEnabledFx(menu.node.effects) && (
-                <button type="button" onClick={() => run(() => api.clearLayerStyle(menu.node.id))}>
+              {hasEnabledFx(menuShown.node.effects) && (
+                <button type="button" onClick={() => run(() => api.clearLayerStyle(menuShown.node.id))}>
                   <Trash2 size={13} /> Clear Layer Style
                 </button>
               )}
-              <button type="button" onClick={() => run(() => api.openFilters(menu.node.id))}>
+              <button type="button" onClick={() => run(() => api.openFilters(menuShown.node.id))}>
                 <FlaskConical size={13} /> Smart Filters…
               </button>
             </>
           )}
           <div className={styles.menuSep} />
-          {menu.node.mask ? (
+          {menuShown.node.mask ? (
             <>
               <button type="button" onClick={() => run(api.loadMaskAsSelection)}>
                 <MaskIcon size={13} /> Mask to Selection
               </button>
-              <button type="button" onClick={() => run(() => api.toggleMaskEnabled(menu.node.id))}>
-                <MaskIcon size={13} /> {menu.node.mask.enabled ? "Disable mask" : "Enable mask"}
+              <button type="button" onClick={() => run(() => api.toggleMaskEnabled(menuShown.node.id))}>
+                <MaskIcon size={13} /> {menuShown.node.mask.enabled ? "Disable mask" : "Enable mask"}
               </button>
               <button type="button" onClick={() => run(api.applyMask)}>
                 <MaskIcon size={13} /> Apply Mask

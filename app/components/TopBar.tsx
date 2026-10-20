@@ -5,6 +5,7 @@ import { ChevronDown, PanelRight, X } from "lucide-react";
 import { Check, Download, Menu as MenuIcon, Redo2, Search, Undo2 } from "../lib/icons";
 import styles from "./TopBar.module.scss";
 import { registerDismissible } from "../lib/dismiss";
+import { exitProps, useLinger, usePresence } from "../lib/use-presence";
 import logo from "../icon.png";
 import ThemeToggle from "./ThemeToggle";
 import CommandPalette, { type PaletteCommand } from "./CommandPalette";
@@ -82,6 +83,16 @@ export default function TopBar({
      than an iPad Pro. See globals.scss. */
   const touchShell = mobile || tablet;
   const [open, setOpen] = useState<string | null>(null);
+  /* A menu opening from nothing animates in, and out again when it closes;
+     sweeping the pointer along the bar from one menu to the next is a swap,
+     and swaps are instant (`data-instant`). */
+  const { shown: shownMenu, closing: menuClosing } = useLinger(open);
+  const [prevMenu, setPrevMenu] = useState<string | null>(open);
+  const [menuSwap, setMenuSwap] = useState(false);
+  if (open !== prevMenu) {
+    setMenuSwap(open !== null && prevMenu !== null);
+    setPrevMenu(open);
+  }
   // Mobile menu sheet (the collapsed menubar behind the hamburger).
   const [sheetOpen, setSheetOpen] = useState(false);
   /* While the sheet is up it absorbs the back gesture, instead of the gesture
@@ -96,6 +107,7 @@ export default function TopBar({
   /* Phone: the document menu under the name in the header — switch between
      open documents, start one, rename or close this one. */
   const [docMenu, setDocMenu] = useState(false);
+  const { mounted: docMenuShown, closing: docMenuClosing } = usePresence(docMenu);
   const docRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!docMenu) return;
@@ -247,8 +259,8 @@ export default function TopBar({
             {!saved && <span className={styles.docDirty} aria-hidden />}
             <ChevronDown size={16} className={styles.docChevron} />
           </button>
-          {docMenu && (
-            <div className={styles.docMenu} role="menu" aria-label="Documents">
+          {docMenuShown && (
+            <div className={styles.docMenu} role="menu" aria-label="Documents" {...exitProps(docMenuClosing)}>
               {docs.map((d) => (
                 <button
                   key={d.id}
@@ -321,10 +333,12 @@ export default function TopBar({
             >
               {menu.label}
             </button>
-            {open === menu.label && (
+            {shownMenu === menu.label && (
               <div
-                ref={dropRef}
+                ref={menuClosing ? undefined : dropRef}
                 className={styles.dropdown}
+                {...exitProps(menuClosing)}
+                data-instant={menuSwap || undefined}
                 role="menu"
                 data-columns={columnsOf(menu.items).length > 1 || undefined}
               >

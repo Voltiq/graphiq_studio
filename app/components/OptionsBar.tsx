@@ -49,6 +49,7 @@ import {
 } from "lucide-react";
 import { Check, PressureIcon } from "../lib/icons";
 import styles from "./OptionsBar.module.scss";
+import { Presence, exitProps } from "../lib/use-presence";
 import {
   CROP_RATIOS,
   FONT_FAMILIES,
@@ -246,11 +247,13 @@ function OpenTypeControl({ text, onText }: TextProps) {
       >
         <Ligature size={15} />
       </button>
-      {open &&
+      <Presence open={open}>
+        {(closing) =>
         createPortal(
           <>
-            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
-            <div className={styles.otPopover} style={{ left: pos.left, top: pos.top }} role="dialog" aria-label="OpenType features">
+            {!closing && <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />}
+            <div className={styles.otPopover}
+              {...exitProps(closing)} style={{ left: pos.left, top: pos.top }} role="dialog" aria-label="OpenType features">
             <span className={styles.otTitle}>OpenType features</span>
             <div className={styles.otGrid}>
               {OPENTYPE_FLAGS.map(({ key, label }) => (
@@ -301,6 +304,7 @@ function OpenTypeControl({ text, onText }: TextProps) {
         </>,
         document.body,
       )}
+      </Presence>
     </>
   );
 }
@@ -358,11 +362,13 @@ function WarpControl({ text, onText }: TextProps) {
       >
         <Waves size={15} />
       </button>
-      {open &&
+      <Presence open={open}>
+        {(closing) =>
         createPortal(
           <>
-            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
-            <div className={styles.otPopover} style={{ left: pos.left, top: pos.top }} role="dialog" aria-label="Warp text">
+            {!closing && <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />}
+            <div className={styles.otPopover}
+              {...exitProps(closing)} style={{ left: pos.left, top: pos.top }} role="dialog" aria-label="Warp text">
               <span className={styles.otTitle}>Warp text</span>
               <div className={styles.otAxisRow}>
                 <Select
@@ -381,6 +387,7 @@ function WarpControl({ text, onText }: TextProps) {
           </>,
           document.body,
         )}
+      </Presence>
     </>
   );
 }
@@ -441,12 +448,14 @@ function PressureControl({
       >
         <PressureIcon size={15} />
       </button>
-      {open &&
+      <Presence open={open}>
+        {(closing) =>
         createPortal(
           <>
-            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
+            {!closing && <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />}
             <div
               className={styles.otPopover}
+              {...exitProps(closing)}
               style={{ left: pos.left, top: pos.top }}
               role="dialog"
               aria-label="Pen pressure"
@@ -483,6 +492,7 @@ function PressureControl({
           </>,
           document.body,
         )}
+      </Presence>
     </>
   );
 }
@@ -549,12 +559,14 @@ function TipShapeControl({
       >
         <Grip size={15} />
       </button>
-      {open &&
+      <Presence open={open}>
+        {(closing) =>
         createPortal(
           <>
-            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
+            {!closing && <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />}
             <div
               className={styles.otPopover}
+              {...exitProps(closing)}
               style={{ left: pos.left, top: pos.top }}
               role="dialog"
               aria-label="Tip shape"
@@ -685,6 +697,7 @@ function TipShapeControl({
           </>,
           document.body,
         )}
+      </Presence>
     </>
   );
 }
@@ -761,12 +774,14 @@ function CustomShapePicker({
       >
         {current ? <ShapeTileArt p={current} /> : <Shapes size={15} />}
       </button>
-      {open &&
+      <Presence open={open}>
+        {(closing) =>
         createPortal(
           <>
-            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
+            {!closing && <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />}
             <div
               className={styles.otPopover}
+              {...exitProps(closing)}
               style={{ left: pos.left, top: pos.top, width: 300 }}
               role="dialog"
               aria-label="Custom shapes"
@@ -824,6 +839,7 @@ function CustomShapePicker({
           </>,
           document.body,
         )}
+      </Presence>
     </>
   );
 }
@@ -941,11 +957,13 @@ function TextFillControl({ text, onText }: TextProps) {
       >
         <Palette size={15} />
       </button>
-      {open &&
+      <Presence open={open}>
+        {(closing) =>
         createPortal(
           <>
-            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
-            <div className={styles.otPopover} style={{ left: pos.left, top: pos.top }} role="dialog" aria-label="Text fill">
+            {!closing && <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />}
+            <div className={styles.otPopover}
+              {...exitProps(closing)} style={{ left: pos.left, top: pos.top }} role="dialog" aria-label="Text fill">
               <span className={styles.otTitle}>Text fill</span>
               <Segmented
                 options={[
@@ -997,6 +1015,7 @@ function TextFillControl({ text, onText }: TextProps) {
           </>,
           document.body,
         )}
+      </Presence>
     </>
   );
 }
@@ -1129,12 +1148,14 @@ function TextFxControl({ text, onText }: TextProps) {
       >
         <Sparkle size={15} />
       </button>
-      {open &&
+      <Presence open={open}>
+        {(closing) =>
         createPortal(
           <>
-            <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />
+            {!closing && <div className={styles.otBackdrop} onMouseDown={() => setOpen(false)} />}
             <div
               className={styles.otPopover}
+              {...exitProps(closing)}
               style={{ left: pos.left, top: pos.top }}
               role="dialog"
               aria-label="Type effects"
@@ -1213,6 +1234,7 @@ function TextFxControl({ text, onText }: TextProps) {
           </>,
           document.body,
         )}
+      </Presence>
     </>
   );
 }
