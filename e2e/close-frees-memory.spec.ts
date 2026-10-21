@@ -75,3 +75,26 @@ test("deleting a vector mask frees its raster", async ({ app }) => {
   await app.settle();
   expect(await rasters(), "and let go once it is gone").toBe(0);
 });
+
+/* The same, on a HIDDEN layer. The renderer let go of a dead mask's raster
+   only when it drew the layer, and a hidden layer is never drawn: the raster
+   stayed until the layer was shown again (TODO 1.2, "still open"). */
+test("deleting the vector mask of a hidden layer frees its raster too", async ({ app }) => {
+  await app.run("layer-new");
+  await app.page.evaluate(() => window.graphiq!.select([{ x: 100, y: 100, w: 400, h: 300 }]));
+  await app.setForeground("#e0402a");
+  await app.key("Backspace");
+  await app.run("select-deselect");
+  await addVectorMask(app);
+  const rasters = async () =>
+    (await memory(app.page)).buffers.filter((b) => b.name.startsWith("vmask:")).length;
+  expect(await rasters(), "the mask is rasterised while it is in use").toBe(1);
+
+  const id = (await app.page.evaluate(() => window.graphiq!.layers()))[0].id;
+  await app.page.evaluate((layer) => window.graphiq!.setLayer(layer, { visible: false }), id);
+  await app.settle();
+  expect(await rasters(), "hiding the layer keeps it (it may be shown again)").toBe(1);
+  await app.run("vmask-delete");
+  await app.settle();
+  expect(await rasters(), "deleting the mask of a hidden layer lets it go").toBe(0);
+});

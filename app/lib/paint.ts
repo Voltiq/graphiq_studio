@@ -45,6 +45,7 @@ import {
   type BlendIf,
 } from "./blendif";
 import { clampBudgetMB, overBudget, totalBytes } from "./history-budget";
+import { DocumentScoped, DocumentState, type Entry, type Layer } from "./doc-state";
 import {
   ROOT,
   ancestry,
@@ -616,8 +617,11 @@ export interface EngineHandle {
   setHistoryBudgetMB: (mb: number) => void;
   /** Photoshop-style non-linear history (branch instead of truncating). */
   setNonLinearHistory: (on: boolean) => void;
-  /** Let go of a closed document's history. */
-  discardHistoryDocument: (docId: string) => void;
+  /** Let go of a closed document: its rasters, caches and history. */
+  closeDocument: (docId: string) => void;
+  /** Composite any open document at its own size, without bringing it
+   *  forward (null if the engine has never held it). */
+  compositeDocument: (docId: string, tree: LayerNode[]) => HTMLCanvasElement | null;
   /** Finish edits that live in the canvas UI rather than the engine (a text
    *  session) — call BEFORE the active document changes, so they land in it. */
   commitPendingEdits: () => void;
@@ -724,11 +728,6 @@ const makeCanvas = (
   return { c, ctx };
 };
 
-interface Layer {
-  c: HTMLCanvasElement;
-  ctx: CanvasRenderingContext2D;
-}
-
 /** One resident tile of a tiled adjustment product (its own LRU entry). */
 interface AdjTile {
   c: HTMLCanvasElement;
@@ -825,35 +824,6 @@ export interface HistorySide {
   redo: () => void;
 }
 
-interface Entry {
-  label: string;
-  /** Index of the entry this one was made ON TOP OF, or ROOT (-1) for the
-   *  original document. In linear mode this is always the previous entry, so
-   *  the tree degenerates to the list it has always been; in non-linear mode a
-   *  new edit made after undoing branches here instead of truncating. */
-  parent: number;
-  side?: HistorySide;
-  // Pixel payload — absent for purely structural entries (layer add/group/etc.),
-  // whose effect lives entirely in `side`.
-  layerId?: string;
-  rect?: { x: number; y: number; w: number; h: number };
-  before?: ImageData;
-  after?: ImageData;
-  // Which surface the pixel payload patches; absent ⇒ "layer" (back-compat).
-  surface?: "layer" | "mask";
-}
-
-/** One document's undo state. The engine is shared by every open tab, so the
- *  active document's slot lives in the engine's own fields and the others are
- *  parked — see `setHistoryDocument`. */
-interface HistorySlot {
-  entries: Entry[];
-  cur: number;
-  sourceIndex: number;
-  snapshots: DocSnapshot[];
-  sourceSnap: string | null;
-}
-
 /**
  * A selection's soft coverage — the 8-bit truth behind its rects, which are
  * only the ≥50% outline (what the ants trace and the tools reason about).
@@ -871,14 +841,6 @@ interface SelectionCoverage {
   bounds: Rect;
   alpha: Uint8Array;
 }
-
-const emptyHistorySlot = (): HistorySlot => ({
-  entries: [],
-  cur: ROOT,
-  sourceIndex: 0,
-  snapshots: [],
-  sourceSnap: null,
-});
 
 // (premultChannels + computeBlurFx moved to filters.ts — shared by the Blur
 // Gallery and the blur smart-filter type.)
@@ -916,16 +878,14 @@ export interface PerfStats {
   dirtyAt: number;
 }
 
-export class PaintEngine {
-  private w = 0;
-  private h = 0;
+export class PaintEngine extends DocumentScoped {
+  // Each open document's size, rasters, id-keyed caches and history live in its
+  // own DocumentState; the engine works on the one in front (`this.doc`), which
+  // every `this.layers` / `this.w` below reads through. See doc-state.ts.
   private view: HTMLCanvasElement | null = null;
   private vctx: CanvasRenderingContext2D | null = null;
-  private layers = new Map<string, Layer>();
   private stroke: Layer | null = null;
   private scratch: Layer | null = null;
-  /** Has a document size been applied? Replaces `stroke` as that sentinel. */
-  private sized = false;
 
   /**
    * Make the buffers an edit needs, at the moment it needs them.
@@ -962,9 +922,11 @@ export class PaintEngine {
       if (!c) return;
       buffers.push({ name, w: c.width, h: c.height, bytes: c.width * c.height * 4 });
     };
-    for (const [id, l] of this.layers) add(`layer:${id}`, l.c);
-    for (const [id, m] of this.masks) add(`mask:${id}`, m.c);
-    for (const [id, v] of this.vectorMaskCache) add(`vmask:${id}`, v.c);
+    for (const d of this.everyDoc()) {
+      for (const [id, l] of d.layers) add(`layer:${id}`, l.c);
+      for (const [id, m] of d.masks) add(`mask:${id}`, m.c);
+      for (const [id, v] of d.vectorMaskCache) add(`vmask:${id}`, v.c);
+    }
     add("stroke", this.stroke?.c);
     add("scratch", this.scratch?.c);
     return {
@@ -991,21 +953,11 @@ export class PaintEngine {
   private gamutWarn = false;
 
   // --- Layer masks (non-destructive) -----------------------------------------
-  // Grayscale mask per layer id (R=G=B=value); absent ⇒ no mask. Colour-agnostic
-  // (always sRGB) — never gamut-converted — and editable by the brush pipeline.
-  private masks = new Map<string, Layer>();
-  /** Natural-size sources for framed images (see setFrameSource). */
-  private frameSrc = new Map<string, HTMLCanvasElement>();
-  // Derived alpha cache per id (RGB=0, A=coverage). Recomputed only on mask
-  // mutation, scoped to the changed rect — never per composite frame. The mask's
-  // own alpha is folded in (A = R × maskAlpha/255) so eraser strokes read right.
-  private maskAlpha = new Map<string, Layer>();
-  /** Rasterised vector masks, keyed by node id; the entry carries the hash it
-   *  was built from so an anchor drag re-renders and nothing else does. */
-  private vectorMaskCache = new Map<string, { key: string; c: HTMLCanvasElement }>();
-  // Which surface paint tools target, per layer ("pixels" default; "mask" only
-  // while that layer has a mask).
-  private surfaces = new Map<string, ActiveSurface>();
+  // Grayscale mask per layer id (R=G=B=value), in the document's `masks`;
+  // absent ⇒ no mask. Colour-agnostic (always sRGB) — never gamut-converted —
+  // and editable by the brush pipeline. Its derived alpha (`maskAlpha`: RGB=0,
+  // A = R × maskAlpha/255, so eraser strokes read right) is recomputed only on
+  // mask mutation, scoped to the changed rect — never per composite frame.
   // True while the in-progress stroke paints the mask (set in beginStroke).
   private strokeOnMask = false;
   // Reused buffers for the live mask-paint preview (grayscale + derived alpha).
@@ -1077,17 +1029,10 @@ export class PaintEngine {
   // (same immutable tree ⇒ no structural/props change slipped past the rects).
   private pendingDirty: Rect | null = null;
   private lastTree: LayerNode[] | null = null;
-  // Monotonic per-layer pixel version (bumped on any committed pixel write), a
-  // per-id mask version (bumped on any mask mutation), and a document epoch
-  // (bumped on resize/crop/transform/colour-space) — the key ingredients.
-  private pixelVersion = new Map<string, number>();
-  // Memoized layerContentBounds, keyed by `pixelVersion:docEpoch` (see below).
-  private contentBoundsCache = new Map<string, { key: string; box: Rect | null }>();
-  private maskVersion = new Map<string, number>();
-  private docEpoch = 0;
-  // Compiled Curves/Levels LUTs per adjustment-node id, keyed by the spec JSON.
-  // (Param→LUT math memo, not a pixel cache — stays separate from renderCache.)
-  private toneCache = new Map<string, { key: string; luts: ToneLUTs; luts16?: ToneLUTs16 }>();
+  // The document's monotonic per-layer pixel version (bumped on any committed
+  // pixel write) and per-id mask version (bumped on any mask mutation), plus its
+  // epoch (`docEpoch`, bumped on resize/crop/transform/colour-space) — the key
+  // ingredients.
   // The tree the current/last composite ran against (for dirty-region proofs).
   private curTree: LayerNode[] | null = null;
   // Dirty-region bookkeeping per cached ADJUSTMENT product: which document
@@ -1563,39 +1508,32 @@ export class PaintEngine {
 
   /** Bytes held by the undo stacks' pixel patches, across every open document. */
   historyBytes(): number {
-    return totalBytes(this.entries) + this.parkedHistoryBytes();
-  }
-
-  private parkedHistoryBytes(): number {
     let n = 0;
-    for (const s of this.parkedHistory.values()) n += totalBytes(s.entries);
+    for (const d of this.everyDoc()) n += totalBytes(d.entries);
     return n;
   }
 
   /** The step cap is per document (each tab keeps its own N states, as in
    *  Photoshop); the memory cap is for the whole session, since it is what
-   *  bounds RAM. Parked documents give up their steps first — the ones you are
-   *  most likely to want back are in the document in front of you. */
+   *  bounds RAM. Background documents give up their steps first — the ones you
+   *  are most likely to want back are in the document in front of you. */
   private trimHistory(): void {
     const budget = this.historyBudgetMB;
-    for (const [id, slot] of this.parkedHistory) {
-      const others = totalBytes(this.entries) + this.parkedHistoryBytes() - totalBytes(slot.entries);
-      if (!overBudget(others + totalBytes(slot.entries), budget)) break;
-      const trimmed = this.withHistorySlot(slot, () =>
-        this.dropTrimVictims(() => overBudget(others + totalBytes(this.entries), budget)),
-      );
-      this.parkedHistory.set(id, trimmed);
+    for (const d of [...this.everyDoc()].slice(1)) {
+      const others = this.historyBytes() - totalBytes(d.entries);
+      if (!overBudget(others + totalBytes(d.entries), budget)) break;
+      this.withDocument(d, () => this.dropTrimVictims(() => overBudget(others + totalBytes(this.entries), budget)));
     }
-    const parked = this.parkedHistoryBytes();
+    const elsewhere = this.historyBytes() - totalBytes(this.entries);
     const dropped = this.dropTrimVictims(
       () =>
         this.entries.length > this.historyLimit ||
-        overBudget(totalBytes(this.entries) + parked, budget),
+        overBudget(totalBytes(this.entries) + elsewhere, budget),
     );
     if (dropped) this.emitHistory();
   }
 
-  /** Drop states from the CURRENT slot while `over()` holds; returns how many. */
+  /** Drop states from the CURRENT document while `over()` holds; returns how many. */
   private dropTrimVictims(over: () => boolean): number {
     let dropped = 0;
     while (over()) {
@@ -1609,37 +1547,6 @@ export class PaintEngine {
       dropped++;
     }
     return dropped;
-  }
-
-  private takeHistorySlot(): HistorySlot {
-    return {
-      entries: this.entries,
-      cur: this.cur,
-      sourceIndex: this.historySourceIndex,
-      snapshots: this.snapshots,
-      sourceSnap: this.historySourceSnap,
-    };
-  }
-
-  private putHistorySlot(s: HistorySlot): void {
-    this.entries = s.entries;
-    this.cur = s.cur;
-    this.historySourceIndex = s.sourceIndex;
-    this.snapshots = s.snapshots;
-    this.historySourceSnap = s.sourceSnap;
-  }
-
-  /** Run tree bookkeeping (trim / prune — never pixel work) on a parked slot by
-   *  borrowing the live fields, and hand back the slot as it was left. */
-  private withHistorySlot(slot: HistorySlot, fn: () => void): HistorySlot {
-    const live = this.takeHistorySlot();
-    this.putHistorySlot(slot);
-    try {
-      fn();
-      return this.takeHistorySlot();
-    } finally {
-      this.putHistorySlot(live);
-    }
   }
 
   /** Finish whatever live session is open, so its commit lands in the history
@@ -1656,47 +1563,85 @@ export class PaintEngine {
   }
 
   /**
-   * Make `docId`'s history the one undo/redo/History act on. The engine is
-   * shared by every open tab, and with one stack between them Ctrl+Z in an
-   * untouched tab undid another tab's last edit, off-screen. Call this BEFORE
-   * anything journals into the newly active document.
+   * Bring `docId` to the front: undo/redo/History, painting and compositing all
+   * act on it from here, each document with its own rasters, caches and
+   * history (with one undo stack between tabs, Ctrl+Z in an untouched tab once
+   * undid another tab's last edit, off-screen). Call this BEFORE anything
+   * journals into the newly active document; a document seen for the first
+   * time is then sized by `setDoc`.
    */
-  setHistoryDocument(docId: string): void {
-    if (docId === this.historyDoc) return;
-    if (this.historyDoc !== null) {
-      this.endLiveSessions();
-      this.parkedHistory.set(this.historyDoc, this.takeHistorySlot());
-      this.putHistorySlot(emptyHistorySlot());
-    }
+  setDocument(docId: string): void {
+    if (docId === this.docId) return;
+    if (this.docId !== null) this.endLiveSessions(); // they belong to the tab being left
+    const known = this.docs.get(docId);
+    if (known) this.doc = known;
     // With no document named yet, the first one adopts what is already here.
-    const next = this.parkedHistory.get(docId);
-    if (next) {
-      this.parkedHistory.delete(docId);
-      this.putHistorySlot(next);
-    }
-    this.historyDoc = docId;
+    else if (this.docId !== null) this.doc = new DocumentState();
+    this.docs.set(docId, this.doc);
+    this.docId = docId;
+    this.wandSrc = null;
+    this.fitOpBuffers();
     this.trimHistory();
     this.emitHistory();
   }
 
-  /** A closed document's history (and its snapshots' canvases) is let go. */
-  discardHistoryDocument(docId: string): void {
-    if (docId !== this.historyDoc) {
-      this.parkedHistory.delete(docId);
-      return;
+  /** The operation buffers are shared, and sized to the document in front. */
+  private fitOpBuffers(): void {
+    const fits = (l: Layer | null) => !l || (l.c.width === this.w && l.c.height === this.h);
+    if (!fits(this.stroke)) this.stroke = this.w && this.h ? makeCanvas(this.w, this.h) : null;
+    if (!fits(this.scratch)) this.scratch = this.w && this.h ? this.mk(this.w, this.h) : null;
+  }
+
+  /**
+   * Let go of a closed document: its rasters, caches, history and snapshots go
+   * with its DocumentState, and its products leave the shared caches. Closing
+   * used to have to find each canvas by id — and missed some (TODO 1.2).
+   */
+  closeDocument(docId: string): void {
+    const d = this.docFor(docId);
+    if (!d) return;
+    if (d === this.doc) this.endLiveSessions();
+    for (const id of d.sharedIds) this.dropShared(id);
+    this.docs.delete(docId);
+    if (d === this.doc) {
+      // Nothing is in front until the editor brings the next tab forward.
+      this.doc = new DocumentState();
+      this.docId = null;
+      this.emitHistory();
     }
-    this.endLiveSessions();
-    this.putHistorySlot(emptyHistorySlot());
-    this.historyDoc = null;
-    this.emitHistory();
+  }
+
+  /** Note that the document in front put `id` in a shared cache. */
+  private noteShared(id: string): void {
+    this.doc.sharedIds.add(id);
+  }
+
+  /** Take `id` out of every cache the documents share. */
+  private dropShared(id: string): void {
+    this.dropCache(id);
+    this.filteredCache.delete(id);
+    this.filterPending.delete(id);
+    this.adjMeta.delete(id);
+  }
+
+  /**
+   * Composite any open document — the one in front or one in the background —
+   * at its own size, without bringing it forward. `tree` is that document's
+   * layer tree. Null when the engine has never held the document (a restored
+   * tab nobody has opened has no pixels here yet).
+   */
+  compositeDocument(docId: string, tree: LayerNode[]): HTMLCanvasElement | null {
+    const d = this.docFor(docId);
+    if (!d || !d.w || !d.h) return null;
+    return this.withDocument(d, () => this.exportComposite(tree));
   }
 
   /** Any document's history labels (creation order) and position — so a file
    *  written from an inactive tab still carries what was done to it. */
   historyOf(docId: string): { labels: string[]; index: number } | null {
-    const slot = docId === this.historyDoc ? this.takeHistorySlot() : this.parkedHistory.get(docId);
-    if (!slot) return null;
-    return { labels: slot.entries.map((e) => e.label), index: slot.cur + 1 };
+    const d = this.docFor(docId);
+    if (!d) return null;
+    return { labels: d.entries.map((e) => e.label), index: d.cur + 1 };
   }
 
   /** Route heavy compute through workers (on) or the synchronous fallbacks
@@ -1728,10 +1673,9 @@ export class PaintEngine {
   private strokeLayer: string | null = null;
   private brush: BrushSettings | null = null;
   private mode: StrokeMode = "paint";
-  // Per-layer edit locks the engine enforces at the pixel-commit chokepoint
-  // (pushEntry). Kept in sync from the layer tree via syncLayerLocks(). Only the
-  // two flags the engine acts on live here; position lock is a UI-level guard.
-  private layerLocks = new Map<string, { transparency: boolean; pixels: boolean }>();
+  // Per-layer edit locks (the document's `layerLocks`) are enforced at the
+  // pixel-commit chokepoint (pushEntry), kept in sync from the layer tree via
+  // syncLayerLocks(). Position lock is a UI-level guard and isn't tracked.
   private strokeLabel = "Brush"; // history label for the current stroke
   private clip: Rect[] | null = null;
   private clipAngle = 0;
@@ -2015,12 +1959,11 @@ export class PaintEngine {
   private step = 1;
   private dirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
 
-  // History is an UNDO TREE (see history-tree.ts): every entry records its
-  // parent, and `cur` is the node the document currently shows (ROOT = the
-  // original). A linear history is the degenerate case where every parent is
-  // the previous entry, so this behaves exactly as the old array + index did.
-  private entries: Entry[] = [];
-  private cur = ROOT;
+  // History is an UNDO TREE (see history-tree.ts), one per document: every
+  // entry records its parent, and `cur` is the node the document currently
+  // shows (ROOT = the original). A linear history is the degenerate case where
+  // every parent is the previous entry, so this behaves exactly as the old
+  // array + index did.
   /** Photoshop's "Allow Non-Linear History": keep the states a new edit would
    *  otherwise discard, as a branch, instead of truncating them. */
   private nonLinear = false;
@@ -2065,21 +2008,13 @@ export class PaintEngine {
     const src = this.historySourceIndex - 1;
     this.historySourceIndex = src < 0 || gone.has(src) ? 0 : remap[src] + 1;
   }
-  // History brush source: the state index the brush repaints from (0 = the
-  // original). The active layer's pixels AT that index are reconstructed from
-  // its patch entries on demand (beginHistory), so no full snapshots are stored.
-  private historySourceIndex = 0;
-  // Pinned snapshots (TODO §10): full pixel captures the user can restore to and
-  // point the History brush at. Engine-owned because they hold canvases; the
-  // editor pairs each with the layer TREE it was taken with.
-  private snapshots: DocSnapshot[] = [];
+  // History brush source (the document's `historySourceIndex`): the state the
+  // brush repaints from (0 = the original). The active layer's pixels AT that
+  // index are reconstructed from its patch entries on demand (beginHistory), so
+  // no full snapshots are stored. Pinned snapshots (`snapshots`, TODO §10) are
+  // full pixel captures the user can restore to and point the History brush at;
+  // the editor pairs each with the layer TREE it was taken with.
   private snapSeq = 0;
-  /** When set, the History brush sources from this snapshot instead of a step. */
-  private historySourceSnap: string | null = null;
-  /** The document whose history the fields above hold (null until the editor
-   *  names one), and every other open document's history, parked. */
-  private historyDoc: string | null = null;
-  private parkedHistory = new Map<string, HistorySlot>();
 
   onChange: () => void = () => {};
   onHistory: (s: HistorySummary) => void = () => {};
@@ -2129,15 +2064,21 @@ export class PaintEngine {
     const canvasChanged = nextCanvas !== this.cs;
     this.wandSrc = null;
     this.invalidateStyled();
+    // Every document's pixels are re-encoded below, not just this one's.
+    for (const d of this.everyDoc()) if (d !== this.doc) d.epoch++;
     this.ws = ws;
     this.cs = nextCanvas;
     if (canvasChanged) {
       if (this.scratch) this.scratch = this.mk(this.w, this.h);
-      // drawImage converts each layer's pixels from the old space into the new one.
-      for (const [id, l] of this.layers) {
-        const next = this.mk(this.w, this.h, true);
-        next.ctx.drawImage(l.c, 0, 0);
-        this.layers.set(id, next);
+      // drawImage converts each layer's pixels from the old space into the new
+      // one — in every open document, since the working space is the session's.
+      // Each at its own size: the background tabs' are not this one's.
+      for (const d of this.everyDoc()) {
+        for (const [id, l] of d.layers) {
+          const next = this.mk(l.c.width, l.c.height, true);
+          next.ctx.drawImage(l.c, 0, 0);
+          d.layers.set(id, next);
+        }
       }
     }
     this.endAdjust();
@@ -4100,6 +4041,7 @@ export class PaintEngine {
       epoch: this.docEpoch,
       docW: this.w,
       docH: this.h,
+      doc: this.doc,
       before: src,
       coverage,
     };
@@ -4277,6 +4219,46 @@ export class PaintEngine {
     this.adjMeta.delete(id);
   }
 
+  /** Drop the raster of every vector mask in `tree` that is no longer active.
+   *  renderNode does this for the layers it draws, but a HIDDEN layer is never
+   *  drawn: a vector mask deleted while its layer was hidden kept a
+   *  document-sized raster until the layer was shown again. */
+  private pruneVectorMasks(tree: LayerNode[]): void {
+    if (!this.vectorMaskCache.size) return;
+    const walk = (nodes: LayerNode[]) => {
+      for (const n of nodes) {
+        if (!vectorMaskActive(n.vectorMask)) this.vectorMaskCache.delete(n.id);
+        if (n.type === "group") walk(n.children);
+      }
+    };
+    walk(tree);
+  }
+
+  /**
+   * Commit a pixel patch to a document that is NOT in front: work it began that
+   * finished after its tab was left (a heal back from the worker). Its own
+   * layer, history and locks — and nothing on screen, which is showing another
+   * document. Before documents had their own state, this journalled into
+   * whichever tab was in front.
+   */
+  private landInBackground(
+    d: DocumentState,
+    layerId: string,
+    rect: Rect,
+    before: ImageData,
+    after: ImageData,
+    label: string,
+  ): void {
+    this.withDocument(d, () => {
+      const lock = this.layerLocks.get(layerId);
+      if (lock?.pixels) return;
+      if (lock?.transparency) after = this.freezeAlpha(before, after);
+      this.layer(layerId).ctx.putImageData(after, rect.x, rect.y);
+      this.linkEntry({ layerId, rect, before, after, label });
+      this.bumpPixel(layerId, rect);
+    });
+  }
+
   // ---- Frame content sources ------------------------------------------------
   // The image placed in a frame, kept at its NATURAL size so the frame can be
   // re-fitted (cover -> contain, a different scale, a nudge) without going back
@@ -4310,22 +4292,23 @@ export class PaintEngine {
 
   /** For the project file. */
   getFrameSourceImage(id: string): string | null {
-    const c = this.frameSrc.get(id);
+    const c = this.holderOf((d) => d.frameSrc, id);
     return c ? c.toDataURL("image/png") : null;
   }
 
   /** Exactly the canvas `getFrameSourceImage` would encode — see above. */
   getFrameSourceImageCanvas(id: string): HTMLCanvasElement | null {
-    return this.frameSrc.get(id) ?? null;
+    return this.holderOf((d) => d.frameSrc, id) ?? null;
   }
 
   clearFrameSource(id: string) {
     this.frameSrc.delete(id);
   }
 
-  /** A leaf layer's pixels as a PNG data URL (null if it has no canvas yet). */
+  /** A leaf layer's pixels as a PNG data URL (null if it has no canvas yet).
+   *  Any open document's: a background tab is saved by id too. */
   getLayerImage(id: string): string | null {
-    const l = this.layers.get(id);
+    const l = this.holderOf((d) => d.layers, id);
     return l ? l.c.toDataURL("image/png") : null;
   }
 
@@ -4334,7 +4317,7 @@ export class PaintEngine {
    *  byte-identical output. Autosave hands these to a worker instead of
    *  encoding on the main thread; everything else uses the getters above. */
   getLayerImageCanvas(id: string): HTMLCanvasElement | null {
-    return this.layers.get(id)?.c ?? null;
+    return this.holderOf((d) => d.layers, id)?.c ?? null;
   }
 
   /** A doc-sized COPY of a layer's raster as a canvas (blank if it has none
@@ -4406,13 +4389,13 @@ export class PaintEngine {
 
   /** A layer's grayscale mask as a PNG data URL (null if it has no mask). */
   getMaskImage(id: string): string | null {
-    const m = this.masks.get(id);
+    const m = this.holderOf((d) => d.masks, id);
     return m ? m.c.toDataURL("image/png") : null;
   }
 
   /** Exactly the canvas `getMaskImage` would encode — see getLayerImageCanvas. */
   getMaskImageCanvas(id: string): HTMLCanvasElement | null {
-    return this.masks.get(id)?.c ?? null;
+    return this.holderOf((d) => d.masks, id)?.c ?? null;
   }
 
   /** Restore a mask from a decoded image (project load) + derive its alpha. */
@@ -4949,6 +4932,7 @@ export class PaintEngine {
     const bytes = owned ? c.width * c.height * 4 : 0;
     this.renderBytes += bytes;
     this.renderCache.set(id, { c, key, bytes, tick: ++this.renderTick });
+    this.noteShared(id);
     this.frameProtect.add(id);
   }
 
@@ -5733,6 +5717,7 @@ export class PaintEngine {
       if (!entry) {
         entry = { key, grid, tiles: new Array<AdjTile | null>(n).fill(null), bytes: 0, tick: 0 };
         this.tiledAdj.set(id, entry);
+        this.noteShared(id);
       }
       for (let i = 0; i < n; i++) {
         const tr = tileRect(i, grid, this.w, this.h);
@@ -6192,6 +6177,7 @@ export class PaintEngine {
     this.frameProtect.clear();
     this.liveBypass = this.computeLiveBypass(tree);
     this.curTree = tree;
+    if (tree !== this.lastTree) this.pruneVectorMasks(tree);
     // A gesture that painted DRAFT filter/effect pixels leaves them wherever it
     // blitted, and those blits are region-scoped — so the first settled frame
     // after the session must repaint the whole view, not just the last dirty
@@ -9733,6 +9719,8 @@ export class PaintEngine {
       epoch: number;
       docW: number;
       docH: number;
+      /** The document it heals, which may not be in front when it lands. */
+      doc: DocumentState;
       before: ImageData;
       coverage: Uint8ClampedArray; // kept for the sync fallback on worker error
     }
@@ -9781,7 +9769,7 @@ export class PaintEngine {
 
   /** Bake a finished heal (worker bytes, or recompute sync when bytes = null).
    *  Discards the result if the document was reframed while it was in flight —
-   *  the captured coordinates would no longer be valid. */
+   *  the captured coordinates would no longer be valid — or closed. */
   private finishHeal(
     job: {
       layerId: string;
@@ -9793,13 +9781,16 @@ export class PaintEngine {
       epoch: number;
       docW: number;
       docH: number;
+      doc: DocumentState;
       before: ImageData;
       coverage: Uint8ClampedArray;
     },
     bytes: Uint8ClampedArray<ArrayBuffer> | null,
   ) {
-    if (job.epoch !== this.docEpoch || job.docW !== this.w || job.docH !== this.h) return;
-    const l = this.layers.get(job.layerId);
+    const d = job.doc;
+    if (job.epoch !== d.epoch || job.docW !== d.w || job.docH !== d.h) return;
+    if (!this.isOpen(d)) return; // closed meanwhile
+    const l = d.layers.get(job.layerId);
     if (!l) return; // layer deleted while healing
     let healed: ImageData;
     if (bytes) {
@@ -9810,6 +9801,17 @@ export class PaintEngine {
       }
     } else {
       healed = healRegion({ src: job.before, coverage: job.coverage });
+    }
+    if (d !== this.doc) {
+      this.landInBackground(
+        d,
+        job.layerId,
+        { x: job.rx, y: job.ry, w: job.rw, h: job.rh },
+        job.before,
+        healed,
+        job.label,
+      );
+      return;
     }
     l.ctx.putImageData(healed, job.rx, job.ry);
     this.pushEntry(
@@ -9928,6 +9930,7 @@ export class PaintEngine {
   private storeFiltered(id: string, key: string, canvas: HTMLCanvasElement, quality: "preview" | "full") {
     this.filteredCache.delete(id); // re-insert to refresh Map order (LRU-ish)
     this.filteredCache.set(id, { key, canvas, quality });
+    this.noteShared(id);
     while (this.filteredCache.size > 8) {
       const oldest = this.filteredCache.keys().next().value;
       if (oldest === undefined) break;
@@ -9956,6 +9959,7 @@ export class PaintEngine {
     const sh = Math.max(1, Math.round(this.h * scale));
     const seq = ++this.filterJobSeq;
     this.filterPending.set(node.id, { seq, key, quality, docW: this.w, docH: this.h });
+    this.noteShared(node.id);
     const readScaled = (source: HTMLCanvasElement): ImageData => {
       if (scale === 1) return source.getContext("2d")!.getImageData(0, 0, this.w, this.h);
       const small = this.mk(sw, sh, true);
@@ -10738,10 +10742,7 @@ export class PaintEngine {
         const stale = offPath(this.parents(), this.cur);
         if (stale.length) this.dropNodes(stale);
       };
-      prune();
-      for (const [id, slot] of this.parkedHistory) {
-        this.parkedHistory.set(id, this.withHistorySlot(slot, prune));
-      }
+      for (const d of this.everyDoc()) this.withDocument(d, prune);
     }
     this.emitHistory();
   }

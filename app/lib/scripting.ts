@@ -32,7 +32,7 @@ export interface ScriptLayerNode {
 
 /** Everything the api reads — Editor assigns this ref fresh every render. */
 export interface ScriptingDeps {
-  docs: { id: string; name: string; width: number; height: number }[];
+  docs: { id: string; name: string; width: number; height: number; layers: LayerNode[] }[];
   activeId: string;
   setActiveId: (id: string) => void;
   /** Runs a command; whether it ran (commands/registry.ts). */
@@ -80,10 +80,11 @@ export interface GraphiqScripting {
   actions(): { id: string; name: string; steps: number }[];
   /** Play a saved action by id or (first-match) name. Resolves when done. */
   play(idOrName: string): Promise<boolean>;
-  /** Flattened composite as a PNG blob (scale 1 = full size). */
-  exportPNG(scale?: number): Promise<Blob | null>;
+  /** Flattened composite as a PNG blob (scale 1 = full size) — of the active
+   *  document, or of any open one by id, without switching to it. */
+  exportPNG(scale?: number, docId?: string): Promise<Blob | null>;
   /** exportPNG + download. */
-  download(filename?: string, scale?: number): Promise<boolean>;
+  download(filename?: string, scale?: number, docId?: string): Promise<boolean>;
 }
 
 /** Every menu item id that actually dispatches (pure — Node-verified). */
@@ -134,8 +135,8 @@ journaled paths as the UI, so it is all undoable):
   graphiq.select([{x,y,w,h}, …])     replace the selection (null = deselect)
   graphiq.undo() / .redo()
   graphiq.actions()                  saved macros; await graphiq.play(idOrName)
-  await graphiq.exportPNG(scale?)    composite as a PNG Blob
-  await graphiq.download(name?, scale?)
+  await graphiq.exportPNG(scale?, docId?)  composite as a PNG Blob (any open tab)
+  await graphiq.download(name?, scale?, docId?)
 
 Example — run a macro over the current doc and save the result:
   await graphiq.play("My action"); await graphiq.download("result.png");`;
@@ -242,9 +243,17 @@ export function buildScriptingApi(depsRef: { current: ScriptingDeps | null }): G
       await d.playAction(act.id);
       return true;
     },
-    async exportPNG(scale = 1) {
+    async exportPNG(scale = 1, docId) {
       const d = deps();
-      const src = d?.engineRef.current?.exportComposite(d.activeLayers);
+      const eng = d?.engineRef.current;
+      if (!d || !eng) return null;
+      let src: HTMLCanvasElement | null;
+      if (docId === undefined || docId === d.activeId) src = eng.exportComposite(d.activeLayers);
+      else {
+        // A background tab composites at its own size, where it is (TODO 1.2).
+        const doc = d.docs.find((x) => x.id === docId);
+        src = doc ? eng.compositeDocument(doc.id, doc.layers) : null;
+      }
       if (!src) return null;
       const k = Number.isFinite(scale) && scale > 0 ? scale : 1;
       let c = src;
@@ -260,11 +269,11 @@ export function buildScriptingApi(depsRef: { current: ScriptingDeps | null }): G
       }
       return new Promise((resolve) => c.toBlob((b) => resolve(b), "image/png"));
     },
-    async download(filename, scale = 1) {
+    async download(filename, scale = 1, docId) {
       const d = deps();
-      const blob = await this.exportPNG(scale);
+      const blob = await this.exportPNG(scale, docId);
       if (!blob) return false;
-      const name = filename?.trim() || `${d?.docs.find((x) => x.id === d.activeId)?.name ?? "graphiq"}.png`;
+      const name = filename?.trim() || `${d?.docs.find((x) => x.id === (docId ?? d.activeId))?.name ?? "graphiq"}.png`;
       downloadBlob(blob, name.endsWith(".png") ? name : `${name}.png`);
       return true;
     },

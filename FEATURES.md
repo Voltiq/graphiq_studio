@@ -793,6 +793,30 @@ Measured on a 12 MP photograph opened and left alone — **five** document-sized
 - **Mutation-tested six ways** — the buffers eager again, only one of the two deferred, the preview hidden instead of unmounted, the allocation never happening at all, and the report omitting first the operation buffers and then the layers. All six caught.
 - **The mutation harness itself had to be fixed first.** It reverted by searching for the replacement text, and the eager two-liner appears three times in `paint.ts`, so the revert found three matches, refused, and left the file mutated mid-run. Reverting is now a write of the original bytes, which cannot fail on a search.
 
+### Each open document has its own engine state
+
+- **One state per tab, not one pool for all of them.** The paint engine is shared by every open tab. It kept all of their layer rasters in one map, one set of caches and one undo history, swapped in and out of "parked" slots on every switch. Now each document owns a `DocumentState` ([app/lib/doc-state.ts](app/lib/doc-state.ts)): its size, rasters, id-keyed caches, geometry epoch and history. The engine works on the one in front. Closing a tab drops its state whole, and a background tab can be composited where it is (`compositeDocument`), which is what multi-page PDF was blocked on.
+- **Behaviour-neutral by construction.** The engine reads the document in front through accessors (`DocumentScoped`), so none of the ~10k lines that say `this.layers` or `this.w` changed, and `paint.ts` came out a line shorter. The full browser suite passed on the split before anything else was touched.
+- **What the split surfaced, and fixed:**
+  - Changing the working space converted every tab's layers at the active tab's size, cropping a larger background document.
+  - A spot heal still in the worker when its tab was left went into the history of the tab in front, or was silently dropped if that tab was a different size. The engine-wide epoch couldn't tell one tab's resize from another's. It now lands in its own document, and the epoch is per document.
+  - A vector mask deleted from a HIDDEN layer kept its document-sized raster, because only drawing a layer pruned it. The view composite now prunes across the whole tree.
+- **Switching back to a tab keeps what was drawn for it.** The old switch cleared every cached render whenever the two tabs' sizes differed. Entries are keyed by globally unique node ids, so each tab's stay valid.
+- **First consumer:** `graphiq.exportPNG(scale, docId)` and `download(name, scale, docId)` export any open tab without switching to it.
+- **Tested in `e2e/doc-engine.spec.ts`:**
+  - a background tab composited at its own size;
+  - a working-space switch with a larger background tab;
+  - the quick mask freed with its tab, which the editor no longer names;
+  - brush buffers refitted after a switch to a larger tab;
+  - the memory report spanning tabs;
+  - a closed tab's renders leaving the shared cache;
+  - the in-flight heal, made deterministic by holding the worker's message until the tab has switched.
+
+  `close-frees-memory.spec.ts` gained the hidden-layer case, and a check reads a left tab's autosaved JSON straight out of IndexedDB to confirm its pixels were read from the background.
+- **Mutation-tested 15 ways, 13 caught.**
+  - **Two first survived for want of a test, and both now fail.** Reading by id from the front tab only would have autosaved every left tab without its pixels; nothing checked those pixels. And the heal's epoch check survived on a coincidence: both tabs happened to sit at epoch 1.
+  - **Two survive deliberately.** If a working-space switch converts only the front tab, the result can't be seen today: drawing between canvases colour-manages. If it doesn't bump the background tabs' epochs, nothing shows either, because cache keys carry the colour space too. Both mirror what the old code did for every tab. The first keeps every layer in the working space, which the rest of the engine assumes. The second guards a heal in flight across a canvas-space switch.
+
 ### Running out of canvas memory is reported, not composited as a blank photograph
 
 - **The failure has no error attached to it.** WebKit enforces a per-page canvas memory budget and, past it, hands back a canvas that draws, composites and reads perfectly — as transparent black, for ever. No throw, no null context, no console warning. The user does not see *"your device ran out of room"*; they see the photo they just opened turn into nothing, which reads as this app having destroyed it.

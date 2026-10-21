@@ -2131,10 +2131,11 @@ export default function CanvasArea({
   const engineRef = useRef<PaintEngine | null>(null);
   if (!engineRef.current) engineRef.current = new PaintEngine();
   const engine = engineRef.current;
-  // Each tab has its own undo history. A layout effect, so the swap happens
-  // before any effect below (a queued paste, say) journals into the new tab.
+  // Each tab has its own engine state — rasters, caches and undo history
+  // (TODO 1.2). A layout effect, so the swap happens before any effect below
+  // (a queued paste, say) journals into the new tab.
   useLayoutEffect(() => {
-    engine.setHistoryDocument(activeId);
+    engine.setDocument(activeId);
   }, [engine, activeId]);
 
   // Dev-only console hooks: __gqRenderCache A/B (Spec 06 — disable() must be
@@ -4847,7 +4848,8 @@ export default function CanvasArea({
       setHistoryLimit: (n) => engine.setHistoryLimit(n),
       setHistoryBudgetMB: (mb) => engine.setHistoryBudgetMB(mb),
       setNonLinearHistory: (on) => engine.setNonLinearHistory(on),
-      discardHistoryDocument: (docId) => engine.discardHistoryDocument(docId),
+      closeDocument: (docId) => engine.closeDocument(docId),
+      compositeDocument: (docId, tree) => engine.compositeDocument(docId, tree),
       commitPendingEdits: () => commitText(),
       historyOf: (docId) => engine.historyOf(docId),
       setWorkersEnabled: (on) => engine.setWorkersEnabled(on),

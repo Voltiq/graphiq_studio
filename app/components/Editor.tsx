@@ -167,7 +167,6 @@ import type { Theme } from "../lib/theme";
 import { invertRects, type Pan, type Rect } from "../lib/view";
 import {
   cloneSubtree,
-  allNodeIds,
   collectLeafIds,
   filterMaskKey,
   findNode,
@@ -1193,7 +1192,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
      — a text edit typed into it — is committed into THAT tab first; the commit
      targets whichever document is active, so after the switch it would be too
      late (it used to be dropped). The engine's own sessions, a floating paste
-     included, are finished when it swaps histories (setHistoryDocument). */
+     included, are finished when it swaps documents (setDocument). */
   const setActiveId = (id: string) => {
     if (id !== activeIdRef.current) {
       flushToolSelectionRef.current(); // a selection gesture belongs to the tab it was made in
@@ -4149,21 +4148,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     // Finish open edits while this tab's history still exists to take them.
     if (id === activeId) paintRef.current?.commitPendingEdits();
     const idx = docs.findIndex((d) => d.id === id);
-    const closing = docs[idx];
     const next = docs.filter((d) => d.id !== id);
     setDocs(next);
     docJsonCache.current.delete(id);
-    const eng = paintRef.current;
-    eng?.discardHistoryDocument(id);
-    /* Free its pixels. The engine is shared by every tab and holds each
-       document's canvases in one map; closing used to leave all of them
-       resident — measured: every layer and mask of a closed document still
-       there — and, its history gone, unreachable. */
-    if (eng && closing) {
-      for (const nodeId of allNodeIds(closing.layers)) eng.removeLayer(nodeId);
-      eng.freeMask(quickMaskKey(id));
-      for (const ch of closing.channels ?? []) eng.freeMask(selectionChannelKey(id, ch.id));
-    }
+    /* Its engine state goes whole: every raster (layers, masks, the quick mask,
+       saved channels), every cache and its history. Closing once had to free
+       each canvas by id, and left some resident (TODO 1.2). */
+    paintRef.current?.closeDocument(id);
     if (id === activeId) setActiveId(next[Math.min(idx, next.length - 1)].id);
   };
 
