@@ -1,80 +1,631 @@
 @use "../styles/ds" as ds;
 
-/* Interactive tour: dimmed blanket with a spotlight cutout + a floating card. */
+/* The onboarding tour (TourOverlay.tsx): a dim with a spotlight cut in it, a
+   ring round the spotlight, and a card that walks you round the chrome.
 
-.blanket {
+   Motion, all from the system's tokens:
+   - the spotlight and the card travel between stops on the GENTLE spring (they
+     change size as they go), and the card's height follows its stop's;
+   - the stops slide past each other in the direction of travel — the new one
+     on the snappy spring, its parts a beat apart, the old one gone in --dur-
+     exit — and the first one arrives with the card instead;
+   - the card itself rises in like a dialog and sinks away when the tour ends,
+     as the dim lifts.
+   With motion reduced every one of these is cut to nothing, and each base
+   style is the resting frame. */
+
+.tour {
+  /* The theme's blanket, deepened: a spotlight wants more contrast than a
+     sheet does (≈52% over the light theme, ≈73% over the dark, where the
+     chrome is near black already and a lighter dim barely registers). */
+  --tour-dim: color-mix(in srgb, var(--blanket) 70%, #05070c);
   position: fixed;
   inset: 0;
-  z-index: 420; /* above panels/floats/menus, below nothing it needs */
+  z-index: 420; /* above panels, floats and menus */
+
+  /* A pointer try-it: the shields round the spotlight block; it does not. */
+  &[data-reach="pointer"] {
+    pointer-events: none;
+  }
 }
 
-/* The spotlight IS the blanket: a rounded hole whose giant box-shadow dims
-   everything else. For centred steps it collapses to a point mid-screen. */
-.hole {
+.shield {
   position: fixed;
-  border-radius: 10px;
-  box-shadow: 0 0 0 200vmax color-mix(in srgb, #05070c 62%, transparent);
-  pointer-events: none;
-  transition: left 200ms var(--ease), top 200ms var(--ease), width 200ms var(--ease),
-    height 200ms var(--ease);
+  pointer-events: auto;
 }
 
-:root[data-motion="off"] .hole {
-  transition: none;
+/* ---- The spotlight ----------------------------------------------------------
+   The hole IS the dim: its 200vmax shadow covers everything but itself. It
+   is placed by transform, so it glides; for a centred stop it closes to a
+   point behind the card. */
+
+.hole,
+.ring,
+.ping {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.hole {
+  box-shadow: 0 0 0 200vmax var(--tour-dim);
+  animation: dimIn 420ms var(--ease-reveal) both;
+}
+
+.ring {
+  box-shadow:
+    0 0 0 1.5px var(--accent-solid),
+    0 0 0 5px color-mix(in srgb, var(--accent-solid) 16%, transparent),
+    0 0 22px 2px color-mix(in srgb, var(--accent-solid) 26%, transparent);
+  transition: opacity var(--t-med) var(--ease);
+  animation: breathe 2.8s ease-in-out infinite;
+
+  &[data-on="false"] {
+    opacity: 0;
+  }
+}
+
+.tour[data-ready="true"] .hole,
+.tour[data-ready="true"] .ring {
+  transition:
+    transform var(--dur-gentle) var(--spring-gentle),
+    width var(--dur-gentle) var(--spring-gentle),
+    height var(--dur-gentle) var(--spring-gentle),
+    border-radius var(--dur-gentle) var(--spring-gentle),
+    opacity var(--t-med) var(--ease);
+}
+
+/* Not glides yet (the first frame) or not at all (motion reduced): the parts
+   that travel simply land. Even the global reduced-motion rule's 0.01ms
+   transition — on every property, as `all` is the default — lands a frame
+   late, which here is a frame of the card at its old stop. */
+.tour:not([data-ready="true"]) :is(.hole, .ring, .place, .caret, .stage) {
+  transition: none !important;
+}
+
+/* A ripple off the spotlight as it lands on each stop. */
+.ping {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 0;
+  opacity: 0;
+  animation: ping 900ms var(--ease-reveal) 280ms;
+}
+
+.tour[data-state="closed"] {
+  .hole {
+    animation: dimOut var(--dur-exit) var(--ease-exit) both;
+  }
+
+  .ring,
+  .ping {
+    animation: dimOut var(--dur-exit) var(--ease-exit) both;
+  }
+}
+
+@keyframes dimIn {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes dimOut {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes breathe {
+  50% {
+    box-shadow:
+      0 0 0 1.5px var(--accent-solid),
+      0 0 0 8px color-mix(in srgb, var(--accent-solid) 9%, transparent),
+      0 0 34px 5px color-mix(in srgb, var(--accent-solid) 20%, transparent);
+  }
+}
+
+@keyframes ping {
+  from {
+    outline-offset: 0;
+    opacity: 0.9;
+  }
+  to {
+    outline-offset: 18px;
+    opacity: 0;
+  }
+}
+
+/* ---- The card ----------------------------------------------------------------- */
+
+.place {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: min(368px, calc((100vw - var(--safe-l) - var(--safe-r)) / var(--ui-zoom, 1) - 24px));
+  pointer-events: auto;
+
+  .tour[data-ready="true"] & {
+    transition: transform var(--dur-gentle) var(--spring-gentle);
+  }
 }
 
 .card {
-  position: fixed;
-  width: 340px;
-  max-width: calc(100vw - 24px);
-  padding: 16px 18px 14px;
-  @include ds.overlay(var(--r-xl));
+  position: relative;
+  overflow: hidden;
+  @include ds.overlay(22px);
+  touch-action: pan-y; /* a sideways swipe is the tour's */
+  @include ds.dialog-in(cardIn);
+
+  .tour[data-state="closed"] & {
+    animation: cardOut var(--dur-exit) var(--ease-exit) both;
+  }
+}
+
+@include ds.dialog-keyframes(cardIn);
+
+@keyframes cardOut {
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+    filter: blur(3px);
+  }
+}
+
+/* The caret: a corner of the card's own material, pointing at the target. */
+.caret {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: var(--surface-3);
+  border: 1px solid var(--line-2);
+  transform: rotate(45deg);
+  pointer-events: none;
+
+  .tour[data-ready="true"] & {
+    transition:
+      left var(--dur-gentle) var(--spring-gentle),
+      top var(--dur-gentle) var(--spring-gentle);
+  }
+
+  &[data-side="below"] {
+    top: -8px;
+    left: calc(var(--arrow) - 6px);
+    border-right: 0;
+    border-bottom: 0;
+  }
+
+  &[data-side="above"] {
+    bottom: -8px;
+    left: calc(var(--arrow) - 6px);
+    border-left: 0;
+    border-top: 0;
+  }
+
+  &[data-side="right"] {
+    left: -8px;
+    top: calc(var(--arrow) - 6px);
+    border-top: 0;
+    border-right: 0;
+  }
+
+  &[data-side="left"] {
+    right: -8px;
+    top: calc(var(--arrow) - 6px);
+    border-bottom: 0;
+    border-left: 0;
+  }
+}
+
+/* ---- The stops ------------------------------------------------------------------
+   The stage takes the height of the stop it shows, on the gentle spring; the
+   stops slide through it. The outgoing one is laid over the top, out of the
+   flow, so the stage measures only the incoming one. */
+
+.stage {
+  position: relative;
+  overflow: hidden;
+
+  .tour[data-ready="true"] & {
+    transition: height var(--dur-gentle) var(--spring-gentle);
+  }
+}
+
+.pane {
+  --dir: 1;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 11px;
+  padding: 7px 7px 0;
+
+  &[data-dir="back"] {
+    --dir: -1;
+  }
+
+  &[data-phase="in"] > * {
+    animation:
+      partIn var(--dur-snappy) var(--spring-snappy) both,
+      partReveal 240ms var(--ease-reveal) both;
+  }
+
+  @for $i from 2 through 4 {
+    &[data-phase="in"] > :nth-child(#{$i}) {
+      animation-delay: #{($i - 1) * 35ms};
+    }
+  }
+
+  &[data-phase="out"] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    pointer-events: none;
+    animation: paneOut 170ms var(--ease-exit) both;
+  }
+}
+
+/* The first stop arrives with the card; it does not slide in after it. */
+.stage[data-moved="false"] .pane > * {
+  animation: none;
+}
+
+@keyframes partIn {
+  from {
+    transform: translateX(calc(var(--dir) * 28px));
+  }
+}
+
+@keyframes partReveal {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+  }
+  to {
+    filter: none;
+  }
+}
+
+@keyframes paneOut {
+  to {
+    opacity: 0;
+    transform: translateX(calc(var(--dir) * -20px));
+    filter: blur(3px);
+  }
+}
+
+/* The illustration: a lit board the scene stands on. Left out where the
+   screen is too short to spare it (a phone on its side). */
+.artBox {
+  position: relative;
+  height: 120px;
+  border-radius: 15px;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 95% at 50% 0%, color-mix(in oklab, var(--accent-solid) 20%, transparent), transparent 72%),
+    radial-gradient(circle at 1px 1px, color-mix(in oklab, var(--text) 10%, transparent) 1px, transparent 1.5px) 0 0 /
+      12px 12px,
+    var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+
+  @media (max-height: 620px) {
+    display: none;
+  }
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 2px 11px 0;
+}
+
+.eyebrow {
+  @include ds.eyebrow;
+  margin: 0;
+  color: var(--accent);
+}
+
+.count {
+  color: var(--text-3);
 }
 
 .title {
-  font-size: 14px;
+  margin: 0;
+  font-size: 17px;
   font-weight: var(--weight-semibold);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--text);
 }
 
 .body {
-  font-size: 12px;
-  line-height: 1.5;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
   color: var(--text-2);
 }
+
+/* ---- Tips ---------------------------------------------------------------------- */
+
+.tips {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 0 11px;
+  list-style: none;
+
+  /* The last stop's cheat sheet. */
+  &[data-sheet] {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 12px;
+    padding: 10px 11px;
+    margin: 0 4px;
+    border-radius: 12px;
+    background: var(--surface-2);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+}
+
+.tip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-2);
+}
+
+.keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.kbd {
+  @include ds.kbd;
+  min-width: 20px;
+  font-size: 10.5px;
+  text-align: center;
+}
+
+.plus,
+.or {
+  font-size: 10px;
+  color: var(--text-3);
+}
+
+.bullet {
+  width: 5px;
+  height: 5px;
+  margin: 0 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent-solid);
+  opacity: 0.7;
+}
+
+.tipText {
+  min-width: 0;
+}
+
+/* ---- Try it ----------------------------------------------------------------------
+   A dashed invitation while it waits; solid green, with a tick that pops, once
+   it is done. The prompt and the praise share one cell and swap places. */
+
+.try {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 4px;
+  padding: 9px 12px;
+  border-radius: 13px;
+  border: 1px dashed var(--accent-line);
+  background: var(--accent-soft);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+  transition:
+    background var(--t-med) var(--ease),
+    border-color var(--t-med) var(--ease);
+
+  &[data-done="true"] {
+    border-style: solid;
+    border-color: color-mix(in oklab, var(--success) 45%, transparent);
+    background: color-mix(in oklab, var(--success) 13%, transparent);
+  }
+}
+
+.tryIcon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent-fill);
+  color: var(--accent-contrast);
+  animation: beckon 2.2s ease-out infinite;
+
+  [data-done="true"] > & {
+    background: var(--success);
+    color: #fff;
+    animation: tick var(--dur-bouncy) var(--spring-bouncy) both;
+  }
+}
+
+@keyframes beckon {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-solid) 45%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+
+@keyframes tick {
+  from {
+    transform: scale(0.3) rotate(-35deg);
+  }
+}
+
+.tryText {
+  display: grid;
+}
+
+.tryPrompt,
+.tryPraise {
+  grid-area: 1 / 1;
+  transition:
+    opacity var(--t-med) var(--ease),
+    transform var(--dur-gentle) var(--spring-gentle);
+}
+
+.tryPraise {
+  opacity: 0;
+  transform: translateY(7px);
+}
+
+[data-done="true"] {
+  .tryPrompt {
+    opacity: 0;
+    transform: translateY(-7px);
+  }
+
+  .tryPraise {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- Progress ----------------------------------------------------------------------
+   A segment per stop: the ones behind you filled, this one lit, the rest a
+   track. Each is a way back (or ahead) to its stop. */
+
+.progress {
+  display: flex;
+  gap: 4px;
+  padding: 14px 18px 0;
+}
+
+.seg {
+  flex: 1;
+  display: grid;
+  align-items: center;
+  height: 14px;
+  padding: 0;
+  cursor: pointer;
+
+  &::before {
+    content: "";
+    grid-area: 1 / 1;
+    height: 4px;
+    border-radius: var(--r-pill);
+    background: var(--border-strong);
+    opacity: 0.55;
+    transition: opacity var(--t-fast) var(--ease);
+  }
+
+  &:hover::before {
+    opacity: 1;
+  }
+}
+
+/* The touch shell's 44px floor for every button (globals) would make each
+   segment 44 wide — nine of them overflow a phone's card. A segment is a
+   shortcut, not the way through (Next, Back and the swipe are): it keeps its
+   own width and takes a taller strip to land on. */
+:global(html[data-touch="true"]) .tour .progress > .seg {
+  min-width: 0;
+  min-height: 0;
+  height: 24px;
+}
+
+.segFill {
+  grid-area: 1 / 1;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--accent-fill);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition:
+    transform var(--dur-gentle) var(--spring-gentle),
+    opacity var(--t-med) var(--ease),
+    box-shadow var(--t-med) var(--ease);
+
+  [data-state="past"] > & {
+    transform: none;
+    opacity: 0.5;
+  }
+
+  [data-state="now"] > & {
+    transform: none;
+    box-shadow: 0 0 8px color-mix(in srgb, var(--accent-solid) 55%, transparent);
+  }
+}
+
+/* ---- Buttons ------------------------------------------------------------------------ */
 
 .foot {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 2px;
-}
-
-.dots {
-  display: flex;
-  gap: 4px;
-  margin-right: auto;
-}
-
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--border-strong);
-
-  &[data-on="true"] {
-    background: var(--accent-fill);
-  }
+  padding: 12px 14px 14px;
 }
 
 .btn {
-  @include ds.btn(30px);
-  padding: 0 12px;
+  @include ds.btn(32px);
+  padding: 0 14px;
   font-size: 12.5px;
+
+  @media (pointer: coarse) {
+    height: 40px;
+  }
+}
+
+.ghost {
+  @include ds.btn-ghost;
+}
+
+/* The first button stands on its own at the left. */
+.lead {
+  margin-right: auto;
+  padding: 0 10px;
 }
 
 .primary {
   @include ds.btn-primary;
+  position: relative;
+  min-width: 92px;
+
+  /* A try-it done: the way on asks to be taken. */
+  &[data-nudge]::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    pointer-events: none;
+    animation: nudge 1.5s ease-out 3;
+  }
+}
+
+@keyframes nudge {
+  from {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-solid) 55%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 11px transparent;
+  }
+}
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

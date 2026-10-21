@@ -452,6 +452,7 @@ export default function TopBar({
             <button
               type="button"
               className={styles.export}
+              data-tour="export"
               onClick={() => onMenuAction?.("export-as")}
               title="Export as… (Ctrl+Shift+E)"
             >

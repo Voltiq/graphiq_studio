@@ -5867,17 +5867,23 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   // ---- Onboarding (§11): interactive tour + sample document ----------------
-  const [tourStep, setTourStep] = useState<number | null>(null);
-  // First run: greet with the tour's welcome card (Skip marks it seen too).
+  /* "due" is a first run with the tour about to arrive: it greets with its
+     welcome card a beat after the editor is up, so it arrives rather than is
+     simply there. The phone's start card waits until it has gone — it blurs
+     the stage the tour is pointing at — and takes over from it after. */
+  const [tour, setTour] = useState<"off" | "due" | "open">("off");
   useEffect(() => {
     try {
-      if (!localStorage.getItem("graphiq:welcomed")) setTourStep(0);
+      if (localStorage.getItem("graphiq:welcomed")) return;
     } catch {
-      /* storage unavailable — never nag */
+      return; /* storage unavailable — never nag */
     }
+    setTour("due");
+    const t = window.setTimeout(() => setTour("open"), 450);
+    return () => window.clearTimeout(t);
   }, []);
   const closeTour = () => {
-    setTourStep(null);
+    setTour("off");
     try {
       localStorage.setItem("graphiq:welcomed", "1");
     } catch {
@@ -6906,7 +6912,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     "new-guide": () => setNewGuideOpen(true),
     "help-start": () => setHelpOpen("start"),
     "help-docs": () => setHelpOpen("docs"),
-    "tour": () => setTourStep(0),
+    "tour": () => setTour("open"),
   };
   /** Run `fn` on the active layer, if there is one. */
   const onActiveLayer = (fn: (id: string) => void) => {
@@ -8143,6 +8149,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
               is "nothing has been made yet"; the history check catches an edit
               that left no layer behind (a canvas resize, say). */}
           {!startDismissed &&
+            tour === "off" &&
             !restoreSnap &&
             docs.length === 1 &&
             !active?.layers.length &&
@@ -8540,14 +8547,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       {batchOpen && (
         <BatchDialog actions={savedActions} runFile={batchRunFile} onClose={() => setBatchOpen(false)} />
       )}
-      {tourStep !== null && (
-        <TourOverlay
-          mobile={mobile}
-          step={tourStep}
-          onStep={setTourStep}
-          onClose={closeTour}
-          onOpenSample={openSampleDoc}
-        />
+      {tour === "open" && (
+        <TourOverlay mobile={mobile} watch={{ tool, zoom }} onClose={closeTour} onOpenSample={openSampleDoc} />
       )}
       {hdrToneOpen && active.hdr && (
         <HdrMergeDialog

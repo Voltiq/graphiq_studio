@@ -40,7 +40,8 @@ export default function MobileBar({
 }) {
   return (
     <nav className={styles.bar} data-tour="mobilebar" aria-label="Mobile toolbar">
-      <div className={styles.dock}>
+      {/* The band is the whole foot of the screen; the tour outlines the pill. */}
+      <div className={styles.dock} data-tour-spot>
         {QUICK.map((id) => {
           const t = ALL_TOOLS.find((x) => x.id === id)!;
           const Icon = t.icon;

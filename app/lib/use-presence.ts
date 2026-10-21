@@ -8,7 +8,7 @@ export const EXIT_MS = 150;
 export const FOLD_MS = 280;
 
 /** The user (or the OS) asked for less motion: leave at once, nothing to watch. */
-function motionOff(): boolean {
+export function motionOff(): boolean {
   if (typeof window === "undefined") return true;
   return (
     document.documentElement.dataset.motion === "off" ||

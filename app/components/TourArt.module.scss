@@ -1,0 +1,1398 @@
+/* The tour's illustrations (TourArt.tsx). Every scene is coloured from the
+   theme's tokens, so it sits in light and dark alike, and every animation
+   leaves from the scene's resting frame and returns to it: with motion reduced
+   (each animation cut to nothing) what stays is that frame, complete. */
+
+$spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+$settle: cubic-bezier(0.34, 1.3, 0.64, 1);
+$glide: cubic-bezier(0.65, 0, 0.35, 1);
+
+.art {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* ---- Materials ------------------------------------------------------------ */
+
+.panel,
+.dockPill {
+  fill: var(--raised);
+  stroke: var(--line-2);
+}
+
+.menu {
+  fill: var(--surface-3);
+  stroke: var(--line-2);
+  filter: drop-shadow(0 4px 7px rgb(0 0 0 / 22%));
+}
+
+.well {
+  fill: var(--surface-2);
+  stroke: var(--border);
+}
+
+.phone {
+  fill: var(--surface-2);
+  stroke: var(--line-2);
+  stroke-width: 1.5;
+}
+
+.sheet {
+  fill: var(--raised);
+  stroke: var(--line-2);
+}
+
+.sheetAccent {
+  fill: var(--accent-soft);
+  stroke: var(--accent-line);
+}
+
+.sheetEdge {
+  fill: none;
+  stroke: rgb(255 255 255 / 55%);
+}
+
+.sheetCard {
+  fill: var(--surface-3);
+  stroke: var(--line-2);
+  filter: drop-shadow(0 -2px 6px rgb(0 0 0 / 18%));
+}
+
+.pill,
+.badge,
+.format {
+  fill: var(--surface-3);
+  stroke: var(--line-2);
+}
+
+.paper {
+  fill: var(--raised-2);
+  stroke: var(--line-2);
+  stroke-linejoin: round;
+}
+
+.dogEar {
+  fill: var(--surface-2);
+  stroke: var(--line-2);
+  stroke-linejoin: round;
+}
+
+.hit {
+  fill: var(--accent-soft);
+}
+
+.active,
+.slide,
+.slideDock {
+  fill: var(--accent-soft);
+  stroke: var(--accent-line);
+}
+
+.key {
+  fill: var(--raised-2);
+  stroke: var(--line-2);
+}
+
+/* ---- Type ------------------------------------------------------------------ */
+
+.label {
+  font-size: 9.5px;
+  font-weight: 500;
+  fill: var(--text);
+}
+
+.label2 {
+  font-size: 9.5px;
+  fill: var(--text-2);
+}
+
+.typedText {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  fill: var(--text);
+}
+
+.dim {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  fill: var(--text-3);
+}
+
+.small {
+  font-size: 7.5px;
+  font-weight: 500;
+  fill: var(--text-2);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  fill: var(--text);
+}
+
+.monoDim {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  fill: var(--text-3);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  fill: var(--text-3);
+}
+
+.keyText {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 500;
+  fill: var(--text-2);
+}
+
+.fx {
+  font-size: 8.5px;
+  font-style: italic;
+  font-weight: 600;
+  fill: var(--accent);
+}
+
+/* ---- Marks ----------------------------------------------------------------- */
+
+.glyph {
+  fill: none;
+  stroke: var(--text-2);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.glyphFill {
+  fill: var(--text-2);
+}
+
+.dash {
+  fill: none;
+  stroke: var(--text-2);
+  stroke-width: 1.3;
+  stroke-dasharray: 2.2 1.6;
+}
+
+.mark {
+  fill: var(--text-3);
+}
+
+.icon,
+.dot,
+.fill,
+.fillStatic,
+.wheel {
+  fill: var(--accent-solid);
+}
+
+.iconDim {
+  fill: var(--border-strong);
+}
+
+.bar {
+  fill: var(--border-strong);
+  opacity: 0.75;
+}
+
+.divider {
+  stroke: var(--line-2);
+}
+
+.track {
+  fill: var(--surface-2);
+  stroke: var(--border);
+  stroke-width: 0.5;
+}
+
+.thumb {
+  fill: #fff;
+  stroke: rgb(0 0 0 / 18%);
+  stroke-width: 0.8;
+  filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 30%));
+}
+
+.pointer {
+  fill: var(--text);
+  stroke: var(--surface-3);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+  paint-order: stroke;
+}
+
+.crossLine {
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.ok,
+.okDisc {
+  fill: var(--success);
+}
+
+.okTick {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.adjust {
+  fill: var(--text);
+  stroke: var(--text);
+}
+
+.adjustHalf {
+  fill: var(--raised);
+}
+
+.mask {
+  fill: #fff;
+  stroke: var(--line-2);
+}
+
+.maskHole {
+  fill: #1d1f24;
+}
+
+.solid {
+  fill: #8b93a7;
+}
+
+.seam {
+  stroke: #fff;
+  stroke-width: 1.5;
+}
+
+.seamKnob {
+  fill: #fff;
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 35%));
+}
+
+.seamGrip {
+  fill: none;
+  stroke: #5b6070;
+  stroke-width: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.subjectShade {
+  fill: #5a6b8c;
+  opacity: 0.55;
+}
+
+.finger,
+.fingerSoft,
+.fingerDrag {
+  fill: color-mix(in srgb, var(--accent-solid) 24%, transparent);
+  stroke: var(--accent-solid);
+  stroke-width: 1.5;
+}
+
+/* ---- Welcome: the layers fan, a stroke draws, sparkles twinkle --------------- */
+
+.fan {
+  animation: fan 4.4s ease-in-out infinite;
+}
+
+@keyframes fan {
+  0%,
+  100% {
+    transform: none;
+  }
+  50% {
+    transform: translateY(var(--lift));
+  }
+}
+
+.stroke {
+  fill: none;
+  stroke: var(--accent-solid);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 1 2;
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 25%));
+  animation: draw 5.2s infinite;
+}
+
+@keyframes draw {
+  0%,
+  6% {
+    stroke-dashoffset: 1.2;
+    opacity: 1;
+    animation-timing-function: $glide;
+  }
+  36% {
+    stroke-dashoffset: 0;
+  }
+  84% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  94%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+.sparkle {
+  fill: var(--accent);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: twinkle 2.6s ease-in-out infinite;
+}
+
+@keyframes twinkle {
+  50% {
+    transform: scale(0.45) rotate(45deg);
+    opacity: 0.35;
+  }
+}
+
+/* ---- Palette: typed, then the matches cascade in --------------------------- */
+
+.typeClip {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: type 5.6s infinite;
+}
+
+@keyframes type {
+  0%,
+  8% {
+    transform: scaleX(0);
+    animation-timing-function: steps(6, end);
+  }
+  34%,
+  100% {
+    transform: none;
+  }
+}
+
+.caret {
+  fill: var(--accent);
+  animation:
+    caret 5.6s infinite,
+    blink 0.9s steps(1) infinite;
+}
+
+@keyframes caret {
+  0%,
+  8% {
+    transform: translateX(-35px);
+    animation-timing-function: steps(6, end);
+  }
+  34%,
+  100% {
+    transform: none;
+  }
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.typed {
+  animation: typedOut 5.6s infinite;
+}
+
+@keyframes typedOut {
+  88% {
+    opacity: 1;
+  }
+  96%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@for $i from 1 through 3 {
+  .row#{$i} {
+    animation: row#{$i} 5.6s infinite;
+  }
+
+  @keyframes row#{$i} {
+    0%,
+    #{34 + $i * 4}% {
+      opacity: 0;
+      transform: translateY(-5px);
+      animation-timing-function: $settle;
+    }
+    #{44 + $i * 4}%,
+    88% {
+      opacity: 1;
+      transform: none;
+    }
+    96%,
+    100% {
+      opacity: 0;
+      transform: none;
+    }
+  }
+}
+
+/* ---- Tools: the highlight walks the rail; a slot opens ---------------------- */
+
+.slide,
+.walk {
+  animation: walk 6.4s infinite;
+}
+
+@keyframes walk {
+  0%,
+  10% {
+    transform: translateX(-90px);
+    animation-timing-function: $settle;
+  }
+  18%,
+  28% {
+    transform: translateX(-60px);
+    animation-timing-function: $settle;
+  }
+  36%,
+  46% {
+    transform: translateX(-30px);
+    animation-timing-function: $settle;
+  }
+  54%,
+  88% {
+    transform: none;
+    animation-timing-function: $glide;
+  }
+  98%,
+  100% {
+    transform: translateX(-90px);
+  }
+}
+
+.flyout {
+  transform-box: fill-box;
+  transform-origin: 14px 0;
+  animation: flyout 6.4s infinite;
+}
+
+@keyframes flyout {
+  0%,
+  58% {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.86);
+    animation-timing-function: $spring;
+  }
+  64%,
+  84% {
+    opacity: 1;
+    transform: none;
+    animation-timing-function: ease-in;
+  }
+  90%,
+  100% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+/* ---- Options: the size slider and its brush -------------------------------- */
+
+.knob {
+  animation: knob 4.8s infinite;
+}
+
+@keyframes knob {
+  0%,
+  8% {
+    transform: none;
+    animation-timing-function: $settle;
+  }
+  28%,
+  42% {
+    transform: translateX(-42px);
+    animation-timing-function: $settle;
+  }
+  62%,
+  78% {
+    transform: translateX(36px);
+    animation-timing-function: $glide;
+  }
+  96%,
+  100% {
+    transform: none;
+  }
+}
+
+.fill {
+  transform-box: fill-box;
+  transform-origin: left center;
+  transform: scaleX(0.6);
+  animation: fillSize 4.8s infinite;
+}
+
+@keyframes fillSize {
+  0%,
+  8% {
+    transform: scaleX(0.6);
+    animation-timing-function: $settle;
+  }
+  28%,
+  42% {
+    transform: scaleX(0.25);
+    animation-timing-function: $settle;
+  }
+  62%,
+  78% {
+    transform: scaleX(0.9);
+    animation-timing-function: $glide;
+  }
+  96%,
+  100% {
+    transform: scaleX(0.6);
+  }
+}
+
+.dab {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: dab 4.8s infinite;
+}
+
+@keyframes dab {
+  0%,
+  8% {
+    transform: none;
+    animation-timing-function: $settle;
+  }
+  28%,
+  42% {
+    transform: scale(0.55);
+    animation-timing-function: $settle;
+  }
+  62%,
+  78% {
+    transform: scale(1.3);
+    animation-timing-function: $glide;
+  }
+  96%,
+  100% {
+    transform: none;
+  }
+}
+
+/* A key held down: it sinks a little and takes the accent. (Keyframes are
+   emitted at the top level, where CSS modules scope their names.) */
+@mixin held($name) {
+  animation: #{$name} 4.8s infinite;
+
+  .key {
+    animation: #{$name}-lit 4.8s infinite;
+  }
+}
+
+@mixin held-keyframes($name, $from, $to) {
+  @keyframes #{$name} {
+    0%,
+    #{$from - 2}%,
+    #{$to + 2}%,
+    100% {
+      transform: none;
+    }
+    #{$from}%,
+    #{$to}% {
+      transform: translateY(1.5px);
+    }
+  }
+
+  @keyframes #{$name}-lit {
+    0%,
+    #{$from - 2}%,
+    #{$to + 2}%,
+    100% {
+      fill: var(--raised-2);
+      stroke: var(--line-2);
+    }
+    #{$from}%,
+    #{$to}% {
+      fill: var(--accent-soft);
+      stroke: var(--accent-line);
+    }
+  }
+}
+
+.keyL {
+  @include held(pressL);
+}
+
+.keyR {
+  @include held(pressR);
+}
+
+@include held-keyframes(pressL, 10, 28);
+@include held-keyframes(pressR, 44, 62);
+
+/* ---- Zoom: in toward the pointer, a pan, back out --------------------------- */
+
+.zoomIn {
+  transform-box: view-box;
+  transform-origin: 196px 46px;
+  animation: zoomIn 6.4s infinite;
+}
+
+@keyframes zoomIn {
+  0%,
+  12% {
+    transform: none;
+    animation-timing-function: $glide;
+  }
+  36%,
+  50% {
+    transform: scale(2.1);
+    animation-timing-function: $glide;
+  }
+  64%,
+  72% {
+    transform: translateX(-26px) scale(2.1);
+    animation-timing-function: $glide;
+  }
+  92%,
+  100% {
+    transform: none;
+  }
+}
+
+.zoomA {
+  animation: swapA 6.4s infinite;
+}
+
+.zoomB {
+  opacity: 0;
+  animation: swapB 6.4s infinite;
+}
+
+@keyframes swapA {
+  0%,
+  20%,
+  86%,
+  100% {
+    opacity: 1;
+  }
+  24%,
+  82% {
+    opacity: 0;
+  }
+}
+
+@keyframes swapB {
+  0%,
+  20%,
+  86%,
+  100% {
+    opacity: 0;
+  }
+  24%,
+  82% {
+    opacity: 1;
+  }
+}
+
+.hold {
+  animation: hold 6.4s infinite;
+
+  .key {
+    animation: hold-lit 6.4s infinite;
+  }
+}
+
+@keyframes hold {
+  0%,
+  9%,
+  76%,
+  100% {
+    transform: none;
+  }
+  12%,
+  72% {
+    transform: translateY(1.5px);
+  }
+}
+
+@keyframes hold-lit {
+  0%,
+  9%,
+  76%,
+  100% {
+    fill: var(--raised-2);
+    stroke: var(--line-2);
+  }
+  12%,
+  72% {
+    fill: var(--accent-soft);
+    stroke: var(--accent-line);
+  }
+}
+
+.wheel {
+  animation: wheel 6.4s infinite;
+}
+
+@keyframes wheel {
+  0%,
+  12%,
+  36%,
+  100% {
+    transform: none;
+  }
+  16%,
+  24%,
+  32% {
+    transform: translateY(3px);
+  }
+  20%,
+  28% {
+    transform: none;
+  }
+}
+
+/* ---- Layers: the active row moves, an eye shuts and opens -------------------- */
+
+.active {
+  animation: activeRow 6s infinite;
+}
+
+@keyframes activeRow {
+  0%,
+  18% {
+    transform: none;
+    animation-timing-function: $settle;
+  }
+  26%,
+  60% {
+    transform: translateY(26px);
+    animation-timing-function: $settle;
+  }
+  68%,
+  100% {
+    transform: none;
+  }
+}
+
+.slash {
+  opacity: 0;
+  animation: slash 6s infinite;
+}
+
+@keyframes slash {
+  0%,
+  38%,
+  84%,
+  100% {
+    opacity: 0;
+  }
+  42%,
+  80% {
+    opacity: 1;
+  }
+}
+
+.fade {
+  animation: fadeRow 6s infinite;
+}
+
+@keyframes fadeRow {
+  0%,
+  38%,
+  84%,
+  100% {
+    opacity: 1;
+  }
+  42%,
+  80% {
+    opacity: 0.35;
+  }
+}
+
+/* ---- Adjust: the adjustment wipes across, and back -------------------------- */
+
+.wipe,
+.wipeLine {
+  transform: translateX(-90px);
+  animation: wipe 6.4s infinite;
+}
+
+@keyframes wipe {
+  0%,
+  8% {
+    transform: translateX(-180px);
+    animation-timing-function: $glide;
+  }
+  42%,
+  56% {
+    transform: none;
+    animation-timing-function: $glide;
+  }
+  90%,
+  100% {
+    transform: translateX(-180px);
+  }
+}
+
+/* ---- Select: an ellipse dragged out, its ants marching, a feather ----------- */
+
+.marquee {
+  transform-box: fill-box;
+  transform-origin: 0 0;
+  animation: grow 6.4s infinite;
+}
+
+@keyframes grow {
+  0%,
+  6% {
+    transform: scale(0.08);
+    opacity: 0;
+    animation-timing-function: $glide;
+  }
+  8% {
+    opacity: 1;
+  }
+  30%,
+  90% {
+    transform: none;
+    opacity: 1;
+  }
+  97%,
+  100% {
+    transform: none;
+    opacity: 0;
+  }
+}
+
+.cross {
+  animation: crossGo 6.4s infinite;
+}
+
+@keyframes crossGo {
+  0%,
+  6% {
+    transform: translate(-84.6px, -73.6px);
+    opacity: 0;
+    animation-timing-function: $glide;
+  }
+  8% {
+    opacity: 1;
+  }
+  30% {
+    transform: none;
+    opacity: 1;
+  }
+  40%,
+  100% {
+    transform: none;
+    opacity: 0;
+  }
+}
+
+.antsUnder {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.3;
+}
+
+.ants {
+  fill: none;
+  stroke: #1a1c22;
+  stroke-width: 1.3;
+  stroke-dasharray: 4 4;
+  animation: march 0.6s linear infinite;
+}
+
+@keyframes march {
+  to {
+    stroke-dashoffset: -8;
+  }
+}
+
+.feather {
+  fill: var(--accent-solid);
+  opacity: 0;
+  animation: feather 6.4s ease-in-out infinite;
+}
+
+@keyframes feather {
+  0%,
+  40%,
+  86%,
+  100% {
+    opacity: 0;
+  }
+  52%,
+  74% {
+    opacity: 0.5;
+  }
+}
+
+/* ---- Readout: the pointer roams, the numbers follow ------------------------- */
+
+.roam {
+  transform: translate(130px, 30px);
+  animation: roam 6.6s infinite;
+}
+
+@keyframes roam {
+  0%,
+  22% {
+    transform: translate(130px, 30px);
+    animation-timing-function: $settle;
+  }
+  33%,
+  55% {
+    transform: translate(176px, 52px);
+    animation-timing-function: $settle;
+  }
+  66%,
+  88% {
+    transform: translate(196px, 24px);
+    animation-timing-function: $settle;
+  }
+  100% {
+    transform: translate(130px, 30px);
+  }
+}
+
+.tickA {
+  animation: tickA 6.6s infinite;
+}
+
+.tickB {
+  opacity: 0;
+  animation: tickB 6.6s infinite;
+}
+
+.tickC {
+  opacity: 0;
+  animation: tickC 6.6s infinite;
+}
+
+@keyframes tickA {
+  0%,
+  28%,
+  96%,
+  100% {
+    opacity: 1;
+  }
+  31%,
+  93% {
+    opacity: 0;
+  }
+}
+
+@keyframes tickB {
+  0%,
+  31%,
+  61%,
+  100% {
+    opacity: 0;
+  }
+  34%,
+  58% {
+    opacity: 1;
+  }
+}
+
+@keyframes tickC {
+  0%,
+  64%,
+  93%,
+  100% {
+    opacity: 0;
+  }
+  67%,
+  90% {
+    opacity: 1;
+  }
+}
+
+/* ---- Export: the formats pop in, then the autosave's tick ------------------- */
+
+.doc {
+  animation: float 5.4s ease-in-out infinite;
+}
+
+@keyframes float {
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@for $i from 1 through 5 {
+  .chip#{$i} {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: chip#{$i} 5.4s infinite;
+  }
+
+  @keyframes chip#{$i} {
+    0%,
+    #{4 + $i * 6}% {
+      opacity: 0;
+      transform: scale(0.4);
+      animation-timing-function: $spring;
+    }
+    #{12 + $i * 6}%,
+    86% {
+      opacity: 1;
+      transform: none;
+    }
+    94%,
+    100% {
+      opacity: 0;
+      transform: scale(0.9);
+    }
+  }
+}
+
+.saved {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: saved 5.4s infinite;
+}
+
+@keyframes saved {
+  0%,
+  44% {
+    opacity: 0;
+    transform: scale(0.3);
+    animation-timing-function: $spring;
+  }
+  54%,
+  86% {
+    opacity: 1;
+    transform: none;
+  }
+  94%,
+  100% {
+    opacity: 0;
+    transform: none;
+  }
+}
+
+/* ---- Done: a tick drawn in its ring, confetti (once) ------------------------ */
+
+.halo {
+  fill: var(--accent-soft);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation:
+    haloIn 0.9s $spring 0.5s backwards,
+    breathe 3.2s ease-in-out 1.6s infinite;
+}
+
+@keyframes haloIn {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+}
+
+@keyframes breathe {
+  50% {
+    transform: scale(1.07);
+  }
+}
+
+.ring {
+  fill: none;
+  stroke: var(--accent-solid);
+  stroke-width: 4;
+  stroke-dasharray: 1 2;
+  animation: drawIn 0.7s $glide 0.1s backwards;
+}
+
+.tick {
+  fill: none;
+  stroke: var(--accent-solid);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1 2;
+  animation: drawIn 0.45s $glide 0.6s backwards;
+}
+
+@keyframes drawIn {
+  from {
+    stroke-dashoffset: 1.2;
+  }
+}
+
+.confetti {
+  transform: translate(var(--dx), var(--dy)) rotate(var(--rot)) scale(1);
+  animation:
+    burst 1s cubic-bezier(0.15, 0.8, 0.25, 1) backwards,
+    drift 3.4s ease-in-out infinite;
+}
+
+@keyframes burst {
+  from {
+    transform: translate(0px, 0px) rotate(0deg) scale(0.2);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+}
+
+@keyframes drift {
+  0%,
+  100% {
+    transform: translate(var(--dx), var(--dy)) rotate(var(--rot)) scale(1);
+  }
+  50% {
+    transform: translate(var(--dx), calc(var(--dy) + 3px)) rotate(calc(var(--rot) + 25deg)) scale(1);
+  }
+}
+
+/* ---- Phone dock: a finger taps one tool, then another ---------------------- */
+
+.slideDock {
+  animation: dockSlide 5.4s infinite;
+}
+
+@keyframes dockSlide {
+  0%,
+  30% {
+    transform: none;
+    animation-timing-function: $settle;
+  }
+  36%,
+  60% {
+    transform: translateX(-30px);
+    animation-timing-function: $settle;
+  }
+  66%,
+  100% {
+    transform: none;
+  }
+}
+
+.finger {
+  opacity: 0;
+  animation: tap 5.4s infinite;
+}
+
+@keyframes tap {
+  0%,
+  8% {
+    opacity: 0;
+    transform: translate(250px, 108px);
+    animation-timing-function: $glide;
+  }
+  12% {
+    opacity: 1;
+  }
+  26% {
+    transform: translate(93px, 60px);
+  }
+  30% {
+    transform: translate(93px, 60px) scale(0.84);
+  }
+  36% {
+    transform: translate(93px, 60px);
+    animation-timing-function: $glide;
+  }
+  54% {
+    transform: translate(123px, 60px);
+  }
+  58% {
+    transform: translate(123px, 60px) scale(0.84);
+  }
+  64% {
+    opacity: 1;
+    transform: translate(123px, 60px);
+    animation-timing-function: $glide;
+  }
+  82%,
+  100% {
+    opacity: 0;
+    transform: translate(250px, 108px);
+  }
+}
+
+@mixin ripple($name) {
+  fill: none;
+  stroke: var(--accent-solid);
+  stroke-width: 1.5;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: #{$name} 5.4s infinite;
+}
+
+@mixin ripple-keyframes($name, $at) {
+  @keyframes #{$name} {
+    0%,
+    #{$at - 1}% {
+      opacity: 0;
+      transform: scale(0.3);
+      animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    #{$at + 1}% {
+      opacity: 0.7;
+    }
+    #{$at + 14}%,
+    100% {
+      opacity: 0;
+      transform: scale(1.4);
+    }
+  }
+}
+
+.ripple1 {
+  @include ripple(ripple1);
+}
+
+.ripple2 {
+  @include ripple(ripple2);
+}
+
+@include ripple-keyframes(ripple1, 30);
+@include ripple-keyframes(ripple2, 58);
+
+/* ---- Phone options card: folded by its grip, and opened again --------------- */
+
+.grip {
+  fill: var(--border-strong);
+}
+
+.cardFold {
+  animation: cardFold 5.6s infinite;
+}
+
+@keyframes cardFold {
+  0%,
+  26% {
+    transform: none;
+    animation-timing-function: $glide;
+  }
+  46%,
+  60% {
+    transform: translateY(30px);
+    animation-timing-function: $glide;
+  }
+  80%,
+  100% {
+    transform: none;
+  }
+}
+
+.fingerDrag {
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: drag 5.6s infinite;
+}
+
+@keyframes drag {
+  0%,
+  14% {
+    opacity: 0;
+    transform: scale(1.4);
+  }
+  22%,
+  26% {
+    opacity: 1;
+    transform: none;
+    animation-timing-function: $glide;
+  }
+  46%,
+  60% {
+    opacity: 1;
+    transform: translateY(30px);
+    animation-timing-function: $glide;
+  }
+  80% {
+    opacity: 1;
+    transform: none;
+  }
+  88%,
+  100% {
+    opacity: 0;
+    transform: none;
+  }
+}
+
+/* ---- Phone pinch: two fingers open the picture up, and close it ------------- */
+
+.pinchPic {
+  transform-box: view-box;
+  transform-origin: 160px 60px;
+  animation: pinchPic 5.4s infinite;
+}
+
+@keyframes pinchPic {
+  0%,
+  14% {
+    transform: none;
+    animation-timing-function: $glide;
+  }
+  46%,
+  60% {
+    transform: scale(1.9);
+    animation-timing-function: $glide;
+  }
+  88%,
+  100% {
+    transform: none;
+  }
+}
+
+@mixin finger-path($name, $dx, $dy) {
+  @keyframes #{$name} {
+    0%,
+    6% {
+      opacity: 0;
+      transform: none;
+    }
+    12% {
+      opacity: 1;
+    }
+    14% {
+      transform: none;
+      animation-timing-function: $glide;
+    }
+    46%,
+    60% {
+      transform: translate($dx, $dy);
+      animation-timing-function: $glide;
+    }
+    88% {
+      opacity: 1;
+      transform: none;
+    }
+    96%,
+    100% {
+      opacity: 0;
+      transform: none;
+    }
+  }
+}
+
+.pinchA {
+  animation: pinchA 5.4s infinite;
+}
+
+.pinchB {
+  animation: pinchB 5.4s infinite;
+}
+
+@include finger-path(pinchA, -18px, 14px);
+@include finger-path(pinchB, 18px, -14px);
