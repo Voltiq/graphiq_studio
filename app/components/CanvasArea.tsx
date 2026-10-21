@@ -139,7 +139,6 @@ import {
   toggleSmooth,
 } from "../lib/path-edit";
 import type { PendingLoad } from "../lib/project";
-import { effectiveSoftness } from "../lib/refine-edge";
 import PerfHud from "./PerfHud";
 
 const ZOOM_STEPS = [
@@ -759,7 +758,6 @@ export default function CanvasArea({
   onSelectionRects,
   selectionAngle,
   selectionPivot,
-  selectionFeather,
   onSelectionAngle,
   onSelectionPivot,
   moveMode,
@@ -959,7 +957,6 @@ export default function CanvasArea({
   selectionAngle: number;
   selectionPivot: { x: number; y: number } | null;
   /** Feather radius (px) applied to selection fills / erases / lifts. */
-  selectionFeather: number;
   onSelectionAngle: (angle: number) => void;
   onSelectionPivot: (pivot: { x: number; y: number } | null) => void;
   moveMode: MoveMode;
@@ -2001,11 +1998,6 @@ export default function CanvasArea({
   marqueeShapeRef.current = marqueeShape;
   const marqueeApexRef = useRef(triangleApex);
   marqueeApexRef.current = triangleApex;
-  // drawAnts is a useCallback keyed on [engine] and reads every prop through a
-  // ref for exactly this reason — reading `selectionFeather` directly captured
-  // its first-render value and the preview never appeared.
-  const selectionFeatherRef = useRef(selectionFeather);
-  selectionFeatherRef.current = selectionFeather;
   /** Ants-only preview of an in-flight Apex reshape (null = nothing pending).
    *  Non-null means the drawn outline is ahead of the committed selection. */
   const apexPreviewRef = useRef<Rect[] | null>(null);
@@ -2649,10 +2641,7 @@ export default function CanvasArea({
       // the rasteriser doing the offset-curve work (including the corners). It
       // needs its own canvas because that carve would otherwise eat whatever
       // else is already on the overlay — the Quick Mask wash, for one.
-      const soft = effectiveSoftness({
-        ...engine.getRefineEdge(),
-        feather: selectionFeatherRef.current,
-      });
+      const soft = engine.selectionSoftness(selectionRef.current);
       const bandPx = soft * 2 * s;
       if (bandPx >= 3) {
         let fc = featherLayerRef.current;
@@ -4701,10 +4690,9 @@ export default function CanvasArea({
       restoreSnapshot: (id) => engine.restoreSnapshot(id),
       deleteSnapshot: (id) => engine.deleteSnapshot(id),
       setHistorySourceSnapshot: (id) => engine.setHistorySourceSnapshot(id),
-      fillSelection: (layerId, rects, col, angle, pivot, feather) =>
-        engine.fillSelection(layerId, rects, col, angle, pivot, feather),
-      eraseSelection: (layerId, rects, angle, pivot, label, feather) =>
-        engine.eraseSelection(layerId, rects, angle, pivot, label, feather),
+      fillSelection: (layerId, rects, col, angle, pivot) => engine.fillSelection(layerId, rects, col, angle, pivot),
+      eraseSelection: (layerId, rects, angle, pivot, label) =>
+        engine.eraseSelection(layerId, rects, angle, pivot, label),
       copyRegion: (rects, angle, pivot) => engine.copyRegion(rects, angle, pivot),
       lassoSelect: (points) => engine.lassoSelect(points),
       combineSelection: (base, region, mode) => engine.combineSelection(base, region, mode),
@@ -4800,8 +4788,15 @@ export default function CanvasArea({
       modifySelection: (rects, angle, pivot, op, px) => engine.modifySelection(rects, angle, pivot, op, px),
       setGlobalLight: (l) => engine.setGlobalLight(l),
       getGlobalLight: () => engine.getGlobalLight(),
-      setRefineEdge: (r) => engine.setRefineEdge(r),
-      getRefineEdge: () => engine.getRefineEdge(),
+      featherSelection: (rects, angle, pivot, px) => engine.featherSelection(rects, angle, pivot, px),
+      refineSelection: (rects, angle, pivot, r) => engine.refineSelection(rects, angle, pivot, r),
+      growSoftSelection: (rects, px) => engine.growSoftSelection(rects, px),
+      shiftSelection: (rects, dx, dy) => engine.shiftSelection(rects, dx, dy),
+      carryResizedSelection: (from, to, fromBox, toBox) => engine.carryResizedSelection(from, to, fromBox, toBox),
+      selectionCoverageCanvas: (rects, angle, pivot) => engine.selectionCoverageCanvas(rects, angle, pivot),
+      selectionSoftness: (rects) => engine.selectionSoftness(rects),
+      selectionMaskImage: (rects) => engine.selectionMaskImage(rects),
+      adoptSelectionMask: (rects, at, source) => engine.adoptSelectionMask(rects, at, source),
       setColorSpace: (cs) => engine.setColorSpace(cs),
       setProofing: (simulate, warn, target) => engine.setProofing(simulate, warn, target),
       captureLeaves: (ids) => engine.captureLeaves(ids),
@@ -4969,6 +4964,19 @@ export default function CanvasArea({
           }
           if (!cancelled) engine.setFrameSource(id, img, img.naturalWidth, img.naturalHeight);
         }),
+        // A soft selection's coverage (v25), behind the rects the document holds.
+        (async () => {
+          const sel = entry.selection;
+          if (!sel) return;
+          const img = new Image();
+          img.src = sel.mask.data;
+          try {
+            await img.decode();
+          } catch {
+            return; // the outline still loads; it is just hard
+          }
+          if (!cancelled) engine.adoptSelectionMask(sel.rects, sel.mask, img);
+        })(),
       ]);
       if (!cancelled) {
         onLoadDone(entry.docId);
@@ -5748,13 +5756,7 @@ export default function CanvasArea({
     const liftContent = (): boolean => {
       if (!((tool === "shape" || resizeMode === "content") && activeLayerId)) return false;
       if (moveBlocked(activeLayerId)) return false; // position-locked or fill layer
-      return engine.beginFloatFromSelection(
-        activeLayerId,
-        selection,
-        selectionAngle,
-        selectionPivot,
-        selectionFeather,
-      );
+      return engine.beginFloatFromSelection(activeLayerId, selection, selectionAngle, selectionPivot);
     };
     const bbox = bboxOf(selection);
     const pivot = selectionPivot ?? { x: bbox.x + bbox.w / 2, y: bbox.y + bbox.h / 2 };
@@ -5833,7 +5835,7 @@ export default function CanvasArea({
     const rotating = !edges && inRotateZone(box, p.x, p.y, MOVE_ROTATE_REACH / sc);
     if (!edges && !rotating) return false;
     const id = activeLayerIdRef.current;
-    if (!id || !engine.beginFloatFromSelection(id, [box], 0, null, 0)) return false;
+    if (!id || !engine.beginFloatFromSelection(id, [box], 0, null)) return false;
     e.preventDefault();
     viewRef.current?.setPointerCapture(e.pointerId);
     const pivot = { x: box.x + box.w / 2, y: box.y + box.h / 2 };
@@ -6417,7 +6419,7 @@ export default function CanvasArea({
     // The outline follows the moved pixels, exactly like a pointer move-drag.
     const sel = selectionRef.current;
     if (sel.length && (d.x !== 0 || d.y !== 0)) {
-      const moved = sel.map((r) => ({ ...r, x: r.x + d.x, y: r.y + d.y }));
+      const moved = engine.shiftSelection(sel, d.x, d.y); // a soft selection moves soft
       const h = selHandlersRef.current;
       if (selAngleRef.current !== 0) {
         h.onSelectionRects(moved);
@@ -6464,7 +6466,7 @@ export default function CanvasArea({
 
       if (outlineOnly) {
         // Selection tools / Move-in-selection-mode nudge the OUTLINE only.
-        const moved = sel.map((r) => ({ ...r, x: r.x + dx, y: r.y + dy }));
+        const moved = engine.shiftSelection(sel, dx, dy);
         const h = selHandlersRef.current;
         if (selAngleRef.current !== 0) {
           h.onSelectionRects(moved);
@@ -6749,13 +6751,7 @@ export default function CanvasArea({
         if (moveBlocked(moveId)) return; // position-locked or fill layer
         let floating = engine.isFloating && engine.floatLayerId === moveId;
         if (!floating && moveId && selection.length) {
-          floating = engine.beginFloatFromSelection(
-            moveId,
-            selection,
-            selectionAngle,
-            selectionPivot,
-            selectionFeather,
-          );
+          floating = engine.beginFloatFromSelection(moveId, selection, selectionAngle, selectionPivot);
         }
         if (floating) {
           e.preventDefault();
@@ -8248,6 +8244,7 @@ export default function CanvasArea({
         : [];
       const nb = committed.length ? bboxOf(committed) : null;
       const changed = !!nb && (nb.x !== o.x || nb.y !== o.y || nb.w !== o.w || nb.h !== o.h);
+      if (changed && nb) engine.carryResizedSelection(before.rects, committed, o, nb); // soft stays soft
       // For a wand selection, scale its cached boundary segments to match the
       // committed rects so the ants stay cheap (no unionSegments on many rects).
       const recacheWand = (rects: Rect[]) => {
@@ -8331,7 +8328,7 @@ export default function CanvasArea({
       if (!float && mode === "pixels") engine.endMove();
       // Selection follows whatever moved (float, lifted pixels, or selection-only).
       if (selection.length && (d.x !== 0 || d.y !== 0)) {
-        const moved = selection.map((r) => ({ ...r, x: r.x + d.x, y: r.y + d.y }));
+        const moved = engine.shiftSelection(selection, d.x, d.y);
         if (selAngleRef.current !== 0) {
           // Keep the rotation and shift the pivot with the rects, so a rotated
           // selection's outline stays locked to its (rotated) pixels. Resetting

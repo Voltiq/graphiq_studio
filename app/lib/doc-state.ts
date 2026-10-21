@@ -23,6 +23,7 @@ import type { ActiveSurface } from "./layers";
 import type { DocSnapshot, HistorySide } from "./paint";
 import type { Rect } from "./view";
 import type { ToneLUTs, ToneLUTs16 } from "./tone";
+import type { SelectionMask } from "./selection-mask";
 
 /** A raster and its 2D context. */
 export interface Layer {
@@ -87,6 +88,11 @@ export class DocumentState {
   readonly contentBoundsCache = new Map<string, { key: string; box: Rect | null }>();
   /** Compiled Curves/Levels LUTs per adjustment-node id, keyed by spec JSON. */
   readonly toneCache = new Map<string, { key: string; luts: ToneLUTs; luts16?: ToneLUTs16 }>();
+  /** The coverage behind each soft selection (TODO 1.3), keyed by the outline
+   *  rects ARRAY — that object is the selection's identity as it travels
+   *  unchanged through React state, undo and Reselect. A hard selection has no
+   *  entry: it is exactly its rects. */
+  readonly selectionMasks = new WeakMap<Rect[], SelectionMask>();
   /** Ids this document has put in the engine's SHARED caches (render
    *  products, tiled adjustments, filter products), so closing it can take
    *  exactly those out. A stale id costs nothing: dropping it is a no-op. */
@@ -221,6 +227,9 @@ export abstract class DocumentScoped {
   }
   protected get toneCache(): DocumentState["toneCache"] {
     return this.doc.toneCache;
+  }
+  protected get selectionMasks(): DocumentState["selectionMasks"] {
+    return this.doc.selectionMasks;
   }
 
   protected get entries(): Entry[] {

@@ -129,3 +129,234 @@ test("H  intersecting with a soft saved channel keeps the soft edge", async ({ a
   expect(c.partial, `${c.partial} partial px`).toBeGreaterThan(SOFT);
   expect(c.partial).toBeLessThan(211_264 * 0.75);
 });
+
+/* TODO 1.3: every operation that makes a selection from another works on its
+   coverage, so the rest of 0.2a's list keeps a soft selection soft too. */
+
+const RECT = { x: 600, y: 300, w: 600, h: 400 };
+
+/** Select ▸ <op>… with its slider at `px`. */
+async function modify(app: App, action: string, label: string, px: number, button: string) {
+  await app.page.evaluate((a) => window.graphiq!.run(a), action);
+  const dlg = app.page.locator('div[role="dialog"][aria-modal="true"]').last();
+  await dlg.waitFor();
+  expect(await app.setRange(label, px), `${action}: its slider`).toBe(true);
+  await dlg.getByRole("button", { name: button, exact: true }).click();
+  await app.settle();
+}
+
+/** A hard rect, feathered — the soft selection most of these start from. */
+async function feathered(app: App, px = 20) {
+  await app.page.evaluate((r) => window.graphiq!.select([r]), RECT);
+  await app.settle();
+  await modify(app, "select-feather", "Radius", px, "Feather");
+}
+
+/** The selection as a layer mask, measured, then taken back off. */
+async function measure(app: App) {
+  await app.run("mask-from-sel");
+  const c = await app.exported();
+  await app.run("undo");
+  return c;
+}
+
+test("I  Select ▸ Feather is a real operation: a soft selection, and one undo step", async ({ app }) => {
+  await opaqueLayer(app);
+  await feathered(app);
+  const soft = await measure(app);
+  expect(soft.partial, "the feather is in the selection itself").toBeGreaterThan(SOFT);
+  await app.run("undo"); // the feather
+  const hard = await measure(app);
+  expect(hard.partial, "and undo takes it back to the hard rect").toBe(0);
+});
+
+test("J  a feather that would leave nothing selected is refused, and says so", async ({ app }) => {
+  await opaqueLayer(app);
+  await app.page.evaluate(() => window.graphiq!.select([{ x: 400, y: 400, w: 4, h: 4 }]));
+  await app.settle();
+  await modify(app, "select-feather", "Radius", 60, "Feather");
+  await expect(app.page.getByText(/No pixels would be more than 50% selected/)).toBeVisible();
+  const c = await measure(app);
+  expect([c.partial, c.levels], "the selection is untouched: still the hard 4×4").toEqual([0, 2]);
+});
+
+test("K  Expand and Contract move a soft edge without hardening it", async ({ app }) => {
+  await opaqueLayer(app);
+  await feathered(app);
+  const base = await measure(app);
+  await modify(app, "select-expand", "Expand by", 12, "Expand");
+  const out = await measure(app);
+  expect(out.partial, "expanded, still soft").toBeGreaterThan(SOFT);
+  expect(out.alphaSum, "...and more is selected").toBeGreaterThan(base.alphaSum);
+  await app.run("undo");
+  await modify(app, "select-contract", "Contract by", 12, "Contract");
+  const inn = await measure(app);
+  expect(inn.partial, "contracted, still soft").toBeGreaterThan(SOFT);
+  expect(inn.alphaSum, "...and less is selected").toBeLessThan(base.alphaSum);
+});
+
+test("L  Grow keeps a soft selection soft", async ({ app }) => {
+  await opaqueLayer(app);
+  await feathered(app);
+  const base = await measure(app);
+  await modify(app, "select-grow", "Expand by", 10, "Grow");
+  const grown = await measure(app);
+  expect(grown.partial).toBeGreaterThan(SOFT);
+  expect(grown.alphaSum).toBeGreaterThan(base.alphaSum);
+});
+
+test("M  Ctrl-dragging a marquee adds to a soft selection, keeping its soft edge", async ({ app }) => {
+  await opaqueLayer(app);
+  await feathered(app);
+  const base = await measure(app);
+  await app.key("m");
+  const b = await app.canvasBox();
+  await app.page.keyboard.down("Control");
+  await app.page.mouse.move(b.x + b.width * 0.05, b.y + b.height * 0.05);
+  await app.page.mouse.down();
+  await app.page.mouse.move(b.x + b.width * 0.2, b.y + b.height * 0.2, { steps: 6 });
+  await app.page.mouse.up();
+  await app.page.keyboard.up("Control");
+  await app.settle();
+  const both = await measure(app);
+  expect(both.partial, "the feathered part is still soft").toBeGreaterThan(SOFT);
+  expect(both.alphaSum, "...and the new rect was added").toBeGreaterThan(base.alphaSum);
+});
+
+test("N  nudging the outline moves a soft selection, soft and whole", async ({ app }) => {
+  await opaqueLayer(app);
+  await feathered(app);
+  const base = await measure(app);
+  await app.key("m");
+  for (let i = 0; i < 5; i++) await app.key("ArrowRight");
+  await app.settle();
+  const moved = await measure(app);
+  expect(moved.partial).toBeGreaterThan(SOFT);
+  expect(moved.alphaSum, "the same coverage, five pixels over").toBe(base.alphaSum);
+  expect(moved.hash, "...and really moved").not.toBe(base.hash);
+});
+
+test("O  Refine Edge is baked into the selection, and undoable", async ({ app }) => {
+  await opaqueLayer(app);
+  await app.page.evaluate((r) => window.graphiq!.select([r]), RECT);
+  await app.settle();
+  await app.page.evaluate(() => window.graphiq!.run("select-refine"));
+  const dlg = app.page.locator('div[role="dialog"][aria-label="Refine edge"]');
+  await dlg.waitFor();
+  await app.setRange("Feather", 15);
+  await dlg.getByRole("button", { name: /^(Apply|OK)$/ }).first().click();
+  await app.settle();
+  expect((await measure(app)).partial, "refined: soft").toBeGreaterThan(SOFT);
+  await app.run("undo");
+  expect((await measure(app)).partial, "undone: the hard rect again").toBe(0);
+});
+
+test("P  resizing a soft selection by numbers keeps it soft", async ({ app }) => {
+  await opaqueLayer(app);
+  await feathered(app);
+  const base = await measure(app);
+  await app.key("m");
+  const w = app.page.getByRole("textbox", { name: "W" }).first();
+  await w.fill(String(RECT.w * 1.5));
+  await w.press("Enter");
+  await app.settle();
+  const wide = await measure(app);
+  expect(wide.partial, "still soft").toBeGreaterThan(SOFT);
+  expect(wide.alphaSum, "and wider").toBeGreaterThan(base.alphaSum);
+});
+
+test.describe("saved with the project", () => {
+  test.use({ filePickers: false });
+
+  test("Q  a soft selection survives saving and reopening the .gproj", async ({ app }, info) => {
+    const { page } = app;
+    await opaqueLayer(app);
+    await feathered(app);
+    const before = await measure(app);
+    const saved = page.waitForEvent("download", { timeout: 20_000 });
+    await app.menu("File", "Save");
+    const file = info.outputPath("soft.gproj");
+    await (await saved).saveAs(file);
+    await page.setInputFiles('input[accept*=".gproj"]', file);
+    await app.settle(3_000);
+    expect((await app.docs()).length, "it opened as a second tab").toBe(2);
+    const after = await measure(app);
+    expect(after.partial, "the reopened selection is soft").toBeGreaterThan(SOFT);
+    expect(after.alphaSum, "...and the same coverage").toBe(before.alphaSum);
+  });
+});
+
+test("R  dragging a resize handle keeps a soft selection soft", async ({ app }) => {
+  await opaqueLayer(app);
+  await feathered(app);
+  const base = await measure(app);
+  await app.key("m");
+  const b = await app.canvasBox();
+  const sx = b.width / 1920;
+  const sy = b.height / 1080;
+  // The bottom-right corner handle of the selection's box, dragged outward.
+  const cx = b.x + (RECT.x + RECT.w) * sx;
+  const cy = b.y + (RECT.y + RECT.h) * sy;
+  await app.page.mouse.move(cx, cy);
+  await app.page.mouse.down();
+  await app.page.mouse.move(cx + 120 * sx, cy + 80 * sy, { steps: 8 });
+  await app.page.mouse.up();
+  await app.settle();
+  const big = await measure(app);
+  expect(big.partial, "resized, still soft").toBeGreaterThan(SOFT);
+  expect(big.alphaSum, "...and bigger").toBeGreaterThan(base.alphaSum);
+});
+
+/* The ants mark the 50% line; a feathered selection also shows how far its
+   soft edge reaches, as two faint lines either side. That extent now comes
+   from the selection's own mask (it is what knows it was feathered). */
+test("S  a feathered selection shows its soft extent around the ants", async ({ app }) => {
+  await feathered(app, 20);
+  await app.key("m");
+  await app.settle(600);
+  const b = await app.canvasBox();
+  const sx = b.width / 1920;
+  const midY = b.y + (RECT.y + RECT.h / 2) * (b.height / 1080);
+  const from = b.x + (RECT.x + RECT.w / 2) * sx; // the selection's middle…
+  const to = b.x + (RECT.x + RECT.w + 80) * sx; // …to well past its right edge
+  const lines = await app.page.evaluate(
+    ({ y, x0, x1 }) => {
+      const ov = [...document.querySelectorAll("canvas")].filter((c) => /overlay/i.test(c.className));
+      let best = 0;
+      for (const c of ov) {
+        const r = c.getBoundingClientRect();
+        const k = c.width / r.width;
+        const py = Math.round((y - r.top) * k);
+        if (py < 0 || py >= c.height) continue;
+        const row = c.getContext("2d")!.getImageData(0, py, c.width, 1).data;
+        let n = 0;
+        let inInk = false;
+        for (let x = Math.round((x0 - r.left) * k); x < Math.round((x1 - r.left) * k); x++) {
+          const ink = row[x * 4 + 3] > 0;
+          if (ink && !inInk) n++;
+          inInk = ink;
+        }
+        best = Math.max(best, n);
+      }
+      return best;
+    },
+    { y: midY, x0: from, x1: to },
+  );
+  expect(lines, "the ants, plus the inner and outer edge of the soft band").toBeGreaterThanOrEqual(3);
+});
+
+/* Rotating never dropped the coverage: the angle rides beside the outline and
+   the mask is rotated where it is used. Checked rather than assumed. */
+test("T  rotating a soft selection by numbers keeps it soft", async ({ app }) => {
+  await opaqueLayer(app);
+  await feathered(app);
+  const base = await measure(app);
+  await app.key("m");
+  const angle = app.page.getByRole("textbox", { name: "Angle" }).first();
+  await angle.fill("30");
+  await angle.press("Enter");
+  await app.settle();
+  const turned = await measure(app);
+  expect(turned.partial, "rotated, still soft").toBeGreaterThan(SOFT);
+  expect(turned.hash, "...and really rotated").not.toBe(base.hash);
+});

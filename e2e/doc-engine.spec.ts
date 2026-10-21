@@ -281,3 +281,48 @@ test("leaving a tab files it with its pixels, read from the background", async (
   await expect.poll(layer, { message: "the left tab is in the snapshot" }).not.toBeNull();
   expect((await layer())!.data, "with its layer's pixels").toBe("data:image/png;base64,");
 });
+
+test("leaving a tab files its SOFT selection too, read from the background", async ({ app }) => {
+  const { page } = app;
+  await page.evaluate(() => window.graphiq!.select([{ x: 300, y: 200, w: 500, h: 300 }]));
+  await app.settle();
+  await page.evaluate(() => window.graphiq!.run("select-feather"));
+  const dlg = page.locator('div[role="dialog"][aria-modal="true"]').last();
+  await dlg.waitFor();
+  await app.setRange("Radius", 20);
+  await dlg.getByRole("button", { name: "Feather", exact: true }).click();
+  await app.settle();
+  await app.newDoc(); // the feathered tab is serialized after the engine moved on
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const masks = () =>
+    page.evaluate(async () => {
+      if (!(await indexedDB.databases()).some((d) => d.name === "graphiq-autosave")) return null;
+      const snap = await new Promise<{ docs?: { json: string | Blob }[] } | null>((resolve) => {
+        const req = indexedDB.open("graphiq-autosave");
+        req.onerror = () => resolve(null);
+        req.onsuccess = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains("snapshots")) return resolve(null);
+          const get = db.transaction("snapshots", "readonly").objectStore("snapshots").get("latest");
+          get.onsuccess = () => {
+            db.close();
+            resolve(get.result ?? null);
+          };
+          get.onerror = () => resolve(null);
+        };
+      });
+      const out: (string | null)[] = [];
+      for (const d of snap?.docs ?? []) {
+        const doc = JSON.parse(typeof d.json === "string" ? d.json : await d.json.text()) as {
+          selectionMask?: { data?: string };
+        };
+        out.push(doc.selectionMask?.data?.slice(0, 22) ?? null);
+      }
+      return out;
+    });
+  await expect.poll(async () => (await masks())?.length ?? 0, { message: "both tabs are in the snapshot" }).toBe(2);
+  expect(await masks(), "the left tab carries its soft selection").toContain("data:image/png;base64,");
+});

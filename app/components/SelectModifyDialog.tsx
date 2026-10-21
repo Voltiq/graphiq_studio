@@ -5,9 +5,9 @@ import { X } from "lucide-react";
 import styles from "./PreferencesDialog.module.scss";
 import { Slider } from "./Controls";
 
-/** Per-op copy and slider range. Border/Smooth/Expand/Contract change the
- *  selection's GEOMETRY; Feather only softens how it is used, which is why they
- *  are described differently even though they share one dialog. */
+/** Per-op copy and slider range. All six make a new selection: Feather and
+ *  Grow soften or widen its coverage, Expand and Contract move its edge (a soft
+ *  edge moves soft), and Border and Smooth give it a crisp new outline. */
 const META: Record<
   "feather" | "grow" | "border" | "smooth" | "expand" | "contract",
   { title: string; blurb: string; label: string; button: string; min: number; max: number; initial: number }
@@ -15,7 +15,7 @@ const META: Record<
   feather: {
     button: "Feather",
     title: "Feather selection",
-    blurb: "Soften the selection edges — applied when you fill, delete or move.",
+    blurb: "Soften the selection's edge. Fills, deletes, moves and brushes then follow the soft edge.",
     label: "Radius", min: 0, max: 250, initial: 8,
   },
   grow: {

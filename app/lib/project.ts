@@ -83,7 +83,39 @@ export interface ProjectFile {
   /** Named layer-state snapshots (v21). Absent in older files — no comps, not
    *  an error. Purely declarative: no rasters ride along. */
   comps?: LayerComp[];
+  /** A SOFT selection's coverage (v25), behind the `selection` rects, which
+   *  are only its ≥50% outline. Absent for a hard selection (its rects say
+   *  everything) and in older files, which reopen with the outline alone. */
+  selectionMask?: SavedSelectionMask;
   savedAt: string;
+}
+
+/** A soft selection's coverage as a grayscale PNG over its bounds (v25). */
+export interface SavedSelectionMask {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Grayscale PNG data URL, `w × h`: the coverage is the red channel. */
+  data: string;
+  /** How far a feather made its edge reach (the ants' extent preview). */
+  softness?: number;
+}
+
+/** A saved selection mask that is safe to restore into a `w × h` document,
+ *  or null. A hand-edited or truncated file loses the softness, not the file. */
+export function coerceSelectionMask(v: unknown, w: number, h: number): SavedSelectionMask | null {
+  if (!v || typeof v !== "object") return null;
+  const m = v as Record<string, unknown>;
+  const int = (k: string) => (Number.isInteger(m[k]) ? (m[k] as number) : NaN);
+  const x = int("x");
+  const y = int("y");
+  const mw = int("w");
+  const mh = int("h");
+  if (!(x >= 0 && y >= 0 && mw > 0 && mh > 0 && x + mw <= w && y + mh <= h)) return null;
+  if (typeof m.data !== "string" || !m.data.startsWith("data:image/png")) return null;
+  const softness = typeof m.softness === "number" && m.softness > 0 ? m.softness : undefined;
+  return { x, y, w: mw, h: mh, data: m.data, ...(softness ? { softness } : {}) };
 }
 
 /** Leaf pixel data waiting to be drawn into the engine once a doc is active & sized.
@@ -99,6 +131,9 @@ export interface PendingLoad {
   channels?: { id: string; data?: string; source?: CanvasImageSource }[];
   /** Natural-size sources for framed pictures, by layer id (v23). */
   frameSources?: { id: string; data?: string; source?: CanvasImageSource }[];
+  /** A soft selection's coverage (v25), restored behind `rects` — the very
+   *  array the loaded document holds as its selection, which is what keys it. */
+  selection?: { rects: Rect[]; mask: SavedSelectionMask };
 }
 
 export interface ProjectInput {
@@ -120,6 +155,8 @@ export interface ProjectInput {
   samplers?: ColorSampler[];
   channels?: SavedChannel[];
   comps?: LayerComp[];
+  /** The selection's coverage when it is soft (v25). */
+  selectionMask?: SavedSelectionMask | null;
 }
 
 function serializeNode(
@@ -165,7 +202,7 @@ export function serializeProject(
   const channels = doc.channels ?? [];
   return {
     format: "graphiq-project",
-    version: 24, // v24 adds the authoring colour space (v23 framed-picture sources)
+    version: 25, // v25 adds a soft selection's coverage (v24 the authoring colour space)
     name: doc.name,
     width: doc.width,
     height: doc.height,
@@ -188,6 +225,7 @@ export function serializeProject(
     channelImages: channels
       .map((c) => ({ id: c.id, data: getChannel(c.id) }))
       .filter((c): c is { id: string; data: string } => !!c.data),
+    ...(doc.selectionMask && doc.selection.length ? { selectionMask: doc.selectionMask } : {}),
     savedAt: new Date().toISOString(),
   };
 }

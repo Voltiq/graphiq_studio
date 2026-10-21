@@ -27,7 +27,7 @@ import {
   type WorkingSpace,
 } from "../lib/colorspace";
 import { layoutPage, type PdfLayoutOptions } from "../lib/pdf";
-import { NO_REFINE, decontaminate, type RefineEdge } from "../lib/refine-edge";
+import { NO_REFINE, decontaminate, refineActive, type RefineEdge } from "../lib/refine-edge";
 import { boxOf, pivotOf, sanitizeBox, transformRects } from "../lib/selection-transform";
 import {
   MIN_ANCHORS,
@@ -243,6 +243,7 @@ import ProfileCompareDialog from "./ProfileCompareDialog";
 import {
   LEGACY_PROJECT_EXT,
   PROJECT_EXT,
+  coerceSelectionMask,
   downloadBlob,
   saveProjectFile,
   serializeProject,
@@ -993,9 +994,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const [compareComposite, setCompareComposite] = useState<HTMLCanvasElement | null | undefined>(undefined);
   const [adjust, setAdjust] = useState<Adjustments>(DEFAULT_ADJUST);
   const [adjustFilter, setAdjustFilter] = useState("Original");
-  const [selectionFeather, setSelectionFeather] = useState(0);
-  const selectionFeatherRef = useRef(0);
-  selectionFeatherRef.current = selectionFeather;
   const [selectModify, setSelectModify] = useState<
     "feather" | "grow" | "border" | "smooth" | "expand" | "contract" | null
   >(null);
@@ -1635,7 +1633,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   // Setting a (new) selection resets its rotation transform.
   const setSelection = (rects: Rect[]) => {
-    setSelectionFeather(0); // a fresh selection starts unfeathered
     setDocs((ds) =>
       ds.map((d) =>
         d.id === activeIdRef.current
@@ -1720,19 +1717,23 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const before = selStateOf(activeDocRef.current);
     const after: SelState = { rects, angle, pivot };
     if (sameSelState(before, after)) return; // no-op → don't journal it
-    setSelectionFeather(0); // a changed selection region resets feather (Grow re-applies it)
     setSelState(docId, after);
     paintRef.current?.pushStructural(label, () => setSelState(docId, before), () => setSelState(docId, after));
   };
 
-  // Select ▸ Grow — expand the selection rects outward by `px`, keeping feather.
+  // Select ▸ Grow — push the selection outward by `px` (a square kernel). A soft
+  // selection grows on its coverage, so it stays soft; a hard one, rect by rect.
   const growSelection = (px: number) => {
     const d = activeDocRef.current;
     if (!d.selection.length) {
       showToast("Grow needs an active selection — make one first.");
       return;
     }
-    const feather = selectionFeatherRef.current;
+    const soft = paintRef.current?.growSoftSelection(d.selection, px);
+    if (soft) {
+      commitSelection("Grow", soft, d.selectionAngle, d.selectionPivot);
+      return;
+    }
     const grown = d.selection.map((r) => {
       const x = Math.max(0, r.x - px);
       const y = Math.max(0, r.y - px);
@@ -1741,10 +1742,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       return { x, y, w: Math.max(1, right - x), h: Math.max(1, bottom - y) };
     });
     commitSelection("Grow", grown, d.selectionAngle, d.selectionPivot);
-    setSelectionFeather(feather); // growing keeps the feather radius
   };
 
-  // Select ▸ Feather — soften the selection edges by `px` for fills/erases/moves.
   // ---- Refine edge ----
   const [refineOpen, setRefineOpen] = useState<{
     source: HTMLCanvasElement;
@@ -1760,35 +1759,30 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const eng = paintRef.current;
     if (!eng) return;
     const source = eng.exportComposite(d.layers);
-    // The selection as a hard alpha mask. Built here from the rects (plus the
-    // same rotation the engine applies) rather than exposing the engine's
-    // private mask builder for one caller.
-    const mask = document.createElement("canvas");
-    mask.width = d.width;
-    mask.height = d.height;
-    const mctx = mask.getContext("2d", { willReadFrequently: true });
-    if (!mctx) return;
-    mctx.fillStyle = "#fff";
-    if (d.selectionAngle) {
-      const cx = d.selectionPivot?.x ?? d.width / 2;
-      const cy = d.selectionPivot?.y ?? d.height / 2;
-      mctx.translate(cx, cy);
-      mctx.rotate(d.selectionAngle);
-      mctx.translate(-cx, -cy);
-    }
-    for (const r of d.selection) mctx.fillRect(r.x, r.y, r.w, r.h);
-    setRefineOpen({
-      source,
-      mask,
-      initial: { ...(eng.getRefineEdge?.() ?? NO_REFINE), feather: selectionFeatherRef.current },
-    });
+    // The selection's own coverage — soft where it is soft — with its rotation.
+    const mask = eng.selectionCoverageCanvas(d.selection, d.selectionAngle, d.selectionPivot);
+    // Each refinement is baked into the selection it was made for, so the next
+    // one starts from nothing rather than re-applying the last on top.
+    setRefineOpen({ source, mask, initial: NO_REFINE });
   };
   const applyRefineEdge = (r: RefineEdge, deconAmount: number) => {
     const ctx = refineOpen;
     setRefineOpen(null);
     if (!ctx) return;
-    paintRef.current?.setRefineEdge({ ...r, feather: 0 }); // feather rides its own scalar
-    setSelectionFeather(r.feather);
+    const eng = paintRef.current;
+    const sel = activeDocRef.current;
+    if (!eng) return;
+    /* Refine Edge makes a NEW SELECTION — the refined coverage, its rotation
+       baked in — and it is undoable like any other. It used to be engine state
+       applied at every later use instead, to whatever was selected by then. */
+    const refined = refineActive(r)
+      ? eng.refineSelection(sel.selection, sel.selectionAngle, sel.selectionPivot, r)
+      : null;
+    if (refined && !refined.length) {
+      showToast("No pixels would be more than 50% selected — the refined selection would be empty.");
+      return;
+    }
+    if (refined) commitSelection("Refine Edge", refined, 0, null);
     if (deconAmount <= 0) return;
     // Decontamination edits PIXELS, so it is a real, undoable layer change —
     // unlike the edge settings, which only shape the mask.
@@ -1800,7 +1794,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       return;
     }
     const src = paintRef.current?.getLayerCanvas(id!);
-    const mctx = ctx.mask.getContext("2d", { willReadFrequently: true });
+    // The REFINED edge is what decontamination works on: its soft fringe.
+    const refinedMask = refined ? eng.selectionCoverageCanvas(refined, 0, null) : ctx.mask;
+    const mctx = refinedMask.getContext("2d", { willReadFrequently: true });
     const sctx = src?.getContext("2d", { willReadFrequently: true });
     if (!src || !mctx || !sctx) return;
     const w = d.width;
@@ -1846,6 +1842,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       Math.round(from.w) === to.w &&
       Math.round(from.h) === to.h;
     if (sameBox && Math.abs(rads - d.selectionAngle) < 1e-6) return; // nothing to do
+    paintRef.current?.carryResizedSelection(d.selection, moved, from, to); // soft stays soft
     // Rotation turns about the box CENTRE, matching the on-canvas handle.
     commitSelection("Transform selection", moved, rads, rads ? pivotOf(to) : null);
   };
@@ -1877,12 +1874,23 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     commitSelection(`${op[0].toUpperCase()}${op.slice(1)}`, next, 0, null);
   };
 
+  /* Select ▸ Feather — soften the selection's edge by `px`. A real operation on
+     its coverage, undoable, whose result is the soft selection everything then
+     uses; it used to be a radius riding beside the selection, applied at each
+     use and forgotten when the selection changed. */
   const featherSelection = (px: number) => {
-    if (!activeDocRef.current.selection.length) {
+    const d = activeDocRef.current;
+    if (!d.selection.length) {
       showToast("Feather needs an active selection — make one first.");
       return;
     }
-    setSelectionFeather(px);
+    const next = paintRef.current?.featherSelection(d.selection, d.selectionAngle, d.selectionPivot, px);
+    if (!next) return;
+    if (!next.length) {
+      showToast("No pixels would be more than 50% selected — feather by less, or select more first.");
+      return;
+    }
+    commitSelection("Feather", next, 0, null); // the rotation is baked into the coverage
   };
 
   const selectAll = () => {
@@ -3992,7 +4000,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       d.selectionAngle,
       d.selectionPivot,
       "Cut",
-      selectionFeatherRef.current,
     );
   };
 
@@ -4209,6 +4216,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         activeLayerId: d.activeLayerId,
         selectedLayerIds: d.selectedLayerIds,
         selection: d.selection,
+        // A soft selection's coverage rides with its outline (v25).
+        selectionMask: paintRef.current?.selectionMaskImage(d.selection) ?? null,
         metadata: d.metadata ?? null,
         paths: d.paths ?? [],
         guides: d.guides ?? [],
@@ -4829,7 +4838,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const channelLoads = (p.channelImages ?? [])
       .filter((i) => doc.channels?.some((c) => c.id === i.id))
       .map((i) => ({ id: i.id, data: i.data }));
-    setPendingLoads((ls) => [...ls, { docId, images, masks, channels: channelLoads, frameSources }]);
+    // v25: a soft selection's coverage, restored behind THIS array — the one the
+    // document now holds as its selection — once the document is in the engine.
+    const selMask = doc.selection.length ? coerceSelectionMask(p.selectionMask, p.width, p.height) : null;
+    const selection = selMask ? { rects: doc.selection, mask: selMask } : undefined;
+    setPendingLoads((ls) => [...ls, { docId, images, masks, channels: channelLoads, frameSources, selection }]);
     // Seed the autosave cache from the file JSON so a never-viewed restored tab
     // still snapshots correctly (refreshed from the engine once it goes active).
     docJsonCache.current.set(docId, { json: JSON.stringify(p), name: doc.name });
@@ -6673,7 +6686,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       { tile: r.tile, width: r.width, height: r.height, placement: r.placement },
       selRef.current.length ? d.selectionAngle : 0,
       selRef.current.length ? d.selectionPivot : null,
-      selRef.current.length ? selectionFeatherRef.current : 0,
     );
   };
 
@@ -7465,7 +7477,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             d.selectionAngle,
             d.selectionPivot,
             "Delete",
-            selectionFeatherRef.current,
           );
         }
       } else if (e.code === "Backspace") {
@@ -7480,7 +7491,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             fill,
             d.selectionAngle,
             d.selectionPivot,
-            selectionFeatherRef.current,
           );
         }
       } else if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "l") {
@@ -7908,7 +7918,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onSelectionRects={setSelectionRects}
           selectionAngle={active.selectionAngle}
           selectionPivot={active.selectionPivot}
-          selectionFeather={selectionFeather}
           onSelectionAngle={setSelectionAngle}
           onSelectionPivot={setSelectionPivot}
           moveMode={moveMode}
