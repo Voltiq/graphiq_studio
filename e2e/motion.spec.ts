@@ -76,39 +76,66 @@ test("a context menu leaves rather than vanishing, and takes no click on its way
   await expect(app.page.locator(menuSel), "then gone").toHaveCount(0, { timeout: 1000 });
 });
 
-test("a panel folds and unfolds through every height in between", async ({ app }) => {
-  const sample = () =>
-    app.page.evaluate(
-      () =>
-        new Promise<number[]>((done) => {
-          const card = document.querySelector<HTMLElement>('[data-panel-id="color"]')!;
-          const out: number[] = [];
-          const t0 = performance.now();
-          const tick = () => {
-            out.push(Math.round(card.getBoundingClientRect().height));
-            if (performance.now() - t0 < 650) requestAnimationFrame(tick);
-            else done(out);
-          };
-          requestAnimationFrame(tick);
-        }),
-    );
-  const open = Math.round((await app.page.locator('[data-panel-id="color"]').boundingBox())!.height);
-  const caret = app.page.locator('[data-panel-id="color"] button[aria-label="Collapse Color"]');
-  const [fold] = await Promise.all([sample(), caret.click()]);
-  const shut = fold[fold.length - 1];
-  expect(shut, "it folded").toBeLessThan(open / 3);
-  const between = fold.filter((h) => h > shut + 8 && h < open - 8);
-  expect(between.length, `folding passed through the middle: ${fold.join(",")}`).toBeGreaterThanOrEqual(4);
+/* Read the fold where it is, not where a frame happens to land: the moment
+   the caret's click starts the card's height transition it is paused, and the
+   card is measured a quarter, half and three quarters of the way through.
+   Sampling frames (as this test first did) saw one in-between height on a
+   loaded CI runner, whose frames came too far apart — not a fold that jumped. */
+const scrubFold = (app: App, caret: string) =>
+  app.page.evaluate(
+    (caret) =>
+      new Promise<{ heights: number[]; dur: number }>((done, fail) => {
+        const card = document.querySelector<HTMLElement>('[data-panel-id="color"]')!;
+        const fold = () => {
+          void getComputedStyle(card).height; // bring style up to date: this starts the transition
+          return card
+            .getAnimations({ subtree: true })
+            .find((a) => (a as CSSTransition).transitionProperty === "grid-template-rows");
+        };
+        const timer = window.setTimeout(() => {
+          mo.disconnect();
+          fail(new Error("the click started no fold"));
+        }, 3000);
+        const mo = new MutationObserver(() => {
+          const t = fold();
+          if (!t) return;
+          mo.disconnect();
+          window.clearTimeout(timer);
+          t.pause();
+          const dur = Number(t.effect!.getComputedTiming().duration);
+          const heights = [0.25, 0.5, 0.75].map((f) => {
+            t.currentTime = dur * f;
+            return Math.round(card.getBoundingClientRect().height);
+          });
+          t.finish();
+          done({ heights, dur });
+        });
+        mo.observe(card, { subtree: true, childList: true, attributes: true });
+        card.querySelector<HTMLButtonElement>(caret)!.click();
+      }),
+    caret,
+  );
 
-  const [unfold] = await Promise.all([
-    sample(),
-    app.page.locator('[data-panel-id="color"] button[aria-label="Expand Color"]').click(),
-  ]);
-  expect(unfold[unfold.length - 1], "it unfolded").toBeGreaterThan(open - 4);
-  expect(
-    unfold.filter((h) => h > shut + 8 && h < open - 8).length,
-    `unfolding too: ${unfold.join(",")}`,
-  ).toBeGreaterThanOrEqual(4);
+test("a panel folds and unfolds through every height in between", async ({ app }) => {
+  const height = async () => Math.round((await app.page.locator('[data-panel-id="color"]').boundingBox())!.height);
+  const open = await height();
+  const fold = await scrubFold(app, 'button[aria-label="Collapse Color"]');
+  await app.settle(600);
+  const shut = await height();
+  expect(shut, "it folded").toBeLessThan(open / 3);
+  expect(fold.dur, "over the fold's duration, not in a frame").toBeGreaterThan(200);
+  const [f1, f2, f3] = fold.heights;
+  expect(f2, `halfway through folding it is in between: ${fold.heights}`).toBeGreaterThan(shut + 8);
+  expect(f2, `...: ${fold.heights}`).toBeLessThan(open - 8);
+  expect(f1 >= f2 && f2 >= f3 && f1 > f3, `and it only shrinks: ${fold.heights}`).toBe(true);
+
+  const unfold = await scrubFold(app, 'button[aria-label="Expand Color"]');
+  await app.settle(800);
+  expect(await height(), "it unfolded").toBeGreaterThan(open - 4);
+  const [u1, u2, u3] = unfold.heights;
+  expect(u2, `halfway through unfolding it is in between: ${unfold.heights}`).toBeGreaterThan(shut + 8);
+  expect(u2, `...: ${unfold.heights}`).toBeLessThan(open - 8);
+  expect(u1 <= u2 && u2 <= u3 && u1 < u3, `and it only grows: ${unfold.heights}`).toBe(true);
 });
 
 test("the menu bar swaps instantly between neighbouring menus", async ({ app }) => {

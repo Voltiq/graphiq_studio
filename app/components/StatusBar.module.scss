@@ -31,11 +31,30 @@
   white-space: nowrap;
 }
 
+/* The middle gives way when the strip is short of room. On a tablet (the one
+   shell that still draws this strip) the three groups wanted 1036px of a
+   768px iPad, and what ran off the end, cut off, was the save state, the
+   document size and the zoom; the shell gained 269px of sideways scroll. The
+   hint is the one thing that can be cut short, so it is, with an ellipsis. */
 .center {
   margin: 0 auto;
+  min-width: 0;
+  overflow: hidden;
 
   svg {
+    flex-shrink: 0;
     color: var(--text-3);
+  }
+
+  > * {
+    flex-shrink: 0;
+  }
+
+  .hint {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 

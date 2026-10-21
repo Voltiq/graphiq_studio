@@ -12,7 +12,7 @@
  *
  * Driven with a FINGER as well as a mouse: the script used only the mouse,
  * which in a touch context still reports `pointerType: "mouse"`, and
- * tools/mobile.js listed it among the touch rails that never touched.
+ * tools/mobile.js (now e2e/mobile-profile.spec.ts) listed it among the touch rails that never touched.
  */
 import type { Page } from "@playwright/test";
 import { test, expect, type App } from "./fixtures";

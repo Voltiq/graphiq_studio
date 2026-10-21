@@ -3,9 +3,9 @@
 **A green CI run is not "mobile works".**
 
 Every mobile rail in this repo runs in an emulated Chromium on a desktop. That
-emulation is good enough to make real geometric claims — `tools/mobile.js` gives
+emulation is good enough to make real geometric claims — the iPhone profile in `e2e/mobile-profile.spec.ts` gives
 it a phone's viewport, pixel ratio, user agent and touch input, and
-`tools/verify-mobile-invariants.js` asserts the five invariants against it — but
+`e2e/mobile-invariants.spec.ts` asserts the five invariants against it — but
 there is a specific, knowable list of things it *cannot* see. This is that list.
 
 Each item names **the code path it covers**, so a failure on a real device lands
@@ -63,7 +63,7 @@ height.
 **Covers:** `app/lib/budgets.ts` (`BY_CLASS`), and `DRAFT_MAX_PIXELS` in
 `app/lib/paint.ts`.
 
-`tools/mobile.js` throttles the CPU 4×, which slows *script* only. It does not
+`e2e/mobile-profile.spec.ts` throttles the CPU 4×, which slows *script* only. It does not
 model a slower GPU, lower memory bandwidth, or a thermal ceiling — so it
 understates the gap, which is the safe direction to be wrong in, but it is still
 wrong. Measured locally: cold boot 254 ms unthrottled, 714 ms at 4×.
@@ -159,7 +159,7 @@ nothing happen, and the buttons should act on `pointerup` instead.
 
 ## What emulation *does* cover, so it is not repeated above
 
-`tools/verify-mobile-invariants.js` (11 checks) asserts the five invariants: the
+`e2e/mobile-invariants.spec.ts` asserts the five invariants: the
 44px floor in every shell state and inside all 43 dialogs, hit-testability by
 `elementFromPoint`, no page scroll even when shoved, shell height equal to
 `visualViewport.height`, no control under a simulated notch, and every dialog's

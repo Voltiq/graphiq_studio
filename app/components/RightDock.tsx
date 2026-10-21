@@ -745,7 +745,12 @@ export default function RightDock({
         const dock = document.querySelector('[data-tour="dock"]');
         const section = document.querySelector(`[data-panel-id="${id}"]`);
         if (!dock || !section) return;
-        const need = section.getBoundingClientRect().height;
+        /* Its NATURAL height, not its box: the body unfolds from nothing
+           (Panel's fold), so two frames in the box is a few px tall — read
+           that way, Adjustments (1834px) never raised a 152px sheet. */
+        const inner = section.querySelector<HTMLElement>('[class*="panelFoldInner"]');
+        const folding = inner?.parentElement?.getBoundingClientRect().height ?? 0;
+        const need = section.getBoundingClientRect().height - folding + (inner?.scrollHeight ?? 0);
         const have = dock.getBoundingClientRect().height;
         if (need <= have) return;
         if (detent === "peek") onDetent("half");

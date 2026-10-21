@@ -125,77 +125,15 @@ jobs:
 
       # Each harness exits non-zero on failure and prints its own PASS/FAIL lines.
       # They are separate steps so the summary names which one broke.
-      - name: The loupe shows the pixels a finger is covering
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:loupe -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-      - name: A point placed by tap can be dragged before it counts
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:twostage -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-      - name: The clone source can be seen and moved with a finger
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:clonesrc -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-      - name: Hover-only affordances are reachable without a hover
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:hoveronly -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-      - name: The phone opens on a photo-first start card
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:startcard -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
       - name: Recent pictures are remembered, listed and re-openable
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:recents -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-      - name: The tools drawer is a labelled sheet on touch
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:toolsheet -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-      - name: Every tool's options fit, in a sheet rather than a scrolling bar
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:optionsheet -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-      - name: Nothing in the panels drawer is out of reach
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:dockreach -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-      - name: The panels are a bottom sheet with three detents
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:panelsheet -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-      - name: One panel open at a time, and the sheet grows to fit it
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:accordion -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
       - name: No panel is stranded outside the phone's one dock
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:stranded -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: The command palette is the phone's primary menu
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:palette -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: The phone's chrome, and the readouts it used to drop
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:chrome -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
@@ -208,12 +146,6 @@ jobs:
       - name: Export reaches the OS share sheet, and falls back intact
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:share -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: The tablet tier — persistent rail, collapsible dock, touch targets
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:tablet -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
@@ -232,12 +164,6 @@ jobs:
       - name: The software keyboard moves the bar and the focused field
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:keyboard -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: A text session can be finished and abandoned by touch
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:textsession -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 
@@ -292,24 +218,6 @@ jobs:
       - name: Performance budgets follow the device, not the desktop
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: npm run test:budgets -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: The overlay loop stops animating when nobody is looking
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:ants -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: The mobile shell, on a real device profile (self-testing)
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:mobile -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: The five mobile invariants, on a real device profile
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:invariants -- --url http://localhost:3000
         env:
           GQ_CHANNEL: chrome
 

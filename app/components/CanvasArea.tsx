@@ -67,6 +67,7 @@ import {
   type CompareAxis,
 } from "../lib/compare";
 import { clampPan, KEEP, normalizeRect, type Pan, type Rect } from "../lib/view";
+import { coveredFrom, readStageInsets, visibleStage } from "../lib/stage-area";
 import type { ColorSampler } from "../lib/samplers";
 import type { GestureReadout } from "../lib/samplers";
 import type {
@@ -4370,23 +4371,15 @@ export default function CanvasArea({
        The token is read rather than `mobileRef`: `mobile` is a React prop that
        is false until the media query settles, and the first fit runs before
        that, so gating on it inset by zero and changed nothing. CSS has the
-       answer at the first paint. */
-    const root = getComputedStyle(document.documentElement);
-    const strip = parseFloat(root.getPropertyValue("--edge-strip")) || 0;
-    /* The phone's stage also carries the readout chip at its top and the tool's
-       options card at its foot (`--fit-top`, `--m-options-h`; both unset
-       elsewhere), so the picture opens in the part between them — as the
-       design shows it, lifted clear of the card. */
-    const top = parseFloat(root.getPropertyValue("--fit-top")) || 0;
-    const card = parseFloat(root.getPropertyValue("--m-options-h")) || 0;
-    const foot = card ? card + 16 : 0;
-    const usableW = Math.max(1, vp.clientWidth - strip * 2);
-    const usableH = Math.max(1, vp.clientHeight - top - foot);
+       answer at the first paint. The phone's stage also carries the readout
+       chip and the options card, so the picture opens in the part between
+       them, as the design shows it (lib/stage-area). */
+    const { usableW, usableH, cx, cy } = visibleStage(vp.clientWidth, vp.clientHeight, readStageInsets());
     const raw = Math.min(usableW / w, usableH / h) * 100 * 0.96;
     const z = clamp(Math.max(1, Math.floor(raw)), MIN_ZOOM, MAX_ZOOM);
     const s = z / 100;
-    const px = (vp.clientWidth - w * s) / 2;
-    const py = top + (usableH - h * s) / 2;
+    const px = cx - (w * s) / 2;
+    const py = cy - (h * s) / 2;
     if (z === zoomRef.current) {
       setPanRef.current(clampPan(px, py, s, w, h, vp.clientWidth, vp.clientHeight));
     } else {
@@ -4529,8 +4522,8 @@ export default function CanvasArea({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, fit]);
 
-  // When zoom changes, pivot around the focal point (cursor or viewport centre),
-  // or apply an explicit pan queued by fit().
+  // When zoom changes, pivot around the focal point (the cursor, or the middle
+  // of what is visible of the stage), or apply an explicit pan queued by fit().
   useLayoutEffect(() => {
     const vp = viewportRef.current;
     if (!vp) return;
@@ -4549,8 +4542,9 @@ export default function CanvasArea({
 
     const f = focalRef.current;
     focalRef.current = null;
-    const ax = f ? f.ax : vp.clientWidth / 2;
-    const ay = f ? f.ay : vp.clientHeight / 2;
+    const seen = visibleStage(vp.clientWidth, vp.clientHeight, readStageInsets());
+    const ax = f ? f.ax : seen.cx;
+    const ay = f ? f.ay : seen.cy;
     setPanRef.current((prev) => {
       const docX = (ax - prev.x) / prevScale;
       const docY = (ay - prev.y) / prevScale;
@@ -4597,7 +4591,9 @@ export default function CanvasArea({
    *
    * The caret's own rect, not the editable's: a block of text can extend below
    * the fold while the line being typed is perfectly visible, and the reverse
-   * is true the moment a new line is added.
+   * is true the moment a new line is added. Cleared above whatever covers the
+   * stage from below — on a phone that is the options card riding on the
+   * keyboard, not the keyboard itself (lib/stage-area).
    */
   const keepCaretVisible = useCallback(() => {
     if (!textSessionRef.current) return;
@@ -4608,7 +4604,7 @@ export default function CanvasArea({
     if (!sel || !sel.rangeCount) return;
     const r = sel.getRangeAt(0).getBoundingClientRect();
     if (!r.height && !r.width) return;
-    const delta = Math.round(r.bottom + 12 - (window.innerHeight - kb));
+    const delta = Math.round(r.bottom + 12 - coveredFrom());
     if (delta <= 0) return; // already in view — never move for the sake of it
     setPanRef.current((p) => ({ x: p.x, y: p.y - delta }));
   }, []);

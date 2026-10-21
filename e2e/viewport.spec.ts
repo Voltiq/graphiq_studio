@@ -117,7 +117,7 @@ test.describe("desktop", () => {
     await app.settle(500);
     await page.keyboard.press("Enter");
     await page.waitForSelector('[role="dialog"]', { timeout: 5_000 });
-    await app.settle(500);
+    await app.still('[role="dialog"]');
   }
   const scale = async (app: App, factor: number) => {
     await app.cdp("Emulation.setPageScaleFactor", { pageScaleFactor: factor });

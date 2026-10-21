@@ -110,6 +110,25 @@ export class App {
     return this.page.waitForTimeout(ms);
   }
 
+  /** Wait until `sel` has stopped moving: every finite animation on it and in
+   *  it has ended. A fixed sleep reads a spring wherever a slow runner has got
+   *  to — CI measured a dialog 1px taller, caught in its entrance overshoot. */
+  async still(sel: string, timeout = 5_000): Promise<void> {
+    await this.page.waitForFunction(
+      (sel) => {
+        const el = document.querySelector(sel);
+        return (
+          !!el &&
+          el
+            .getAnimations({ subtree: true })
+            .every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity)
+        );
+      },
+      sel,
+      { timeout },
+    );
+  }
+
   /** Run a menu command, then close any MODAL dialog it opened. Modal only: a
    *  popover is a role="dialog" too, and Escape there also deselects. */
   async run(action: string): Promise<void> {

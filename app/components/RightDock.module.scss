@@ -403,9 +403,15 @@
    swatches are not shaved off a panel at rest — and only top and bottom: the
    fold is vertical, and things that sit half outside the content box at its
    sides (the colour picker's slider knobs at either end) must not be cut off
-   while it moves. `clip`, unlike `hidden`, lets the other axis stay visible. */
+   while it moves. `clip`, unlike `hidden`, lets the other axis stay visible.
+
+   The column is pinned to the card (`minmax(0, 1fr)`). Left implicit it was
+   `auto`, which grows to the body's min-content: the Adjustments filmstrip's,
+   440px — so every row of that panel was laid out 440px wide in a 266px dock
+   (and 83px past a phone's screen), the strip no longer the thing scrolling. */
 .panelFold {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 1fr;
 
   &[data-animate] {
