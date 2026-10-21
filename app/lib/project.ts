@@ -8,6 +8,7 @@ import type { SavedChannel } from "./channels";
 import type { LayerComp } from "./comps";
 import type { Rect } from "./view";
 import type { WorkingSpace } from "./colorspace";
+import type { TextRenderSpec } from "./paint";
 
 /** Graphiq project file extension (keeps layers, groups & settings; lossless). */
 export const PROJECT_EXT = "gproj";
@@ -134,6 +135,10 @@ export interface PendingLoad {
   /** A soft selection's coverage (v25), restored behind `rects` — the very
    *  array the loaded document holds as its selection, which is what keys it. */
   selection?: { rects: Rect[]; mask: SavedSelectionMask };
+  /** Text layers to rasterise from their spec once the document exists — for a
+   *  document BUILT rather than read (the sample): the engine's own type
+   *  renderer draws them, so the pixels are exactly what a re-edit redraws. */
+  texts?: { id: string; spec: TextRenderSpec }[];
 }
 
 export interface ProjectInput {

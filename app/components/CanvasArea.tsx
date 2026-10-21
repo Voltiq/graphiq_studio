@@ -4898,6 +4898,7 @@ export default function CanvasArea({
     const entry = pendingLoads.find((p) => p.docId === activeId);
     if (!entry) return;
     engine.setDoc(width, height, collectLeafIds(layers));
+    for (const t of entry.texts ?? []) engine.renderText(t.id, t.spec);
     let cancelled = false;
     (async () => {
       await Promise.all([
