@@ -1,6 +1,6 @@
 /* Images that are enormous on paper and tiny on disk.
  *
- * `verify-canvas-ceiling.js` needs pictures whose declared size straddles the
+ * `e2e/canvas-ceiling.spec.ts` needs pictures whose declared size straddles the
  * browser's canvas limit — one exactly at it, one exactly one pixel over. Those
  * two are the item's check: "a document one pixel over the probed limit".
  *

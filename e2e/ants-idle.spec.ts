@@ -9,10 +9,11 @@
  * wrong when there is. So both halves are asserted — no frames AND the outline
  * still on screen, unchanged.
  *
- * "Animating" is judged by the pattern MOVING and frames still coming, not by
- * a frame count: CI measured 12 frames in 700ms where a desktop gives 40+, and
- * a threshold of 20 failed a loop that was animating correctly. Parked is
- * exactly zero frames either way.
+ * "Animating" is judged by frames coming at ALL and the pattern MOVING, not by
+ * a frame count: CI measured 12 frames in 700ms where a desktop gives 40+ (a
+ * threshold of 20 failed), then exactly 5 in 800ms after a key (a threshold
+ * of 5 failed). Parked is exactly zero frames; awake is any — that is the
+ * distinction, and the moving dashes are what show it is an animation.
  */
 import { test, expect, bootApp, type App } from "./fixtures";
 
@@ -82,7 +83,7 @@ test("a selection's ants march while someone is there, park when left, and wake 
   const a = await ants(app);
   const fresh = await sample(app, 700);
   expect(fresh.ants.painted, "a selection just made is drawn").toBeGreaterThan(0);
-  expect(fresh.raf, "...and animates: frames keep coming").toBeGreaterThan(5);
+  expect(fresh.raf, "...and animates: frames keep coming").toBeGreaterThan(0);
   expect(fresh.ants.sum, "...and the dashes travel").not.toBe(a.sum);
 
   await page.waitForTimeout(PARK_WAIT);
@@ -94,13 +95,16 @@ test("a selection's ants march while someone is there, park when left, and wake 
 
   await page.mouse.move(box.x + 320, box.y + 300);
   const woken = await sample(app, 800);
-  expect(woken.raf, "one movement of the pointer brings it back").toBeGreaterThan(5);
+  expect(woken.raf, "one movement of the pointer brings it back").toBeGreaterThan(0);
   expect(woken.ants.sum, "...and the ants march again").not.toBe(parked.ants.sum);
 
   await page.waitForTimeout(PARK_WAIT);
   expect((await sample(app, 1500)).raf, "it parks again after the next quiet spell").toBe(0);
+  const before = await ants(app);
   await page.keyboard.press("Shift");
-  expect((await sample(app, 800)).raf, "...and a key wakes it, not only the mouse").toBeGreaterThan(5);
+  const keyed = await sample(app, 800);
+  expect(keyed.raf, "...and a key wakes it, not only the mouse").toBeGreaterThan(0);
+  expect(keyed.ants.sum, "...the dashes moving again").not.toBe(before.sum);
 
   /* A hidden tab has nothing to animate for; what is ours to check is that the
      overlay survives the round trip rather than being cleared on the way out. */

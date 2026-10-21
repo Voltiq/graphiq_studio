@@ -13,48 +13,12 @@
  * attribute, so that is asserted. And it must never be a nuisance: never over
  * work, never on a mouse.
  */
-import { deflateSync } from "node:zlib";
 import { test, expect, type App } from "./fixtures";
+import { solidPng } from "./png";
 
 test.afterEach(async ({ app }) => {
   expect(app.consoleErrors, "no console errors").toEqual([]);
 });
-
-/** A solid-colour PNG, so the rail carries no fixture files. */
-function solidPng(w: number, h: number, [r, g, b]: number[]): Buffer {
-  const raw = Buffer.alloc((w * 3 + 1) * h);
-  for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++) raw.set([r, g, b], y * (w * 3 + 1) + 1 + x * 3);
-  const table = Array.from({ length: 256 }, (_, i) => {
-    let c = i;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    return c >>> 0;
-  });
-  const crc = (buf: Buffer) => {
-    let c = 0xffffffff;
-    for (const byte of buf) c = table[(c ^ byte) & 0xff] ^ (c >>> 8);
-    return (c ^ 0xffffffff) >>> 0;
-  };
-  const chunk = (type: string, data: Buffer) => {
-    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
-    const len = Buffer.alloc(4);
-    len.writeUInt32BE(data.length);
-    const tail = Buffer.alloc(4);
-    tail.writeUInt32BE(crc(body));
-    return Buffer.concat([len, body, tail]);
-  };
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(w, 0);
-  ihdr.writeUInt32BE(h, 4);
-  ihdr[8] = 8; // bit depth
-  ihdr[9] = 2; // truecolour
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk("IHDR", ihdr),
-    chunk("IDAT", deflateSync(raw)),
-    chunk("IEND", Buffer.alloc(0)),
-  ]);
-}
 
 const PHOTO = { w: 61, h: 43, rgb: [0, 128, 255] };
 

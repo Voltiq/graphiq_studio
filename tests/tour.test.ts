@@ -10,7 +10,7 @@ import { MOBILE_TOUR_STEPS, TOUR_STEPS, tourSteps, type TourStep } from "../app/
  * spotlight to the 12×12 dot the padding leaves in the corner.
  *
  * What a browser has to prove — that each spotlight lands on live chrome — is
- * in `tools/verify-tour.js`. What is worth pinning here is the shape of the
+ * in `e2e/tour.spec.ts`. What is worth pinning here is the shape of the
  * lists, and the one rule that would silently undo the fix.
  */
 

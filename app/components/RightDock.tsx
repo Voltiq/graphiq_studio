@@ -532,7 +532,7 @@ export default function RightDock({
   /* Dev-only commit counter, in the same family as CanvasArea's __gq hooks.
      The question it answers: does a closed panel drawer keep re-rendering
      while a stroke is being painted? (Measured: twice across a thirty-step
-     stroke, against 52 with the sheet open — see tools/verify-stranded-panels.js.)
+     stroke, against 52 with the sheet open — see e2e/stranded-panels.spec.ts.)
      No dep array, so it ticks once per commit. */
   useEffect(() => {
     const w = window as unknown as { __gqPanelRenders?: number };

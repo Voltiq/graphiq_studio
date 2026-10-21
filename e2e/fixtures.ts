@@ -90,10 +90,13 @@ export class App {
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.waitForSelector('[data-tour="canvas"]', { timeout: 60_000 });
     await page.waitForFunction(() => typeof window.graphiq === "object", null, { timeout: 30_000 });
-    // The tour mounts late and owns the keyboard until it is gone.
-    const tour = await page
-      .waitForSelector('div[aria-label="Interactive tour"]', { timeout: 8_000 })
-      .catch(() => null);
+    /* The tour mounts late and owns the keyboard until it is gone. It comes
+       once per profile (`graphiq:welcomed`), so a re-boot of a page that has
+       seen it does not wait 8s for a tour that is not coming. */
+    const welcomed = await page.evaluate(() => !!localStorage.getItem("graphiq:welcomed"));
+    const tour = welcomed
+      ? null
+      : await page.waitForSelector('div[aria-label="Interactive tour"]', { timeout: 8_000 }).catch(() => null);
     if (tour) {
       await page.keyboard.press("Escape");
       await page.waitForSelector('div[aria-label="Interactive tour"]', { state: "detached", timeout: 5_000 });

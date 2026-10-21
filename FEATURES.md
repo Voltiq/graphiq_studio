@@ -904,7 +904,7 @@ Measured on a 12 MP photograph opened and left alone — **five** document-sized
 
 - **Reported as "the butterfly sits in a black box in the tab", and that is exactly what it was.** All three payloads in `favicon.ico` measured **0 transparent pixels**: the generator composited the glyph onto the opaque `#18191a` ground. The rule was right one block above — the apple-touch-icon *must* be opaque, because iOS paints transparency black — and carrying it down to the favicon was simply wrong. A tab strip paints its own background, and it is not always dark, so a filled ground shows as a box in every theme. Now **60–73% transparent** at 16, 32 and 48px, while the Apple and maskable icons stay fully opaque, as they have to.
 - **The document was not naming a tab icon at all.** Setting `icons.apple` in Next's metadata suppresses the file-convention link for `app/icon.png`, so the only declared icon was Apple's and the tab fell back to a bare `/favicon.ico` probe. Both tab icons are now declared explicitly — the .ico and the transparent 192px PNG — so which icon a browser shows is a decision rather than a guess.
-- **Guarded by the check that reproduces it.** `verify-manifest` now asserts the favicon is declared, served, and *not* opaque; putting the old composite back fails it with `0 transparent px of 2304`, which is the reported bug in one line.
+- **Guarded by the check that reproduces it.** `verify-manifest` (now `e2e/manifest.spec.ts`) asserts the favicon is declared, served, and *not* opaque; putting the old composite back fails it with `0 transparent px of 2304`, which is the reported bug in one line.
 
 #### A 404 the rail found on the way
 
@@ -1619,7 +1619,7 @@ An error boundary wraps the editor (`ErrorBoundary.tsx`, mounted in `page.tsx`; 
 
 ### A committed bucket fill keeps its colour
 
-`npm run test:bucket` (`tools/verify-bucket-commit.js`, 9 checks) — a bucket fill stays *live* after the click: `liveBucketRef` keeps the seed so tolerance, contiguity, anti-alias and opacity can be auditioned against the result, until the next action. The colour was being auditioned along with them, long after the fill was committed.
+`e2e/bucket-commit.spec.ts` (was `tools/verify-bucket-commit.js`) — a bucket fill stays *live* after the click: `liveBucketRef` keeps the seed so tolerance, contiguity, anti-alias and opacity can be auditioned against the result, until the next action. The colour was being auditioned along with them, long after the fill was committed.
 
 - **What it did.** Fill a layer red; with the Paint Bucket still selected, pick green in the Colour panel. The fill turned green — `255,0,0,255` → `0,255,0,255` — with no click on the canvas, no new history step, and nothing on screen to say so. Switching tools did not put it back. One Undo removed the whole fill, so nothing was lost, but a fill already committed must not change colour on its own.
 - **The obvious fix is not enough, and the rail proves it.** The re-run was driven by an effect listing `foreground` and `background` among its dependencies, so dropping them stops a colour change from *triggering* a re-run — but the re-run still *read* the live foreground. Change the colour and then nudge tolerance, and the fill turns green after all, one step further from the cause. The colour is instead frozen into the handle at the moment of the commit, and opacity stays live because auditioning it is what the feature is for.
@@ -1648,7 +1648,7 @@ Guarded by four checks inside `npm run test:optionsheet` (34 total). The row car
 
 ### SVG text keeps its gradient
 
-`npm run test:svggrad` (`tools/verify-svg-text-gradient.js`, 11 checks) plus 13 unit checks in `tests/gradient.test.ts`.
+`e2e/svg-text-gradient.spec.ts` (was `tools/verify-svg-text-gradient.js`) plus 13 unit checks in `tests/gradient.test.ts`.
 
 - **The bug.** `emitText` read `splitPaint(v.color)` — the block's SOLID colour — and never looked at `v.fill`, the gradient the raster had been drawing since text gradients shipped. A gradient heading rasterized correctly and exported as one flat colour, silently, with the file claiming to be the same artwork.
 - **The fix is a transcription, not a second opinion.** `buildCanvasGradient` never handed the author's stops to canvas directly — the midpoint power curve, the reflected fold and the conic seam blend are not things `addColorStop` can express — so it flattened every gradient to 65 evenly-spaced samples. That resampling is now `gradientRamp` and the placement is `gradientGeometry`, and **both the canvas renderer and the SVG emitter consume them**. A unit check asserts `buildCanvasGradient` hands the canvas exactly what `gradientRamp` returns, sample for sample, so the two cannot drift.
@@ -1659,7 +1659,7 @@ Guarded by four checks inside `npm run test:optionsheet` (34 total). The row car
 
 ### Type on a path
 
-`app/lib/textpath.ts` with 26 unit checks (`tests/textpath.test.ts`) and 14 browser checks (`npm run test:textpath`). **Layer ▸ Text on path** sets the active text layer along the Pen's Work Path; **Take text off its path** reverses it. Both are one undo step, and the layer stays a text layer throughout.
+`app/lib/textpath.ts` with 26 unit checks (`tests/textpath.test.ts`) and browser checks in `e2e/text-on-path.spec.ts`. **Layer ▸ Text on path** sets the active text layer along the Pen's Work Path; **Take text off its path** reverses it. Both are one undo step, and the layer stays a text layer throughout.
 
 - **A third draw path, because the other two are run-based.** Straight text hands canvas a whole string and lets it advance the pen. On a curve every character sits somewhere else and points somewhere else, so the layout emits one placement — a point and an angle — per glyph, and the renderer translates, rotates and draws single characters. The cost is that kerning between adjacent glyphs is lost, which is inherent to drawing them one at a time.
 - **The centre of a glyph is what sits on the curve, and that is worth a number.** Advancing to the left edge and rotating there is the obvious implementation and it splays letters outward on tight curves. A 10px glyph centred on a 100px circle bulges `hypot(100,5) − 100 = 0.125px`; placed by its left edge the far end reaches `hypot(100,10) − 100 = 0.499px` — **four times the deviation, all on one side**.
@@ -1695,7 +1695,7 @@ Guarded by four checks inside `npm run test:optionsheet` (34 total). The row car
 
 ### The pattern-tile library
 
-`app/lib/patterns.ts` with `PatternPicker`, 35 unit checks (`tests/patterns.test.ts`) and 9 browser checks (`npm run test:patterns`). Built-in tiles plus your own, with import, export and storage — on the same lines as the gradient and shape libraries, with one measured difference.
+`app/lib/patterns.ts` with `PatternPicker`, 35 unit checks (`tests/patterns.test.ts`) and browser checks in `e2e/pattern-fill.spec.ts`. Built-in tiles plus your own, with import, export and storage — on the same lines as the gradient and shape libraries, with one measured difference.
 
 - **Not localStorage, and the numbers say why.** Every other preset here is small JSON; a tile is an image. Measured as data-URL characters — what localStorage would actually hold — a motif at 128² is 11.9 KB but a photographic tile at 512² is **1371 KB**, which is 26% of the ~5 MB an origin gets, shared with swatches, brushes, gradients and actions. Three such tiles would fill it and start throwing on save. The tiles live in IndexedDB as Blobs, which has no such ceiling and avoids base64's +33%; `recents.ts` already stores blobs that way, so this follows it rather than inventing a second approach.
 - **The built-ins are drawn, not shipped.** The only binaries in this repository are the app icons. The five starter tiles are procedures, which costs no storage and makes them exactly seamless — each is drawn so that what leaves one edge arrives at the opposite one, and the picker renders every swatch **tiled** so a seam shows up while choosing rather than in the artwork.

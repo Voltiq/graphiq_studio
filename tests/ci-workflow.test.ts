@@ -41,7 +41,9 @@ describe("the CI workflow", () => {
     const named = Object.values(wf.jobs)
       .flatMap((j) => j.steps)
       .flatMap((s) => [...(s.run ?? "").matchAll(/npm run (?:-s )?([\w:-]+)/g)].map((m) => m[1]));
-    expect(named.length).toBeGreaterThan(10); // a truncated file must not pass
+    /* A truncated file must not pass: the gates by name, now that the old
+       browser job's two dozen harness steps are e2e specs under one command. */
+    expect(named).toEqual(expect.arrayContaining(["lint", "check", "build", "test:e2e"]));
     expect(named.filter((n) => !scripts.includes(n))).toEqual([]);
   });
 });

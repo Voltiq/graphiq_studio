@@ -1,9 +1,9 @@
 # Continuous integration for Graphiq Studio.
 #
 # Two jobs, split by what they need rather than by what they check: `check` needs
-# nothing but Node and finishes in under a minute, so a type error or a broken
-# unit test reports almost immediately; `browser` has to build, boot and drive the
-# real app, and takes minutes.
+# nothing but Node and finishes in minutes, so a type error or a broken unit test
+# reports almost immediately; `e2e` has to boot and drive the real app, sharded
+# four ways.
 #
 # WHY A DEV SERVER AND NOT A PRODUCTION BUILD. The instinct is to test what ships.
 # It cannot work here: the harnesses drive the app through dev-only console hooks
@@ -30,8 +30,8 @@
 # baseline, and on a runner it always would be. Performance is tracked locally,
 # in one sitting, with interleaved arms.
 #
-# EVERY HARNESS RUNS, even after one fails (`!cancelled()` + the dev server
-# having come up), so one run reports every broken rail rather than the first.
+# EVERY TEST RUNS, even after one fails (Playwright's default, `retries: 0` on
+# purpose), so one run reports every broken rail rather than the first.
 # `tests/ci-workflow.test.ts` parses this file under `npm run check`: from
 # 2026-08-25 to 2026-10-16 it did not parse, and no check ran at all.
 #
@@ -77,191 +77,20 @@ jobs:
       - name: Production build
         run: npm run build
 
-  browser:
-    name: browser harnesses
-    runs-on: ubuntu-latest
-    # Measured 2026-10-17: with every rail running (not stopping at the first
-    # failure) the job reached rail 66 of 79 at 40 min and was cut off. The cure
-    # is parallel shards (TODO 2.1); until then, room for all of them.
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          # 24 rather than the older LTS on purpose: it is the version every
-          # harness and the whole unit suite are actually verified on here.
-          node-version: 24
-          cache: npm
-      - run: npm ci
-
-      # Fail here, loudly and early, rather than inside a harness timeout.
-      # Every "FAIL  <check>" / "HARNESS FAILURE: …" line a harness prints becomes
-      # an annotation on the run. Annotations are readable through the public
-      # API; raw job logs need admin rights — which is how two weeks of CI
-      # failures went undiagnosed.
-      - name: Turn harness FAIL lines into annotations
-        run: echo "::add-matcher::.github/matchers/rail-fail.json"
-
-      - name: Check the browser this runner provides
-        run: |
-          which google-chrome-stable google-chrome || true
-          google-chrome-stable --version || google-chrome --version
-
-      - name: Start the dev server
-        id: server
-        run: |
-          npm run dev > dev-server.log 2>&1 &
-          echo "waiting for the dev server..."
-          for i in $(seq 1 90); do
-            if curl -sSf -o /dev/null http://localhost:3000; then
-              echo "up after ${i}s"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "dev server never came up"
-          cat dev-server.log
-          exit 1
-
-      # Each harness exits non-zero on failure and prints its own PASS/FAIL lines.
-      # They are separate steps so the summary names which one broke.
-      - name: Recent pictures are remembered, listed and re-openable
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:recents -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: No panel is stranded outside the phone's one dock
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:stranded -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Every tour spotlight lands on chrome that exists
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:tour -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Export reaches the OS share sheet, and falls back intact
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:share -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Dialog previews and rails fit a phone
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:dialoginternals -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Dialogs stay on screen at every interface scale
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:dialogzoom -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: The software keyboard moves the bar and the focused field
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:keyboard -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Dialogs do not summon the keyboard, and numeric fields get a keypad
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:kbfields -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: The app is installable, with icons a launcher will not letterbox
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:manifest -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: The iOS home-screen tags, and the notch they make real
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:ioswebapp -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: '"More space" offers only what the platform can actually do'
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:morespace -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Installable with no service worker, and the decision behind that
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:installable -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Documents too big for the browser are refused, not opened blank
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:ceiling -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Running out of canvas memory is reported, not composited blank
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:canvasmem -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: An open document holds only the buffers it actually needs
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:memfloor -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Performance budgets follow the device, not the desktop
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:budgets -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: A committed bucket fill keeps its colour
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:bucket -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Gradient text exports as a gradient, not a flat colour
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:svggrad -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Type set along a path, and taken off it
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:textpath -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: The pattern library, its picker, and a pattern fill
-        if: ${{ !cancelled() && steps.server.outcome == 'success' }}
-        run: npm run test:patterns -- --url http://localhost:3000
-        env:
-          GQ_CHANNEL: chrome
-
-      - name: Dev server log
-        if: failure()
-        run: cat dev-server.log
-
-  # The rails that have moved to Playwright Test (e2e/, TODO 2.1). Sharded, so
-  # the suite's wall time divides as it grows instead of adding to the job
-  # above; each shard starts its own dev server (playwright.config.ts
-  # webServer). On a failure the HTML report and per-test traces are uploaded —
+  # Every browser rail, under Playwright Test (e2e/, TODO 2.1). Sharded, so
+  # the suite's wall time divides as it grows; each shard starts its own dev
+  # server (playwright.config.ts webServer). Four shards since the last of the
+  # old `browser` job's 79 hand-rolled harnesses moved here (2026-10-21) — that
+  # job alone took ~45 minutes, serially. On a failure the HTML report and per-test traces are uploaded —
   # a trace replays the run step by step, which raw logs cannot.
   e2e:
-    name: e2e ${{ matrix.shard }}/2
+    name: e2e ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -270,7 +99,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Playwright Test
-        run: npm run test:e2e -- --shard=${{ matrix.shard }}/2
+        run: npm run test:e2e -- --shard=${{ matrix.shard }}/4
         env:
           GQ_CHANNEL: chrome
       - name: Upload report and traces
