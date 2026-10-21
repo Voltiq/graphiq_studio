@@ -301,6 +301,11 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+
+  /* No option chosen: the prompt reads like a field's placeholder. */
+  &[data-placeholder] {
+    color: var(--text-3);
+  }
 }
 
 /* Portalled popup — the shared overlay card. */
@@ -344,6 +349,16 @@
   svg {
     color: var(--accent);
     flex-shrink: 0;
+  }
+}
+
+/* A heading over a run of options (`group` on an option), as in the menus. */
+.selectGroup {
+  @include ds.eyebrow;
+  padding: 8px 9px 3px;
+
+  &:first-child {
+    padding-top: 3px;
   }
 }
 

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { Trash2 } from "../lib/icons";
 import styles from "./PasteDialog.module.scss";
-import { ColorChip, Segmented, Slider, Toggle } from "./Controls";
+import { ColorChip, Segmented, Select, Slider, Toggle } from "./Controls";
 import { availableFormats, renderExport, type ExportFormat, type ExportOptions } from "../lib/imageio";
 import {
   BUILTIN_EXPORT_PRESETS,
@@ -291,35 +291,24 @@ export default function ExportDialog({
             <>
               <span className={styles.groupLabel}>Preset</span>
               <div style={{ display: "flex", gap: "var(--sp-2)", alignItems: "center" }}>
-                <select
-                  className="gq-field" style={{ ...field, padding: "0 8px", flex: 1 }}
-                  value=""
-                  onChange={(e) => {
-                    const p = allPresets.find((x) => x.id === e.target.value);
-                    if (p) applyPreset(p);
-                  }}
-                  aria-label="Apply export preset"
-                >
-                  <option value="">Apply a preset…</option>
-                  {BUILTIN_EXPORT_PRESETS.length > 0 && (
-                    <optgroup label="Built-in">
-                      {BUILTIN_EXPORT_PRESETS.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {userPresets.length > 0 && (
-                    <optgroup label="My presets">
-                      {userPresets.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
+                {/* An action menu: choosing applies the preset, and the trigger
+                    goes back to its prompt. */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Select
+                    block
+                    ariaLabel="Apply export preset"
+                    placeholder="Apply a preset…"
+                    value=""
+                    options={[
+                      ...BUILTIN_EXPORT_PRESETS.map((p) => ({ value: p.id, label: p.name, group: "Built-in" })),
+                      ...userPresets.map((p) => ({ value: p.id, label: p.name, group: "My presets" })),
+                    ]}
+                    onChange={(id) => {
+                      const p = allPresets.find((x) => x.id === id);
+                      if (p) applyPreset(p);
+                    }}
+                  />
+                </div>
                 <button type="button" className={styles.btn} onClick={savePreset}>
                   Save current
                 </button>
@@ -344,18 +333,13 @@ export default function ExportDialog({
               )}
 
               <span className={styles.groupLabel}>Format</span>
-              <select
-                className="gq-field" style={{ ...field, padding: "0 8px" }}
+              <Select
+                block
+                ariaLabel="Format"
                 value={format.id}
-                onChange={(e) => setFormat(formatById(e.target.value))}
-                aria-label="Format"
-              >
-                {formats.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.label} (.{f.ext})
-                  </option>
-                ))}
-              </select>
+                options={formats.map((f) => ({ value: f.id, label: `${f.label} (.${f.ext})` }))}
+                onChange={(id) => setFormat(formatById(id))}
+              />
 
               {format.lossy && <Slider label="Quality" unit="%" value={quality} onChange={setQuality} />}
 
@@ -406,18 +390,13 @@ export default function ExportDialog({
                     setTargets((ts) => ts.map((x) => (x.id === t.id ? { ...x, ...p } : x)));
                   return (
                     <div key={t.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <select
-                        className="gq-field" style={{ ...field, width: 96, padding: "0 6px" }}
+                      <Select
+                        width={96}
+                        ariaLabel="Target format"
                         value={t.formatId}
-                        onChange={(e) => patch({ formatId: e.target.value })}
-                        aria-label="Target format"
-                      >
-                        {formats.map((f) => (
-                          <option key={f.id} value={f.id}>
-                            {f.label}
-                          </option>
-                        ))}
-                      </select>
+                        options={formats.map((f) => ({ value: f.id, label: f.label }))}
+                        onChange={(id) => patch({ formatId: id })}
+                      />
                       <span style={{ fontSize: 12, color: "var(--text-3)" }}>@</span>
                       <input
                         type="number"

@@ -259,6 +259,14 @@
   font-size: 13px;
 }
 
+/* A dropdown (Select) stands as tall as the buttons and fields beside it — the
+   Export dialog's preset row put a 32px one next to a 34px button. The touch
+   floor still lifts it to 44px: that is a min-height, which beats this. The
+   inline variant lives inside another field and keeps that field's height. */
+.dialog :not([data-variant="inline"]) > button[aria-haspopup="listbox"] {
+  height: 34px;
+}
+
 .primary {
   @include ds.btn-primary;
 }

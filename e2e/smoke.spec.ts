@@ -25,10 +25,11 @@
  * The undo mutant was applied to the MENU action while the test presses Ctrl+Z
  * — it still failed, because both routes go through the one shortcut registry.
  *
- * A HARNESS TRAP WORTH KEEPING. A `selectOption` that cannot match blocks for
- * the full default timeout; with a download waiter already ticking, that once
- * read as "export is broken" for 30 s while export was working perfectly. So
- * locators that might not match carry short, explicit timeouts.
+ * A HARNESS TRAP WORTH KEEPING. A locator that cannot match (a `selectOption`,
+ * the first time) blocks for the full default timeout; with a download waiter
+ * already ticking, that once read as "export is broken" for 30 s while export
+ * was working perfectly. So locators that might not match carry short,
+ * explicit timeouts.
  */
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { test, expect, type App } from "./fixtures";
@@ -147,8 +148,11 @@ test("boot, paint, undo, save, reopen, export", async ({ app }, info) => {
     await app.menu("File", "Export as…");
     const ex = page.locator('div[role="dialog"][aria-label="Export image"]');
     await ex.waitFor({ timeout: 8_000 });
-    const fmt = ex.locator('select[aria-label="Format"]');
-    if ((await fmt.inputValue()) !== "png") await fmt.selectOption("png", { timeout: 5_000 });
+    const fmt = ex.getByRole("button", { name: /^Format: / });
+    if (!(await fmt.getAttribute("aria-label", { timeout: 5_000 }))?.startsWith("Format: PNG")) {
+      await fmt.click({ timeout: 5_000 });
+      await page.getByRole("option", { name: "PNG (.png)" }).click({ timeout: 5_000 });
+    }
     await ex.locator('input[aria-label="File name"]').fill("smoke-export", { timeout: 5_000 });
     const exported = page.waitForEvent("download", { timeout: 30_000 });
     await ex.getByText("Export", { exact: true }).click();
