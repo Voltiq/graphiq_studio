@@ -40,30 +40,55 @@ export interface SelectionParts {
 
 /**
  * The selection a coverage image describes (`at(i)` = coverage of pixel i).
- * The rects are the ≥50% outline as one run per row; the mask is kept only
- * when some pixel is partly selected. A selection with no pixel at 50% or
- * more has no outline for the editor to hold, so it comes back empty.
+ * The rects are its outline as one run per row — the pixels at least 50%
+ * selected — and the mask is kept whenever some pixel is partly selected.
+ *
+ * A FAINT selection, under 50% everywhere (a small one feathered hard, a light
+ * Quick Mask stroke), still selects: its outline is drawn at half its peak
+ * strength instead, so it can be seen and grabbed, and it does whatever it
+ * selects at its true strength. Only a selection with no coverage at all is
+ * empty.
  */
 export function fromCoverage(at: (i: number) => number, w: number, h: number): SelectionParts {
-  const rects: Rect[] = [];
   let soft = false;
+  let peak = 0;
   let bx0 = w;
   let by0 = h;
   let bx1 = -1;
   let by1 = -1;
   for (let y = 0; y < h; y++) {
-    let x0 = -1;
     const row = y * w;
     for (let x = 0; x < w; x++) {
       const a = at(row + x);
-      if (a) {
-        if (a < 255) soft = true;
-        if (x < bx0) bx0 = x;
-        if (x > bx1) bx1 = x;
-        if (y < by0) by0 = y;
-        by1 = y;
-      }
-      const on = a >= 128;
+      if (!a) continue;
+      if (a < 255) soft = true;
+      if (a > peak) peak = a;
+      if (x < bx0) bx0 = x;
+      if (x > bx1) bx1 = x;
+      if (y < by0) by0 = y;
+      by1 = y;
+    }
+  }
+  if (!peak) return { rects: [], mask: null };
+  const rects = outlineRuns(at, w, h, peak >= 128 ? 128 : Math.max(1, Math.ceil(peak / 2)));
+  if (!soft) return { rects, mask: null };
+  const bounds = { x: bx0, y: by0, w: bx1 - bx0 + 1, h: by1 - by0 + 1 };
+  const alpha = new Uint8Array(bounds.w * bounds.h);
+  for (let y = 0; y < bounds.h; y++) {
+    const src = (bounds.y + y) * w + bounds.x;
+    for (let x = 0; x < bounds.w; x++) alpha[y * bounds.w + x] = at(src + x);
+  }
+  return { rects, mask: { w, h, bounds, alpha } };
+}
+
+/** The pixels at or above `threshold`, as one run per row. */
+function outlineRuns(at: (i: number) => number, w: number, h: number, threshold: number): Rect[] {
+  const rects: Rect[] = [];
+  for (let y = 0; y < h; y++) {
+    let x0 = -1;
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      const on = at(row + x) >= threshold;
       if (on && x0 < 0) x0 = x;
       else if (!on && x0 >= 0) {
         rects.push({ x: x0, y, w: x - x0, h: 1 });
@@ -72,14 +97,14 @@ export function fromCoverage(at: (i: number) => number, w: number, h: number): S
     }
     if (x0 >= 0) rects.push({ x: x0, y, w: w - x0, h: 1 });
   }
-  if (!soft || !rects.length) return { rects, mask: null };
-  const bounds = { x: bx0, y: by0, w: bx1 - bx0 + 1, h: by1 - by0 + 1 };
-  const alpha = new Uint8Array(bounds.w * bounds.h);
-  for (let y = 0; y < bounds.h; y++) {
-    const src = (bounds.y + y) * w + bounds.x;
-    for (let x = 0; x < bounds.w; x++) alpha[y * bounds.w + x] = at(src + x);
-  }
-  return { rects, mask: { w, h, bounds, alpha } };
+  return rects;
+}
+
+/** The strongest coverage in a mask — under 128 means a faint selection. */
+export function peakOf(m: SelectionMask): number {
+  let p = 0;
+  for (let i = 0; i < m.alpha.length; i++) if (m.alpha[i] > p) p = m.alpha[i];
+  return p;
 }
 
 /** A selection over the whole canvas, one byte per pixel: its mask where it

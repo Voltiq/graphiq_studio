@@ -174,8 +174,9 @@ test("J  a feather that would leave nothing selected is refused, and says so", a
   await opaqueLayer(app);
   await app.page.evaluate(() => window.graphiq!.select([{ x: 400, y: 400, w: 4, h: 4 }]));
   await app.settle();
-  await modify(app, "select-feather", "Radius", 60, "Feather");
-  await expect(app.page.getByText(/No pixels would be more than 50% selected/)).toBeVisible();
+  // 16 pixels spread over a 60 px blur round to nothing at all.
+  await modify(app, "select-feather", "Radius", 120, "Feather");
+  await expect(app.page.getByText(/Nothing would be left selected/)).toBeVisible();
   const c = await measure(app);
   expect([c.partial, c.levels], "the selection is untouched: still the hard 4×4").toEqual([0, 2]);
 });
@@ -359,4 +360,40 @@ test("T  rotating a soft selection by numbers keeps it soft", async ({ app }) =>
   const turned = await measure(app);
   expect(turned.partial, "rotated, still soft").toBeGreaterThan(SOFT);
   expect(turned.hash, "...and really rotated").not.toBe(base.hash);
+});
+
+/* TODO 1.3 slice 2: a FAINT selection — under 50% everywhere — still selects.
+   Its outline marks half its peak strength, so it can be seen and grabbed. */
+test("U  a small selection feathered hard is faint, but still selects", async ({ app }) => {
+  await opaqueLayer(app);
+  await app.page.evaluate(() => window.graphiq!.select([{ x: 900, y: 500, w: 24, h: 24 }]));
+  await app.settle();
+  await modify(app, "select-feather", "Radius", 30, "Feather");
+  await expect(app.page.getByText(/No pixels are more than 50% selected/)).toBeVisible();
+  const c = await measure(app);
+  expect(c.partial, "it selects, softly").toBeGreaterThan(SOFT);
+  expect(c.alphaSum / c.partial, "...and nowhere as much as half").toBeLessThan(128);
+});
+
+/* A rotated outline moved by the arrow keys used to bypass history: Ctrl+Z then
+   undid the step BEFORE it (here, the rotation) and lost the nudge. */
+test("V  nudging a rotated selection is its own undo step", async ({ app }) => {
+  await opaqueLayer(app);
+  await app.page.evaluate((r) => window.graphiq!.select([r]), RECT);
+  await app.settle();
+  await app.key("m");
+  const angle = app.page.getByRole("textbox", { name: "Angle" }).first();
+  await angle.fill("30");
+  await angle.press("Enter");
+  await app.settle();
+  const rotated = await measure(app);
+  await app.key("Control+ArrowRight"); // one nudge, 10 px — each press is its own step
+  await app.settle();
+  const nudged = await measure(app);
+  expect(nudged.hash, "the nudge moved it").not.toBe(rotated.hash);
+  // Still rotated: a turned rect's mask has anti-aliased edges, an upright one none.
+  expect(nudged.partial, "...and kept its rotation").toBeGreaterThan(0);
+  await app.run("undo");
+  const undone = await measure(app);
+  expect(undone.hash, "undo takes back the nudge — and only the nudge").toBe(rotated.hash);
 });

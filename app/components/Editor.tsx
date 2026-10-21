@@ -1701,14 +1701,18 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
   const flushToolSelectionRef = useRef(flushToolSelection);
   flushToolSelectionRef.current = flushToolSelection;
-  /** What CanvasArea's selection tools call, live, during a gesture. */
-  const toolSelectionChange = (rects: Rect[]) => {
+  /** What CanvasArea's selection tools call, live, during a gesture. A rotated
+   *  outline moved by a nudge or a drag keeps its rotation (and its moved
+   *  pivot) — and is journalled like any other tool change; it used to bypass
+   *  history, so Ctrl+Z after nudging a rotated selection undid the step before. */
+  const toolSelectionChange = (rects: Rect[], angle = 0, pivot: { x: number; y: number } | null = null) => {
     const docId = activeIdRef.current;
     if (pendingToolSelRef.current && pendingToolSelRef.current.docId !== docId) flushToolSelection();
-    const after: SelState = { rects, angle: 0, pivot: null };
+    const after: SelState = { rects, angle, pivot };
     if (pendingToolSelRef.current) pendingToolSelRef.current.after = after;
     else pendingToolSelRef.current = { docId, before: selStateOf(activeDocRef.current), after };
-    setSelection(rects);
+    if (angle === 0 && pivot === null) setSelection(rects);
+    else setSelState(docId, after);
   };
 
   const commitSelection = (label: string, rects: Rect[], angle = 0, pivot: { x: number; y: number } | null = null) => {
@@ -1779,10 +1783,13 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       ? eng.refineSelection(sel.selection, sel.selectionAngle, sel.selectionPivot, r)
       : null;
     if (refined && !refined.length) {
-      showToast("No pixels would be more than 50% selected — the refined selection would be empty.");
+      showToast("Nothing would be left selected by that refinement.");
       return;
     }
-    if (refined) commitSelection("Refine Edge", refined, 0, null);
+    if (refined) {
+      commitSelection("Refine Edge", refined, 0, null);
+      if (eng.isFaintSelection(refined)) showToast("No pixels are more than 50% selected — the outline marks where the selection is half as strong.");
+    }
     if (deconAmount <= 0) return;
     // Decontamination edits PIXELS, so it is a real, undoable layer change —
     // unlike the edge settings, which only shape the mask.
@@ -1887,10 +1894,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const next = paintRef.current?.featherSelection(d.selection, d.selectionAngle, d.selectionPivot, px);
     if (!next) return;
     if (!next.length) {
-      showToast("No pixels would be more than 50% selected — feather by less, or select more first.");
+      showToast("Nothing would be left selected — feather by less, or select more first.");
       return;
     }
     commitSelection("Feather", next, 0, null); // the rotation is baked into the coverage
+    if (paintRef.current?.isFaintSelection(next)) showToast("No pixels are more than 50% selected — the outline marks where the selection is half as strong.");
   };
 
   const selectAll = () => {

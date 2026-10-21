@@ -951,12 +951,13 @@ export default function CanvasArea({
   /** Update the measure line (live during a drag; null clears it). */
   onMeasure: (line: MeasureLine | null) => void;
   selection: Rect[];
-  onSelectionChange: (rects: Rect[]) => void;
+  /** A tool's selection change, journalled once per gesture. A moved rotated
+   *  outline passes its rotation and pivot along. */
+  onSelectionChange: (rects: Rect[], angle?: number, pivot?: { x: number; y: number } | null) => void;
   /** Update the selection rects WITHOUT resetting the rotation transform. */
   onSelectionRects: (rects: Rect[]) => void;
   selectionAngle: number;
   selectionPivot: { x: number; y: number } | null;
-  /** Feather radius (px) applied to selection fills / erases / lifts. */
   onSelectionAngle: (angle: number) => void;
   onSelectionPivot: (pivot: { x: number; y: number } | null) => void;
   moveMode: MoveMode;
@@ -4017,12 +4018,14 @@ export default function CanvasArea({
 
   useEffect(() => {
     if (selection.length) {
-      // Multi-rect selections set from outside the canvas (e.g. Select › Inverse)
-      // arrive without a traced outline. Pre-trace their boundary once and cache
-      // it (keyed by the rects array) so the ants render via the cheap cached
-      // path instead of the per-frame unionSegments call, which is rect-capped.
+      // Multi-rect selections set from outside the canvas (e.g. Select › Inverse,
+      // or one brought back by undo) arrive without a traced outline. The engine
+      // traces it from the selection's raster — linear in its area, and kept with
+      // the selection, so undo / redo back to it costs nothing. (A union of the
+      // rects, as this used to run, is cubic in their number: Inverse of a large
+      // ellipse froze the page for 2.2 s, and again on each undo and redo.)
       if (selection.length > 1 && wandSegsRef.current?.key !== selection) {
-        wandSegsRef.current = { key: selection, segs: unionSegments(selection) };
+        wandSegsRef.current = { key: selection, segs: engine.selectionOutline(selection) };
       }
       ensureAnts();
     } else {
@@ -4037,7 +4040,7 @@ export default function CanvasArea({
         antsRaf.current = 0;
       }
     };
-  }, [selection, ensureAnts]);
+  }, [selection, ensureAnts, engine]);
 
   // Re-render the live shape whenever its settings change (colour / stroke /
   // radius / kind / star points) — it stays editable while its selection is up.
@@ -4795,6 +4798,8 @@ export default function CanvasArea({
       carryResizedSelection: (from, to, fromBox, toBox) => engine.carryResizedSelection(from, to, fromBox, toBox),
       selectionCoverageCanvas: (rects, angle, pivot) => engine.selectionCoverageCanvas(rects, angle, pivot),
       selectionSoftness: (rects) => engine.selectionSoftness(rects),
+      selectionOutline: (rects) => engine.selectionOutline(rects),
+      isFaintSelection: (rects) => engine.isFaintSelection(rects),
       selectionMaskImage: (rects) => engine.selectionMaskImage(rects),
       adoptSelectionMask: (rects, at, source) => engine.adoptSelectionMask(rects, at, source),
       setColorSpace: (cs) => engine.setColorSpace(cs),
@@ -6395,8 +6400,8 @@ export default function CanvasArea({
   activeLayerIdRef.current = activeLayerId;
   const moveModeRef = useRef(moveMode);
   moveModeRef.current = moveMode;
-  const selHandlersRef = useRef({ onSelectionChange, onSelectionRects, onSelectionPivot });
-  selHandlersRef.current = { onSelectionChange, onSelectionRects, onSelectionPivot };
+  const selHandlersRef = useRef({ onSelectionChange });
+  selHandlersRef.current = { onSelectionChange };
   const nudgeRef = useRef<{
     active: boolean;
     float: boolean;
@@ -6420,14 +6425,12 @@ export default function CanvasArea({
     const sel = selectionRef.current;
     if (sel.length && (d.x !== 0 || d.y !== 0)) {
       const moved = engine.shiftSelection(sel, d.x, d.y); // a soft selection moves soft
-      const h = selHandlersRef.current;
-      if (selAngleRef.current !== 0) {
-        h.onSelectionRects(moved);
-        const piv = selPivotRef.current;
-        if (piv) h.onSelectionPivot({ x: piv.x + d.x, y: piv.y + d.y });
-      } else {
-        h.onSelectionChange(moved);
-      }
+      const piv = selPivotRef.current;
+      selHandlersRef.current.onSelectionChange(
+        moved,
+        selAngleRef.current,
+        piv ? { x: piv.x + d.x, y: piv.y + d.y } : null,
+      );
     }
   }, [engine]);
 
@@ -6467,14 +6470,12 @@ export default function CanvasArea({
       if (outlineOnly) {
         // Selection tools / Move-in-selection-mode nudge the OUTLINE only.
         const moved = engine.shiftSelection(sel, dx, dy);
-        const h = selHandlersRef.current;
-        if (selAngleRef.current !== 0) {
-          h.onSelectionRects(moved);
-          const piv = selPivotRef.current;
-          if (piv) h.onSelectionPivot({ x: piv.x + dx, y: piv.y + dy });
-        } else {
-          h.onSelectionChange(moved);
-        }
+        const piv = selPivotRef.current;
+        selHandlersRef.current.onSelectionChange(
+          moved,
+          selAngleRef.current,
+          piv ? { x: piv.x + dx, y: piv.y + dy } : null,
+        );
         return;
       }
 
@@ -8329,17 +8330,12 @@ export default function CanvasArea({
       // Selection follows whatever moved (float, lifted pixels, or selection-only).
       if (selection.length && (d.x !== 0 || d.y !== 0)) {
         const moved = engine.shiftSelection(selection, d.x, d.y);
-        if (selAngleRef.current !== 0) {
-          // Keep the rotation and shift the pivot with the rects, so a rotated
-          // selection's outline stays locked to its (rotated) pixels. Resetting
-          // the angle here would leave an axis-aligned mask over rotated content,
-          // which later clips it into scanlines.
-          onSelectionRects(moved);
-          const piv = selPivotRef.current;
-          if (piv) onSelectionPivot({ x: piv.x + d.x, y: piv.y + d.y });
-        } else {
-          onSelectionChange(moved);
-        }
+        // Keep the rotation and shift the pivot with the rects, so a rotated
+        // selection's outline stays locked to its (rotated) pixels. Resetting
+        // the angle here would leave an axis-aligned mask over rotated content,
+        // which later clips it into scanlines.
+        const piv = selPivotRef.current;
+        onSelectionChange(moved, selAngleRef.current, piv ? { x: piv.x + d.x, y: piv.y + d.y } : null);
       }
       moveDeltaRef.current = { x: 0, y: 0 };
       const v = viewRef.current;

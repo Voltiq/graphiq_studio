@@ -107,6 +107,7 @@ import {
   fromCoverage,
   growSquare,
   morphRound,
+  peakOf,
   resample as resampleMask,
   shift as shiftMask,
   type SelectionMask,
@@ -551,6 +552,10 @@ export interface EngineHandle {
   selectionCoverageCanvas: (rects: Rect[], angle: number, pivot: { x: number; y: number } | null) => HTMLCanvasElement;
   /** How far a feathered selection's soft edge reaches, for the ants (0 = unknown / hard). */
   selectionSoftness: (rects: Rect[]) => number;
+  /** The selection's outline (the ants' path), traced once and cached. */
+  selectionOutline: (rects: Rect[]) => Seg[];
+  /** Under 50% everywhere: its outline marks half its peak strength. */
+  isFaintSelection: (rects: Rect[]) => boolean;
   /** A soft selection's coverage as a PNG over its bounds (null when hard). */
   selectionMaskImage: (rects: Rect[]) => SavedSelectionMask | null;
   /** Restore a saved soft selection's coverage behind its rects. */
@@ -1696,6 +1701,7 @@ export class PaintEngine extends DocumentScoped {
    *  a live gradient or brush asks for it every frame. */
   private softMaskMemo: {
     rects: Rect[];
+    cov: SelectionMask | null;
     angle: number;
     px: number | null;
     py: number | null;
@@ -3054,6 +3060,54 @@ export class PaintEngine extends DocumentScoped {
     return out.c;
   }
 
+  /**
+   * A selection's outline as merged boundary segments — what the ants trace.
+   * Traced once from its raster, in time linear in its area, and kept with the
+   * selection (by its rects, like its mask). The trace it replaces was a union
+   * of the rects, cubic in their number: Select ▸ Inverse of a large ellipse
+   * froze the page for over two seconds, and again on every undo and redo.
+   */
+  selectionOutline(rects: Rect[]): Seg[] {
+    const hit = this.doc.selectionOutlines.get(rects);
+    if (hit) return hit;
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const r of rects) {
+      x0 = Math.min(x0, Math.floor(r.x));
+      y0 = Math.min(y0, Math.floor(r.y));
+      x1 = Math.max(x1, Math.ceil(r.x + r.w));
+      y1 = Math.max(y1, Math.ceil(r.y + r.h));
+    }
+    let segs: Seg[] = [];
+    if (x1 > x0 && y1 > y0) {
+      const bw = x1 - x0;
+      const bh = y1 - y0;
+      const on = new Uint8Array(bw * bh);
+      for (const r of rects) {
+        const rx0 = Math.floor(r.x) - x0;
+        const rx1 = Math.ceil(r.x + r.w) - x0;
+        for (let y = Math.floor(r.y) - y0; y < Math.ceil(r.y + r.h) - y0; y++) on.fill(1, y * bw + rx0, y * bw + rx1);
+      }
+      segs = maskToSegments(on, bw, bh, { x0: 0, y0: 0, x1: bw, y1: bh }).map((g) => ({
+        x1: g.x1 + x0,
+        y1: g.y1 + y0,
+        x2: g.x2 + x0,
+        y2: g.y2 + y0,
+      }));
+    }
+    this.doc.selectionOutlines.set(rects, segs);
+    return segs;
+  }
+
+  /** Is this a FAINT selection — partly selected everywhere, nowhere 50%? Its
+   *  outline then marks half its peak strength (see selection-mask.ts). */
+  isFaintSelection(rects: Rect[]): boolean {
+    const m = this.coverageOf(rects);
+    return !!m && peakOf(m) < 128;
+  }
+
   /** How far a selection's soft edge reaches either side of its outline, in
    *  px, when an operation that knows it made it (0 otherwise). */
   selectionSoftness(rects: Rect[]): number {
@@ -3222,9 +3276,9 @@ export class PaintEngine extends DocumentScoped {
     const cov = this.coverageOf(rects);
     const memo = this.softMaskMemo;
     if (
-      cov &&
       memo &&
       memo.rects === rects &&
+      memo.cov === cov &&
       memo.angle === angle &&
       memo.px === (pivot?.x ?? null) &&
       memo.py === (pivot?.y ?? null) &&
@@ -3234,9 +3288,12 @@ export class PaintEngine extends DocumentScoped {
       return memo.c; // callers only ever read it or draw from it
     }
     const out = this.buildSelectionMask(rects, cov, angle, pivot);
-    if (cov) {
+    // Kept for every selection, hard ones too: an edit asks for it again and
+    // again while nothing it depends on moves (a live gradient every frame).
+    {
       this.softMaskMemo = {
         rects,
+        cov,
         angle,
         px: pivot?.x ?? null,
         py: pivot?.y ?? null,

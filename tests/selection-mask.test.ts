@@ -13,6 +13,7 @@ import {
   fromCoverage,
   growSquare,
   morphRound,
+  peakOf,
   resample,
   shift,
   slideLine,
@@ -159,9 +160,19 @@ describe("selections from coverage", () => {
     expect(fromCoverage((i) => c[i], 4, 1).rects).toEqual([{ x: 1, y: 0, w: 2, h: 1 }]);
   });
 
-  it("nothing at 50% or more has no outline, so it is empty", () => {
-    const c = new Uint8Array(16).fill(100);
-    expect(fromCoverage((i) => c[i], 4, 4)).toEqual({ rects: [], mask: null });
+  it("a faint selection (under 50% everywhere) still selects, outlined at half its peak", () => {
+    // A 30%-ish blob with a 10% rim: the outline is where it is at least half of 80.
+    const c = new Uint8Array(6 * 3);
+    for (let x = 1; x <= 4; x++) c[1 * 6 + x] = x === 1 || x === 4 ? 25 : 80;
+    const s = fromCoverage((i) => c[i], 6, 3);
+    expect(s.rects).toEqual([{ x: 2, y: 1, w: 2, h: 1 }]);
+    expect(s.mask, "its true strength is kept").not.toBeNull();
+    expect(peakOf(s.mask!)).toBe(80);
+    expect(coverage(s.rects, s.mask, 6, 3)).toEqual(c);
+  });
+
+  it("only a selection with no coverage at all is empty", () => {
+    expect(fromCoverage(() => 0, 4, 4)).toEqual({ rects: [], mask: null });
   });
 });
 

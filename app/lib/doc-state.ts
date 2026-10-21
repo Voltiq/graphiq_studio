@@ -24,6 +24,7 @@ import type { DocSnapshot, HistorySide } from "./paint";
 import type { Rect } from "./view";
 import type { ToneLUTs, ToneLUTs16 } from "./tone";
 import type { SelectionMask } from "./selection-mask";
+import type { Seg } from "./mask-trace";
 
 /** A raster and its 2D context. */
 export interface Layer {
@@ -93,6 +94,9 @@ export class DocumentState {
    *  unchanged through React state, undo and Reselect. A hard selection has no
    *  entry: it is exactly its rects. */
   readonly selectionMasks = new WeakMap<Rect[], SelectionMask>();
+  /** Each selection's outline as boundary segments — the ants' path — traced
+   *  once, keyed the same way. */
+  readonly selectionOutlines = new WeakMap<Rect[], Seg[]>();
   /** Ids this document has put in the engine's SHARED caches (render
    *  products, tiled adjustments, filter products), so closing it can take
    *  exactly those out. A stale id costs nothing: dropping it is a no-op. */
