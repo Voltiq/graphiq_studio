@@ -130,6 +130,8 @@ test.describe("on a phone", () => {
   test("dialogs do not raise the keyboard, iOS has nothing to zoom, numbers get a keypad", async ({ app }) => {
     test.slow(); // ten dialogs
     await app.run("layer-new");
+    await app.run("select-all"); // Feather… applies only to a selection
+    await app.settle(300);
     const DIALOGS = [
       ["File", "New"],
       ["File", "Export as"],

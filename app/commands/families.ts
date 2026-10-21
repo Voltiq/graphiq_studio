@@ -9,9 +9,9 @@
 // menu grows "fx-add-sparkle" and FxKey has no "sparkle", this file stops
 // compiling.
 
-import type { CommandId } from "./menus";
-import type { FxKey } from "./effects";
-import type { FilterType } from "./filters";
+import type { CommandId } from "../lib/menus";
+import type { FxKey } from "../lib/effects";
+import type { FilterType } from "../lib/filters";
 
 /** The part of `T` after prefix `P`. */
 type Suffix<T extends string, P extends string> = T extends `${P}${infer S}` ? S : never;

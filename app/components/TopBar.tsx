@@ -29,10 +29,7 @@ export default function TopBar({
   onMenuAction,
   onSelectTool,
   initialTheme = DEFAULT_THEME,
-  onUndo,
-  onRedo,
-  canUndo = false,
-  canRedo = false,
+  blocked,
   checks,
   shortcutLabels,
   mobile = false,
@@ -47,10 +44,10 @@ export default function TopBar({
   onMenuAction?: (action: string) => void;
   onSelectTool?: (id: ToolId) => void;
   initialTheme?: Theme;
-  onUndo?: () => void;
-  onRedo?: () => void;
-  canUndo?: boolean;
-  canRedo?: boolean;
+  /** The commands that do not apply right now, each with why (command id →
+   *  reason) — commands/registry.ts. Asked on every render, so a menu greys
+   *  what applies at the moment it opens. */
+  blocked?: () => Readonly<Record<string, string>>;
   /** Action ids that are checkable toggles → current on/off state. */
   checks?: Record<string, boolean>;
   /** Effective shortcut labels from the registry ("menu:<action>"/"tool:<id>"
@@ -78,6 +75,11 @@ export default function TopBar({
     if (v === undefined) return fallback;
     return v || undefined; // "" = explicitly unbound → show nothing
   };
+  /* What does not apply right now, and why: one answer for the menus, the
+     phone's document menu, the palette and the header's undo/redo. A greyed
+     row still runs — the editor answers with the reason, as it did before
+     rows greyed — so greying only ever adds information. */
+  const unavailable = blocked?.() ?? {};
   /* Both touch shells collapse the menubar behind the hamburger: at the 44px
      floor its ten names alone are 593px, and the whole bar wanted 1123 — wider
      than an iPad Pro. See globals.scss. */
@@ -284,7 +286,14 @@ export default function TopBar({
               <button type="button" role="menuitem" className={styles.menuItem} onClick={() => docAction("doc-rename")}>
                 <span className={styles.menuLabel}>Rename…</span>
               </button>
-              <button type="button" role="menuitem" className={styles.menuItem} onClick={() => docAction("doc-close")}>
+              <button
+                type="button"
+                role="menuitem"
+                className={styles.menuItem}
+                aria-disabled={unavailable["doc-close"] ? true : undefined}
+                data-tip={unavailable["doc-close"]}
+                onClick={() => docAction("doc-close")}
+              >
                 <span className={styles.menuLabel}>Close</span>
               </button>
             </div>
@@ -347,6 +356,7 @@ export default function TopBar({
                     {col.map(({ item, i }) => {
                       const checkable = item.action != null && checks != null && item.action in checks;
                       const checked = checkable && !!checks?.[item.action!];
+                      const why = item.action ? unavailable[item.action] : undefined;
                       return (
                         <div key={`${item.label}-${i}`} role="none">
                           {item.group && (
@@ -359,7 +369,8 @@ export default function TopBar({
                             className={styles.menuItem}
                             role={checkable ? "menuitemcheckbox" : "menuitem"}
                             aria-checked={checkable ? checked : undefined}
-                            disabled={item.disabled}
+                            aria-disabled={why ? true : undefined}
+                            data-tip={why}
                             onClick={() => {
                               if (item.action) runMenuAction(item.action, checkable);
                               // Keep the menu open when flipping a toggle; close otherwise.
@@ -398,8 +409,8 @@ export default function TopBar({
           type="button"
           className={styles.iconBtn}
           title="Undo (Ctrl+Z)"
-          onClick={onUndo}
-          disabled={!canUndo}
+          onClick={() => onMenuAction?.("undo")}
+          disabled={"undo" in unavailable}
         >
           <Undo2 size={16} />
         </button>
@@ -407,8 +418,8 @@ export default function TopBar({
           type="button"
           className={styles.iconBtn}
           title="Redo (Ctrl+Shift+Z)"
-          onClick={onRedo}
-          disabled={!canRedo}
+          onClick={() => onMenuAction?.("redo")}
+          disabled={"redo" in unavailable}
         >
           <Redo2 size={16} />
         </button>
@@ -454,6 +465,7 @@ export default function TopBar({
           <CommandPalette
             commands={commands}
             checks={checks}
+            blocked={unavailable}
             onClose={() => setPaletteOpen(false)}
           />
         )}

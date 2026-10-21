@@ -1,7 +1,7 @@
 /**
- * Menu commands, end to end, through the typed dispatch table (TODO 1.1).
- * The table's completeness is a compile-time guarantee; this checks that real
- * clicks and real strings reach it, and that the families route.
+ * Menu commands, end to end, through the command registry (TODO 1.1).
+ * Its completeness is a compile-time guarantee; this checks that real clicks
+ * and real strings reach it, and that the families route.
  */
 import { test, expect } from "./fixtures";
 
@@ -18,6 +18,18 @@ test("File ▸ Close on the last document keeps it, and says why", async ({ app 
   await app.menu("File", "Close");
   expect(await app.docs()).toHaveLength(1);
   await expect(app.page.getByText("This is the only open document")).toBeVisible();
+});
+
+/* The one command that opens something which is not a "…" dialog, so the
+   dialog walkers never reach it. */
+test("Help ▸ the tour starts the tour", async ({ app }) => {
+  const tour = app.page.locator('div[aria-label="Interactive tour"]');
+  await expect(tour).toHaveCount(0);
+  // Not app.run: that closes the modal a command opens, and the tour is one.
+  expect(await app.page.evaluate(() => window.graphiq!.run("help-tour"))).toBe(true);
+  await expect(tour).toBeVisible();
+  await app.page.keyboard.press("Escape");
+  await expect(tour).toHaveCount(0);
 });
 
 test("the scripting console refuses an unknown command, and runs a real one", async ({ app }) => {

@@ -13,7 +13,8 @@ export interface PaletteCommand {
   sub: string; // "Tool" or "<Menu> menu"
   shortcut?: string;
   icon?: LucideIcon;
-  /** Menu action id — lets checkable commands (Window toggles) show state. */
+  /** Menu action id — lets checkable commands (Window toggles) show state, and
+   *  greyed ones say why. */
   action?: string;
   run: () => void;
 }
@@ -59,11 +60,16 @@ interface Row {
 export default function CommandPalette({
   commands,
   checks,
+  blocked,
   onClose,
 }: {
   commands: PaletteCommand[];
   /** Action ids that are checkable toggles → current on/off state. */
   checks?: Record<string, boolean>;
+  /** Action ids that do not apply right now → why (commands/registry.ts). Such
+   *  a row is greyed with its reason in place of its menu; choosing it still
+   *  runs it, and the editor answers with the reason. */
+  blocked?: Readonly<Record<string, string>>;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -178,6 +184,7 @@ export default function CommandPalette({
             const Icon = r.cmd.icon;
             const checkable = !!(checks && r.cmd.action && r.cmd.action in checks);
             const checked = checkable && !!checks![r.cmd.action!];
+            const why = r.cmd.action ? blocked?.[r.cmd.action] : undefined;
             return (
               <button
                 key={r.cmd.key}
@@ -188,6 +195,8 @@ export default function CommandPalette({
                 data-idx={i}
                 role="option"
                 aria-selected={i === hi}
+                aria-disabled={why ? true : undefined}
+                data-tip={why}
                 onMouseEnter={() => setHi(i)}
                 onClick={() => run(r.cmd)}
               >
@@ -210,7 +219,7 @@ export default function CommandPalette({
                     {checked ? <Check size={13} strokeWidth={3} /> : null}
                   </span>
                 )}
-                <span className={styles.sub}>{r.cmd.sub}</span>
+                {why ? <span className={styles.why}>{why}</span> : <span className={styles.sub}>{r.cmd.sub}</span>}
                 {r.cmd.shortcut && <span className={styles.shortcut}>{r.cmd.shortcut}</span>}
               </button>
             );

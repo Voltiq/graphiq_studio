@@ -273,17 +273,10 @@ import {
   setRawWorkerEnabled,
 } from "../lib/imageio";
 import { buildZip, type ZipEntry } from "../lib/zip";
-import { isCommandId, type CommandId } from "../lib/menus";
-import {
-  adjustmentOf,
-  effectOf,
-  extraAdjustmentOf,
-  familyOf,
-  filterOf,
-  panelOf,
-  type DirectCommand,
-  type FamilyCommand,
-} from "../lib/commands";
+import { isCommandId } from "../lib/menus";
+import { executeCommand, isRecordable, unavailableCommands } from "../commands/registry";
+import { commandState } from "../commands/state";
+import type { CommandOps, DialogId } from "../commands/ops";
 import { dedupeFilenames, targetFilename } from "../lib/exportpresets";
 import { exportSVG, looksLikeSVG, parseSVGFile, translateVectorPath } from "../lib/svg";
 import { buildPSD, parsePSD, type PsdDocument, type PsdImage, type PsdNode, type PsdOutNode } from "../lib/psd";
@@ -298,7 +291,6 @@ import {
 import {
   actionLabel,
   freshActionId,
-  isRecordable,
   loadActions,
   saveActions,
   strokeStepLabel,
@@ -353,7 +345,7 @@ import {
   frameLabel,
   type AnimImage,
 } from "../lib/animated";
-import { hasAdjustments, type CompareAxis } from "../lib/compare";
+import type { CompareAxis } from "../lib/compare";
 import DialogFocus from "./DialogFocus";
 import FillDialog from "./FillDialog";
 import NewGuideDialog from "./NewGuideDialog";
@@ -6459,10 +6451,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       return next;
     });
 
-  // Playback dispatches through the LATEST handleMenuAction — each step's state
+  // Playback dispatches through the LATEST runCommand — each step's state
   // must commit (and re-point the refs the handlers read) before the next one,
   // hence the ref + the per-step delay.
-  const handleMenuActionRef = useRef<(id: string) => void>(() => {});
+  const runCommandRef = useRef<(id: string) => boolean>(() => false);
   const playAction = async (id: string) => {
     const act = savedActionsRef.current.find((a) => a.id === id);
     if (!act || !act.steps.length || playingRef.current || recordingIdRef.current) return;
@@ -6487,7 +6479,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             d.selectionPivot,
           );
         } else if (step.action) {
-          handleMenuActionRef.current(step.action);
+          runCommandRef.current(step.action);
         }
         await new Promise((r) => setTimeout(r, PLAYBACK_STEP_MS));
       }
@@ -6878,226 +6870,164 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     remove: (id) => patchPaths((list) => list.filter((x) => x.id !== id)),
   };
 
-  const handleMenuAction = (actionId: CommandId) => {
-    // Recording: log replay-safe commands into the armed action (never while
-    // playing back — a played action must not append to itself).
-    if (recordingIdRef.current && !playingRef.current && isRecordable(actionId)) {
-      const rid = recordingIdRef.current;
-      updateActions((ls) =>
-        ls.map((a) =>
-          a.id === rid
-            ? { ...a, steps: [...a.steps, { action: actionId, label: actionLabel(actionId) }] }
-            : a,
-        ),
-      );
-    }
-    const al = active.activeLayerId;
-    const v = viewSettingsRef.current;
-    /* One entry per direct command. Its type makes a missing entry, or one for
-       an id no menu has, a COMPILE error — the if/else chain this replaced could
-       catch neither, and its argument-carrying branches were unchecked casts.
-       Families (panels, adjustments, effects, filters) are below the table. */
-    const direct: { [K in DirectCommand]: () => void } = {
-      "canvas-size": () => openSizeDialog("canvas"),
-      "image-size": () => openSizeDialog("image"),
-      "image-crop": () => cropToSelection(),
-      "image-trim": () => setTrimOpen(true),
-      "image-rotate-cw": () => applyImageTransform("rotate-cw"),
-      "image-rotate-ccw": () => applyImageTransform("rotate-ccw"),
-      "image-flip-h": () => applyImageTransform("flip-h"),
-      "image-flip-v": () => applyImageTransform("flip-v"),
-      "edit-cut": () => cutSelection(),
-      "edit-copy": () => copySelection(),
-      "edit-paste": () => pasteFromClipboard(),
-      "free-transform": () => enterTransform(true),
-      "transform": () => enterTransform(false),
-      "select-all": () => selectAll(),
-      "select-deselect": () => deselect(),
-      "select-reselect": () => reselect(),
-      "select-inverse": () => invertSelection(),
-      "vmask-add": () => addVectorMask(),
-      "pattern-fill": () => setPatternFill(true),
-      "text-on-path": () => setTextPath(true),
-      "text-off-path": () => setTextPath(false),
-      "vmask-invert": () => invertVectorMask(),
-      "vmask-delete": () => deleteVectorMask(),
-      "select-refine": () => openRefineEdge(),
-      "select-border": () => setSelectModify("border"),
-      "select-smooth": () => setSelectModify("smooth"),
-      "select-expand": () => setSelectModify("expand"),
-      "select-contract": () => setSelectModify("contract"),
-      "select-feather": () => setSelectModify("feather"),
-      "select-grow": () => setSelectModify("grow"),
-      "select-save": () => setChannelDialog("save"),
-      "select-load": () => setChannelDialog("load"),
-      "select-quickmask": () => toggleQuickMask(),
-      "new-doc": () => requestNewDoc(),
-      "open": () => openProject(),
-      "open-recent": () => setRecentsOpen(true),
-      "save": () => saveProject(),
-      "save-as": () => setSaveAsOpen(true),
-      "doc-rename": () => setRenameOpen(true),
-      "doc-close": () => {
-        // One canvas always stays open (closeDoc refuses the last one) — say so.
-        if (docs.length <= 1) showToast("This is the only open document, so it stays open.");
-        else closeDoc(activeId);
-      },
-      "view-more-space": () => setMoreSpaceOpen(true),
-      "import": () => openImport(),
-      "export-as": () => openExport(),
-      "export-svg": () => exportVectorSVG(),
-      "export-frames": () => void exportFrames(),
-      "export-psd": () => exportPSD(),
-      "export-lut": () => setLutExportOpen(true),
-      "export-tiff": () => setTiffExportOpen(true),
-      "export-pdf": () => setPdfExportOpen(true),
-      "merge-hdr": () => setHdrMergeOpen(true),
-      "batch-process": () => setBatchOpen(true),
-      "help-tour": () => setTourStep(0),
-      "help-sample": () => openSampleDoc(),
-      "hdr-tone": () => {
-        if (activeDocRef.current.hdr) setHdrToneOpen(true);
-        else
-          showToast(
-            "No HDR source — this works on documents created via File ▸ Merge to HDR (the float map lives in memory, not in .gproj).",
-          );
-      },
-      "export-hdr": () => {
-        if (activeDocRef.current.hdr) setHdrExportOpen(true);
-        else showToast("No HDR source — export true HDR from a document created via File ▸ Merge to HDR.");
-      },
-      "print": () => printCanvas(),
-      "effect-blur": () => openBlurFx(),
-      "effect-liquify": () => openLiquify(),
-      "effect-warp": () => openWarp(),
-      "color-manage": () => openColorDialog(),
-      "color-compare": () => openCompare(),
-      "preferences": () => setPrefsOpen(true),
-      "workspaces": () => setWorkspacesOpen(true),
-      "undo": () => doUndo(),
-      "redo": () => doRedo(),
-      "layer-new": () => addLayerOp(),
-      "fill-solid": () => addFillOp("solid"),
-      "fill-gradient": () => addFillOp("gradient"),
-      "layer-duplicate": () => duplicateSelected(),
-      "layer-delete": () => removeSelected(),
-      "layer-group": () => groupSelected(),
-      "layer-ungroup": () => {
-        if (al) ungroupLayerOp(al);
-      },
-      "frame-from-layer": () => {
-        if (al) frameFromLayerOp(al);
-      },
-      "layer-isolate": () => {
-        toggleIsolate();
-      },
-      "layer-merge-visible": () => mergeVisibleOp(),
-      "layer-stamp-visible": () => stampVisibleOp(),
-      "layer-merge-down": () => mergeSelected(),
-      "layer-flatten": () => flattenImage(),
-      "mask-add": () => addMaskOp("reveal"),
-      "mask-add-hide": () => addMaskOp("hide"),
-      "mask-from-sel": () => addMaskOp("selection"),
-      "mask-delete": () => removeMaskOp(),
-      "mask-apply": () => applyMaskOp(),
-      "mask-to-sel": () => loadMaskAsSelectionOp(),
-      "adj-tone-curves": () => addToneAdjustment("curves"),
-      "adj-tone-levels": () => addToneAdjustment("levels"),
-      "tone-dest-curves": () => openDestructiveTone("curves"),
-      "tone-dest-levels": () => openDestructiveTone("levels"),
-      "fx-open": () => {
-        const id = activeDocRef.current.activeLayerId;
-        if (id) openLayerStyleOp(id);
-      },
-      "fx-clear": () => {
-        const id = activeDocRef.current.activeLayerId;
-        if (id) clearLayerStyleOp(id);
-      },
-      "layer-clip": () => toggleClippingMask(),
-      "filter-open": () => {
-        const id = activeDocRef.current.activeLayerId;
-        if (id) openFiltersOp(id);
-      },
-      "shortcuts": () => setShortcutsOpen(true),
-      "prefs-performance": () => openPrefs("performance"),
-      "prefs-storage": () => openPrefs("storage"),
-      "help-start": () => setHelpOpen("start"),
-      "help-docs": () => setHelpOpen("docs"),
-      "about": () => setAboutOpen(true),
-      "edit-caf": () => contentAwareFillOp(),
-      "view-zoom-in": () => viewApiRef.current?.zoomIn(),
-      "view-zoom-out": () => viewApiRef.current?.zoomOut(),
-      "view-fit": () => viewApiRef.current?.fit(),
-      "view-100": () => viewApiRef.current?.zoom100(),
-      "view-rulers": () => persistView({ rulers: !v.rulers }),
-      "view-grid": () => persistView({ grid: !v.grid }),
-      "view-docgrid": () => persistView({ docgrid: !v.docgrid }),
-      "view-snap": () => persistView({ snap: !v.snap }),
-      "view-guides": () => persistView({ guides: !v.guides }),
-      "view-lock-guides": () => persistView({ lockguides: !v.lockguides }),
-      "view-smart-guides": () => persistView({ smartguides: !v.smartguides }),
-      "view-new-guide": () => setNewGuideOpen(true),
-      "view-clear-guides": () => {
-        if ((activeDocRef.current.guides ?? []).length) commitGuides("Clear Guides", []);
-        else showToast("This document has no guides.");
-      },
-      "view-compare": () => {
-        // Nothing to compare against without adjustments or smart filters — say so
-        // rather than showing a split between two identical halves.
-        if (compareSplit === null && !hasAdjustments(activeDocRef.current.layers)) {
-          showToast("Nothing to compare — add an adjustment layer or a smart filter first.");
-        } else setCompareSplit((s) => (s === null ? 50 : null));
-      },
-      "view-compare-axis": () => {
-        setCompareAxis((a) => (a === "vertical" ? "horizontal" : "vertical"));
-      },
-      "view-proof": () => setProofColors((p) => !p),
-      "view-gamut": () => setGamutWarn((g) => !g),
-      "view-perf-hud": () => setPerfHud((h) => !h),
-      "window-reset": () => {
-        persistPanels({ ...ALL_PANELS });
-        dockRef.current?.apply(null); // factory dock layout: all right, none floating
-      },
-    };
-    if (Object.hasOwn(direct, actionId)) {
-      direct[actionId as DirectCommand]();
-      return;
-    }
-    const f = familyOf(actionId as FamilyCommand);
-    switch (f.kind) {
-      case "panel": {
-        const key: keyof PanelVisibility = panelOf(f.id); // compile-checked: every window-<x> is a panel
-        persistPanels({ ...panels, [key]: !panels[key] });
-        return;
-      }
-      case "extraAdjustment":
-        addExtraAdjustment(extraAdjustmentOf(f.id));
-        return;
-      case "adjustment":
-        addAdjustmentOp(adjustmentOf(f.id));
-        return;
-      case "effect":
-        addEffectOp(effectOf(f.id));
-        return;
-      case "filter":
-        addFilterOp(filterOf(f.id));
-        return;
-    }
+  /* The commands' view of the editor (TODO 1.1). WHICH operation a command
+     performs, and whether it applies right now, live in commands/registry.ts;
+     these are the operations, still here because they close over this
+     component's state until the store lands (TODO 1.5). */
+  const dialogs: { [K in DialogId]: () => void } = {
+    "trim": () => setTrimOpen(true),
+    "pattern-fill": () => setPatternFill(true),
+    "open-recent": () => setRecentsOpen(true),
+    "save-as": () => setSaveAsOpen(true),
+    "rename": () => setRenameOpen(true),
+    "more-space": () => setMoreSpaceOpen(true),
+    "export-lut": () => setLutExportOpen(true),
+    "export-tiff": () => setTiffExportOpen(true),
+    "export-pdf": () => setPdfExportOpen(true),
+    "merge-hdr": () => setHdrMergeOpen(true),
+    "batch": () => setBatchOpen(true),
+    "hdr-tone": () => setHdrToneOpen(true),
+    "export-hdr": () => setHdrExportOpen(true),
+    "preferences": () => setPrefsOpen(true),
+    "workspaces": () => setWorkspacesOpen(true),
+    "shortcuts": () => setShortcutsOpen(true),
+    "about": () => setAboutOpen(true),
+    "new-guide": () => setNewGuideOpen(true),
+    "help-start": () => setHelpOpen("start"),
+    "help-docs": () => setHelpOpen("docs"),
+    "tour": () => setTourStep(0),
   };
-  /** The gate for ids that arrive as plain strings — a menu row, the palette, a
-   *  recorded action read back from storage, the console. An unknown id used to
-   *  fall through the chain doing nothing; now it says so. */
+  /** Run `fn` on the active layer, if there is one. */
+  const onActiveLayer = (fn: (id: string) => void) => {
+    const id = activeDocRef.current.activeLayerId;
+    if (id) fn(id);
+  };
+  const commandOps: CommandOps = {
+    toast: (message) => showToast(message),
+    open: (dialog) => dialogs[dialog](),
+    newDoc: () => requestNewDoc(),
+    openProject: () => openProject(),
+    save: () => saveProject(),
+    closeActiveDoc: () => closeDoc(activeId),
+    openImport: () => openImport(),
+    openExport: () => openExport(),
+    exportSVG: () => exportVectorSVG(),
+    exportFrames: () => void exportFrames(),
+    exportPSD: () => exportPSD(),
+    print: () => printCanvas(),
+    openSample: () => openSampleDoc(),
+    openPrefs: (section) => openPrefs(section),
+    openColorManagement: () => openColorDialog(),
+    openCompareProfiles: () => openCompare(),
+    undo: () => doUndo(),
+    redo: () => doRedo(),
+    cut: () => cutSelection(),
+    copy: () => copySelection(),
+    paste: () => pasteFromClipboard(),
+    contentAwareFill: () => contentAwareFillOp(),
+    sizeDialog: (mode) => openSizeDialog(mode),
+    cropToSelection: () => cropToSelection(),
+    transformImage: (kind) => applyImageTransform(kind),
+    freeTransform: (content) => enterTransform(content),
+    destructiveTone: (tool) => openDestructiveTone(tool),
+    selectAll: () => selectAll(),
+    deselect: () => deselect(),
+    reselect: () => reselect(),
+    invertSelection: () => invertSelection(),
+    refineEdge: () => openRefineEdge(),
+    modifySelection: (kind) => setSelectModify(kind),
+    selectionChannel: (mode) => setChannelDialog(mode),
+    toggleQuickMask: () => toggleQuickMask(),
+    newLayer: () => addLayerOp(),
+    newFill: (kind) => addFillOp(kind),
+    duplicateLayers: () => duplicateSelected(),
+    deleteLayers: () => removeSelected(),
+    groupLayers: () => groupSelected(),
+    ungroupActive: () => onActiveLayer(ungroupLayerOp),
+    frameFromActive: () => onActiveLayer(frameFromLayerOp),
+    toggleIsolate: () => toggleIsolate(),
+    mergeLayers: () => mergeSelected(),
+    mergeVisible: () => mergeVisibleOp(),
+    stampVisible: () => stampVisibleOp(),
+    flatten: () => flattenImage(),
+    toggleClippingMask: () => toggleClippingMask(),
+    addMask: (init) => addMaskOp(init),
+    deleteMask: () => removeMaskOp(),
+    applyMask: () => applyMaskOp(),
+    maskToSelection: () => loadMaskAsSelectionOp(),
+    addVectorMask: () => addVectorMask(),
+    invertVectorMask: () => invertVectorMask(),
+    deleteVectorMask: () => deleteVectorMask(),
+    textOnPath: (attach) => setTextPath(attach),
+    openLayerStyle: () => onActiveLayer(openLayerStyleOp),
+    clearLayerStyle: () => onActiveLayer(clearLayerStyleOp),
+    addEffect: (key) => addEffectOp(key),
+    openSmartFilters: () => onActiveLayer(openFiltersOp),
+    addFilter: (type) => addFilterOp(type),
+    addToneAdjustment: (tool) => addToneAdjustment(tool),
+    addAdjustment: (type) => addAdjustmentOp(type),
+    addExtraAdjustment: (type) => addExtraAdjustment(type),
+    openBlurGallery: () => openBlurFx(),
+    openLiquify: () => openLiquify(),
+    openWarp: () => openWarp(),
+    zoom: (step) => {
+      const view = viewApiRef.current;
+      if (step === "in") view?.zoomIn();
+      else if (step === "out") view?.zoomOut();
+      else if (step === "fit") view?.fit();
+      else view?.zoom100();
+    },
+    toggleView: (key) => persistView({ [key]: !viewSettingsRef.current[key] }),
+    clearGuides: () => commitGuides("Clear Guides", []),
+    toggleCompare: () => setCompareSplit((s) => (s === null ? 50 : null)),
+    toggleCompareAxis: () => setCompareAxis((a) => (a === "vertical" ? "horizontal" : "vertical")),
+    toggleProof: () => setProofColors((p) => !p),
+    toggleGamut: () => setGamutWarn((g) => !g),
+    togglePerfHud: () => setPerfHud((h) => !h),
+    togglePanel: (key) => persistPanels({ ...panels, [key]: !panels[key] }),
+    resetWorkspace: () => {
+      persistPanels({ ...ALL_PANELS });
+      dockRef.current?.apply(null); // factory dock layout: all right, none floating
+    },
+  };
+  /** What decides whether a command applies — read fresh each time it's asked. */
+  const currentCommandState = () =>
+    commandState({
+      doc: activeDocRef.current,
+      docCount: docs.length,
+      historyBack: history.index > 0,
+      historyForward: history.index < history.items.length - 1,
+      floating: !!paintRef.current?.isFloating(),
+      lastSelection: !!lastSelectionRef.current?.rects.length,
+      isolated: isolatedIds !== null,
+      comparing: compareSplit !== null,
+    });
+  /** The commands that do not apply now, with why — what the menus and the
+   *  palette grey out. Asked when they render, so it is never stale. */
+  const blockedCommands = () => unavailableCommands(currentCommandState());
+
+  /** Run a command by id. The menus, the palette, shortcuts, action playback and
+   *  scripts all arrive here with a plain string (recorded steps come back from
+   *  storage), so this is the gate: an unknown id says so, and a command that
+   *  does not apply now does nothing — saying why, unless its reason is quiet.
+   *  Returns whether it ran. */
   const runCommand = (id: string): boolean => {
     if (!isCommandId(id)) {
       console.warn(`Unknown command "${id}"`);
       return false;
     }
-    handleMenuAction(id);
+    if (!executeCommand(id, currentCommandState(), commandOps)) return false;
+    // Recording: log replay-safe commands into the armed action (never while
+    // playing back — a played action must not append to itself).
+    if (recordingIdRef.current && !playingRef.current && isRecordable(id)) {
+      const rid = recordingIdRef.current;
+      updateActions((ls) =>
+        ls.map((a) => (a.id === rid ? { ...a, steps: [...a.steps, { action: id, label: actionLabel(id) }] } : a)),
+      );
+    }
     return true;
   };
-  // Playback and keybindings carry plain strings (recorded steps come back from
-  // storage), so they go through the gate.
-  handleMenuActionRef.current = runCommand;
+  runCommandRef.current = runCommand;
 
   const swapColors = () => {
     const f = fgRef.current;
@@ -7482,7 +7412,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             e.preventDefault();
             if (d.id.startsWith("tool:")) setTool(d.id.slice(5) as ToolId);
             else if (d.id === "cmd:swap-colors") swapColors();
-            else handleMenuActionRef.current(d.id.slice(5));
+            else runCommandRef.current(d.id.slice(5));
             return;
           }
         }
@@ -7700,7 +7630,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     docs,
     activeId,
     setActiveId,
-    handleMenuAction: runCommand,
+    runCommand,
     layersApi,
     foreground,
     setForeground,
@@ -7731,10 +7661,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onSelectTool={setTool}
         shortcutLabels={shortcutLabels}
         initialTheme={initialTheme}
-        onUndo={doUndo}
-        onRedo={doRedo}
-        canUndo={history.index > 0}
-        canRedo={history.index < history.items.length - 1}
+        blocked={blockedCommands}
         checks={{
           "window-color": panels.color,
           "window-swatches": panels.swatches,
@@ -8169,7 +8096,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           floatHost={floatHost}
           dockRef={dockRef}
           onToast={showToast}
-          onCommand={(id) => handleMenuActionRef.current(id)}
+          onCommand={(id) => runCommandRef.current(id)}
         />
       </div>
       {(() => {

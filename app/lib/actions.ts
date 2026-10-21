@@ -1,21 +1,23 @@
 // Actions (macro) model — TODO §13 Actions panel / §14 recorder core.
 //
-// An action is a named list of MENU COMMANDS (the ids `handleMenuAction`
-// dispatches — menus, palette, shortcuts all funnel through it). Recording
-// hooks that one chokepoint; playback re-dispatches the ids with a short gap
-// so React state (and the refs the handlers read) commit between steps.
+// An action is a named list of MENU COMMANDS (the ids the editor's command
+// runner dispatches — menus, palette, shortcuts all funnel through it).
+// Recording hooks that one chokepoint; playback re-dispatches the ids with a
+// short gap so React state (and the refs the handlers read) commit between
+// steps.
 //
 // Honest scope: only commands that complete WITHOUT further input are
-// recordable. Dialog-openers (Export as…, Image size…, the parameterized
-// adjustment/tone editors, smart-filter adds — they open their stack dialog),
-// interactive modes (free transform) and UI-only commands (view/window/help)
-// are deliberately excluded — a recorded action must replay unattended.
+// recordable — `recordable` in commands/registry.ts marks them. Dialog-openers
+// (Export as…, Image size…, the parameterized adjustment/tone editors,
+// smart-filter adds — they open their stack dialog), interactive modes (free
+// transform) and UI-only commands (view/window/help) are deliberately excluded
+// — a recorded action must replay unattended.
 // PAINT STROKES (brush/pencil/eraser) ARE captured as StrokeSteps — settings,
 // colour and the raw pointer path — and replay through the engine's stroke
 // pipeline at the recorded coordinates. Other tools' gestures (clone, heal,
 // gradient drags, shapes, text) and dialog settings remain uncaptured.
 
-import { MENUS, type CommandId } from "./menus";
+import { MENUS } from "./menus";
 import type { BrushSettings } from "./paint";
 
 /** A recorded paint stroke (brush / pencil / eraser): the tool's settings and
@@ -32,7 +34,7 @@ export interface StrokeStep {
 export interface ActionStep {
   /** Label at record time (survives menu renames for display). */
   label: string;
-  /** The handleMenuAction id to dispatch (menu-command steps). */
+  /** The command id to dispatch (menu-command steps). */
   action?: string;
   /** Recorded paint stroke (stroke steps). Exactly one of action/stroke set. */
   stroke?: StrokeStep;
@@ -58,68 +60,6 @@ export const FKEY_CHOICES = ["F2", "F3", "F4", "F6", "F7", "F8", "F9", "F10"] as
 /** Gap between played steps: lets React commit state + re-point the refs the
  *  next handler reads (they update during render). */
 export const PLAYBACK_STEP_MS = 60;
-
-/* Typed as CommandId, so a renamed or removed menu command is a compile error
-   here. It used to be checked by recordableIdsMissingFromMenus(), which nothing
-   ever called. */
-const RECORDABLE_EXACT: ReadonlySet<string> = new Set<CommandId>([
-  "undo",
-  "redo",
-  "edit-cut",
-  "edit-copy",
-  "edit-paste",
-  "edit-caf",
-  "save",
-  "print",
-  "image-crop",
-  "image-rotate-cw",
-  "image-rotate-ccw",
-  "image-flip-h",
-  "image-flip-v",
-  "layer-new",
-  "layer-duplicate",
-  "layer-delete",
-  "layer-group",
-  "layer-ungroup",
-  "layer-merge-down",
-  "frame-from-layer",
-  "layer-merge-visible",
-  "layer-stamp-visible",
-  "layer-flatten",
-  "layer-clip",
-  "mask-add",
-  "mask-add-hide",
-  "mask-from-sel",
-  "mask-delete",
-  "mask-apply",
-  "mask-to-sel",
-  "select-all",
-  "select-deselect",
-  "select-reselect",
-  "select-inverse",
-  // Preset (non-dialog) adjustment layers — the parameterized kinds
-  // (curves/levels/huesat/selective/chanmix/gradientmap/colorlookup) open
-  // their editors, so they are not recordable.
-  "adj-brightness-contrast",
-  "adj-exposure",
-  "adj-vibrance",
-  "adj-color-balance",
-  "adj-black-white",
-  "adj-photo-filter-warm",
-  "adj-photo-filter-cool",
-  "adj-x-invert",
-  "adj-x-equalize",
-  "fx-clear",
-]);
-
-/** fx-add-* adds a layer effect with defaults — no dialog, replayable. */
-const RECORDABLE_PREFIXES = ["fx-add-"];
-
-/** Can this menu command be recorded into an action (replays unattended)? */
-export function isRecordable(action: string): boolean {
-  if (RECORDABLE_EXACT.has(action)) return true;
-  return RECORDABLE_PREFIXES.some((p) => action.startsWith(p));
-}
 
 let labelCache: Map<string, string> | null = null;
 

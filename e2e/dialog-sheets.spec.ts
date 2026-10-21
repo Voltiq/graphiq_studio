@@ -25,10 +25,7 @@ const NOT_DIALOGS = new Map([
   ["File ▸ Export PSD (layered)", "downloads directly"],
   ["File ▸ Export SVG (vector layers)", "downloads directly"],
   ["File ▸ Export frames (zip)", "downloads directly"],
-  ["File ▸ Export HDR PNG", "a toast: no HDR source in a fresh document"],
-  ["Image ▸ HDR tone mapping", "a toast: no HDR source in a fresh document"],
   ["Layer ▸ Adjustment: color lookup (.cube)", "a file picker for the LUT"],
-  ["Select ▸ Refine edge", "needs a selection; a fresh document has none"],
 ]);
 const KB = 300;
 /* The tall ones, for the short-phone and keyboard passes: a short dialog cannot
@@ -145,13 +142,16 @@ async function activate(page: Page, menu: string) {
   throw new Error(`could not open the ${menu} menu`);
 }
 
-/** The enabled rows of `menu` that open a dialog (their label ends in "…"). */
+/** The rows of `menu` that open a dialog (their label ends in "…") and apply
+ *  now. A greyed row is not walked: it opens nothing, by design — the HDR rows
+ *  in a document with no HDR source, say. Its reason is checked in
+ *  command-availability.spec.ts. */
 async function dialogRows(page: Page, menu: string): Promise<string[]> {
   await openSheet(page);
   await activate(page, menu);
   const items = await page.evaluate(() =>
     [...document.querySelectorAll<HTMLButtonElement>('[data-menubar] [role="menu"] button')]
-      .filter((x) => !x.disabled)
+      .filter((x) => !x.disabled && x.getAttribute("aria-disabled") !== "true")
       .map((x) => (x.querySelector("span")?.textContent ?? x.textContent ?? "").trim())
       .filter((label) => /…\s*$/.test(label))
       .map((label) => label.replace(/…\s*$/, "")),
@@ -185,10 +185,14 @@ async function closeDialog(page: Page): Promise<boolean> {
   return !(await page.locator('[role="dialog"]').count());
 }
 
-/** A layer to act on, so layer dialogs are enabled (as the old rail did). */
+/** A layer and a selection to act on, so the layer and selection dialogs
+ *  apply (as the old rail had a layer; Select ▸ Border… and the rest grey
+ *  without a selection). */
 async function withLayer(app: App) {
   await app.page.keyboard.press("Control+Shift+N");
   await app.settle(1100);
+  await app.run("select-all");
+  await app.settle(300);
 }
 
 test.describe("phone 390×844", () => {

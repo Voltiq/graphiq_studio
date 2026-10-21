@@ -69,11 +69,14 @@ export class App {
     });
   }
 
-  /** Click through the menu bar: `menu("Layer", "New layer")`. */
+  /** Click through the menu bar: `menu("Layer", "New layer")`. A row that does
+   *  not apply right now is `aria-disabled` but still answers a click (with its
+   *  reason), as it does for a person; Playwright would wait for it to become
+   *  enabled, hence `force`. */
   async menu(top: string, item: string): Promise<void> {
     await this.page.getByText(top, { exact: true }).first().click();
     await this.settle(200);
-    await this.page.getByText(item, { exact: true }).first().click();
+    await this.page.getByText(item, { exact: true }).first().click({ force: true });
     await this.settle(600);
   }
 

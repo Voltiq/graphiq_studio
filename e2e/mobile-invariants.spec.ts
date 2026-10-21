@@ -191,6 +191,12 @@ test("2: no control sits under the notch or the home indicator", async ({ app })
 test("5: every dialog's primary button can be touched where it sits, and nothing in a dialog is under 44px", async ({ app }) => {
   test.slow(); // every dialog the menus open
   const { page } = app;
+  /* A layer and a selection, so the layer and selection dialogs apply: a fresh
+     document has neither, and a row that does not apply is greyed and opens
+     nothing. */
+  await app.run("layer-new");
+  await app.run("select-all");
+  await app.settle(300);
   const openSheet = async () => {
     if (await page.locator('[data-menubar][data-sheet="true"]').count()) return;
     await page.locator('header button[aria-label="Menu"]').first().click();
@@ -215,7 +221,11 @@ test("5: every dialog's primary button can be touched where it sits, and nothing
     await app.settle(300);
     const items = await page.evaluate(() =>
       [...document.querySelectorAll<HTMLButtonElement>('[data-menubar] [role="menu"] button')]
-        .map((x) => (x.disabled ? "" : (x.querySelector("span")?.textContent ?? x.textContent ?? "").trim()))
+        .map((x) =>
+          x.disabled || x.getAttribute("aria-disabled") === "true"
+            ? "" // greyed: it opens nothing until it applies
+            : (x.querySelector("span")?.textContent ?? x.textContent ?? "").trim(),
+        )
         .filter((l) => /…\s*$/.test(l)),
     );
     for (const it of items) rows.push([m, it.replace(/…\s*$/, "")]);

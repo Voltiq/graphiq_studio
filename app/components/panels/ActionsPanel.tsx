@@ -14,7 +14,7 @@ const NO_KEY = "—";
  * into named, replayable macros (playable from here or an assigned F-key).
  * Recording captures only steps that replay unattended — dialogs, other tools'
  * gestures and view/window toggles are deliberately not recorded
- * (isRecordable in lib/actions.ts; stroke capture in CanvasArea).
+ * (`recordable` in commands/registry.ts; stroke capture in CanvasArea).
  */
 export default function ActionsPanel({ api }: { api: ActionsApi }) {
   const { actions, recordingId, playingId } = api;

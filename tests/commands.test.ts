@@ -1,14 +1,15 @@
 /**
- * The command registry (TODO 1.1). The compile-time half — every menu id has a
- * handler, every handler a menu id, every family suffix a real effect / filter /
- * panel — is the editor's dispatch-table type and was mutation-tested against
- * tsc. This is the runtime half: the gate that plain strings pass through, and
- * the routing that families take once the direct table has said "not mine".
+ * Command ids (TODO 1.1). The compile-time half — every menu id has a command,
+ * every command a menu id, every family suffix a real effect / filter / panel —
+ * is the type of the registry's DIRECT table (commands/registry.ts) and was
+ * mutation-tested against tsc. This is the runtime half: the gate that plain
+ * strings pass through, and the routing that families take once the direct
+ * table has said "not mine". What the commands DO, and when they apply, is
+ * tests/command-registry.test.ts.
  */
 import { describe, expect, it } from "vitest";
 import { MENUS, isCommandId } from "../app/lib/menus";
-import { effectOf, extraAdjustmentOf, familyOf, filterOf, panelOf } from "../app/lib/commands";
-import { isRecordable } from "../app/lib/actions";
+import { effectOf, extraAdjustmentOf, familyOf, filterOf, panelOf } from "../app/commands/families";
 
 const ids = MENUS.flatMap((m) => m.items.map((i) => i.action));
 
@@ -50,12 +51,5 @@ describe("the command registry", () => {
     const extra = ids.find((id) => id.startsWith("adj-x-"));
     expect(extra).toBeDefined();
     expect(familyOf(extra as Parameters<typeof extraAdjustmentOf>[0]).kind).toBe("extraAdjustment");
-  });
-
-  it("only allows recording real commands", () => {
-    // RECORDABLE_EXACT is typed CommandId; this checks the prefix rule too.
-    expect(ids.filter(isRecordable).every(isCommandId)).toBe(true);
-    expect(isRecordable("fx-add-stroke")).toBe(true);
-    expect(isRecordable("export-as")).toBe(false); // opens a dialog: not replayable
   });
 });

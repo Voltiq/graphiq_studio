@@ -1,5 +1,5 @@
-import { MENUS, type Menu } from "./menus";
-import { TOOL_GROUPS, type Tool, type ToolId } from "./tools";
+import { MENUS } from "./menus";
+import { TOOL_GROUPS, type ToolId } from "./tools";
 import type { LucideIcon } from "lucide-react";
 
 /**
@@ -21,7 +21,8 @@ export interface PaletteCommandSpec {
   sub: string;
   shortcut?: string;
   icon?: LucideIcon;
-  /** Menu action id; absent for tools. Lets checkable rows show their state. */
+  /** Menu action id; absent for tools. Lets checkable rows show their state,
+   *  and greyed ones say why. */
   action?: string;
   run: () => void;
 }
@@ -31,32 +32,18 @@ export interface PaletteSources {
   keyFor: (kind: "menu" | "tool", id: string, fallback?: string) => string | undefined;
   onSelectTool?: (id: ToolId) => void;
   onMenuAction?: (action: string) => void;
-  /* Injectable so the tests can feed a fixture. Not a configuration knob — the
-     editor never passes these. It exists because the interesting cases are the
-     ones the live registries do not currently contain: today NO menu item is
-     `disabled`, so a test run against `MENUS` compares an empty set with an
-     empty set and proves nothing about the rule that withholds them. */
-  menus?: readonly Menu[];
-  tools?: Tool[][];
 }
 
 /**
- * Every tool, then every runnable menu command, in menu order.
+ * Every tool, then every menu command, in menu order.
  *
- * `disabled` items are skipped on purpose: they are placeholders with no
- * handler, so offering them in search would be offering a row that does
- * nothing. They remain visible (and greyed) in the menu tree, which is why the
- * coverage property is "palette OR tree" rather than "palette".
+ * All of them, always: a command that does not apply right now is still
+ * offered, greyed with its reason (commands/registry.ts), because a search
+ * that silently omits "Crop" teaches nobody that Crop needs a selection.
  */
-export function buildPaletteCommands({
-  keyFor,
-  onSelectTool,
-  onMenuAction,
-  menus = MENUS,
-  tools = TOOL_GROUPS,
-}: PaletteSources): PaletteCommandSpec[] {
+export function buildPaletteCommands({ keyFor, onSelectTool, onMenuAction }: PaletteSources): PaletteCommandSpec[] {
   const out: PaletteCommandSpec[] = [];
-  for (const t of tools.flat()) {
+  for (const t of TOOL_GROUPS.flat()) {
     out.push({
       key: `tool:${t.id}`,
       label: t.name,
@@ -71,9 +58,9 @@ export function buildPaletteCommands({
      be noise in a search list and share a key, and keys index the palette's
      recents: one would silently shadow the other across reloads. */
   const seen = new Set<string>();
-  for (const menu of menus) {
+  for (const menu of MENUS) {
     for (const item of menu.items) {
-      if (!item.action || item.disabled) continue;
+      if (!item.action) continue;
       const action = item.action;
       const key = `menu:${action}:${item.label}`;
       if (seen.has(key)) continue;
@@ -88,20 +75,5 @@ export function buildPaletteCommands({
       });
     }
   }
-  return out;
-}
-
-/** Every action id the menus declare, runnable or not. */
-export function menuActionIds(menus: readonly Menu[] = MENUS): string[] {
-  const out: string[] = [];
-  for (const menu of menus) for (const item of menu.items) if (item.action) out.push(item.action);
-  return out;
-}
-
-/** Action ids the menus declare but mark `disabled` — tree-only by design. */
-export function disabledActionIds(menus: readonly Menu[] = MENUS): string[] {
-  const out: string[] = [];
-  for (const menu of menus)
-    for (const item of menu.items) if (item.action && item.disabled) out.push(item.action);
   return out;
 }

@@ -35,7 +35,8 @@ export interface ScriptingDeps {
   docs: { id: string; name: string; width: number; height: number }[];
   activeId: string;
   setActiveId: (id: string) => void;
-  handleMenuAction: (action: string) => void;
+  /** Runs a command; whether it ran (commands/registry.ts). */
+  runCommand: (action: string) => boolean;
   layersApi: LayersApi;
   foreground: string;
   setForeground: (hex: string) => void;
@@ -57,7 +58,8 @@ export interface GraphiqScripting {
   activate(docId: string): boolean;
   /** Every executable command id (the same ids menus/palette/actions use). */
   commands(): string[];
-  /** Dispatch a command — identical to clicking it (journaled, undoable). */
+  /** Dispatch a command — identical to clicking it (journaled, undoable).
+   *  False if the id is unknown, or the command does not apply right now. */
   run(actionId: string): boolean;
   /** Layer-tree summary of the active document. */
   layers(): ScriptLayerNode[];
@@ -173,8 +175,7 @@ export function buildScriptingApi(depsRef: { current: ScriptingDeps | null }): G
         console.warn(`graphiq.run: unknown command "${actionId}" — see graphiq.commands()`);
         return false;
       }
-      d.handleMenuAction(actionId);
-      return true;
+      return d.runCommand(actionId);
     },
     layers() {
       const d = deps();

@@ -2,7 +2,6 @@ export interface MenuItem {
   label: string;
   shortcut?: string;
   separatorAfter?: boolean;
-  disabled?: boolean;
   /** Starts a labelled section: a small heading drawn above this row. */
   group?: string;
   /** Starts a new COLUMN in the desktop dropdown (long menus sit side by side
@@ -256,10 +255,12 @@ export const MENUS: readonly Menu[] = MENU_DEFS;
  *  row whose id has no handler, is a COMPILE error in the editor dispatch. */
 export type CommandId = Extract<(typeof MENU_DEFS)[number]["items"][number], { action: string }>["action"];
 
-const COMMAND_IDS: ReadonlySet<string> = new Set(
-  MENU_DEFS.flatMap((m) => m.items.flatMap((i) => ("action" in i ? [i.action] : []))),
-);
+/** Every command id, once each, in menu order. */
+export const COMMAND_IDS: readonly CommandId[] = [
+  ...new Set(MENU_DEFS.flatMap((m) => m.items.flatMap((i) => ("action" in i ? [i.action] : [])))),
+];
+const COMMAND_ID_SET: ReadonlySet<string> = new Set(COMMAND_IDS);
 
 /** Runtime guard for ids that arrive as plain strings: the scripting console,
  *  a recorded action read back from storage. */
-export const isCommandId = (id: string): id is CommandId => COMMAND_IDS.has(id);
+export const isCommandId = (id: string): id is CommandId => COMMAND_ID_SET.has(id);

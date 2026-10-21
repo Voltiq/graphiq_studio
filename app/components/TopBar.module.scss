@@ -205,6 +205,19 @@
   &:hover:not(:disabled) .shortcut {
     color: var(--text-2);
   }
+
+  /* A command that does not apply right now (commands/registry.ts): greyed,
+     with its reason as the tooltip. It is not `disabled` — choosing it still
+     runs it, and the editor answers with that reason. */
+  &[aria-disabled="true"] {
+    color: var(--text-3);
+    cursor: default;
+
+    &:hover,
+    &:active {
+      background: none;
+    }
+  }
 }
 
 .menuLabel {
