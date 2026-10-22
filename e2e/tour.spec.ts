@@ -20,8 +20,26 @@ import { MOBILE_TOUR_STEPS, TOUR_STEPS } from "../app/lib/tour";
 import { PAD } from "../app/lib/tour-layout";
 
 const TOUR = 'div[aria-label="Interactive tour"]';
-/** Long enough for the gentle spring (490ms) to land. */
-const SETTLE = 800;
+/** Wait out the tour's motion: every finite animation in it has ended — the
+ *  spotlight's glide, the card's, the stops sliding past. A fixed sleep (it was
+ *  800ms) read a loaded runner's spotlight mid-glide: a centred stop's hole not
+ *  yet closed. The art's loops (infinite) do not count. */
+async function still(page: Page) {
+  await page.waitForTimeout(120); // let the move start
+  await page.waitForFunction(
+    () => {
+      const tour = document.querySelector('div[aria-label="Interactive tour"]');
+      return (
+        !tour ||
+        tour
+          .getAnimations({ subtree: true })
+          .every((a) => a.playState !== "running" || a.effect?.getComputedTiming().iterations === Infinity)
+      );
+    },
+    null,
+    { timeout: 8_000 },
+  );
+}
 
 type Shot = {
   id: string | null;
@@ -117,7 +135,7 @@ async function firstRun(page: Page) {
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.waitForSelector(TOUR, { timeout: 30_000 });
   await page.addStyleTag({ content: "nextjs-portal{display:none!important}" });
-  await page.waitForTimeout(SETTLE);
+  await still(page);
   return errors;
 }
 
@@ -133,7 +151,7 @@ async function walk(page: Page) {
     if (!s) break;
     lap.push(s);
     await primary(page).click();
-    await page.waitForTimeout(SETTLE);
+    await still(page);
   }
   return { lap, closed: (await shot(page)) === null };
 }
@@ -144,7 +162,7 @@ async function goTo(page: Page, id: string) {
     await page.keyboard.press("ArrowRight");
     await page.waitForTimeout(250);
   }
-  await page.waitForTimeout(SETTLE);
+  await still(page);
   expect((await shot(page))?.id).toBe(id);
 }
 
@@ -206,14 +224,14 @@ test.describe("on a desktop", () => {
 
     // Back to it later: still done, though the tool is put back.
     await page.keyboard.press("ArrowRight");
-    await page.waitForTimeout(SETTLE);
+    await still(page);
     expect((await shot(page))!.id).toBe("options");
     // A stop with nothing to try keeps the keyboard: B does not reach the editor.
     await page.keyboard.press("b");
     await page.waitForTimeout(200);
     expect(await activeTool(page), "a letter on a plain stop stays with the tour").toBe("move");
     await page.keyboard.press("ArrowLeft");
-    await page.waitForTimeout(SETTLE);
+    await still(page);
     expect(await tryDone(page)).toBe("true");
   });
 
@@ -266,25 +284,25 @@ test.describe("on a desktop", () => {
   test("the keyboard and the progress bar move through it; Esc leaves", async ({ page }) => {
     await firstRun(page);
     await page.keyboard.press("ArrowRight");
-    await page.waitForTimeout(SETTLE);
+    await still(page);
     expect((await shot(page))!.id).toBe("topbar");
     await page.keyboard.press("ArrowLeft");
-    await page.waitForTimeout(SETTLE);
+    await still(page);
     expect((await shot(page))!.id).toBe("welcome");
     // Enter on the focused primary is one step, not two.
     await page.keyboard.press("Enter");
-    await page.waitForTimeout(SETTLE);
+    await still(page);
     expect((await shot(page))!.id).toBe("topbar");
     // A segment of the progress bar jumps straight to its stop.
     await page.locator(TOUR).locator('[data-part="progress"] > button').nth(8).click();
-    await page.waitForTimeout(SETTLE);
+    await still(page);
     expect((await shot(page))!.id).toBe(TOUR_STEPS[8].id);
     // A focused Back takes its own Enter: back a stop, not on.
     await page.locator(TOUR).locator("button", { hasText: /^Next$/ }).focus();
     await page.keyboard.press("Shift+Tab");
     expect(await page.evaluate(() => document.activeElement?.textContent?.trim())).toBe("Back");
     await page.keyboard.press("Enter");
-    await page.waitForTimeout(SETTLE);
+    await still(page);
     expect((await shot(page))!.id).toBe(TOUR_STEPS[7].id);
     // Tab stays in the card.
     for (let i = 0; i < 6; i++) {
@@ -302,7 +320,7 @@ test.describe("on a desktop", () => {
   test("Help ▸ Interactive tour takes it again, from the start", async ({ app }) => {
     await app.page.evaluate(() => window.graphiq!.run("help-tour"));
     await expect(app.page.locator(TOUR)).toBeVisible();
-    await app.page.waitForTimeout(SETTLE);
+    await still(app.page);
     expect((await shot(app.page))!.id).toBe("welcome");
     await app.page.keyboard.press("Escape");
     await expect(app.page.locator(TOUR)).toHaveCount(0);
@@ -446,17 +464,17 @@ test.describe("on a phone", () => {
         card.dispatchEvent(ev("pointerup", x + d));
       }, dx);
     await swipe(-140);
-    await page.waitForTimeout(SETTLE);
+    await still(page);
     expect((await shot(page))!.id).toBe("topbar");
     await swipe(-140);
-    await page.waitForTimeout(SETTLE);
+    await still(page);
     expect((await shot(page))!.id).toBe("mobilebar");
     await swipe(140);
-    await page.waitForTimeout(SETTLE);
+    await still(page);
     expect((await shot(page))!.id).toBe("topbar");
     // A short or mostly-vertical drag is not a swipe.
     await swipe(-20);
-    await page.waitForTimeout(SETTLE);
+    await still(page);
     expect((await shot(page))!.id).toBe("topbar");
   });
 });

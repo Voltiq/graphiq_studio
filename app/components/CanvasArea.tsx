@@ -139,6 +139,7 @@ import {
   toggleSmooth,
 } from "../lib/path-edit";
 import type { PendingLoad } from "../lib/project";
+import { createToolControllers, type ToolController, type ToolHost } from "../tools";
 import PerfHud from "./PerfHud";
 
 const ZOOM_STEPS = [
@@ -1643,7 +1644,6 @@ export default function CanvasArea({
   // cursor that's drawn on the overlay (so it scales with zoom + shows hardness).
   const blurRef = useRef(blur);
   blurRef.current = blur;
-  const blurHoverRef = useRef<{ x: number; y: number } | null>(null);
   // Quick-selection brush: latest settings + hover ring + in-stroke state.
   const quickSelectRef = useRef(quickSelect);
   quickSelectRef.current = quickSelect;
@@ -1657,34 +1657,32 @@ export default function CanvasArea({
   smudgeRef.current = smudge;
   const mixerRef = useRef(mixer);
   mixerRef.current = mixer;
-  const smudgeHoverRef = useRef<{ x: number; y: number } | null>(null);
-  const smudgingRef = useRef(false);
   // History brush: latest settings + hover ring + active flag (coverage-lerp
   // stroke — its own begin/move/end, like blur/dodge).
   const historyBrushRef = useRef(historyBrush);
   historyBrushRef.current = historyBrush;
   const historyHoverRef = useRef<{ x: number; y: number } | null>(null);
   const historyingRef = useRef(false);
-  // Spot-heal brush: settings + hover ring + the blob's stroke points (doc
-  // space). The blob is shown as a veil while painting and heals on release.
+  // Latest settings of the tools with a controller, for the brush HUD (the
+  // controllers read theirs from the host).
   const healRef = useRef(heal);
   healRef.current = heal;
-  const healHoverRef = useRef<{ x: number; y: number } | null>(null);
-  const healPtsRef = useRef<{ x: number; y: number }[] | null>(null);
-  // Red-eye tool: latest settings + hover point (ring cursor on the overlay).
   const redEyeRef = useRef(redEye);
   redEyeRef.current = redEye;
-  const redEyeHoverRef = useRef<{ x: number; y: number } | null>(null);
-  // Dodge/Burn brush: latest settings + hover point (brush-ring cursor on overlay).
   const dodgeRef = useRef(dodge);
   dodgeRef.current = dodge;
-  const dodgeHoverRef = useRef<{ x: number; y: number } | null>(null);
-  const dodgingRef = useRef(false);
-  // Sponge brush: latest settings + hover point + active flag.
   const spongeRef = useRef(sponge);
   spongeRef.current = sponge;
-  const spongeHoverRef = useRef<{ x: number; y: number } | null>(null);
-  const spongingRef = useRef(false);
+  // Tool controllers (TODO 1.4, app/tools/): the tools driven entirely by a
+  // controller — each holds its own gesture's state — and the controller whose
+  // gesture is in flight, which gets the rest of it whatever the tool is by
+  // then. The host is rebuilt every render (below the helpers it lends) and
+  // kept here for the overlay loop, which reads everything through refs.
+  const toolControllersRef = useRef<ReturnType<typeof createToolControllers> | null>(null);
+  if (!toolControllersRef.current) toolControllersRef.current = createToolControllers();
+  const toolControllers = toolControllersRef.current;
+  const gestureRef = useRef<ToolController | null>(null);
+  const toolHostRef = useRef<ToolHost | null>(null);
   // Clone stamp: latest settings, the sampled source point (Alt-click), the live
   // source→dest offset, the hover point for the brush ring, and the Alt-held state
   // (which swaps the ring for a "set source" reticle).
@@ -1929,8 +1927,6 @@ export default function CanvasArea({
     py: number;
     box: Rect;
   } | null>(null);
-  // True while a blur-brush stroke is in progress (distinct from paint strokes).
-  const blurringRef = useRef(false);
   const moveRef = useRef<{
     sx: number;
     sy: number;
@@ -3397,39 +3393,10 @@ export default function CanvasArea({
       drawBrushCursor(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
     }
 
-    if (!anchorArmed && toolRef.current === "heal") {
-      // The painted blob: a translucent veil so you see what will be healed.
-      const pts = healPtsRef.current;
-      const hr = Math.max(1, (healRef.current.size / 2) * s);
-      if (pts && pts.length) {
-        ctx.save();
-        ctx.beginPath();
-        for (const q of pts) {
-          ctx.moveTo(p.x + q.x * s + hr, p.y + q.y * s);
-          ctx.arc(p.x + q.x * s, p.y + q.y * s, hr, 0, Math.PI * 2);
-        }
-        ctx.fillStyle = "rgba(0,0,0,0.32)";
-        ctx.fill();
-        ctx.restore();
-      }
-      if (healHoverRef.current) {
-        const hx = p.x + healHoverRef.current.x * s;
-        const hy = p.y + healHoverRef.current.y * s;
-        drawBrushCursor(hx, hy, hr, healRef.current.hardness);
-      }
-    }
-
-    if (!anchorArmed && toolRef.current === "redeye" && redEyeHoverRef.current) {
-      const hx = p.x + redEyeHoverRef.current.x * s;
-      const hy = p.y + redEyeHoverRef.current.y * s;
-      drawBrushCursor(hx, hy, Math.max(1, (redEyeRef.current.size / 2) * s), 100);
-    }
-
-    if (!anchorArmed && toolRef.current === "blur" && blurHoverRef.current) {
-      const b = blurRef.current;
-      const hx = p.x + blurHoverRef.current.x * s;
-      const hy = p.y + blurHoverRef.current.y * s;
-      drawBrushCursor(hx, hy, Math.max(1, (b.size / 2) * s), b.hardness);
+    // A tool with a controller draws its own: a ring, a blob being healed.
+    const toolCtl = toolControllersRef.current?.[toolRef.current];
+    if (!anchorArmed && toolCtl?.drawOverlay && toolHostRef.current) {
+      toolCtl.drawOverlay({ ctx, p, s, ring: drawBrushCursor }, toolHostRef.current);
     }
 
     if (!anchorArmed && toolRef.current === "quickselect" && quickSelectHoverRef.current) {
@@ -3444,31 +3411,6 @@ export default function CanvasArea({
       const hx = p.x + historyHoverRef.current.x * s;
       const hy = p.y + historyHoverRef.current.y * s;
       drawBrushCursor(hx, hy, Math.max(1, (hb.size / 2) * s), hb.hardness);
-    }
-
-    if (
-      !anchorArmed &&
-      (toolRef.current === "smudge" || toolRef.current === "mixer") &&
-      smudgeHoverRef.current
-    ) {
-      const sm = toolRef.current === "mixer" ? mixerRef.current : smudgeRef.current;
-      const hx = p.x + smudgeHoverRef.current.x * s;
-      const hy = p.y + smudgeHoverRef.current.y * s;
-      drawBrushCursor(hx, hy, Math.max(1, (sm.size / 2) * s), sm.hardness);
-    }
-
-    if (!anchorArmed && toolRef.current === "dodge" && dodgeHoverRef.current) {
-      const d = dodgeRef.current;
-      const hx = p.x + dodgeHoverRef.current.x * s;
-      const hy = p.y + dodgeHoverRef.current.y * s;
-      drawBrushCursor(hx, hy, Math.max(1, (d.size / 2) * s), d.hardness);
-    }
-
-    if (!anchorArmed && toolRef.current === "sponge" && spongeHoverRef.current) {
-      const sp = spongeRef.current;
-      const hx = p.x + spongeHoverRef.current.x * s;
-      const hy = p.y + spongeHoverRef.current.y * s;
-      drawBrushCursor(hx, hy, Math.max(1, (sp.size / 2) * s), sp.hardness);
     }
 
     /* Hover is not required for the SOURCE marker, only for the brush ring
@@ -3792,14 +3734,9 @@ export default function CanvasArea({
       (toolRef.current === "crop" && cropBoxRef.current) ||
       ((toolRef.current === "brush" || toolRef.current === "pencil" || toolRef.current === "eraser") &&
         paintHoverRef.current) ||
-      (toolRef.current === "heal" && (healHoverRef.current || healPtsRef.current)) ||
-      (toolRef.current === "redeye" && redEyeHoverRef.current) ||
-      (toolRef.current === "blur" && blurHoverRef.current) ||
+      !!toolControllersRef.current?.[toolRef.current]?.wantsOverlay?.() ||
       (toolRef.current === "quickselect" && quickSelectHoverRef.current) ||
       (toolRef.current === "history" && historyHoverRef.current) ||
-      ((toolRef.current === "smudge" || toolRef.current === "mixer") && smudgeHoverRef.current) ||
-      (toolRef.current === "dodge" && dodgeHoverRef.current) ||
-      (toolRef.current === "sponge" && spongeHoverRef.current) ||
       (toolRef.current === "clone" && (cloneHoverRef.current || cloneSrcRef.current)) ||
       // Move ▸ transform controls: the box is a standing overlay like the ants,
       // so the loop has to stay alive for it — this branch clears the overlay
@@ -5919,6 +5856,17 @@ export default function CanvasArea({
       engine.cancelStroke();
       paintingRef.current = false;
     }
+    // A tool controller's gesture (a retouch stroke, a heal blob) and the
+    // history brush's stroke go too, the layer put back as it was. They used
+    // to survive the pinch, still open: the next contact's moves fed them (a
+    // hovering pen retouched wherever it hovered), and its lift committed.
+    const gesture = gestureRef.current;
+    gestureRef.current = null;
+    if (gesture && toolHostRef.current) gesture.cancel?.(toolHostRef.current);
+    if (historyingRef.current) {
+      engine.endHistory(false);
+      historyingRef.current = false;
+    }
     if (moveRef.current) {
       const { mode, float } = moveRef.current;
       moveRef.current = null;
@@ -6521,6 +6469,31 @@ export default function CanvasArea({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine, commitNudge]);
 
+  /** What a tool controller may see and do: rebuilt every render, so every
+   *  value is the current one (see app/tools/types.ts). */
+  const toolHost: ToolHost = {
+    engine,
+    tool,
+    toDoc,
+    capture: (e) => viewRef.current?.setPointerCapture(e.pointerId),
+    redraw: ensureAnts,
+    activeLayerId,
+    layers,
+    paintBlocked,
+    selection: { rects: selection.length ? selection : null, angle: selectionAngle, pivot: selectionPivot },
+    foreground,
+    settings: { blur, smudge, mixer, dodge, sponge, heal, redEye },
+    zoomToPoint,
+  };
+  toolHostRef.current = toolHost;
+
+  /** Hand a press to the selected tool's controller. Its gesture, if it
+   *  started one, gets the rest of the pointer's events. */
+  const toolDown = (ctl: ToolController, e: React.PointerEvent) => {
+    ctl.down(e, toolHost);
+    if (ctl.busy()) gestureRef.current = ctl;
+  };
+
   const onCanvasPointerDown = (e: React.PointerEvent) => {
     // Recorded before any early return, so the grab radii below are sized for
     // the device that is actually about to be hit-tested.
@@ -6611,10 +6584,9 @@ export default function CanvasArea({
       reportFilterAnchor(e);
       return;
     }
-    if (tool === "zoom") {
-      // Left click zooms in, right click (or Alt) zooms out — toward the cursor.
-      e.preventDefault();
-      zoomToPoint(e.button === 2 || e.altKey ? -1 : 1, e.clientX, e.clientY);
+    const toolCtl = toolControllers[tool];
+    if (toolCtl?.overPan) {
+      toolDown(toolCtl, e);
       return;
     }
     if (tool === "hand" || panMode) {
@@ -6623,6 +6595,10 @@ export default function CanvasArea({
       viewRef.current?.setPointerCapture(e.pointerId);
       handRef.current = { sx: e.clientX, sy: e.clientY, px: panR.current.x, py: panR.current.y };
       setHoverCursor("grabbing");
+      return;
+    }
+    if (toolCtl) {
+      toolDown(toolCtl, e);
       return;
     }
     if (tool === "eyedropper") {
@@ -7146,140 +7122,6 @@ export default function CanvasArea({
         ? { tool, brush: { ...brush }, color: paintCol, points: [{ x: p.x, y: p.y }] }
         : null;
     }
-    if (tool === "heal") {
-      if (!activeLayerId) return; // nothing to heal on an empty doc
-      const healNode = findNode(layers, activeLayerId);
-      if (!healNode || healNode.type !== "layer") return; // pixel leaves only
-      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
-      if (engine.isFloating) engine.commitFloat();
-      e.preventDefault();
-      viewRef.current?.setPointerCapture(e.pointerId);
-      const p = toDoc(e);
-      healPtsRef.current = [{ x: p.x, y: p.y }];
-      healHoverRef.current = { x: p.x, y: p.y };
-      ensureAnts();
-      return;
-    }
-    if (tool === "redeye") {
-      if (!activeLayerId) return;
-      const node = findNode(layers, activeLayerId);
-      if (!node || node.type !== "layer") return; // pixel leaves only
-      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
-      if (engine.isFloating) engine.commitFloat();
-      e.preventDefault();
-      const p = toDoc(e);
-      engine.redEye(
-        activeLayerId,
-        p.x,
-        p.y,
-        redEyeRef.current.size,
-        redEyeRef.current.darken,
-        selection.length ? selection : null,
-        selectionAngle,
-        selectionPivot,
-      );
-      return;
-    }
-    if (tool === "blur") {
-      if (!activeLayerId) return; // nothing to soften on an empty doc
-      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
-      if (engine.isFloating) engine.commitFloat();
-      e.preventDefault();
-      viewRef.current?.setPointerCapture(e.pointerId);
-      blurringRef.current = true;
-      const p = toDoc(e);
-      blurHoverRef.current = { x: p.x, y: p.y };
-      engine.beginBlur(
-        activeLayerId,
-        blur,
-        p.x,
-        p.y,
-        selection.length ? selection : null,
-        selectionAngle,
-        selectionPivot,
-      );
-    }
-    if (tool === "smudge") {
-      if (!activeLayerId) return; // nothing to smudge on an empty doc
-      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
-      if (engine.isFloating) engine.commitFloat();
-      e.preventDefault();
-      viewRef.current?.setPointerCapture(e.pointerId);
-      smudgingRef.current = true;
-      const p = toDoc(e);
-      smudgeHoverRef.current = { x: p.x, y: p.y };
-      // Finger painting seeds the smear with the foreground colour.
-      const fc = smudge.fingerPaint ? parseColor(fgRef.current) : null;
-      engine.beginSmudge(
-        activeLayerId,
-        smudge,
-        p.x,
-        p.y,
-        fc ? { r: fc.r, g: fc.g, b: fc.b, a: Math.round(fc.a * 255) } : null,
-        selection.length ? selection : null,
-        selectionAngle,
-        selectionPivot,
-      );
-    }
-    if (tool === "mixer") {
-      if (!activeLayerId) return; // nothing to paint on in an empty doc
-      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
-      if (engine.isFloating) engine.commitFloat();
-      e.preventDefault();
-      viewRef.current?.setPointerCapture(e.pointerId);
-      smudgingRef.current = true; // the mixer IS a smudge session with a reservoir
-      const p = toDoc(e);
-      smudgeHoverRef.current = { x: p.x, y: p.y };
-      const fc = parseColor(fgRef.current);
-      engine.beginMixer(
-        activeLayerId,
-        mixer,
-        p.x,
-        p.y,
-        { r: fc.r, g: fc.g, b: fc.b, a: Math.round(fc.a * 255) },
-        selection.length ? selection : null,
-        selectionAngle,
-        selectionPivot,
-      );
-    }
-    if (tool === "dodge") {
-      if (!activeLayerId) return; // nothing to dodge/burn on an empty doc
-      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
-      if (engine.isFloating) engine.commitFloat();
-      e.preventDefault();
-      viewRef.current?.setPointerCapture(e.pointerId);
-      dodgingRef.current = true;
-      const p = toDoc(e);
-      dodgeHoverRef.current = { x: p.x, y: p.y };
-      engine.beginDodge(
-        activeLayerId,
-        dodge,
-        p.x,
-        p.y,
-        selection.length ? selection : null,
-        selectionAngle,
-        selectionPivot,
-      );
-    }
-    if (tool === "sponge") {
-      if (!activeLayerId) return; // nothing to sponge on an empty doc
-      if (paintBlocked(activeLayerId)) return; // pixels-locked layer
-      if (engine.isFloating) engine.commitFloat();
-      e.preventDefault();
-      viewRef.current?.setPointerCapture(e.pointerId);
-      spongingRef.current = true;
-      const p = toDoc(e);
-      spongeHoverRef.current = { x: p.x, y: p.y };
-      engine.beginSponge(
-        activeLayerId,
-        sponge,
-        p.x,
-        p.y,
-        selection.length ? selection : null,
-        selectionAngle,
-        selectionPivot,
-      );
-    }
     if (tool === "history") {
       if (!activeLayerId) return; // needs a layer with history to paint from
       if (paintBlocked(activeLayerId)) return; // pixels-locked layer
@@ -7448,46 +7290,11 @@ export default function CanvasArea({
       historyHoverRef.current = { x: cur.x, y: cur.y };
       ensureAnts();
     }
-    // Red-eye: ring cursor tracking.
-    if (toolRef.current === "redeye") {
-      redEyeHoverRef.current = { x: cur.x, y: cur.y };
-      ensureAnts();
-    }
-    // Spot heal: ring cursor + grow the blob while the pointer is down.
-    if (toolRef.current === "heal") {
-      healHoverRef.current = { x: cur.x, y: cur.y };
-      const pts = healPtsRef.current;
-      if (pts) {
-        const last = pts[pts.length - 1];
-        if (Math.hypot(cur.x - last.x, cur.y - last.y) >= Math.max(2, healRef.current.size / 6)) {
-          pts.push({ x: cur.x, y: cur.y });
-        }
-      }
-      ensureAnts();
-    }
-    // Blur: track the pointer so the brush-ring cursor follows it (drawn on the overlay).
-    if (toolRef.current === "blur") {
-      blurHoverRef.current = { x: cur.x, y: cur.y };
-      ensureAnts();
-    }
+    // A tool with a controller: its ring follows the pointer (a heal blob grows).
+    toolControllers[toolRef.current]?.hover?.(cur, e, toolHost);
     // Quick-select: same brush-ring tracking.
     if (toolRef.current === "quickselect") {
       quickSelectHoverRef.current = { x: cur.x, y: cur.y };
-      ensureAnts();
-    }
-    // Smudge / mixer: same brush-ring tracking (one shared session).
-    if (toolRef.current === "smudge" || toolRef.current === "mixer") {
-      smudgeHoverRef.current = { x: cur.x, y: cur.y };
-      ensureAnts();
-    }
-    // Dodge/Burn: same brush-ring tracking.
-    if (toolRef.current === "dodge") {
-      dodgeHoverRef.current = { x: cur.x, y: cur.y };
-      ensureAnts();
-    }
-    // Sponge: same brush-ring tracking.
-    if (toolRef.current === "sponge") {
-      spongeHoverRef.current = { x: cur.x, y: cur.y };
       ensureAnts();
     }
     // Clone: track the pointer + Alt state for the brush ring / source marker.
@@ -8041,29 +7848,10 @@ export default function CanvasArea({
       ensureAnts();
       return;
     }
-    if (blurringRef.current) {
-      const p = toDoc(e);
-      engine.moveBlur(p.x, p.y);
-      return;
-    }
-    if (smudgingRef.current) {
-      const p = toDoc(e);
-      engine.moveSmudge(p.x, p.y);
-      return;
-    }
+    if (gestureRef.current?.move?.(e, toolHost)) return;
     if (historyingRef.current) {
       const p = toDoc(e);
       engine.moveHistory(p.x, p.y);
-      return;
-    }
-    if (dodgingRef.current) {
-      const p = toDoc(e);
-      engine.moveDodge(p.x, p.y);
-      return;
-    }
-    if (spongingRef.current) {
-      const p = toDoc(e);
-      engine.moveSponge(p.x, p.y);
       return;
     }
     if (!paintingRef.current) return;
@@ -8541,22 +8329,11 @@ export default function CanvasArea({
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       return;
     }
-    if (healPtsRef.current) {
-      // Release heals the whole blob in one pass (one history entry).
-      const pts = healPtsRef.current;
-      healPtsRef.current = null;
-      if (activeLayerId && pts.length) {
-        engine.healSpots(
-          activeLayerId,
-          pts,
-          healRef.current.size,
-          healRef.current.hardness,
-          selection.length ? selection : null,
-          selAngleRef.current,
-          selPivotRef.current,
-        );
-      }
-      ensureAnts();
+    // A tool controller's gesture ends with its lift.
+    const gesture = gestureRef.current;
+    if (gesture) {
+      gestureRef.current = null;
+      gesture.up?.(e, toolHost);
     }
     if (qsDraggingRef.current) {
       engine.endQuickSelect();
@@ -8566,25 +8343,9 @@ export default function CanvasArea({
       if (v && v.hasPointerCapture(e.pointerId)) v.releasePointerCapture(e.pointerId);
       ensureAnts();
     }
-    if (blurringRef.current) {
-      engine.endBlur();
-      blurringRef.current = false;
-    }
-    if (smudgingRef.current) {
-      engine.endSmudge();
-      smudgingRef.current = false;
-    }
     if (historyingRef.current) {
       engine.endHistory();
       historyingRef.current = false;
-    }
-    if (dodgingRef.current) {
-      engine.endDodge();
-      dodgingRef.current = false;
-    }
-    if (spongingRef.current) {
-      engine.endSponge();
-      spongingRef.current = false;
     }
     if (paintingRef.current) {
       engine.endStroke();
@@ -8919,32 +8680,13 @@ export default function CanvasArea({
                   paintHoverRef.current = null;
                   ensureAnts();
                 }
-                if (!blurringRef.current) {
-                  blurHoverRef.current = null;
-                  ensureAnts();
-                }
+                for (const c of new Set(Object.values(toolControllers))) c?.leave?.(toolHost);
                 if (!qsDraggingRef.current) {
                   quickSelectHoverRef.current = null;
                   ensureAnts();
                 }
-                if (!smudgingRef.current) {
-                  smudgeHoverRef.current = null;
-                  ensureAnts();
-                }
                 if (!historyingRef.current) {
                   historyHoverRef.current = null;
-                  ensureAnts();
-                }
-                if (!healPtsRef.current) {
-                  healHoverRef.current = null;
-                  ensureAnts();
-                }
-                if (!dodgingRef.current) {
-                  dodgeHoverRef.current = null;
-                  ensureAnts();
-                }
-                if (!spongingRef.current) {
-                  spongeHoverRef.current = null;
                   ensureAnts();
                 }
                 if (!paintingRef.current) {

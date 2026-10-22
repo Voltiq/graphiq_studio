@@ -427,7 +427,8 @@ export interface EngineHandle {
     clipPivot?: { x: number; y: number } | null,
   ) => void;
   moveBlur: (x: number, y: number) => void;
-  endBlur: () => void;
+  /** `commit` false abandons the stroke: pixels back, no history step. */
+  endBlur: (commit?: boolean) => void;
   /** Smudge brush: begin / extend / finish a colour-dragging stroke. */
   beginSmudge: (
     layerId: string,
@@ -453,7 +454,7 @@ export interface EngineHandle {
   /** Empty the loaded brush (tool switch, or the explicit Clean button). */
   cleanMixer: () => void;
   moveSmudge: (x: number, y: number) => void;
-  endSmudge: () => void;
+  endSmudge: (commit?: boolean) => void;
   /** Sponge brush: begin / extend / finish a saturate/desaturate stroke. */
   beginSponge: (
     layerId: string,
@@ -465,7 +466,7 @@ export interface EngineHandle {
     clipPivot?: { x: number; y: number } | null,
   ) => void;
   moveSponge: (x: number, y: number) => void;
-  endSponge: () => void;
+  endSponge: (commit?: boolean) => void;
   /** Blur Gallery: begin / preview / commit / cancel a live blur-effect session. */
   beginBlurFx: (
     ids: string[],
@@ -8039,22 +8040,52 @@ export class PaintEngine extends DocumentScoped {
     this.layer(this.historyLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
   }
 
-  endHistory() {
-    if (!this.historying) return;
-    this.historyLineTo(this.historyLastRaw.x, this.historyLastRaw.y);
-    const D = this.historyDirty;
-    const layerId = this.historyLayer;
-    if (D && layerId != null && this.historyOrig) {
-      const x = Math.max(0, D.x0);
-      const y = Math.max(0, D.y0);
-      const w = Math.min(this.w - 1, D.x1) - x + 1;
-      const h = Math.min(this.h - 1, D.y1) - y + 1;
-      if (w > 0 && h > 0) {
-        const before = this.subImage(this.historyOrig, x, y, w, h);
-        const after = this.layer(layerId).ctx.getImageData(x, y, w, h);
-        this.pushEntry(layerId, { x, y, w, h }, before, after, this.historyLabel);
-      }
+  /**
+   * The end of a retouch stroke — history brush, blur, dodge/burn, sponge,
+   * smudge/mixer. Each paints its target LIVE over a snapshot of how it was
+   * (`orig`), tracking the touched box (`D`). Committed, that box becomes one
+   * history step. Abandoned (`commit` false: a second finger began a pinch),
+   * it goes back to the snapshot and nothing is recorded — what cancelStroke
+   * is to the brush, whose stroke lives in a scratch buffer instead.
+   */
+  private settleRetouch(
+    layerId: string | null,
+    onMask: boolean,
+    orig: ImageData | null,
+    D: { x0: number; y0: number; x1: number; y1: number } | null,
+    label: string,
+    commit: boolean,
+  ) {
+    if (!D || layerId == null || !orig) return;
+    const x = Math.max(0, D.x0);
+    const y = Math.max(0, D.y0);
+    const w = Math.min(this.w - 1, D.x1) - x + 1;
+    const h = Math.min(this.h - 1, D.y1) - y + 1;
+    if (w <= 0 || h <= 0) return;
+    const mid = onMask ? this.maskKeyOf(layerId) : layerId;
+    const target = onMask ? this.masks.get(mid)! : this.layer(layerId);
+    if (!commit) {
+      // The snapshot was read from this very canvas: same size, same colour
+      // space, so putting its sub-rect back is exact. A mask's alpha cache was
+      // refreshed as the stroke went, so it is refreshed back. The pixel
+      // version is left alone: the pixels are again exactly what it describes,
+      // and nothing was cached under it mid-stroke (a live layer bypasses the
+      // cache) — a bump would only throw good caches away.
+      target.ctx.putImageData(orig, 0, 0, x, y, w, h);
+      if (onMask) this.deriveMaskAlpha(mid, { x, y, w, h });
+      return;
     }
+    const before = this.subImage(orig, x, y, w, h);
+    const after = target.ctx.getImageData(x, y, w, h);
+    this.pushEntry(mid, { x, y, w, h }, before, after, label, undefined, onMask ? "mask" : "layer");
+  }
+
+  /** End the history-brush stroke: one step — or, with `commit` false, none,
+   *  and the layer as it was (see settleRetouch). */
+  endHistory(commit = true) {
+    if (!this.historying) return;
+    if (commit) this.historyLineTo(this.historyLastRaw.x, this.historyLastRaw.y);
+    this.settleRetouch(this.historyLayer, false, this.historyOrig, this.historyDirty, this.historyLabel, commit);
     this.historying = false;
     this.historyLayer = null;
     this.historyOrig = null;
@@ -8980,24 +9011,11 @@ export class PaintEngine extends DocumentScoped {
     }
   }
 
-  endBlur() {
+  /** End the blur stroke (`commit` false: abandon it — see settleRetouch). */
+  endBlur(commit = true) {
     if (!this.blurring) return;
-    this.blurLineTo(this.blurLastRaw.x, this.blurLastRaw.y);
-    const D = this.blurDirty;
-    const layerId = this.blurLayer;
-    if (D && layerId != null && this.blurOrig) {
-      const x = Math.max(0, D.x0);
-      const y = Math.max(0, D.y0);
-      const w = Math.min(this.w - 1, D.x1) - x + 1;
-      const h = Math.min(this.h - 1, D.y1) - y + 1;
-      if (w > 0 && h > 0) {
-        const mid = this.blurOnMask ? this.maskKeyOf(layerId) : layerId;
-        const target = this.blurOnMask ? this.masks.get(mid)! : this.layer(layerId);
-        const before = this.subImage(this.blurOrig, x, y, w, h);
-        const after = target.ctx.getImageData(x, y, w, h);
-        this.pushEntry(mid, { x, y, w, h }, before, after, "Blur", undefined, this.blurOnMask ? "mask" : "layer");
-      }
-    }
+    if (commit) this.blurLineTo(this.blurLastRaw.x, this.blurLastRaw.y);
+    this.settleRetouch(this.blurLayer, this.blurOnMask, this.blurOrig, this.blurDirty, "Blur", commit);
     this.blurring = false;
     this.blurOnMask = false;
     this.blurLayer = null;
@@ -9199,25 +9217,12 @@ export class PaintEngine extends DocumentScoped {
     }
   }
 
-  endDodge() {
+  /** End the dodge/burn stroke (`commit` false: abandon it — see settleRetouch). */
+  endDodge(commit = true) {
     if (!this.dodging) return;
-    this.dodgeLineTo(this.dodgeLastRaw.x, this.dodgeLastRaw.y);
-    const D = this.dodgeDirty;
-    const layerId = this.dodgeLayer;
-    if (D && layerId != null && this.dodgeOrig) {
-      const x = Math.max(0, D.x0);
-      const y = Math.max(0, D.y0);
-      const w = Math.min(this.w - 1, D.x1) - x + 1;
-      const h = Math.min(this.h - 1, D.y1) - y + 1;
-      if (w > 0 && h > 0) {
-        const mid = this.dodgeOnMask ? this.maskKeyOf(layerId) : layerId;
-        const target = this.dodgeOnMask ? this.masks.get(mid)! : this.layer(layerId);
-        const before = this.subImage(this.dodgeOrig, x, y, w, h);
-        const after = target.ctx.getImageData(x, y, w, h);
-        const label = this.dodgeOpts?.mode === "burn" ? "Burn" : "Dodge";
-        this.pushEntry(mid, { x, y, w, h }, before, after, label, undefined, this.dodgeOnMask ? "mask" : "layer");
-      }
-    }
+    if (commit) this.dodgeLineTo(this.dodgeLastRaw.x, this.dodgeLastRaw.y);
+    const label = this.dodgeOpts?.mode === "burn" ? "Burn" : "Dodge";
+    this.settleRetouch(this.dodgeLayer, this.dodgeOnMask, this.dodgeOrig, this.dodgeDirty, label, commit);
     this.dodging = false;
     this.dodgeOnMask = false;
     this.dodgeLayer = null;
@@ -9417,24 +9422,11 @@ export class PaintEngine extends DocumentScoped {
     }
   }
 
-  endSponge() {
+  /** End the sponge stroke (`commit` false: abandon it — see settleRetouch). */
+  endSponge(commit = true) {
     if (!this.sponging) return;
-    this.spongeLineTo(this.spongeLastRaw.x, this.spongeLastRaw.y);
-    const D = this.spongeDirty;
-    const layerId = this.spongeLayer;
-    if (D && layerId != null && this.spongeOrig) {
-      const x = Math.max(0, D.x0);
-      const y = Math.max(0, D.y0);
-      const w = Math.min(this.w - 1, D.x1) - x + 1;
-      const h = Math.min(this.h - 1, D.y1) - y + 1;
-      if (w > 0 && h > 0) {
-        const mid = this.spongeOnMask ? this.maskKeyOf(layerId) : layerId;
-        const target = this.spongeOnMask ? this.masks.get(mid)! : this.layer(layerId);
-        const before = this.subImage(this.spongeOrig, x, y, w, h);
-        const after = target.ctx.getImageData(x, y, w, h);
-        this.pushEntry(mid, { x, y, w, h }, before, after, "Sponge", undefined, this.spongeOnMask ? "mask" : "layer");
-      }
-    }
+    if (commit) this.spongeLineTo(this.spongeLastRaw.x, this.spongeLastRaw.y);
+    this.settleRetouch(this.spongeLayer, this.spongeOnMask, this.spongeOrig, this.spongeDirty, "Sponge", commit);
     this.sponging = false;
     this.spongeOnMask = false;
     this.spongeLayer = null;
@@ -9749,32 +9741,13 @@ export class PaintEngine extends DocumentScoped {
     this.mixerState = null;
   }
 
-  endSmudge() {
+  /** End the smudge / mixer stroke (`commit` false: abandon it — see
+   *  settleRetouch). */
+  endSmudge(commit = true) {
     if (!this.smudging) return;
-    this.smudgeLineTo(this.smudgeLastRaw.x, this.smudgeLastRaw.y);
-    const D = this.smudgeDirty;
-    const layerId = this.smudgeLayer;
-    if (D && layerId != null && this.smudgeOrig) {
-      const x = Math.max(0, D.x0);
-      const y = Math.max(0, D.y0);
-      const w = Math.min(this.w - 1, D.x1) - x + 1;
-      const h = Math.min(this.h - 1, D.y1) - y + 1;
-      if (w > 0 && h > 0) {
-        const mid = this.smudgeOnMask ? this.maskKeyOf(layerId) : layerId;
-        const target = this.smudgeOnMask ? this.masks.get(mid)! : this.layer(layerId);
-        const before = this.subImage(this.smudgeOrig, x, y, w, h);
-        const after = target.ctx.getImageData(x, y, w, h);
-        this.pushEntry(
-          mid,
-          { x, y, w, h },
-          before,
-          after,
-          this.smudgeMix ? "Mixer Brush" : "Smudge",
-          undefined,
-          this.smudgeOnMask ? "mask" : "layer",
-        );
-      }
-    }
+    if (commit) this.smudgeLineTo(this.smudgeLastRaw.x, this.smudgeLastRaw.y);
+    const label = this.smudgeMix ? "Mixer Brush" : "Smudge";
+    this.settleRetouch(this.smudgeLayer, this.smudgeOnMask, this.smudgeOrig, this.smudgeDirty, label, commit);
     this.smudging = false;
     this.smudgeOnMask = false;
     this.smudgeLayer = null;
