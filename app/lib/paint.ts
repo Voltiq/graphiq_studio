@@ -273,6 +273,9 @@ export interface HistorySummary {
   snapshots: { id: string; label: string }[];
   /** When set, the History brush sources from THIS snapshot, not `sourceIndex`. */
   sourceSnapshotId: string | null;
+  /** A live fill or pen path is on the canvas, not yet a step (it becomes one
+   *  as it ends): Undo has something to take. */
+  open: boolean;
 }
 
 /** A pinned document state: every owned layer's pixels + masks and the doc size
@@ -1568,11 +1571,7 @@ export class PaintEngine extends DocumentScoped {
   /** Finish whatever live session is open, so its commit lands in the history
    *  of the document it was started in. */
   private endLiveSessions(): void {
-    this.endAdjust();
-    this.endShape();
-    this.endGradient();
-    this.endPath();
-    this.endFill();
+    this.endLive();
     // A pending paste / transform is committed like before any other operation;
     // left floating, it would draw over the next tab and commit into its history.
     if (this.isFloating) this.commitFloat();
@@ -1928,6 +1927,8 @@ export class PaintEngine extends DocumentScoped {
   private fillOrig: Layer | null = null;
   private fillState: { rects: Rect[]; color: string; antialias: boolean } | null = null;
   private fillOnMask = false; // the live bucket fill targets the active layer's mask
+  // The last history summary said a fill or a path was open, so its end is told too.
+  private openTold = false;
   // Cached magic-wand source pixels, reused across live (tolerance) re-runs and
   // dropped on any layer mutation (see invalidateWandSrc).
   private wandSrc: {
@@ -3487,11 +3488,7 @@ export class PaintEngine extends DocumentScoped {
     side?: HistorySide,
     surface: "layer" | "mask" = "layer",
   ) {
-    this.endAdjust(); // any other pixel op finalizes a live adjustment / shape / gradient / path / fill
-    this.endShape();
-    this.endGradient();
-    this.endPath();
-    this.endFill();
+    this.endLive(); // any other pixel op finalizes a live adjustment / shape / gradient / path / fill
     // ── Edit-lock enforcement (the universal pixel-commit chokepoint) ──────────
     // Transform ops (Move/Rotate/Scale) reposition existing pixels — they answer
     // to POSITION lock, guarded at the UI entry, so they're exempt here. Every
@@ -3517,11 +3514,7 @@ export class PaintEngine extends DocumentScoped {
 
   /** Push a structural undo step (no pixel payload — `undo`/`redo` do the work). */
   pushStructural(label: string, undo: () => void, redo: () => void) {
-    this.endAdjust();
-    this.endShape();
-    this.endGradient();
-    this.endPath();
-    this.endFill();
+    this.endLive();
     this.linkEntry({ label, side: { undo, redo } });
     this.trimHistory();
     this.emitHistory();
@@ -3625,6 +3618,7 @@ export class PaintEngine extends DocumentScoped {
    * settings) until the session is finalized by `endShape`. Mirrors the live
    * adjustment session — one coalescing "Shape" history entry; rapid setting
    * tweaks just refresh it. Call repeatedly with the same box to restyle.
+   * `side` rides on that entry (the shape's box becoming the selection).
    */
   liveShape(
     layerId: string,
@@ -3636,6 +3630,7 @@ export class PaintEngine extends DocumentScoped {
     strokeWidth: number,
     radius: number,
     geom?: ShapeGeom,
+    side?: HistorySide,
   ) {
     if (box.w < 1 || box.h < 1) return;
     this.endAdjust(); // a shape and an adjustment / gradient / path / fill can't be live at once
@@ -3667,7 +3662,7 @@ export class PaintEngine extends DocumentScoped {
     this.paintShape(l.ctx, box, angle, kind, fill, stroke, strokeWidth, radius, geom);
     const after = l.ctx.getImageData(b.x, b.y, b.w, b.h);
     if (!this.shapeEntry) {
-      this.shapeEntry = { layerId, rect: b, before: this.shapeOrig!, after, label: "Shape", parent: ROOT };
+      this.shapeEntry = { layerId, rect: b, before: this.shapeOrig!, after, label: "Shape", side, parent: ROOT };
       this.linkEntry(this.shapeEntry);
       this.emitHistory();
     } else {
@@ -3854,6 +3849,7 @@ export class PaintEngine extends DocumentScoped {
       this.pathLayer = layerId;
       this.pathOrig = this.mk(this.w, this.h, true);
       this.pathOrig.ctx.drawImage(l.c, 0, 0);
+      this.emitHistory(); // open: Undo has it to take
     }
     // Restore the pre-path pixels, then stroke the current path on top.
     l.ctx.globalAlpha = 1;
@@ -3884,6 +3880,7 @@ export class PaintEngine extends DocumentScoped {
         this.pushEntry(layerId, b, before, after, "Path");
       }
     }
+    if (this.openTold) this.emitHistory(); // closed with no step to say so (one anchor, a locked layer)
     this.onPathEnd();
   }
 
@@ -3905,6 +3902,7 @@ export class PaintEngine extends DocumentScoped {
       this.fillLayer = layerId;
       this.fillOrig = this.fillOnMask ? this.mkMask(true) : this.mk(this.w, this.h, true);
       this.fillOrig.ctx.drawImage(l.c, 0, 0);
+      this.emitHistory(false); // open: Undo has it to take
     }
     // Restore the pre-fill pixels, then fill the region on top.
     l.ctx.globalAlpha = 1;
@@ -3996,6 +3994,7 @@ export class PaintEngine extends DocumentScoped {
       }
     }
     this.fillOnMask = false;
+    if (this.openTold) this.emitHistory(false); // closed with no step to say so (an empty region)
     this.onFillEnd();
   }
 
@@ -10451,11 +10450,7 @@ export class PaintEngine extends DocumentScoped {
     selAngle = 0,
     selPivot: { x: number; y: number } | null = null,
   ) {
-    this.endAdjust();
-    this.endShape();
-    this.endGradient();
-    this.endPath();
-    this.endFill();
+    this.endLive();
     const orig = new Map<string, ImageData>();
     for (const id of ids) orig.set(id, this.layer(id).ctx.getImageData(0, 0, this.w, this.h));
     let mask: Uint8ClampedArray | null = null;
@@ -10766,12 +10761,17 @@ export class PaintEngine extends DocumentScoped {
   private revert(e: Entry) {
     if (e.before) this.putPatch(e, e.before);
   }
-  jumpTo(target: number) {
-    this.endAdjust(); // finalize a live adjustment / shape / gradient / path / fill before navigating history
+  /** Finalize every live session — adjustment, shape, gradient, path, fill —
+   *  so each is the history step it stands for. */
+  private endLive() {
+    this.endAdjust();
     this.endShape();
     this.endGradient();
     this.endPath();
     this.endFill();
+  }
+  jumpTo(target: number) {
+    this.endLive(); // finalize a live session before navigating history
     // `target` is an ITEMS index (0 = the original document) — node + 1.
     const node = Math.max(ROOT, Math.min(this.entries.length - 1, target - 1));
     // Walk to the states' common ancestor and back down the other side. For a
@@ -10792,10 +10792,15 @@ export class PaintEngine extends DocumentScoped {
     this.emitHistory();
     this.emitChange();
   }
+  /* Both end the live sessions BEFORE they work out where to go. A fill or a
+     path becomes its step only as it ends; asked first, the step before it
+     was taken as the one to undo, and one Undo took both. */
   undo() {
+    this.endLive();
     if (this.cur >= 0) this.jumpTo(this.entries[this.cur].parent + 1);
   }
   redo() {
+    this.endLive();
     // With branches, "forward" is the most recently created continuation of
     // where you are — the branch you were last working on.
     const next = newestChild(this.parents(), this.cur);
@@ -10818,12 +10823,14 @@ export class PaintEngine extends DocumentScoped {
   syncHistory() {
     this.emitHistory();
   }
-  private emitHistory() {
+  private emitHistory(stale = true) {
     // Any history change means layer pixels changed → wand source is stale.
-    this.wandSrc = null;
+    // (Not as a fill opens: it re-runs from the wand's source, the ORIGINAL.)
+    if (stale) this.wandSrc = null;
     this.historySourceIndex = Math.max(0, Math.min(this.entries.length, this.historySourceIndex));
     const parents = this.parents();
     const live = new Set(ancestry(parents, this.cur));
+    this.openTold = !!this.fillLayer || !!this.pathLayer;
     this.onHistory({
       items: [
         { label: "New", onPath: true }, // the original state is on every path
@@ -10835,6 +10842,7 @@ export class PaintEngine extends DocumentScoped {
       sourceIndex: this.historySourceIndex,
       snapshots: this.snapshots.map((s) => ({ id: s.id, label: s.label })),
       sourceSnapshotId: this.historySourceSnap,
+      open: this.openTold,
     });
   }
 

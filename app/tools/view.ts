@@ -7,6 +7,8 @@ import type { ToolController } from "./types";
 export function zoomTool(): ToolController {
   return {
     overPan: true, // a tap zooms even with pan mode on
+    cursor: "zoom-in",
+    rightButton: true, // zooms out
     down(e, h) {
       e.preventDefault();
       h.zoomToPoint(e.button === 2 || e.altKey ? -1 : 1, e.clientX, e.clientY);

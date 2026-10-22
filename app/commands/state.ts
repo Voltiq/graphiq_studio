@@ -30,6 +30,8 @@ export interface CommandInputs {
   historyForward: boolean;
   /** A paste or move is floating, uncommitted (Undo cancels it). */
   floating: boolean;
+  /** A live fill or pen path is not yet a history step (Undo takes it). */
+  openEdit: boolean;
   /** A previous selection is remembered for Reselect. */
   lastSelection: boolean;
   /** Isolate mode is on for this document. */
@@ -78,7 +80,7 @@ export function commandState(i: CommandInputs): CommandState {
   const workPath = (d.paths ?? []).find((p) => p.id === WORK_PATH_ID) ?? (d.paths ?? [])[0];
   return {
     docCount: i.docCount,
-    canUndo: i.historyBack || i.floating,
+    canUndo: i.historyBack || i.floating || i.openEdit,
     canRedo: i.historyForward,
     hasSelection: d.selection.length > 0,
     canReselect: i.lastSelection && d.selection.length === 0,

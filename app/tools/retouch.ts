@@ -4,6 +4,7 @@
 // pointer, and stays put while it is outside the canvas mid-stroke.
 
 import { parseColor } from "../lib/color";
+import { confined } from "./shared";
 import type { Pt, ToolController, ToolHost } from "./types";
 
 interface Retouch {
@@ -23,6 +24,7 @@ function retouch(r: Retouch): ToolController {
   /** Where the ring is (doc px); null = not over the canvas. */
   let hover: Pt | null = null;
   return {
+    cursor: "none", // the ring is drawn on the overlay instead
     down(e, h) {
       const id = h.activeLayerId;
       if (!id) return; // nothing to retouch on an empty doc
@@ -60,7 +62,7 @@ function retouch(r: Retouch): ToolController {
       hover = null;
       h.redraw();
     },
-    drawOverlay(o, h) {
+    drawCursor(o, h) {
       if (!hover) return;
       const { p, s } = o;
       const t = r.tip(h);
@@ -68,12 +70,10 @@ function retouch(r: Retouch): ToolController {
       const hy = p.y + hover.y * s;
       o.ring(hx, hy, Math.max(1, (t.size / 2) * s), t.hardness);
     },
-    wantsOverlay: () => !!hover,
+    wantsOverlay: (selected) => selected && !!hover,
     busy: () => active,
   };
 }
-
-const confined = (h: ToolHost) => [h.selection.rects, h.selection.angle, h.selection.pivot] as const;
 
 export const blurTool = (): ToolController =>
   retouch({

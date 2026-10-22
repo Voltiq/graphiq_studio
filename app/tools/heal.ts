@@ -10,6 +10,7 @@ export function healTool(): ToolController {
   let pts: Pt[] | null = null;
   let hover: Pt | null = null;
   return {
+    cursor: "none", // the ring is drawn on the overlay instead
     down(e, h) {
       const id = h.activeLayerId;
       if (!id) return; // nothing to heal on an empty doc
@@ -64,7 +65,7 @@ export function healTool(): ToolController {
       hover = null;
       h.redraw();
     },
-    drawOverlay(o, h) {
+    drawCursor(o, h) {
       const { ctx, p, s } = o;
       const hr = Math.max(1, (h.settings.heal.size / 2) * s);
       if (pts && pts.length) {
@@ -84,7 +85,7 @@ export function healTool(): ToolController {
         o.ring(hx, hy, hr, h.settings.heal.hardness);
       }
     },
-    wantsOverlay: () => !!(hover || pts),
+    wantsOverlay: (selected) => selected && !!(hover || pts),
     busy: () => pts !== null,
   };
 }

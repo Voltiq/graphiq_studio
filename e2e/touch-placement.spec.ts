@@ -472,6 +472,16 @@ test("an Alt-tap leaves a clone source a finger can see, drag onto the target an
   await tap(target.x + 3, target.y + 3);
   const near = await docPixel(app, feature.x + 3, feature.y + 3);
   expect(carriesSource(near), `a press NEAR the source without Alt paints instead of moving it: ${near}`).toBe(true);
+
+  // The grab ended with its lift: a stroke dragged now paints, and does not
+  // carry the source along with it (the next press still clones the target).
+  await app.touchDown(target.x + 30, target.y - 50);
+  for (let i = 1; i <= 8; i++) await app.touchMove(target.x + 30 + i * 5, target.y - 50, 1);
+  await app.touchUp();
+  await app.settle(700);
+  await tap(target.x - 50, target.y + 50);
+  const later = await docPixel(app, feature.x - 50, feature.y + 50);
+  expect(carriesSource(later), `the source stays where it was dropped, through a drag: ${later}`).toBe(true);
 });
 
 test.describe("on a desktop", () => {

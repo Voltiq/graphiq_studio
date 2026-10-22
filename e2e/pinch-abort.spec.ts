@@ -161,6 +161,9 @@ const RETOUCH = [
   { tool: "Smudge", key: "f", live: true },
   { tool: "History brush", key: "k", live: true },
   { tool: "Spot heal", key: "j", live: false },
+  /* The brush paints a scratch buffer until the lift (nothing in the file
+     yet); the pinch throws it away. */
+  { tool: "Brush", key: "b", live: false },
 ];
 
 for (const r of RETOUCH as { tool: string; key: string; live: boolean; under?: string; mask?: boolean }[]) {
@@ -230,7 +233,102 @@ for (const r of RETOUCH as { tool: string; key: string; live: boolean; under?: s
     for (let i = 1; i <= 10; i++) await app.touches("touchMove", [{ x: c.x - i * 12, y: c.y }]);
     await app.touches("touchEnd", []);
     await app.settle(1_500);
-    expect(await composite(page), "the next stroke changes the picture").not.toBe(before);
+    // A heal is worked out off the main thread: under load it lands later.
+    await expect
+      .poll(() => composite(page), { message: "the next stroke changes the picture", timeout: 10_000 })
+      .not.toBe(before);
     expect(await historySteps(app), "...as exactly one step").toBe(steps + 1);
+  });
+}
+
+/** Ink on the overlay canvases (the ruler, the crop's shield, a fill's
+ *  preview, a text box being dragged out, the ants). */
+const overlayInk = (page: Page) =>
+  page.evaluate(async () => {
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    let n = 0;
+    for (const ov of [...document.querySelectorAll("canvas")].filter((c) => /overlay/i.test(c.className))) {
+      const d = ov.getContext("2d")!.getImageData(0, 0, ov.width, ov.height).data;
+      for (let i = 3; i < d.length; i += 4) if (d[i]) n++;
+    }
+    return n;
+  });
+
+/* What the old abort never ended — a measure or crop drag, a quick-select
+   stroke, a bucket's or a text press, an Eyedropper sample — kept the pointer
+   after a pinch: the next pointer over the canvas carried on with it (a mouse
+   here; on a tablet, a pen hovering). Now a pinch ends each, back as it was
+   before the press. */
+const SESSIONS: { tool: string; keys: string[]; corner?: boolean; oracle: "ink" | "crop" | "selection" | "colour" }[] = [
+  { tool: "Measure", keys: ["i", "Shift+I"], oracle: "ink" },
+  // (The crop's shield inks every pixel of the overlay, whatever the box: its
+  // box is read by applying it.)
+  { tool: "Crop", keys: ["c"], corner: true, oracle: "crop" },
+  { tool: "Quick selection", keys: ["w", "Shift+W"], oracle: "selection" },
+  { tool: "Paint bucket", keys: ["g"], oracle: "ink" },
+  { tool: "Text", keys: ["t"], oracle: "ink" },
+  { tool: "Eyedropper", keys: ["i"], oracle: "colour" },
+];
+
+for (const s of SESSIONS) {
+  test(`a pinch ends the ${s.tool} tool's press — as it was before, and nothing follows the next pointer`, async ({ app }) => {
+    const { page } = app;
+    // Two blocks of paint: the press lands on the first, the next pointer ends on the second.
+    await app.run("layer-new");
+    for (const [hex, r] of [
+      ["#d02060", { x: 760, y: 340, w: 400, h: 400 }],
+      ["#30c050", { x: 100, y: 100, w: 300, h: 300 }],
+    ] as const) {
+      await app.setForeground(hex);
+      await page.evaluate((r) => window.graphiq!.select([r]), r);
+      await app.key("Backspace");
+    }
+    await app.run("select-deselect");
+    await app.setForeground("#20a0d0");
+    for (const k of s.keys) await app.key(k);
+    const doc = await page.evaluate(() => window.graphiq!.docs().find((d) => d.active)!);
+    const b = await app.canvasBox();
+    const c = s.corner
+      ? { x: Math.round(b.x + 2), y: Math.round(b.y + 2) }
+      : { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) };
+    const ink = await overlayInk(page);
+    // One finger presses and drags...
+    await app.touches("touchStart", [c]);
+    for (let i = 1; i <= 5; i++) await app.touches("touchMove", [{ x: c.x + i * 10, y: c.y + i * 6 }]);
+    await app.settle(200);
+    if (s.oracle === "ink") expect(await overlayInk(page), "the press shows").not.toBe(ink);
+    const colour = await page.evaluate(() => window.graphiq!.foreground());
+    if (s.oracle === "colour") expect(colour, "the press samples the block").not.toBe("#20a0d0");
+    // ...and a second finger lands: a pinch.
+    const at = { x: c.x + 50, y: c.y + 30 };
+    await app.touches("touchStart", [at, { x: at.x + 100, y: at.y }]);
+    await app.settle(150);
+    for (let i = 1; i <= 5; i++)
+      await app.touches("touchMove", [
+        { x: at.x - i * 8, y: at.y },
+        { x: at.x + 100 + i * 8, y: at.y },
+      ]);
+    await app.touches("touchEnd", []);
+    await app.settle(800);
+    await app.run("view-fit"); // the pinch zoomed in: bring the whole canvas back into reach
+    await app.settle(400);
+    if (s.oracle === "ink") expect(await overlayInk(page), "back as it was before the press").toBe(ink);
+    // The next pointer crosses the canvas, to the second block.
+    const v = await app.canvasBox();
+    const to = (x: number, y: number) => [v.x + (x / doc.width) * v.width, v.y + (y / doc.height) * v.height] as const;
+    await page.mouse.move(...to(doc.width * 0.5, doc.height * 0.9));
+    await page.mouse.move(...to(250, 250), { steps: 8 });
+    await app.settle(400);
+    if (s.oracle === "ink") expect(await overlayInk(page), "nothing follows it").toBe(ink);
+    if (s.oracle === "colour")
+      expect(await page.evaluate(() => window.graphiq!.foreground()), "it samples nothing").toBe(colour);
+    if (s.oracle === "selection")
+      expect(await page.evaluate(() => window.graphiq!.run("select-deselect")), "nothing selected").toBe(false);
+    if (s.oracle === "crop") {
+      await app.key("Enter");
+      await app.settle(800);
+      const now = await page.evaluate(() => window.graphiq!.docs().find((d) => d.active)!);
+      expect([now.width, now.height], "the box as it was: the whole canvas").toEqual([doc.width, doc.height]);
+    }
   });
 }

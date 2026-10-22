@@ -6,6 +6,7 @@ import type { Pt, ToolController } from "./types";
 export function redEyeTool(): ToolController {
   let hover: Pt | null = null;
   return {
+    cursor: "none", // the ring is drawn on the overlay instead
     down(e, h) {
       const id = h.activeLayerId;
       if (!id) return;
@@ -27,14 +28,14 @@ export function redEyeTool(): ToolController {
       hover = null;
       h.redraw();
     },
-    drawOverlay(o, h) {
+    drawCursor(o, h) {
       if (!hover) return;
       const { p, s } = o;
       const hx = p.x + hover.x * s;
       const hy = p.y + hover.y * s;
       o.ring(hx, hy, Math.max(1, (h.settings.redEye.size / 2) * s), 100);
     },
-    wantsOverlay: () => !!hover,
+    wantsOverlay: (selected) => selected && !!hover,
     busy: () => false,
   };
 }

@@ -827,6 +827,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     sourceIndex: 0,
     snapshots: [],
     sourceSnapshotId: null,
+    open: false,
   });
   // Any history movement means unsaved work (autosave + status-bar indicator).
   const historyInitRef = useRef(true);
@@ -6947,6 +6948,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       historyBack: history.index > 0,
       historyForward: history.index < history.items.length - 1,
       floating: !!paintRef.current?.isFloating(),
+      openEdit: history.open,
       lastSelection: !!lastSelectionRef.current?.rects.length,
       isolated: isolatedIds !== null,
       comparing: compareSplit !== null,

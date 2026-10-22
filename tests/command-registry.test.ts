@@ -41,6 +41,7 @@ function inputs(over: Over = {}): CommandInputs {
     historyBack: false,
     historyForward: false,
     floating: false,
+    openEdit: false,
     lastSelection: false,
     isolated: false,
     comparing: false,
@@ -121,10 +122,12 @@ describe("when each command applies", () => {
       expect(why(id), id).toBe("ok");
   });
 
-  it("undo and redo follow the history — and a floating paste can always be undone", () => {
+  it("undo and redo follow the history — and a floating paste or a live fill can always be undone", () => {
     expect(why("undo")).toBe("quiet:Nothing to undo.");
     expect(ok("undo", { historyBack: true })).toBe(true);
     expect(ok("undo", { floating: true })).toBe(true);
+    expect(ok("undo", { openEdit: true }), "a live fill or path, not yet a step").toBe(true);
+    expect(ok("redo", { openEdit: true }), "...is nothing to redo").toBe(false);
     expect(why("redo")).toBe("quiet:Nothing to redo.");
     expect(ok("redo", { historyForward: true })).toBe(true);
   });
