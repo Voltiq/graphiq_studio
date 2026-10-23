@@ -14,6 +14,9 @@ import type { ToolPrefs } from "../app/lib/toolPrefs";
 import { ALL_PANELS, createView, restoreView, setPanels, setViewFlags } from "../app/state/view";
 import { createDialogs, openDialog, openPrefs, openSize } from "../app/state/dialogs";
 import { activeDoc, createDocuments, makeDoc } from "../app/state/documents";
+import { createPrefs, restorePrefs, updatePrefs } from "../app/state/prefs";
+import { DEFAULT_PREFS } from "../app/lib/prefs";
+import { DEFAULT_BLUR_FX } from "../app/lib/tools";
 
 /**
  * The editor's stores (TODO 1.5, app/state): the store itself, and the options
@@ -399,5 +402,44 @@ describe("the documents", () => {
     expect(activeDoc(d.get())).toBe(second);
     d.set({ activeId: "doc-7" });
     expect(activeDoc(d.get())).toBe(d.get().docs[0]);
+  });
+});
+
+describe("Preferences", () => {
+  it("start from the defaults, are restored whole, and are saved whole on each change", () => {
+    const prefs = createPrefs();
+    expect(prefs.get()).toEqual(DEFAULT_PREFS);
+    expect(prefs.get(), "a copy, not the defaults themselves").not.toBe(DEFAULT_PREFS);
+    restorePrefs(prefs, () => ({ ...DEFAULT_PREFS, unit: "cm", snapDistance: 12 }));
+    expect([prefs.get().unit, prefs.get().snapDistance]).toEqual(["cm", 12]);
+    const saved: unknown[] = [];
+    updatePrefs(prefs, { gridSpacing: 32 }, (p) => saved.push(p));
+    expect(prefs.get().gridSpacing).toBe(32);
+    expect(saved).toEqual([{ ...DEFAULT_PREFS, unit: "cm", snapDistance: 12, gridSpacing: 32 }]);
+    updatePrefs(prefs, { gridSpacing: 32 }, (p) => saved.push(p));
+    expect(saved, "saved even when nothing changed, as before").toHaveLength(2);
+  });
+
+  it("restoring the defaults changes nothing a component would hear", () => {
+    const prefs = createPrefs();
+    const heard = vi.fn();
+    prefs.subscribe(heard);
+    restorePrefs(prefs, () => DEFAULT_PREFS);
+    expect(heard).not.toHaveBeenCalled();
+  });
+});
+
+describe("the dialog sessions", () => {
+  it("start closed, with the Blur Gallery's defaults", () => {
+    const d = createDialogs().get();
+    expect([d.blurFxOpen, d.blurFx, d.compareComposite, d.pasteSrc, d.toneEdit, d.liquify, d.rawAsk]).toEqual([
+      false,
+      DEFAULT_BLUR_FX,
+      undefined,
+      null,
+      null,
+      null,
+      null,
+    ]);
   });
 });

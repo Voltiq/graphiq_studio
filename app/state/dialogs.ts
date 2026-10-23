@@ -8,9 +8,41 @@
 // first.
 
 import type { DialogId, SelectModify } from "../commands/ops";
+import type { ImportItem } from "../components/ImportDialog";
+import type { EyedropKind } from "../components/LevelsDialog";
+import type { PasteDest } from "../components/PasteDialog";
+import type { AutosaveSnapshot } from "../lib/autosave";
+import type { RawDevelopOptions } from "../lib/dng";
+import type { ChannelHistogram } from "../lib/paint";
+import type { RawSession } from "../lib/rawdev";
+import type { RefineEdge } from "../lib/refine-edge";
+import type { ToneAdjustment } from "../lib/tone";
+import { DEFAULT_BLUR_FX, type BlurFxSettings } from "../lib/tools";
 import type { HelpStart } from "../components/HelpDialog";
 import type { PrefsTab } from "../components/PreferencesDialog";
 import { createStore, type Store } from "./store";
+
+/** What a paste asks about: the picture, and where it goes when already decided. */
+export interface PasteSrc {
+  source: ImageBitmap | HTMLCanvasElement;
+  w: number;
+  h: number;
+  /** Destination already decided (Preferences default) — the dialog only asks
+      the oversized-image canvas-size question. */
+  dest?: PasteDest;
+}
+
+/** Curves or Levels: on an adjustment layer's node, or as a destructive pass. */
+export type ToneEdit =
+  | { mode: "node"; tool: "curves" | "levels"; layerId: string }
+  | { mode: "dest"; tool: "curves" | "levels"; layerId: string; spec: ToneAdjustment };
+
+/** A layer lifted out for Liquify or Warp. */
+export interface LayerSession {
+  layerId: string;
+  name: string;
+  canvas: HTMLCanvasElement;
+}
 
 export interface DialogState {
   trim: boolean;
@@ -45,6 +77,37 @@ export interface DialogState {
   channel: "save" | "load" | null;
   /** Select ▸ Modify, and which. */
   selectModify: SelectModify | null;
+
+  // The editing sessions: dialogs opened ON something, holding it while open.
+  blurFxOpen: boolean;
+  /** The Blur Gallery's settings — kept between openings. */
+  blurFx: BlurFxSettings;
+  /** The composited result of the live blur preview, shown inside the gallery. */
+  blurPreview: HTMLCanvasElement | null;
+  /** View ▸ Compare profiles: the composite it compares (undefined: closed). */
+  compareComposite: HTMLCanvasElement | null | undefined;
+  pasteSrc: PasteSrc | null;
+  /** Export: the composite being exported. */
+  exportComposite: HTMLCanvasElement | null;
+  importItems: ImportItem[] | null;
+  refine: { source: HTMLCanvasElement; mask: HTMLCanvasElement; initial: RefineEdge } | null;
+  /** A fill layer's dialog. */
+  fillEdit: { layerId: string } | null;
+  toneEdit: ToneEdit | null;
+  toneHist: ChannelHistogram | null;
+  /** A Levels eyedropper armed: the next canvas click samples. */
+  tonePick: EyedropKind | null;
+  /** An extra adjustment's dialog. */
+  extraEdit: { layerId: string } | null;
+  /** The layer whose Layer style / Smart filters dialog is open. */
+  layerStyleTarget: string | null;
+  filterTarget: string | null;
+  /** An unclean exit's snapshot, offered for restoring. */
+  restoreSnap: AutosaveSnapshot | null;
+  liquify: LayerSession | null;
+  warping: LayerSession | null;
+  /** A raw file asking how to develop it, and the answer it waits for. */
+  rawAsk: { session: RawSession; name: string; resolve: (o: RawDevelopOptions | null) => void } | null;
 }
 
 export const createDialogs = (): Store<DialogState> =>
@@ -76,6 +139,25 @@ export const createDialogs = (): Store<DialogState> =>
     sizeMode: "canvas",
     channel: null,
     selectModify: null,
+    blurFxOpen: false,
+    blurFx: DEFAULT_BLUR_FX,
+    blurPreview: null,
+    compareComposite: undefined,
+    pasteSrc: null,
+    exportComposite: null,
+    importItems: null,
+    refine: null,
+    fillEdit: null,
+    toneEdit: null,
+    toneHist: null,
+    tonePick: null,
+    extraEdit: null,
+    layerStyleTarget: null,
+    filterTarget: null,
+    restoreSnap: null,
+    liquify: null,
+    warping: null,
+    rawAsk: null,
   });
 
 /** What each of the commands' dialogs opens (the tour is not a dialog here). */

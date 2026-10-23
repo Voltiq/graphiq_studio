@@ -39,7 +39,7 @@ import { coerceBlendingOptions, type KnockoutMode } from "../lib/knockout";
 import { textFxCount } from "../lib/text-fx";
 import { DEFAULT_GLOBAL_LIGHT, sanitizeGlobalLight, type GlobalLight } from "../lib/global-light";
 import { extractICCProfile } from "../lib/icc";
-import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
+import { type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
 import { styleToPatch, type LayerStylePreset } from "../lib/styleio";
 import {
@@ -87,7 +87,7 @@ import { registerRecovery } from "../lib/crash";
 import { dismissTop, registerDismissible } from "../lib/dismiss";
 import { installModifierInjection } from "../lib/modifiers";
 import { DEFAULT_PATH_TEXT } from "../lib/textpath";
-import { registerRawDeveloper, type RawSession } from "../lib/rawdev";
+import { registerRawDeveloper } from "../lib/rawdev";
 import RawDevelopDialog from "./RawDevelopDialog";
 import PatternFillDialog, { type PatternFillResult } from "./PatternFillDialog";
 import type { RawDevelopOptions } from "../lib/dng";
@@ -97,8 +97,9 @@ import { EditorStoresProvider, createEditorStores } from "../state/editor";
 import { useStore } from "../state/store";
 import { brushOf, persistToolOptions, restoreToolOptions } from "../state/toolOptions";
 import { ALL_PANELS, restoreView, setPanels, setViewFlags, type ViewFlags } from "../state/view";
-import { openDialog, openPrefs as openPrefsOn, openSize } from "../state/dialogs";
+import { openDialog, openPrefs as openPrefsOn, openSize, type ToneEdit } from "../state/dialogs";
 import { makeDoc, type Doc } from "../state/documents";
+import { restorePrefs, updatePrefs as updatePrefsIn } from "../state/prefs";
 import { brushKey, stepHardness, stepSize } from "../lib/brush-keys";
 import {
   cleanChannelName,
@@ -125,7 +126,6 @@ import {
 } from "../lib/align";
 import {
   BLUR_FX_LABELS,
-  DEFAULT_BLUR_FX,
   DEFAULT_TOOL,
   measureInfo,
   type BlurFxScope,
@@ -179,7 +179,6 @@ import {
 } from "../lib/layers";
 import type {
   BrushSettings,
-  ChannelHistogram,
   EngineHandle,
   ImageTransform,
   LeafSnapshot,
@@ -366,15 +365,6 @@ import {
 } from "../lib/tone";
 import { extractMetadata, type ImageMetadata } from "../lib/metadata";
 import { embedMetadata, type ExportMetadata } from "../lib/metadata-write";
-
-interface PasteSrc {
-  source: ImageBitmap | HTMLCanvasElement;
-  w: number;
-  h: number;
-  /** Destination already decided (Preferences default) — the dialog only asks
-      the oversized-image canvas-size question. */
-  dest?: PasteDest;
-}
 
 /** A layer selection: the primary (active) id plus the full selected set. */
 type Sel = { active: string | null; selected: string[] };
@@ -612,6 +602,25 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     sizeMode: sizeDialogMode,
     channel: channelDialog,
     selectModify,
+    blurFxOpen,
+    blurFx,
+    blurPreview,
+    compareComposite,
+    pasteSrc,
+    exportComposite,
+    importItems,
+    refine: refineOpen,
+    fillEdit,
+    toneEdit,
+    toneHist,
+    tonePick,
+    extraEdit,
+    layerStyleTarget,
+    filterTarget,
+    restoreSnap,
+    liquify,
+    warping,
+    rawAsk,
   } = useStore(dialogStore, (d) => d);
   const setTrimOpen = dialogStore.setter("trim");
   const setPatternFill = dialogStore.setter("patternFill");
@@ -639,6 +648,25 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const setSizeDialogOpen = dialogStore.setter("size");
   const setChannelDialog = dialogStore.setter("channel");
   const setSelectModify = dialogStore.setter("selectModify");
+  const setBlurFxOpen = dialogStore.setter("blurFxOpen");
+  const setBlurFx = dialogStore.setter("blurFx");
+  const setBlurPreview = dialogStore.setter("blurPreview");
+  const setCompareComposite = dialogStore.setter("compareComposite");
+  const setPasteSrc = dialogStore.setter("pasteSrc");
+  const setExportComposite = dialogStore.setter("exportComposite");
+  const setImportItems = dialogStore.setter("importItems");
+  const setRefineOpen = dialogStore.setter("refine");
+  const setFillEdit = dialogStore.setter("fillEdit");
+  const setToneEdit = dialogStore.setter("toneEdit");
+  const setToneHist = dialogStore.setter("toneHist");
+  const setTonePick = dialogStore.setter("tonePick");
+  const setExtraEdit = dialogStore.setter("extraEdit");
+  const setLayerStyleTarget = dialogStore.setter("layerStyleTarget");
+  const setFilterTarget = dialogStore.setter("filterTarget");
+  const setRestoreSnap = dialogStore.setter("restoreSnap");
+  const setLiquify = dialogStore.setter("liquify");
+  const setWarping = dialogStore.setter("warping");
+  const setRawAsk = dialogStore.setter("rawAsk");
   const { foreground, background, activeSlot } = useStore(colorStore, (c) => c);
   const setForeground = colorStore.setter("foreground");
   const setBackground = colorStore.setter("background");
@@ -696,7 +724,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // Perspective-crop quad (tl, tr, br, bl in doc coords); non-null only while the
   // crop tool's Perspective mode is on. Seeded from the box, then dragged freely.
   const [cropQuad, setCropQuad] = useState<CropQuad | null>(null);
-  const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFS);
+  // Preferences: a store (TODO 1.5, app/state/prefs.ts) the canvas reads too.
+  const prefsStore = stores.prefs;
+  const prefs = useStore(prefsStore, (p) => p);
   // Preferences section to open on — Settings ▸ Performance / Scratch disks
   // deep-link their tabs; plain Preferences… re-opens wherever you last were.
   const openPrefs = (tab?: PrefsTab) => openPrefsOn(dialogStore, tab);
@@ -726,10 +756,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (!r.ok) showToast(r.message);
     return r.ok;
   };
-  const [blurFxOpen, setBlurFxOpen] = useState(false);
-  const [blurFx, setBlurFx] = useState<BlurFxSettings>(DEFAULT_BLUR_FX);
-  // The composited result of the live blur preview, shown inside the gallery dialog.
-  const [blurPreview, setBlurPreview] = useState<HTMLCanvasElement | null>(null);
   const blurFxSessionRef = useRef<string[] | null>(null);
   const blurFxTimerRef = useRef(0);
   const blurFxOpenRef = useRef(false);
@@ -737,13 +763,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
   // Load persisted preferences once on the client (localStorage is unavailable on the server).
-  useEffect(() => setPrefs(loadPrefs()), []);
-  const updatePrefs = (patch: Partial<Preferences>) =>
-    setPrefs((p) => {
-      const next = { ...p, ...patch };
-      savePrefs(next);
-      return next;
-    });
+  useEffect(() => restorePrefs(prefsStore), [prefsStore]);
+  const updatePrefs = (patch: Partial<Preferences>) => updatePrefsIn(prefsStore, patch);
   const history = useStore(docStore, (d) => d.history);
   // Any history movement means unsaved work (autosave + status-bar indicator).
   const historyInitRef = useRef(true);
@@ -885,7 +906,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setTool("crop");
   };
   const [proofTarget, setProofTargetState] = useState<ProofTarget>("srgb");
-  const [compareComposite, setCompareComposite] = useState<HTMLCanvasElement | null | undefined>(undefined);
   const [adjust, setAdjust] = useState<Adjustments>(DEFAULT_ADJUST);
   const [adjustFilter, setAdjustFilter] = useState("Original");
   const marqueeShapeRef = useRef(marqueeShape);
@@ -900,12 +920,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     restoreToolOptions(colorStore, toolStore, loadToolPrefs());
     return stop;
   }, [colorStore, toolStore]);
-  const [pasteSrc, setPasteSrc] = useState<PasteSrc | null>(null);
   const setPendingPaste = docStore.setter("pendingPaste");
   const pendingLoads = useStore(docStore, (d) => d.pendingLoads);
   const setPendingLoads = docStore.setter("pendingLoads");
-  const [exportComposite, setExportComposite] = useState<HTMLCanvasElement | null>(null);
-  const [importItems, setImportItems] = useState<ImportItem[] | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   // Internal clipboard fallback (used if the OS clipboard write/read fails).
@@ -1516,11 +1533,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   // ---- Refine edge ----
-  const [refineOpen, setRefineOpen] = useState<{
-    source: HTMLCanvasElement;
-    mask: HTMLCanvasElement;
-    initial: RefineEdge;
-  } | null>(null);
   const openRefineEdge = () => {
     const d = activeDocRef.current;
     if (!d.selection.length) {
@@ -2243,13 +2255,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   // ---- Fill layers ---------------------------------------------------------
-  const [fillEdit, setFillEdit] = useState<{ layerId: string } | null>(null);
   // The Fill editor closes the moment its layer goes away (delete / undo).
   useEffect(() => {
     if (!fillEdit) return;
     const n = findNode(active.layers, fillEdit.layerId);
     if (!n || n.type !== "layer" || !n.fill) setFillEdit(null);
-  }, [active.layers, fillEdit]);
+  }, [active.layers, fillEdit, setFillEdit]);
   // A default fill spec for a new fill layer of the given kind (uses the current
   // colours so it's immediately meaningful, then opens the editor to tweak).
   const defaultFill = (kind: "solid" | "gradient"): FillSpec =>
@@ -2441,12 +2452,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     activeAdjustment && activeAdjustment.adjustment.type === "sliders" ? activeAdjustment.adjustment : null;
 
   // ---- Curves & Levels (tone) ----------------------------------------------
-  type ToneEdit =
-    | { mode: "node"; tool: "curves" | "levels"; layerId: string }
-    | { mode: "dest"; tool: "curves" | "levels"; layerId: string; spec: ToneAdjustment };
-  const [toneEdit, setToneEdit] = useState<ToneEdit | null>(null);
-  const [toneHist, setToneHist] = useState<ChannelHistogram | null>(null);
-  const [tonePick, setTonePick] = useState<EyedropKind | null>(null);
   const toneEditRef = useRef<ToneEdit | null>(null);
   toneEditRef.current = toneEdit;
   const tonePickRef = useRef<EyedropKind | null>(null);
@@ -2498,7 +2503,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   // ---- Extra adjustment layers (Hue/Sat, Selective, Mixer, Gradient Map,
   //      Color Lookup, Invert, Equalize) --------------------------------------
-  const [extraEdit, setExtraEdit] = useState<{ layerId: string } | null>(null);
   const extraSpec: ExtraAdjustment | null = (() => {
     if (!extraEdit) return null;
     const n = findNode(active.layers, extraEdit.layerId);
@@ -2686,7 +2690,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   }, [toneKey]);
 
   // ---- Layer effects (styles) ----------------------------------------------
-  const [layerStyleTarget, setLayerStyleTarget] = useState<string | null>(null);
   const [fxClipboard, setFxClipboard] = useState<LayerEffects | null>(null);
   // Live FX-edit session: one undoable step per drag gesture (debounced).
   const fxEditRef = useRef<{ layerId: string; beforeTree: LayerNode[]; selBefore: Sel } | null>(null);
@@ -2894,7 +2897,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   // ---- Smart filters (Spec 07) ---------------------------------------------
-  const [filterTarget, setFilterTarget] = useState<string | null>(null);
   // Live filter-edit session: one undoable step per drag gesture (debounced).
   const filterEditRef = useRef<{ layerId: string; beforeTree: LayerNode[]; selBefore: Sel } | null>(null);
   const filterEditTimer = useRef(0);
@@ -4017,7 +4019,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     ok: false,
   });
   const autosaveDirtyRef = useRef(false); // history moved since the last write
-  const [restoreSnap, setRestoreSnap] = useState<AutosaveSnapshot | null>(null);
 
   /* ---- The phone's start card -------------------------------------------
      Shown over an UNTOUCHED document only: one document, no layers, and no
@@ -4132,7 +4133,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     const stopHeartbeat = installHeartbeat();
     if (unclean) void readAutosave().then((s) => s && setRestoreSnap(s));
     return stopHeartbeat;
-  }, []);
+  }, [setRestoreSnap]);
 
   /** Every open document, serialized now, in tab order (active one refreshed
    *  from the engine; inactive ones can't have changed since they were cached).
@@ -4983,7 +4984,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   // ---- Liquify (modal warp-mesh editor on the active pixel layer) ----------
-  const [liquify, setLiquify] = useState<{ layerId: string; name: string; canvas: HTMLCanvasElement } | null>(null);
   const openLiquify = () => {
     const d = activeDocRef.current;
     const id = d.activeLayerId;
@@ -5000,7 +5000,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (!canvas) return;
     setLiquify({ layerId: id!, name: node.name, canvas });
   };
-  const [warping, setWarping] = useState<{ layerId: string; name: string; canvas: HTMLCanvasElement } | null>(null);
   const openWarp = () => {
     const d = activeDocRef.current;
     const id = d.activeLayerId;
@@ -6327,11 +6326,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
      it asks through a registry, and this holds the asking open until the person
      answers. The promise's `resolve` is the whole state: no dialog is mounted
      unless a RAW is waiting on one. */
-  const [rawAsk, setRawAsk] = useState<{
-    session: RawSession;
-    name: string;
-    resolve: (o: RawDevelopOptions | null) => void;
-  } | null>(null);
   useEffect(
     () =>
       registerRawDeveloper(
@@ -6340,7 +6334,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             setRawAsk({ session, name, resolve }),
           ),
       ),
-    [],
+    [setRawAsk],
   );
   const channelsOf = (): SavedChannel[] => activeDocRef.current.channels ?? [];
   const setChannels = (docId: string, next: SavedChannel[]) =>
@@ -7375,7 +7369,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onViewport={setViewport}
           mobile={mobile}
           tool={tool}
-          gradientSnap={prefs.gradientSnap}
           onPickLayer={(id) => layersApi.select(id, "replace")}
           onPlaceText={placeText}
           onUpdateText={updateText}
@@ -7421,36 +7414,12 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           recordStrokes={!!recordingId}
           onStrokeRecord={recordStrokeStep}
           colorSpace={colorSpace}
-          unit={prefs.unit}
           docDpi={active.dpi ?? 300}
-          checkerSize={prefs.checkerSize}
-          checkerColors={prefs.checkerColors}
-          checkerA={prefs.checkerA}
-          checkerB={prefs.checkerB}
-          docGrid={
-            showDocGrid
-              ? {
-                  spacing: prefs.gridSpacing,
-                  subdivisions: prefs.gridSubdivisions,
-                  color: prefs.gridColor,
-                }
-              : null
-          }
-          pixelGridColor={prefs.pixelGridColor}
-          snapDistance={prefs.snapDistance}
           guides={active.guides ?? EMPTY_GUIDES}
           onGuidesCommit={commitGuides}
-          penPressure={prefs.penPressure}
-          pressureCurve={prefs.pressureCurve}
-          palmRejection={prefs.palmRejection}
           compareSplit={compareSplit}
           compareAxis={compareAxis}
           onCompareSplit={setCompareSplit}
-          cursorPrefs={{
-            mode: prefs.paintCursor,
-            crosshair: prefs.brushCrosshair,
-            ringColor: prefs.ringColor,
-          }}
           onBrushHud={setBrushHud}
           viewApiRef={viewApiRef}
           paintRef={paintRef}
@@ -7559,16 +7528,10 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             tool={tool}
             zoom={zoom}
             onZoomChange={setZoom}
-            width={active.width}
-            height={active.height}
             colorSpace={colorSpace}
-            unit={prefs.unit}
-            dpi={active.dpi ?? 300}
-            layerCount={collectLeafIds(active.layers).length}
             isolatedCount={isolatedHiding}
             onExitIsolate={() => setIsolate(null)}
             saveState={saveState}
-            selection={active.selection}
             measure={tool === "measure" ? measure : null}
             subscribeCursor={subscribeCursor}
           />

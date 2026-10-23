@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { ArrowLeftRight, Minus, Plus, X } from "lucide-react";
 import styles from "./CanvasArea.module.scss";
 import type { WorkingSpace } from "../lib/colorspace";
 import { budgets, overlayDpr } from "../lib/budgets";
-import { checkerCSS, type CheckerColors, type CheckerSize, type MeasureUnit } from "../lib/prefs";
+import { checkerCSS } from "../lib/prefs";
 import type { StrokeStep } from "../lib/actions";
 import { baseRunStyle, effectiveWeight, fontFeatureCSS, stretchKeyword } from "../lib/richtext";
 import {
@@ -55,7 +55,6 @@ import {
   palmDown,
   palmUp,
   rejectsPointer,
-  type PressureCurve,
 } from "../lib/pointer";
 import {
   bypassAdjustments,
@@ -68,7 +67,7 @@ import { clampPan, KEEP, type Pan, type Rect } from "../lib/view";
 import { coveredFrom, readStageInsets, visibleStage } from "../lib/stage-area";
 import type { ColorSampler } from "../lib/samplers";
 import type { GestureReadout } from "../lib/samplers";
-import { useColors, useDocuments, useEditorStores, useToolOptions, useView } from "../state/editor";
+import { useColors, useDocuments, useEditorStores, usePrefs, useToolOptions, useView } from "../state/editor";
 import { setViewFlags } from "../state/view";
 import { brushOf, slotColor } from "../state/toolOptions";
 import type {
@@ -528,7 +527,6 @@ export default function CanvasArea({
   statusHost,
   tool,
   panMode = false,
-  gradientSnap,
   onPickLayer,
   onPlaceText,
   onUpdateText,
@@ -566,24 +564,12 @@ export default function CanvasArea({
   recordStrokes,
   onStrokeRecord,
   colorSpace,
-  unit = "px",
   docDpi = 300,
-  checkerSize = "medium",
-  checkerColors = "auto",
-  checkerA = "#ffffff",
-  checkerB = "#cccccc",
-  docGrid,
-  pixelGridColor,
-  snapDistance,
   guides,
   onGuidesCommit,
-  penPressure,
-  pressureCurve,
-  palmRejection,
   compareSplit,
   compareAxis,
   onCompareSplit,
-  cursorPrefs,
   onBrushHud,
   viewApiRef,
   paintRef,
@@ -617,9 +603,6 @@ export default function CanvasArea({
    *  otherwise means switching to the Hand tool and back for each adjustment.
    *  The tool itself is untouched — the toolbar still shows what it showed. */
   panMode?: boolean;
-  /** Gradient: its handles snap (Preferences). The tools' other options and
-   *  the colours come from the editor's stores (TODO 1.5). */
-  gradientSnap: boolean;
   /** Make `id` the active layer (auto-select's pick). */
   onPickLayer: (id: string) => void;
   /** Commit a finished text block: creates a layer and rasterizes it (Editor). */
@@ -689,36 +672,15 @@ export default function CanvasArea({
   recordStrokes: boolean;
   onStrokeRecord: (stroke: StrokeStep) => void;
   colorSpace: WorkingSpace;
-  unit?: MeasureUnit;
   docDpi?: number;
-  /** Transparency grid (Preferences ▸ Transparency): square size + colours. */
-  checkerSize?: CheckerSize;
-  checkerColors?: CheckerColors;
-  checkerA?: string;
-  checkerB?: string;
-  /** Document grid overlay (View ▸ Document grid) — null = hidden. */
-  docGrid: { spacing: number; subdivisions: number; color: string } | null;
-  /** Pixel-grid line colour (Preferences ▸ Guides & grid). */
-  pixelGridColor: string;
-  /** Snap pull distance in screen px (shape-node symmetry snaps, guide snapping). */
-  snapDistance: number;
   /** This document's ruler guides (View ▸ Show guides). */
   guides: Guide[];
   /** Commit a guide edit as one undoable step (label shows in the History panel). */
   onGuidesCommit: (label: string, next: Guide[]) => void;
-  /** Honour stylus pressure (Preferences ▸ Touch & pen). */
-  penPressure: boolean;
-  /** How hard you must press for full size/flow. */
-  pressureCurve: PressureCurve;
-  /** Ignore touch for TOOL input once a stylus has been used (gestures still work). */
-  palmRejection: boolean;
   /** Before/after split: divider position 0-100, or null when compare is off. */
   compareSplit: number | null;
   compareAxis: CompareAxis;
   onCompareSplit: (pct: number) => void;
-  /** Paint-cursor prefs (Preferences ▸ Cursors): ring vs precise, centre
-   *  crosshair, ring colour. */
-  cursorPrefs: { mode: "ring" | "precise"; crosshair: boolean; ringColor: string };
   /** On-canvas brush HUD (Alt + right-drag): the new size, and the new hardness
    *  for the tools that have one. Editor routes it to the active tool. */
   onBrushHud: (size: number, hardness: number | null) => void;
@@ -756,6 +718,38 @@ export default function CanvasArea({
   const onRevealGuides = () => setViewFlags(view, { guides: true });
   // The tools' options and the colours: the editor's stores (TODO 1.5).
   const { tools, colors, view, documents } = useEditorStores();
+  // Preferences the canvas applies (TODO 1.5): the checkerboard, the grids,
+  // snapping, the pen and the cursors.
+  const {
+    gradientSnap,
+    unit,
+    checkerSize,
+    checkerColors,
+    checkerA,
+    checkerB,
+    pixelGridColor,
+    snapDistance,
+    penPressure,
+    pressureCurve,
+    palmRejection,
+    gridSpacing,
+    gridSubdivisions,
+    gridColor,
+    paintCursor,
+    brushCrosshair,
+    ringColor,
+  } = usePrefs((p) => p);
+  const docGridOn = useView((v) => v.docgrid);
+  /** Document grid overlay (View ▸ Document grid) — null = hidden. */
+  const docGrid = useMemo(
+    () => (docGridOn ? { spacing: gridSpacing, subdivisions: gridSubdivisions, color: gridColor } : null),
+    [docGridOn, gridSpacing, gridSubdivisions, gridColor],
+  );
+  /** Paint cursor (Preferences ▸ Cursors). */
+  const cursorPrefs = useMemo(
+    () => ({ mode: paintCursor, crosshair: brushCrosshair, ringColor }),
+    [paintCursor, brushCrosshair, ringColor],
+  );
   // The open documents (TODO 1.5): the tabs, what is queued for the engine, and
   // the history the engine reports.
   const docs = useDocuments((d) => d.docs);
@@ -2674,10 +2668,11 @@ export default function CanvasArea({
 
   // Move ▸ transform controls: restart the overlay loop when the box appears,
   // moves to another layer, or is switched off — none of which involve a
-  // pointer event, so nothing else would wake the loop.
+  // pointer event, so nothing else would wake the loop. And when the stage
+  // changes size (rulers shown or hidden): the overlay is sized as it draws.
   useEffect(() => {
     ensureAnts();
-  }, [tool, showTransform, activeLayerId, layers, ensureAnts]);
+  }, [tool, showTransform, activeLayerId, layers, vpSize, ensureAnts]);
 
   // Keep the overlay loop alive while a crop box is present so it stays drawn and
   // reflects live edits (drag, W/H fields, ratio, straighten).

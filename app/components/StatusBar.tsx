@@ -10,7 +10,9 @@ import type { MeasureUnit } from "../lib/prefs";
 import { getTool, measureInfo, type MeasureLine, type ToolId } from "../lib/tools";
 import { parseColor, swatchBg, toHex6 } from "../lib/color";
 import type { Rect } from "../lib/view";
-import { useColors } from "../state/editor";
+import { useColors, useDocuments, usePrefs } from "../state/editor";
+import { activeDoc } from "../state/documents";
+import { collectLeafIds } from "../lib/layers";
 import { slotColor } from "../state/toolOptions";
 
 /** Photoshop-style document sizes: flattened / all layers, from real dims. */
@@ -57,16 +59,10 @@ export default function StatusBar({
   tool,
   zoom,
   onZoomChange,
-  width,
-  height,
   colorSpace,
-  unit = "px",
-  dpi = 300,
-  layerCount,
   isolatedCount = 0,
   onExitIsolate,
   saveState,
-  selection,
   measure = null,
   subscribeCursor,
 }: {
@@ -78,22 +74,24 @@ export default function StatusBar({
   tool: ToolId;
   zoom: number;
   onZoomChange: (z: number) => void;
-  width: number;
-  height: number;
   colorSpace: WorkingSpace;
-  unit?: MeasureUnit;
-  dpi?: number;
-  layerCount: number;
   /** >0 while Isolate mode is on — how many visible layers it is hiding. */
   isolatedCount?: number;
   onExitIsolate?: () => void;
   saveState: { label: string; ok: boolean };
-  selection: Rect[];
   measure?: MeasureLine | null;
   subscribeCursor: (fn: (p: CursorPt) => void) => () => void;
 }) {
   // The colour the paint tools use: the editor's store (TODO 1.5).
   const foreground = useColors((c) => c[slotColor(c.activeSlot)]);
+  // The active document's size, resolution, layers and selection, and the unit
+  // they are shown in: the documents store and Preferences.
+  const width = useDocuments((d) => activeDoc(d).width);
+  const height = useDocuments((d) => activeDoc(d).height);
+  const dpi = useDocuments((d) => activeDoc(d).dpi ?? 300);
+  const layerCount = useDocuments((d) => collectLeafIds(activeDoc(d).layers).length);
+  const selection = useDocuments((d) => activeDoc(d).selection);
+  const unit = usePrefs((p) => p.unit);
   const meta = getTool(tool);
   const [cursor, setCursor] = useState<CursorPt>(null);
 

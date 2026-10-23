@@ -8,6 +8,8 @@ import { createColors, createToolOptions, type Colors, type ToolOptions } from "
 import { createView, type ViewState } from "./view";
 import { createDialogs, type DialogState } from "./dialogs";
 import { createDocuments, type DocumentsState } from "./documents";
+import { createPrefs } from "./prefs";
+import type { Preferences } from "../lib/prefs";
 
 export interface EditorStores {
   colors: Store<Colors>;
@@ -15,10 +17,11 @@ export interface EditorStores {
   view: Store<ViewState>;
   dialogs: Store<DialogState>;
   documents: Store<DocumentsState>;
+  prefs: Store<Preferences>;
 }
 
 export function createEditorStores(): EditorStores {
-  return { colors: createColors(), tools: createToolOptions(), view: createView(), dialogs: createDialogs(), documents: createDocuments() };
+  return { colors: createColors(), tools: createToolOptions(), view: createView(), dialogs: createDialogs(), documents: createDocuments(), prefs: createPrefs() };
 }
 
 const Stores = createContext<EditorStores | null>(null);
@@ -40,3 +43,5 @@ export const useView = <V>(select: (v: ViewState) => V): V => useStore(useEditor
 export const useDialogs = <V>(select: (d: DialogState) => V): V => useStore(useEditorStores().dialogs, select);
 /** What `select` picks out of the open documents, kept current. */
 export const useDocuments = <V>(select: (d: DocumentsState) => V): V => useStore(useEditorStores().documents, select);
+/** What `select` picks out of Preferences, kept current. */
+export const usePrefs = <V>(select: (p: Preferences) => V): V => useStore(useEditorStores().prefs, select);

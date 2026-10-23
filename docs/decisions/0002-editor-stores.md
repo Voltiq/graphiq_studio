@@ -69,6 +69,12 @@ speed.
   characterizations (the documents' own: make, open, switch, save, re-open,
   close, restore) matched byte for byte under it. `CanvasArea` → 81 props;
   Editor → 63 `useState`s. `e2e/documents-state.spec.ts`.
+- What slice 4 left (v3.8.8): Preferences (`app/state/prefs.ts`; the canvas
+  reads thirteen of them), the status bar's document readouts, and the dialog
+  sessions (into `dialogs.ts`). Editor → 43 `useState`s, `CanvasArea` → 67
+  props. Memoizing the canvas's derived settings exposed one hidden
+  dependency (the cursor overlay's size on a stage resize), now explicit.
+  Characterized and matched byte for byte; `e2e/prefs-state.spec.ts`.
 
 ## Revisit when
 
