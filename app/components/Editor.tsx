@@ -14,7 +14,7 @@ import StatusBar from "./StatusBar";
 import CanvasSizeDialog, { type CanvasSize } from "./CanvasSizeDialog";
 import PasteDialog, { type PasteDest } from "./PasteDialog";
 import PreferencesDialog, { type PrefsTab } from "./PreferencesDialog";
-import HelpDialog, { type HelpStart } from "./HelpDialog";
+import HelpDialog from "./HelpDialog";
 import AboutDialog from "./AboutDialog";
 import TooltipHost from "./Tooltip";
 import {
@@ -42,7 +42,6 @@ import { extractICCProfile } from "../lib/icc";
 import { DEFAULT_PREFS, loadPrefs, savePrefs, type Preferences } from "../lib/prefs";
 import { FX_GRADIENT_PRESETS_KEY, GRADIENT_PRESETS_KEY } from "../lib/gradientio";
 import { styleToPatch, type LayerStylePreset } from "../lib/styleio";
-import { DEFAULT_MIXER, sanitizeMixer, type MixerSettings } from "../lib/mixer";
 import {
   defaultFrame,
   fitContent,
@@ -94,6 +93,12 @@ import PatternFillDialog, { type PatternFillResult } from "./PatternFillDialog";
 import type { RawDevelopOptions } from "../lib/dng";
 import { anchorsToPathData } from "../lib/paths";
 import { loadToolPrefs, saveToolPrefs } from "../lib/toolPrefs";
+import { EditorStoresProvider, createEditorStores } from "../state/editor";
+import { useStore } from "../state/store";
+import { brushOf, persistToolOptions, restoreToolOptions } from "../state/toolOptions";
+import { ALL_PANELS, restoreView, setPanels, setViewFlags, type ViewFlags } from "../state/view";
+import { openDialog, openPrefs as openPrefsOn, openSize } from "../state/dialogs";
+import { makeDoc, type Doc } from "../state/documents";
 import { brushKey, stepHardness, stepSize } from "../lib/brush-keys";
 import {
   cleanChannelName,
@@ -120,45 +125,16 @@ import {
 } from "../lib/align";
 import {
   BLUR_FX_LABELS,
-  DEFAULT_BLUR,
-  DEFAULT_SMUDGE,
-  DEFAULT_SPONGE,
-  DEFAULT_HEAL,
-  DEFAULT_REDEYE,
   DEFAULT_BLUR_FX,
-  DEFAULT_CLONE,
-  DEFAULT_CROP,
-  DEFAULT_DODGE,
-  DEFAULT_QUICKSELECT,
-  DEFAULT_TEXT,
   DEFAULT_TOOL,
-  SAMPLE_SIZE_PX,
-  cropAspect,
   measureInfo,
   type BlurFxScope,
   type BlurFxSettings,
-  type BlurSettings,
-  type SmudgeSettings,
-  type SpongeSettings,
-  type HealSettings,
-  type RedEyeSettings,
   type TextRun,
-  type CloneSettings,
   type CropQuad,
-  type CropSettings,
   type PenAnchor,
-  type DodgeSettings,
-  type TextSettings,
   type VectorText,
-  type GradientSettings,
-  type MoveMode,
-  type PenSettings,
-  type SelectResizeMode,
-  type LassoMode,
-  type MarqueeShape,
   type MeasureLine,
-  type QuickSelectSettings,
-  type ShapeSettings,
   type ToolId,
 } from "../lib/tools";
 import { estimateQuadSize } from "../lib/homography";
@@ -205,10 +181,8 @@ import type {
   BrushSettings,
   ChannelHistogram,
   EngineHandle,
-  HistorySummary,
   ImageTransform,
   LeafSnapshot,
-  PendingPaste,
   TextRenderSpec,
 } from "../lib/paint";
 import BlurGalleryDialog from "./BlurGalleryDialog";
@@ -276,7 +250,7 @@ import { buildZip, type ZipEntry } from "../lib/zip";
 import { isCommandId } from "../lib/menus";
 import { executeCommand, isRecordable, unavailableCommands } from "../commands/registry";
 import { commandState } from "../commands/state";
-import type { CommandOps, DialogId } from "../commands/ops";
+import type { CommandOps } from "../commands/ops";
 import { dedupeFilenames, targetFilename } from "../lib/exportpresets";
 import { exportSVG, looksLikeSVG, parseSVGFile, translateVectorPath } from "../lib/svg";
 import { buildPSD, parsePSD, type PsdDocument, type PsdImage, type PsdNode, type PsdOutNode } from "../lib/psd";
@@ -402,44 +376,6 @@ interface PasteSrc {
   dest?: PasteDest;
 }
 
-interface Doc {
-  id: string;
-  name: string;
-  width: number;
-  height: number;
-  layers: LayerNode[];
-  /** Primary layer (drives the blend/opacity panel; anchor for range-select). */
-  activeLayerId: string | null;
-  /** Full multi-selection (always includes activeLayerId when non-null). */
-  selectedLayerIds: string[];
-  selection: Rect[];
-  /** Selection rotation (radians) about `selectionPivot` (or the bbox centre). */
-  selectionAngle: number;
-  selectionPivot: { x: number; y: number } | null;
-  /** Source-image file/EXIF metadata (set when a doc originates from an image). */
-  metadata?: ImageMetadata | null;
-  /** Pixels per inch — physical-unit rulers/readouts + true-size print. */
-  dpi?: number;
-  /** Stored pen paths (Paths panel; "work" = the latest Pen-tool commit). */
-  paths?: SavedPath[];
-  /** Ruler guides (View ▸ Show guides). Per-document, saved in .gproj. */
-  guides?: Guide[];
-  /** Info-panel colour samplers. Per-document, saved in .gproj. */
-  samplers?: ColorSampler[];
-  /** Saved selections (named alpha channels; the rasters live in the engine
-   *  under selectionChannelKey(docId, id)). Per-document, saved in .gproj. */
-  channels?: SavedChannel[];
-  /** Named layer-state snapshots (visibility / position / appearance).
-   *  Per-document, saved in .gproj. */
-  comps?: LayerComp[];
-  /** What was done to this document BEFORE this session — read from the file's
-   *  history labels. A record, not a navigable stack (see history-log.ts). */
-  historyLog?: string[];
-  /** 32-bit float radiance source (Merge to HDR) — IN MEMORY only, never
-   *  serialized (.gproj/autosave keep the tone-mapped pixels instead). */
-  hdr?: HdrImage | null;
-}
-
 /** A layer selection: the primary (active) id plus the full selected set. */
 type Sel = { active: string | null; selected: string[] };
 
@@ -458,37 +394,6 @@ const TOOL_SELECTION_LABEL: Partial<Record<ToolId, string>> = {
   quickselect: "Quick Selection",
   move: "Move Selection",
 };
-
-const ALL_PANELS: PanelVisibility = {
-  color: true,
-  swatches: true,
-  brushes: true,
-  adjustments: true,
-  properties: true,
-  layers: true,
-  paths: true,
-  comps: true,
-  history: true,
-  actions: true,
-  navigator: true,
-  channels: true,
-  metadata: true,
-  info: true,
-};
-
-const makeDoc = (seq: number, size?: { w: number; h: number }, dpi = 300): Doc => ({
-  id: `doc-${seq}`,
-  name: `Untitled-${seq}`,
-  width: size?.w ?? 1920,
-  height: size?.h ?? 1080,
-  dpi,
-  layers: [],
-  activeLayerId: null,
-  selectedLayerIds: [],
-  selection: [],
-  selectionAngle: 0,
-  selectionPivot: null,
-});
 
 /** The four canvas corners as a perspective-crop quad (tl, tr, br, bl). */
 const fullCanvasQuad = (w: number, h: number): CropQuad => [
@@ -667,76 +572,106 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     }
   };
   const [zoom, setZoom] = useState(67);
-  const [foreground, setForeground] = useState("#6366f1ff");
-  const [background, setBackground] = useState("#ffffffff");
-  // Which swatch tools paint with: "primary" = foreground, "secondary" = background.
-  const [activeSlot, setActiveSlot] = useState<"primary" | "secondary">("primary");
-  const [sizeDialogOpen, setSizeDialogOpen] = useState(false);
-  const [sizeDialogMode, setSizeDialogMode] = useState<"canvas" | "image">("canvas");
+  /* The options bar's state and the two colours live in stores (TODO 1.5,
+     app/state): the components that show them subscribe there, and Editor
+     reads what it acts on. The setters are the stores' own, shaped like
+     useState's. */
+  const [stores] = useState(createEditorStores);
+  const { colors: colorStore, tools: toolStore } = stores;
+  // The open documents (TODO 1.5, app/state/documents.ts): read here under the
+  // names they had as state, set through the store's setters.
+  const docStore = stores.documents;
+  /* Which dialogs are open (TODO 1.5, app/state/dialogs.ts) — under the names
+     they had as state, with setters shaped like the ones they replace. */
+  const dialogStore = stores.dialogs;
+  const {
+    trim: trimOpen,
+    patternFill,
+    recents: recentsOpen,
+    saveAs: saveAsOpen,
+    rename: renameOpen,
+    moreSpace: moreSpaceOpen,
+    exportLut: lutExportOpen,
+    exportTiff: tiffExportOpen,
+    exportPdf: pdfExportOpen,
+    mergeHdr: hdrMergeOpen,
+    batch: batchOpen,
+    hdrTone: hdrToneOpen,
+    exportHdr: hdrExportOpen,
+    workspaces: workspacesOpen,
+    shortcuts: shortcutsOpen,
+    about: aboutOpen,
+    newGuide: newGuideOpen,
+    print: printOpen,
+    colorManagement: colorDialogOpen,
+    newDoc: newDocOpen,
+    prefs: prefsOpen,
+    prefsTab,
+    help: helpOpen,
+    size: sizeDialogOpen,
+    sizeMode: sizeDialogMode,
+    channel: channelDialog,
+    selectModify,
+  } = useStore(dialogStore, (d) => d);
+  const setTrimOpen = dialogStore.setter("trim");
+  const setPatternFill = dialogStore.setter("patternFill");
+  const setRecentsOpen = dialogStore.setter("recents");
+  const setSaveAsOpen = dialogStore.setter("saveAs");
+  const setRenameOpen = dialogStore.setter("rename");
+  const setMoreSpaceOpen = dialogStore.setter("moreSpace");
+  const setLutExportOpen = dialogStore.setter("exportLut");
+  const setTiffExportOpen = dialogStore.setter("exportTiff");
+  const setPdfExportOpen = dialogStore.setter("exportPdf");
+  const setHdrMergeOpen = dialogStore.setter("mergeHdr");
+  const setBatchOpen = dialogStore.setter("batch");
+  const setHdrToneOpen = dialogStore.setter("hdrTone");
+  const setHdrExportOpen = dialogStore.setter("exportHdr");
+  const setWorkspacesOpen = dialogStore.setter("workspaces");
+  const setShortcutsOpen = dialogStore.setter("shortcuts");
+  const setAboutOpen = dialogStore.setter("about");
+  const setNewGuideOpen = dialogStore.setter("newGuide");
+  const setPrintOpen = dialogStore.setter("print");
+  const setColorDialogOpen = dialogStore.setter("colorManagement");
+  const setNewDocOpen = dialogStore.setter("newDoc");
+  const setPrefsOpen = dialogStore.setter("prefs");
+  const setPrefsTab = dialogStore.setter("prefsTab");
+  const setHelpOpen = dialogStore.setter("help");
+  const setSizeDialogOpen = dialogStore.setter("size");
+  const setChannelDialog = dialogStore.setter("channel");
+  const setSelectModify = dialogStore.setter("selectModify");
+  const { foreground, background, activeSlot } = useStore(colorStore, (c) => c);
+  const setForeground = colorStore.setter("foreground");
+  const setBackground = colorStore.setter("background");
+  // What Editor itself acts on, each subscribed alone.
+  const pen = useStore(toolStore, (t) => t.pen);
+  const blur = useStore(toolStore, (t) => t.blur);
+  const frameFit = useStore(toolStore, (t) => t.frameFit);
+  const textSettings = useStore(toolStore, (t) => t.text);
+  const cropSettings = useStore(toolStore, (t) => t.crop);
+  const alignToCanvas = useStore(toolStore, (t) => t.alignToCanvas);
+  const marqueeShape = useStore(toolStore, (t) => t.marqueeShape);
+  const lassoMode = useStore(toolStore, (t) => t.lassoMode);
+  const setBrush = toolStore.setter("brush");
+  const setEraser = toolStore.setter("eraser");
+  const setPencil = toolStore.setter("pencil");
+  const setBlur = toolStore.setter("blur");
+  const setQuickSelect = toolStore.setter("quickSelect");
+  const setSmudge = toolStore.setter("smudge");
+  const setMixer = toolStore.setter("mixer");
+  const setFrameFit = toolStore.setter("frameFit");
+  const setSponge = toolStore.setter("sponge");
+  const setHistoryBrush = toolStore.setter("historyBrush");
+  const setHeal = toolStore.setter("heal");
+  const setRedEye = toolStore.setter("redEye");
+  const setClone = toolStore.setter("clone");
+  const setDodge = toolStore.setter("dodge");
+  const setTextSettings = toolStore.setter("text");
+  const setCropSettings = toolStore.setter("crop");
+  const setResizeMode = toolStore.setter("resizeMode");
+  const setMarqueeShape = toolStore.setter("marqueeShape");
+  const setLassoMode = toolStore.setter("lassoMode");
   const [pan, setPan] = useState<Pan>({ x: 0, y: 0 });
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
-  const [brush, setBrush] = useState<BrushSettings>({
-    size: 24,
-    hardness: 80,
-    opacity: 100,
-    flow: 100,
-    blend: "Normal",
-    smoothing: 20,
-  });
-  const [eraser, setEraser] = useState<BrushSettings>({
-    size: 30,
-    hardness: 90,
-    opacity: 100,
-    flow: 100,
-    blend: "Normal",
-    smoothing: 10,
-  });
-  // Pencil: a hard-edged, pixel-perfect tool — always full hardness, no smoothing.
-  const [pencil, setPencil] = useState<BrushSettings>({
-    size: 4,
-    hardness: 100,
-    opacity: 100,
-    flow: 100,
-    blend: "Normal",
-    smoothing: 0,
-  });
-  const [wand, setWand] = useState({ tolerance: 32, contiguous: true, sampleAll: false });
-  const [bucket, setBucket] = useState({
-    tolerance: 32,
-    opacity: 100,
-    contiguous: true,
-    antialias: false,
-  });
-  const [shape, setShape] = useState<ShapeSettings>({ kind: "rect", strokeWidth: 2, radius: 12 });
-  const [gradient, setGradient] = useState<GradientSettings>({
-    type: "linear",
-    reverse: false,
-    smooth: false,
-    stops: null,
-  });
-  const [pen, setPen] = useState<PenSettings>({ width: 8, taper: 0, bend: 0 });
-  const [blur, setBlur] = useState<BlurSettings>(DEFAULT_BLUR);
-  const [quickSelect, setQuickSelect] = useState<QuickSelectSettings>(DEFAULT_QUICKSELECT);
-  const [smudge, setSmudge] = useState<SmudgeSettings>(DEFAULT_SMUDGE);
-  const [mixer, setMixer] = useState<MixerSettings>(DEFAULT_MIXER);
-  const [frameShape, setFrameShape] = useState<"rect" | "ellipse">("rect");
-  // Fit for NEW frames. An existing frame carries its own in its spec, and the
-  // options bar edits that one when a frame layer is selected.
-  const [frameFit, setFrameFit] = useState<FrameFit>("cover");
-  const [sponge, setSponge] = useState<SpongeSettings>(DEFAULT_SPONGE);
-  const [historyBrush, setHistoryBrush] = useState<BrushSettings>({
-    size: 24,
-    hardness: 80,
-    opacity: 100,
-    flow: 100,
-    blend: "Normal",
-    smoothing: 20,
-  });
-  const [heal, setHeal] = useState<HealSettings>(DEFAULT_HEAL);
-  const [redEye, setRedEye] = useState<RedEyeSettings>(DEFAULT_REDEYE);
-  const [clone, setClone] = useState<CloneSettings>(DEFAULT_CLONE);
-  const [dodge, setDodge] = useState<DodgeSettings>(DEFAULT_DODGE);
-  const [textSettings, setTextSettings] = useState<TextSettings>(DEFAULT_TEXT);
   // Global light is DOCUMENT state, not per-layer: one angle every effect that
   // opts in follows, so turning it anywhere turns it everywhere.
   const [globalLight, setGlobalLightState] = useState<GlobalLight>(DEFAULT_GLOBAL_LIGHT);
@@ -754,7 +689,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setGlobalLightState(next);
     paintRef.current?.setGlobalLight(next);
   };
-  const [cropSettings, setCropSettings] = useState<CropSettings>(DEFAULT_CROP);
   // The pending crop rectangle (doc coords) while the crop tool is active; null
   // means no crop is in progress. Edited interactively on the canvas overlay and
   // via the options bar; committed with Enter / ✓, dropped with Esc.
@@ -763,18 +697,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // crop tool's Perspective mode is on. Seeded from the box, then dragged freely.
   const [cropQuad, setCropQuad] = useState<CropQuad | null>(null);
   const [prefs, setPrefs] = useState<Preferences>(DEFAULT_PREFS);
-  const [prefsOpen, setPrefsOpen] = useState(false);
   // Preferences section to open on — Settings ▸ Performance / Scratch disks
   // deep-link their tabs; plain Preferences… re-opens wherever you last were.
-  const [prefsTab, setPrefsTab] = useState<PrefsTab>("appearance");
-  const openPrefs = (tab?: PrefsTab) => {
-    if (tab) setPrefsTab(tab);
-    setPrefsOpen(true);
-  };
-  // Help window (Getting started / Documentation) + About.
-  const [helpOpen, setHelpOpen] = useState<HelpStart | null>(null);
-  const [aboutOpen, setAboutOpen] = useState(false);
-  const [trimOpen, setTrimOpen] = useState(false);
+  const openPrefs = (tab?: PrefsTab) => openPrefsOn(dialogStore, tab);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef(0);
   // Show a brief in-app notification (replaces blocking window.alert).
@@ -819,16 +744,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       savePrefs(next);
       return next;
     });
-  const [history, setHistory] = useState<HistorySummary>({
-    items: [{ label: "New", onPath: true }],
-    index: 0,
-    nonLinear: false,
-    bytes: 0,
-    sourceIndex: 0,
-    snapshots: [],
-    sourceSnapshotId: null,
-    open: false,
-  });
+  const history = useStore(docStore, (d) => d.history);
   // Any history movement means unsaved work (autosave + status-bar indicator).
   const historyInitRef = useRef(true);
   // Each tab has its own history, so switching tabs hands over a different
@@ -859,13 +775,9 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     if (history.index > 0) unsavedRef.current = true;
     setSaveState((s) => (s.label === "Unsaved changes" ? s : { label: "Unsaved changes", ok: false }));
   }, [history]);
-  const [saveAsOpen, setSaveAsOpen] = useState(false);
   /* Renaming used to live only on the document tab. The phone reclaims that
      strip when there is a single document, so it needs a second door — and a
      desktop keyboard user never had one at all. */
-  const [renameOpen, setRenameOpen] = useState(false);
-  const [recentsOpen, setRecentsOpen] = useState(false);
-  const [moreSpaceOpen, setMoreSpaceOpen] = useState(false);
   /* The install prompt is CAUGHT in the pre-paint script in layout.tsx, not
      here: `beforeinstallprompt` fires before this component has mounted and it
      never replays, so an effect that listens for it directly misses it every
@@ -930,44 +842,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setInstallReady(false);
     void e.prompt();
   }, []);
-  const [panels, setPanelsState] = useState<PanelVisibility>(ALL_PANELS);
-  const [showRulers, setShowRulers] = useState(true);
-  const [showGrid, setShowGrid] = useState(false);
-  const [snap, setSnap] = useState(true);
-  /** Move ▸ Align to: false = the selected layers' own union, true = the canvas
-   *  (or the selection, when there is one). */
-  const [alignToCanvas, setAlignToCanvas] = useState(false);
-  /** Move ▸ Auto-select: a canvas click picks the layer (or group) under it. */
-  const [autoSelect, setAutoSelect] = useState(true);
-  const [autoSelectScope, setAutoSelectScope] = useState<"layer" | "group">("layer");
-  /** Move ▸ Transform controls (Photoshop's "Show Transform Controls"): a live
-   *  box with handles on the active layer, so it can be scaled or rotated
-   *  without first entering Free Transform. */
-  const [showTransform, setShowTransform] = useState(false);
-  const viewApiRef = useRef<ViewApi | null>(null);
-  const [showDocGrid, setShowDocGrid] = useState(false);
-  // Guides (TODO §11). Visibility doubles as the snap switch — Photoshop's rule:
-  // hidden guides pull on nothing. Locked guides still show and still snap, they
-  // just can't be dragged. The guides themselves are per-document (see Doc).
-  const [showGuides, setShowGuides] = useState(true);
-  const [lockGuides, setLockGuides] = useState(false);
-  const [smartGuides, setSmartGuides] = useState(true);
-  const [newGuideOpen, setNewGuideOpen] = useState(false);
-  // Before/after compare: the split divider position (null = off) and its axis.
-  // Holding \ to peek lives in CanvasArea — it needs no editor state.
-  const [compareSplit, setCompareSplit] = useState<number | null>(null);
-  const [compareAxis, setCompareAxis] = useState<CompareAxis>("vertical");
-  // Current view toggles, reachable from the one-time keydown listener.
-  const viewSettingsRef = useRef({
-    rulers: true,
-    grid: false,
-    snap: true,
-    docgrid: false,
-    guides: true,
-    lockguides: false,
-    smartguides: true,
-  });
-  viewSettingsRef.current = {
+  // The View menu's toggles and the Window menu's panels: a store (TODO 1.5,
+  // app/state/view.ts) the canvas, the options bar and the dock read too. The
+  // guides themselves are per-document (see Doc).
+  const viewStore = stores.view;
+  const {
     rulers: showRulers,
     grid: showGrid,
     snap,
@@ -975,14 +854,19 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     guides: showGuides,
     lockguides: lockGuides,
     smartguides: smartGuides,
-  };
+    panels,
+  } = useStore(viewStore, (v) => v);
+  const viewApiRef = useRef<ViewApi | null>(null);
+  // Before/after compare: the split divider position (null = off) and its axis.
+  // Holding \ to peek lives in CanvasArea — it needs no editor state.
+  const [compareSplit, setCompareSplit] = useState<number | null>(null);
+  const [compareAxis, setCompareAxis] = useState<CompareAxis>("vertical");
   const [colorSpace, setColorSpaceState] = useState<WorkingSpace>("srgb");
   // Read when a project is written, which happens from callbacks that must not
   // capture a stale space (the same reason globalLight has one).
   const colorSpaceRef = useRef(colorSpace);
   colorSpaceRef.current = colorSpace;
   // Soft proofing (view-only): Ctrl+Alt+Y simulate, Ctrl+Alt+Shift+Y gamut warn.
-  const [printOpen, setPrintOpen] = useState(false);
   const [proofColors, setProofColors] = useState(false);
   const [gamutWarn, setGamutWarn] = useState(false);
   // Dev Perf HUD overlay (View ▸ Performance HUD / window.__gqPerf).
@@ -1001,151 +885,25 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setTool("crop");
   };
   const [proofTarget, setProofTargetState] = useState<ProofTarget>("srgb");
-  const [colorDialogOpen, setColorDialogOpen] = useState(false);
   const [compareComposite, setCompareComposite] = useState<HTMLCanvasElement | null | undefined>(undefined);
   const [adjust, setAdjust] = useState<Adjustments>(DEFAULT_ADJUST);
   const [adjustFilter, setAdjustFilter] = useState("Original");
-  const [selectModify, setSelectModify] = useState<
-    "feather" | "grow" | "border" | "smooth" | "expand" | "contract" | null
-  >(null);
-  const [moveMode, setMoveMode] = useState<MoveMode>("pixels");
-  const [resizeMode, setResizeMode] = useState<SelectResizeMode>("bounds");
-  const [resizeSmooth, setResizeSmooth] = useState(true);
-  const [marqueeShape, setMarqueeShape] = useState<MarqueeShape>("rect");
   const marqueeShapeRef = useRef(marqueeShape);
   marqueeShapeRef.current = marqueeShape;
-  const [lassoMode, setLassoMode] = useState<LassoMode>("free");
   const lassoModeRef = useRef(lassoMode);
   lassoModeRef.current = lassoMode;
-  const [triangleApex, setTriangleApex] = useState(0.5);
-  const [sampleSizeLabel, setSampleSizeLabel] = useState("Point sample");
-  const [sampleScopeLabel, setSampleScopeLabel] = useState("All layers");
 
   // Restore every options-bar setting from the last session (client-only, so the
   // server-rendered defaults don't mismatch), then persist them on any change.
   useEffect(() => {
-    const p = loadToolPrefs();
-    if (p.foreground) setForeground(p.foreground);
-    if (p.background) setBackground(p.background);
-    if (p.brush) setBrush((s) => ({ ...s, ...p.brush }));
-    if (p.eraser) setEraser((s) => ({ ...s, ...p.eraser }));
-    if (p.pencil) setPencil((s) => ({ ...s, ...p.pencil }));
-    if (p.wand) setWand((s) => ({ ...s, ...p.wand }));
-    if (p.bucket) setBucket((s) => ({ ...s, ...p.bucket }));
-    if (p.shape) setShape((s) => ({ ...s, ...p.shape }));
-    if (p.gradient) setGradient((s) => ({ ...s, ...p.gradient }));
-    if (p.pen) setPen((s) => ({ ...s, ...p.pen }));
-    if (p.blur) setBlur((s) => ({ ...s, ...p.blur }));
-    if (p.quickSelect) setQuickSelect((s) => ({ ...s, ...p.quickSelect }));
-    if (p.smudge) setSmudge((s) => ({ ...s, ...p.smudge }));
-    if (p.mixer) setMixer((s) => sanitizeMixer({ ...s, ...p.mixer }));
-    if (p.sponge) setSponge((s) => ({ ...s, ...p.sponge }));
-    if (p.historyBrush) setHistoryBrush((s) => ({ ...s, ...p.historyBrush }));
-    if (p.heal) setHeal((s) => ({ ...s, ...p.heal }));
-    if (p.redEye) setRedEye((s) => ({ ...s, ...p.redEye }));
-    if (p.clone) setClone((s) => ({ ...s, ...p.clone }));
-    if (p.dodge) setDodge((s) => ({ ...s, ...p.dodge }));
-    if (p.text) setTextSettings((s) => ({ ...s, ...p.text }));
-    if (p.crop) setCropSettings((s) => ({ ...s, ...p.crop }));
-    if (p.moveMode) setMoveMode(p.moveMode);
-    if (typeof p.autoSelect === "boolean") setAutoSelect(p.autoSelect);
-    if (p.autoSelectScope) setAutoSelectScope(p.autoSelectScope);
-    if (typeof p.showTransform === "boolean") setShowTransform(p.showTransform);
-    if (typeof p.alignToCanvas === "boolean") setAlignToCanvas(p.alignToCanvas);
-    if (p.resizeMode) setResizeMode(p.resizeMode);
-    if (typeof p.resizeSmooth === "boolean") setResizeSmooth(p.resizeSmooth);
-    if (p.marqueeShape) setMarqueeShape(p.marqueeShape);
-    if (p.lassoMode) setLassoMode(p.lassoMode);
-    if (typeof p.triangleApex === "number") setTriangleApex(p.triangleApex);
-    if (p.sampleSize) setSampleSizeLabel(p.sampleSize);
-    if (p.sampleScope) setSampleScopeLabel(p.sampleScope);
-  }, []);
-  const toolSaveReady = useRef(false);
-  useEffect(() => {
-    if (!toolSaveReady.current) {
-      toolSaveReady.current = true; // skip the first run (defaults / just-loaded)
-      return;
-    }
-    const id = window.setTimeout(
-      () =>
-        saveToolPrefs({
-          foreground,
-          background,
-          brush,
-          eraser,
-          pencil,
-          wand,
-          quickSelect,
-          bucket,
-          shape,
-          gradient,
-          pen,
-          blur,
-          smudge,
-          mixer,
-          sponge,
-          historyBrush,
-          heal,
-          redEye,
-          clone,
-          dodge,
-          text: textSettings,
-          crop: cropSettings,
-          moveMode,
-          autoSelect,
-          autoSelectScope,
-          showTransform,
-          alignToCanvas,
-          resizeMode,
-          resizeSmooth,
-          marqueeShape,
-          lassoMode,
-          triangleApex,
-          sampleSize: sampleSizeLabel,
-          sampleScope: sampleScopeLabel,
-        }),
-      250,
-    );
-    return () => window.clearTimeout(id);
-  }, [
-    foreground,
-    background,
-    brush,
-    eraser,
-    pencil,
-    wand,
-    quickSelect,
-    bucket,
-    shape,
-    gradient,
-    pen,
-    blur,
-    smudge,
-    mixer,
-    sponge,
-    historyBrush,
-    heal,
-    redEye,
-    clone,
-    dodge,
-    textSettings,
-    cropSettings,
-    moveMode,
-    autoSelect,
-    autoSelectScope,
-    showTransform,
-    alignToCanvas,
-    resizeMode,
-    resizeSmooth,
-    marqueeShape,
-    lassoMode,
-    triangleApex,
-    sampleSizeLabel,
-    sampleScopeLabel,
-  ]);
+    const stop = persistToolOptions(colorStore, toolStore, saveToolPrefs);
+    restoreToolOptions(colorStore, toolStore, loadToolPrefs());
+    return stop;
+  }, [colorStore, toolStore]);
   const [pasteSrc, setPasteSrc] = useState<PasteSrc | null>(null);
-  const [pendingPaste, setPendingPaste] = useState<PendingPaste | null>(null);
-  const [pendingLoads, setPendingLoads] = useState<PendingLoad[]>([]);
+  const setPendingPaste = docStore.setter("pendingPaste");
+  const pendingLoads = useStore(docStore, (d) => d.pendingLoads);
+  const setPendingLoads = docStore.setter("pendingLoads");
   const [exportComposite, setExportComposite] = useState<HTMLCanvasElement | null>(null);
   const [importItems, setImportItems] = useState<ImportItem[] | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1190,13 +948,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   activeSlotRef.current = activeSlot;
   // The colour tools actually paint with = the active swatch.
   const paintColor = activeSlot === "primary" ? foreground : background;
-  const setPaintColor = activeSlot === "primary" ? setForeground : setBackground;
   const historyRef = useRef(history);
   historyRef.current = history;
 
   // Open documents. Starts with a single, unnamed canvas.
-  const [docs, setDocs] = useState<Doc[]>(() => [makeDoc(1)]);
-  const [activeId, setActiveIdState] = useState("doc-1");
+  const docs = useStore(docStore, (d) => d.docs);
+  const setDocs = docStore.setter("docs");
+  const activeId = useStore(docStore, (d) => d.activeId);
+  const setActiveIdState = docStore.setter("activeId");
   /* EVERY tab switch goes through here. Work still open in the tab being left
      — a text edit typed into it — is committed into THAT tab first; the commit
      targets whichever document is active, so after the switch it would be too
@@ -1267,10 +1026,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     );
   };
 
-  const openSizeDialog = (mode: "canvas" | "image") => {
-    setSizeDialogMode(mode);
-    setSizeDialogOpen(true);
-  };
+  const openSizeDialog = (mode: "canvas" | "image") => openSize(dialogStore, mode);
 
   // Image resize (resample): scale every layer, then adopt the new dimensions.
   // resizeImage runs first so the follow-up size change is a no-op for the engine.
@@ -1473,7 +1229,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setCropBox({ x: 0, y: 0, w: d.width, h: d.height });
     setCropSettings((s) => ({ ...s, straighten: 0 }));
     if (cropSettingsRef.current.perspective) setCropQuad(fullCanvasQuad(d.width, d.height));
-  }, []);
+  }, [setCropSettings]);
 
   // ---- Snapshots (TODO §10) -----------------------------------------------
   // The engine pins the PIXELS (+ masks + doc size); the layer TREE that went
@@ -1524,7 +1280,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     };
     redo();
     eng.pushStructural("Restore Snapshot", undo, redo);
-  }, []);
+  }, [setDocs]);
 
   // Commit the pending crop: snapshot, crop every leaf to the box (rotating by the
   // straighten angle), resize the document, and fold it into one undoable step.
@@ -1603,7 +1359,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     // Re-seat the crop box to the new, full canvas so the tool stays usable.
     setCropBox({ x: 0, y: 0, w: rect.w, h: rect.h });
     setCropSettings((s) => ({ ...s, straighten: 0 }));
-  }, []);
+  }, [setCropSettings, setDocs]);
 
   // Entering the crop tool (or switching documents while in it) seats the box on
   // the whole canvas; leaving the tool drops the pending crop without applying it.
@@ -1623,7 +1379,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
     setCropQuad(
       cropSettingsRef.current.perspective ? fullCanvasQuad(d.width, d.height) : null,
     );
-  }, [tool, activeId]);
+  }, [tool, activeId, setCropSettings]);
   // Toggling Perspective while in the crop tool seeds the quad from the current
   // box (or the full canvas), and leaving the mode drops it.
   useEffect(() => {
@@ -2752,9 +2508,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const cubeInputRef = useRef<HTMLInputElement>(null);
   const cubeTargetRef = useRef<"new" | string | null>(null);
   // Export the current adjustments AS a .cube LUT (File menu / Adjustments panel).
-  const [lutExportOpen, setLutExportOpen] = useState(false);
-  const [workspacesOpen, setWorkspacesOpen] = useState(false);
-  const [batchOpen, setBatchOpen] = useState(false);
   // Dock v2 hosts: the left dock column + the floating-panel overlay (panels
   // portal in from RightDock, which owns the whole layout model).
   const [leftHost, setLeftHost] = useState<HTMLDivElement | null>(null);
@@ -2763,11 +2516,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
      renders the host); the phone and tablet keep the bar. */
   const [statusHost, setStatusHost] = useState<HTMLDivElement | null>(null);
   const dockRef = useRef<DockApi | null>(null);
-  const [tiffExportOpen, setTiffExportOpen] = useState(false);
-  const [pdfExportOpen, setPdfExportOpen] = useState(false);
-  const [hdrMergeOpen, setHdrMergeOpen] = useState(false);
-  const [hdrToneOpen, setHdrToneOpen] = useState(false);
-  const [hdrExportOpen, setHdrExportOpen] = useState(false);
 
   const addExtraAdjustment = (type: string) => {
     if (type === "colorlookup") {
@@ -3094,7 +2842,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
   const clearLayerStyleOp = (id: string) => fxStructural(id, undefined, "Clear Layer Style");
 
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   // ---- Shortcut registry (single source of truth + user remaps) -------------
   const [shortcutOverrides, setShortcutOverrides] = useState<ShortcutOverrides>({});
@@ -4163,7 +3910,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
   // File ▸ New / the tab-strip "+": dialog by default, instant with the stored
   // defaults when the "ask" preference is off.
-  const [newDocOpen, setNewDocOpen] = useState(false);
   const requestNewDoc = () => {
     if (prefsRef.current.newDocAsk) setNewDocOpen(true);
     else createDoc();
@@ -6246,22 +5992,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   const openCompare = () => setCompareComposite(paintRef.current?.exportComposite(active.layers) ?? null);
 
   // ---- Window menu: panel visibility (persisted) ----
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("pe-panels");
-      if (saved) setPanelsState({ ...ALL_PANELS, ...JSON.parse(saved) });
-    } catch {
-      /* ignore */
-    }
-  }, []);
-  const persistPanels = (p: PanelVisibility) => {
-    setPanelsState(p);
-    try {
-      localStorage.setItem("pe-panels", JSON.stringify(p));
-    } catch {
-      /* ignore */
-    }
-  };
+  const persistPanels = (p: PanelVisibility) => setPanels(viewStore, p);
 
   // ---- Guides (View menu, ruler drags — per-document, saved in .gproj) ------
   // Guide edits are ordinary undo steps: they're structural (no pixels), and the
@@ -6333,57 +6064,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
   // ---- View menu: rulers / grid / snap (persisted), zoom commands ----
   useEffect(() => {
-    try {
-      const v = JSON.parse(localStorage.getItem("pe-view") || "{}");
-      /* Rulers default OFF — on every shell, as the design shows the stage and
-         as Photoshop starts — and that is a DEFAULT, not an override: a stored
-         boolean wins either way, so View ▸ Show rulers sticks once it is used.
-         On a touch device it is also the right call on its own merits: a ruler
-         is for measuring against a pointer you can place precisely, and on a
-         768px tablet the vertical one was the last 22px between the stage and
-         the whole width.
-
-         The same decision is made before the first paint by the inline script
-         in layout.tsx — it has to be, because the stage's size comes from a
-         grid template the cold-load fit measures straight away. This mirrors it
-         into React state and then drops the bridging attribute, so from here on
-         `data-rulers` is the only thing deciding. */
-      if (typeof v.rulers === "boolean") setShowRulers(v.rulers);
-      else setShowRulers(false);
-      delete document.documentElement.dataset.rulersDefault;
-      if (typeof v.grid === "boolean") setShowGrid(v.grid);
-      if (typeof v.snap === "boolean") setSnap(v.snap);
-      if (typeof v.docgrid === "boolean") setShowDocGrid(v.docgrid);
-      if (typeof v.guides === "boolean") setShowGuides(v.guides);
-      if (typeof v.lockguides === "boolean") setLockGuides(v.lockguides);
-      if (typeof v.smartguides === "boolean") setSmartGuides(v.smartguides);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-  const persistView = (patch: {
-    rulers?: boolean;
-    grid?: boolean;
-    snap?: boolean;
-    docgrid?: boolean;
-    guides?: boolean;
-    lockguides?: boolean;
-    smartguides?: boolean;
-  }) => {
-    const next = { ...viewSettingsRef.current, ...patch };
-    setShowRulers(next.rulers);
-    setShowGrid(next.grid);
-    setSnap(next.snap);
-    setShowDocGrid(next.docgrid);
-    setShowGuides(next.guides);
-    setLockGuides(next.lockguides);
-    setSmartGuides(next.smartguides);
-    try {
-      localStorage.setItem("pe-view", JSON.stringify(next));
-    } catch {
-      /* ignore */
-    }
-  };
+    /* The rulers' default is decided before the first paint by the inline
+       script in layout.tsx too — it has to be, because the stage's size comes
+       from a grid template the cold-load fit measures straight away. Once the
+       stored view is in the store, the bridging attribute goes, so from here on
+       `data-rulers` is the only thing deciding. */
+    if (restoreView(viewStore)) delete document.documentElement.dataset.rulersDefault;
+  }, [viewStore]);
+  const persistView = (patch: Partial<ViewFlags>) => setViewFlags(viewStore, patch);
 
   // ---- Actions (macro recorder — Actions panel + F-key playback) ------------
   const [savedActions, setSavedActions] = useState<SavedAction[]>([]);
@@ -6611,8 +6299,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   // The raster is an ordinary engine mask under a reserved key, so saving is
   // allocMask("selection") and loading is maskSelectionRects() — the same two
   // calls the quick mask and "Load mask as selection" already use.
-  const [channelDialog, setChannelDialog] = useState<"save" | "load" | null>(null);
-  const [patternFill, setPatternFill] = useState(false);
 
   /**
    * Fill the selection with a repeating tile — or the whole layer when there is
@@ -6824,29 +6510,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
      performs, and whether it applies right now, live in commands/registry.ts;
      these are the operations, still here because they close over this
      component's state until the store lands (TODO 1.5). */
-  const dialogs: { [K in DialogId]: () => void } = {
-    "trim": () => setTrimOpen(true),
-    "pattern-fill": () => setPatternFill(true),
-    "open-recent": () => setRecentsOpen(true),
-    "save-as": () => setSaveAsOpen(true),
-    "rename": () => setRenameOpen(true),
-    "more-space": () => setMoreSpaceOpen(true),
-    "export-lut": () => setLutExportOpen(true),
-    "export-tiff": () => setTiffExportOpen(true),
-    "export-pdf": () => setPdfExportOpen(true),
-    "merge-hdr": () => setHdrMergeOpen(true),
-    "batch": () => setBatchOpen(true),
-    "hdr-tone": () => setHdrToneOpen(true),
-    "export-hdr": () => setHdrExportOpen(true),
-    "preferences": () => setPrefsOpen(true),
-    "workspaces": () => setWorkspacesOpen(true),
-    "shortcuts": () => setShortcutsOpen(true),
-    "about": () => setAboutOpen(true),
-    "new-guide": () => setNewGuideOpen(true),
-    "help-start": () => setHelpOpen("start"),
-    "help-docs": () => setHelpOpen("docs"),
-    "tour": () => setTour("open"),
-  };
   /** Run `fn` on the active layer, if there is one. */
   const onActiveLayer = (fn: (id: string) => void) => {
     const id = activeDocRef.current.activeLayerId;
@@ -6854,7 +6517,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
   const commandOps: CommandOps = {
     toast: (message) => showToast(message),
-    open: (dialog) => dialogs[dialog](),
+    open: (dialog) => (dialog === "tour" ? setTour("open") : openDialog(dialogStore, dialog)),
     newDoc: () => requestNewDoc(),
     openProject: () => openProject(),
     save: () => saveProject(),
@@ -6927,14 +6590,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
       else if (step === "fit") view?.fit();
       else view?.zoom100();
     },
-    toggleView: (key) => persistView({ [key]: !viewSettingsRef.current[key] }),
+    toggleView: (key) => persistView({ [key]: !viewStore.get()[key] }),
     clearGuides: () => commitGuides("Clear Guides", []),
     toggleCompare: () => setCompareSplit((s) => (s === null ? 50 : null)),
     toggleCompareAxis: () => setCompareAxis((a) => (a === "vertical" ? "horizontal" : "vertical")),
     toggleProof: () => setProofColors((p) => !p),
     toggleGamut: () => setGamutWarn((g) => !g),
     togglePerfHud: () => setPerfHud((h) => !h),
-    togglePanel: (key) => persistPanels({ ...panels, [key]: !panels[key] }),
+    togglePanel: (key) => persistPanels({ ...viewStore.get().panels, [key]: !viewStore.get().panels[key] }),
     resetWorkspace: () => {
       persistPanels({ ...ALL_PANELS });
       dockRef.current?.apply(null); // factory dock layout: all right, none floating
@@ -7512,8 +7175,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   }, []);
 
   // The active tool's brush dynamics (brush / pencil / eraser are independent).
-  const activeBrush = tool === "eraser" ? eraser : tool === "pencil" ? pencil : brush;
-  const setActiveBrush = tool === "eraser" ? setEraser : tool === "pencil" ? setPencil : setBrush;
+  const setActiveBrush = toolStore.setter(brushOf(tool));
 
   /** On-canvas brush HUD (Alt + right-drag on the canvas): write the dragged
    *  size/hardness back to whichever tool is active. These are tool OPTIONS —
@@ -7591,6 +7253,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
   };
 
   return (
+    <EditorStoresProvider value={stores}>
     <div className={styles.app} data-app>
       {/* Focus management for every modal dialog (see DialogFocus). */}
       <DialogFocus />
@@ -7599,8 +7262,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         tablet={tablet}
         panelsOpen={tablet && mobileDrawer === "panels"}
         onTogglePanels={() => toggleMobileDrawer("panels")}
-        docs={docs.map((d) => ({ id: d.id, name: d.name }))}
-        activeDocId={activeId}
         onSelectDoc={(id) => {
           commitFloatIfAny();
           setActiveId(id);
@@ -7652,48 +7313,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           const id = activeDocRef.current.activeLayerId;
           if (id) chooseSurface(id, "pixels");
         }}
-        foreground={paintColor}
-        onForeground={setPaintColor}
-        brush={activeBrush}
-        onBrush={setActiveBrush}
-        moveMode={moveMode}
-        onMoveMode={setMoveMode}
-        resizeMode={resizeMode}
-        onResizeMode={setResizeMode}
-        resizeSmooth={resizeSmooth}
-        onResizeSmooth={setResizeSmooth}
-        marqueeShape={marqueeShape}
-        onMarqueeShape={setMarqueeShape}
-        lassoMode={lassoMode}
-        onLassoMode={setLassoMode}
-        triangleApex={triangleApex}
-        onTriangleApex={setTriangleApex}
         selBox={selNumericBox}
         onSelBox={applySelBox}
-        wand={wand}
-        onWand={(patch) => setWand((wd) => ({ ...wd, ...patch }))}
-        quickSelect={quickSelect}
-        onQuickSelect={(patch) => setQuickSelect((q) => ({ ...q, ...patch }))}
-        bucket={bucket}
-        onBucket={(patch) => setBucket((b) => ({ ...b, ...patch }))}
-        gradient={gradient}
-        onGradient={(patch) => setGradient((g) => ({ ...g, ...patch }))}
-        pen={pen}
-        onPen={(patch) => setPen((pn) => ({ ...pn, ...patch }))}
-        eyedropper={{ size: sampleSizeLabel, scope: sampleScopeLabel }}
-        onEyedropper={(patch) => {
-          if (patch.size !== undefined) setSampleSizeLabel(patch.size);
-          if (patch.scope !== undefined) setSampleScopeLabel(patch.scope);
-        }}
-        shape={shape}
-        onShape={(patch) => setShape((s) => ({ ...s, ...patch }))}
-        blur={blur}
-        onBlur={(patch) => setBlur((b) => ({ ...b, ...patch }))}
-        smudge={smudge}
-        onSmudge={(patch) => setSmudge((s) => ({ ...s, ...patch }))}
-        mixer={mixer}
-        onMixer={(patch) => setMixer((s) => ({ ...s, ...patch }))}
-        frameShape={frameShape}
         frameFit={activeFrameFit}
         onFrameFit={setActiveFrameFit}
         frameSelected={!!activeFrameNode}
@@ -7702,54 +7323,24 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
         onFrameScale={setActiveFrameScale}
         onFrameNudge={nudgeActiveFrameContent}
         onFrameReset={resetActiveFrameContent}
-        onFrameShape={setFrameShape}
         onCleanMixer={() => {
           paintRef.current?.cleanMixer();
           showToast("Brush cleaned.");
         }}
-        sponge={sponge}
-        onSponge={(patch) => setSponge((s) => ({ ...s, ...patch }))}
-        historyBrush={historyBrush}
-        onHistoryBrush={setHistoryBrush}
-        heal={heal}
-        onHeal={(patch) => setHeal((h) => ({ ...h, ...patch }))}
-        redEye={redEye}
-        onRedEye={(patch) => setRedEye((r) => ({ ...r, ...patch }))}
-        clone={clone}
-        onClone={(patch) => setClone((c) => ({ ...c, ...patch }))}
-        dodge={dodge}
-        onDodge={(patch) => setDodge((d) => ({ ...d, ...patch }))}
-        snap={snap}
-        onSnap={setSnap}
-        autoSelect={autoSelect}
-        onAutoSelect={setAutoSelect}
-        autoSelectScope={autoSelectScope}
-        onAutoSelectScope={setAutoSelectScope}
-        showTransform={showTransform}
-        onShowTransform={setShowTransform}
-        alignToCanvas={alignToCanvas}
-        onAlignToCanvas={setAlignToCanvas}
         onAlign={(mode) => alignLayersOp(mode, alignToCanvas)}
         onDistribute={distributeLayersOp}
-        text={textSettings}
         onText={(patch) => {
           // With a live text selection, character-level changes style the
           // SELECTED range (rich runs); otherwise they set the block/base style.
           if (viewApiRef.current?.applyTextStyle(patch)) return;
           setTextSettings((t) => ({ ...t, ...patch }));
         }}
-        crop={cropSettings}
-        onCrop={(patch) => setCropSettings((s) => ({ ...s, ...patch }))}
         cropBox={cropBox}
         onCropBox={setCropBox}
         onCropApply={applyCropNow}
         onCropReset={resetCropBox}
         docWidth={active.width}
         docHeight={active.height}
-        fill={foreground}
-        onFill={setForeground}
-        stroke={background}
-        onStroke={setBackground}
         measure={measure}
         onMeasureClear={() => setMeasure(null)}
         onStraighten={straightenFromMeasure}
@@ -7763,21 +7354,11 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             setTool(id);
             if (mobile) setMobileDrawer(null); // picking a tool closes the drawer
           }}
-          foreground={foreground}
-          background={background}
-          onForeground={setForeground}
-          onBackground={setBackground}
-          onSwap={() => {
-            setForeground(background);
-            setBackground(foreground);
-          }}
         />
         <div className={styles.leftDock} ref={setLeftHost} aria-label="Left dock" />
         <CanvasArea
           panMode={mobile && panMode}
           statusHost={!mobile && !tablet ? setStatusHost : undefined}
-          docs={docs}
-          activeId={activeId}
           onSelectDoc={(id) => {
             commitFloatIfAny();
             setActiveId(id);
@@ -7794,56 +7375,14 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onViewport={setViewport}
           mobile={mobile}
           tool={tool}
-          brush={activeBrush}
-          color={paintColor}
-          foreground={foreground}
-          background={background}
-          bucket={bucket}
-          gradient={{
-            type: gradient.type,
-            reverse: gradient.reverse,
-            smooth: gradient.smooth,
-            snap: prefs.gradientSnap,
-            stops: gradient.stops,
-            fg: foreground,
-            bg: background,
-          }}
-          pen={pen}
-          shape={{
-            kind: shape.kind,
-            strokeWidth: shape.strokeWidth,
-            radius: shape.radius,
-            customId: shape.customId,
-            starPoints: shape.starPoints,
-            fill: foreground,
-            stroke: background,
-          }}
-          onShapeRadius={(r) => setShape((v) => ({ ...v, radius: r }))}
-          blur={blur}
-          smudge={smudge}
-          mixer={mixer}
-          sponge={sponge}
-          historyBrush={historyBrush}
-          heal={heal}
-          redEye={redEye}
-          clone={clone}
-          dodge={dodge}
-          showTransform={showTransform}
-          autoSelect={autoSelect}
-          autoSelectScope={autoSelectScope}
+          gradientSnap={prefs.gradientSnap}
           onPickLayer={(id) => layersApi.select(id, "replace")}
-          text={textSettings}
-          onText={(patch) => setTextSettings((t) => ({ ...t, ...patch }))}
           onPlaceText={placeText}
           onUpdateText={updateText}
           cropBox={cropBox}
           onCropBox={setCropBox}
           cropQuad={cropQuad}
           onCropQuad={setCropQuad}
-          cropGrid={cropSettings.grid}
-          cropShield={cropSettings.shield}
-          cropStraighten={cropSettings.straighten}
-          cropAspect={cropAspect(cropSettings, active.height ? active.width / active.height : 1)}
           onCropApply={applyCropNow}
           layers={viewLayers}
           activeLayerId={active.activeLayerId}
@@ -7868,18 +7407,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           selectionPivot={active.selectionPivot}
           onSelectionAngle={setSelectionAngle}
           onSelectionPivot={setSelectionPivot}
-          moveMode={moveMode}
-          resizeMode={resizeMode}
-          resizeSmooth={resizeSmooth}
-          marqueeShape={marqueeShape}
-          lassoMode={lassoMode}
-          triangleApex={triangleApex}
-          wand={wand}
-          quickSelect={quickSelect}
-          onQuickSelect={(patch) => setQuickSelect((q) => ({ ...q, ...patch }))}
-          sampleSize={SAMPLE_SIZE_PX[sampleSizeLabel] ?? 1}
-          sampleAllLayers={sampleScopeLabel === "All layers"}
-          onPick={setPaintColor}
           tonePick={!!tonePick}
           onTonePick={onTonePicked}
           curveTarget={curveTarget}
@@ -7891,23 +7418,15 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onPenPathCommit={storeWorkPath}
           onPathEdited={(id, anchors, closed) => pathsApi.replace(id, anchors, closed)}
           onFrameDrawn={(rect, shape) => addFrameLayer(defaultFrame(rect, shape))}
-          frameShape={frameShape}
           recordStrokes={!!recordingId}
           onStrokeRecord={recordStrokeStep}
-          pendingPaste={pendingPaste}
-          onPasteDone={() => setPendingPaste(null)}
-          pendingLoads={pendingLoads}
-          onLoadDone={(docId) => setPendingLoads((ls) => ls.filter((p) => p.docId !== docId))}
           colorSpace={colorSpace}
-          showRulers={showRulers}
           unit={prefs.unit}
           docDpi={active.dpi ?? 300}
           checkerSize={prefs.checkerSize}
           checkerColors={prefs.checkerColors}
           checkerA={prefs.checkerA}
           checkerB={prefs.checkerB}
-          showGrid={showGrid}
-          snap={snap}
           docGrid={
             showDocGrid
               ? {
@@ -7920,11 +7439,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           pixelGridColor={prefs.pixelGridColor}
           snapDistance={prefs.snapDistance}
           guides={active.guides ?? EMPTY_GUIDES}
-          showGuides={showGuides}
-          lockGuides={lockGuides}
-          smartGuides={smartGuides}
           onGuidesCommit={commitGuides}
-          onRevealGuides={() => persistView({ guides: true })}
           penPressure={prefs.penPressure}
           pressureCurve={prefs.pressureCurve}
           palmRejection={prefs.palmRejection}
@@ -7939,7 +7454,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onBrushHud={setBrushHud}
           viewApiRef={viewApiRef}
           paintRef={paintRef}
-          onHistory={setHistory}
           onAdjustEnd={onAdjustEnd}
           onCursor={emitCursor}
           onGesture={emitGesture}
@@ -7956,17 +7470,8 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           tablet={tablet}
           detent={sheetDetent}
           onDetent={setSheetDetent}
-          foreground={foreground}
-          background={background}
-          onForeground={setForeground}
-          onBackground={setBackground}
-          activeSlot={activeSlot}
-          onActiveSlot={setActiveSlot}
-          brush={activeBrush}
-          onBrush={setActiveBrush}
           tool={tool}
           layers={layersApi}
-          history={history}
           maxHistoryRows={prefs.maxHistory}
           onHistoryJump={(i) => paintRef.current?.jumpTo(i)}
           onSetHistorySource={(i) => paintRef.current?.setHistorySourceIndex(i)}
@@ -8018,7 +7523,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onAddLevels={() => addToneAdjustment("levels")}
           onAddExtra={addExtraAdjustment}
           onExportLut={() => setLutExportOpen(true)}
-          panels={panels}
           engineRef={paintRef}
           docName={active.name}
           colorSpace={colorSpace}
@@ -8055,7 +7559,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
             tool={tool}
             zoom={zoom}
             onZoomChange={setZoom}
-            foreground={paintColor}
             width={active.width}
             height={active.height}
             colorSpace={colorSpace}
@@ -8530,7 +8033,7 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
           onAdd={(g) => {
             commitGuides("New Guide", [...(activeDocRef.current.guides ?? []), g]);
             // A guide you just asked for should be visible even if guides were off.
-            if (!viewSettingsRef.current.guides) persistView({ guides: true });
+            if (!viewStore.get().guides) persistView({ guides: true });
           }}
           onClose={() => setNewGuideOpen(false)}
         />
@@ -8703,5 +8206,6 @@ export default function Editor({ initialTheme }: { initialTheme: Theme }) {
 
       <TooltipHost />
     </div>
+    </EditorStoresProvider>
   );
 }

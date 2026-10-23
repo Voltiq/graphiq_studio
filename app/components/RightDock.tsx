@@ -44,28 +44,15 @@ import { Camera, Spline, type LucideIcon } from "lucide-react";
 import type { NavigatorView, Rect } from "../lib/view";
 import { findNode as findLayer, type LayersApi } from "../lib/layers";
 import type { ChannelSelectOp, SavedChannel } from "../lib/channels";
-import type { BrushSettings, EngineHandle, HistorySummary } from "../lib/paint";
+import type { EngineHandle } from "../lib/paint";
 import type { Adjustments } from "../lib/adjust";
 import type { ExtraAdjustmentType } from "../lib/adjust-extra";
 import type { ImageMetadata } from "../lib/metadata";
 import type { MeasureUnit } from "../lib/prefs";
+import { useColors, useDocuments, useEditorStores, useToolOptions, useView } from "../state/editor";
+import { brushOf } from "../state/toolOptions";
 
-export type PanelVisibility = {
-  color: boolean;
-  swatches: boolean;
-  brushes: boolean;
-  adjustments: boolean;
-  properties: boolean;
-  layers: boolean;
-  paths: boolean;
-  comps: boolean;
-  history: boolean;
-  actions: boolean;
-  navigator: boolean;
-  channels: boolean;
-  metadata: boolean;
-  info: boolean;
-};
+export type { PanelVisibility } from "../state/view";
 
 export type PanelId =
   | "navigator"
@@ -289,18 +276,8 @@ function loadOpen(): Record<PanelId, boolean> {
 interface Props {
   /** Parked below the fold on a phone — see the note on Toolbar's `parked`. */
   parked?: boolean;
-  foreground: string;
-  background: string;
-  onForeground: (c: string) => void;
-  onBackground: (c: string) => void;
-  activeSlot: "primary" | "secondary";
-  onActiveSlot: (slot: "primary" | "secondary") => void;
-  /** Active paint-tool brush settings — the Brushes panel applies presets to it. */
-  brush: BrushSettings;
-  onBrush: (b: BrushSettings) => void;
   tool: string;
   layers: LayersApi;
-  history: HistorySummary;
   maxHistoryRows: number;
   onHistoryJump: (index: number) => void;
   /** Point the History brush at a history state (0 = the original). */
@@ -316,7 +293,6 @@ interface Props {
   onDeleteSnapshot: (id: string) => void;
   onSetSourceSnapshot: (id: string | null) => void;
   view: NavigatorView;
-  panels: PanelVisibility;
   adjust: Adjustments;
   onAdjust: (patch: Partial<Adjustments>) => void;
   adjustFilter: string;
@@ -427,17 +403,8 @@ export default function RightDock({
   tablet = false,
   detent,
   onDetent,
-  foreground,
-  background,
-  onForeground,
-  onBackground,
-  activeSlot,
-  onActiveSlot,
-  brush,
-  onBrush,
   tool,
   layers,
-  history,
   maxHistoryRows,
   onHistoryJump,
   onSetHistorySource,
@@ -463,7 +430,6 @@ export default function RightDock({
   onAddLevels,
   onAddExtra,
   onExportLut,
-  panels,
   engineRef,
   selection,
   selectionAngle,
@@ -492,6 +458,19 @@ export default function RightDock({
   onToast,
   onCommand,
 }: Props) {
+  // The colours, and the active tool's brush the Brushes panel applies presets
+  // to: the editor's stores (TODO 1.5).
+  const { tools, colors } = useEditorStores();
+  const { foreground, background, activeSlot } = useColors((c) => c);
+  const onForeground = colors.setter("foreground");
+  const onBackground = colors.setter("background");
+  const onActiveSlot = colors.setter("activeSlot");
+  const brush = useToolOptions((t) => t[brushOf(tool)]);
+  const onBrush = tools.setter(brushOf(tool));
+  // Which panels the Window menu shows: the editor's view store.
+  const panels = useView((v) => v.panels);
+  // The active document's history (the History panel): the documents store.
+  const history = useDocuments((d) => d.history);
   const [order, setOrder] = useState<PanelId[]>(DEFAULT_ORDER);
   /* The Color panel's view (Picker / Swatches), remembered: someone who works
      from a palette should find it where they left it. Restored after mount

@@ -10,6 +10,7 @@ import { swatchBg } from "../lib/color";
 import { uiZoom } from "../lib/ui-scale";
 import { clampY } from "../lib/safeArea";
 import { exitProps, useLinger } from "../lib/use-presence";
+import { useColors, useEditorStores } from "../state/editor";
 
 const byId = (id: ToolId): Tool => ALL_TOOLS.find((t) => t.id === id)!;
 /** The rail's slots, flattened, as tools. */
@@ -21,11 +22,6 @@ const HOLD_MS = 380;
 interface Props {
   tool: ToolId;
   onToolChange: (id: ToolId) => void;
-  foreground: string;
-  background: string;
-  onForeground: (c: string) => void;
-  onBackground: (c: string) => void;
-  onSwap: () => void;
   /** Touch layout: six tools up front, the rest in a labelled grid. */
   mobile?: boolean;
   /**
@@ -43,14 +39,15 @@ interface Props {
 export default function Toolbar({
   tool,
   onToolChange,
-  foreground,
-  background,
-  onForeground,
-  onBackground,
-  onSwap,
   mobile = false,
   parked = false,
 }: Props) {
+  // The two colours: the editor's store (TODO 1.5).
+  const { colors } = useEditorStores();
+  const { foreground, background } = useColors((c) => c);
+  const onForeground = colors.setter("foreground");
+  const onBackground = colors.setter("background");
+  const onSwap = () => colors.set((c) => ({ foreground: c.background, background: c.foreground }));
   /* ---- Desktop slots ----
      Each slot shows one tool of its family: the active one if it belongs here,
      otherwise the last one used from it (its first tool before that). The pick

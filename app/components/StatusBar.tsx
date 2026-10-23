@@ -10,6 +10,8 @@ import type { MeasureUnit } from "../lib/prefs";
 import { getTool, measureInfo, type MeasureLine, type ToolId } from "../lib/tools";
 import { parseColor, swatchBg, toHex6 } from "../lib/color";
 import type { Rect } from "../lib/view";
+import { useColors } from "../state/editor";
+import { slotColor } from "../state/toolOptions";
 
 /** Photoshop-style document sizes: flattened / all layers, from real dims. */
 /** Pixels → the display unit, trimmed to 2 decimals. */
@@ -55,7 +57,6 @@ export default function StatusBar({
   tool,
   zoom,
   onZoomChange,
-  foreground,
   width,
   height,
   colorSpace,
@@ -77,7 +78,6 @@ export default function StatusBar({
   tool: ToolId;
   zoom: number;
   onZoomChange: (z: number) => void;
-  foreground: string;
   width: number;
   height: number;
   colorSpace: WorkingSpace;
@@ -92,6 +92,8 @@ export default function StatusBar({
   measure?: MeasureLine | null;
   subscribeCursor: (fn: (p: CursorPt) => void) => () => void;
 }) {
+  // The colour the paint tools use: the editor's store (TODO 1.5).
+  const foreground = useColors((c) => c[slotColor(c.activeSlot)]);
   const meta = getTool(tool);
   const [cursor, setCursor] = useState<CursorPt>(null);
 

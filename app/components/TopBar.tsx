@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, PanelRight, X } from "lucide-react";
 import { Check, Download, Menu as MenuIcon, Redo2, Search, Undo2 } from "../lib/icons";
 import styles from "./TopBar.module.scss";
+import { useDocuments } from "../state/editor";
 import { registerDismissible } from "../lib/dismiss";
 import { exitProps, useLinger, usePresence } from "../lib/use-presence";
 import logo from "../icon.png";
@@ -36,8 +37,6 @@ export default function TopBar({
   tablet = false,
   panelsOpen = false,
   onTogglePanels,
-  docs = [],
-  activeDocId,
   onSelectDoc,
   saved = true,
 }: {
@@ -62,13 +61,13 @@ export default function TopBar({
   tablet?: boolean;
   panelsOpen?: boolean;
   onTogglePanels?: () => void;
-  /** Phone: the open documents, for the name in the header and its menu. */
-  docs?: { id: string; name: string }[];
-  activeDocId?: string;
   onSelectDoc?: (id: string) => void;
   /** Whether the active document's work is saved (an unsaved dot otherwise). */
   saved?: boolean;
 }) {
+  // The document tabs: the editor's documents store (TODO 1.5).
+  const docs = useDocuments((d) => d.docs);
+  const activeDocId = useDocuments((d) => d.activeId);
   // The registry's effective label, falling back to the static default.
   const keyFor = (kind: "menu" | "tool", id: string, fallback?: string): string | undefined => {
     const v = shortcutLabels?.[`${kind}:${id}`];

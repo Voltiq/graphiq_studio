@@ -14,7 +14,6 @@ import {
   serializeTextEditor,
   type TextStylePatch,
 } from "../lib/richtext-dom";
-import type { LassoMode } from "../lib/tools";
 import {
   HUD_VEIL,
   hudAlphaAt,
@@ -69,32 +68,22 @@ import { clampPan, KEEP, type Pan, type Rect } from "../lib/view";
 import { coveredFrom, readStageInsets, visibleStage } from "../lib/stage-area";
 import type { ColorSampler } from "../lib/samplers";
 import type { GestureReadout } from "../lib/samplers";
+import { useColors, useDocuments, useEditorStores, useToolOptions, useView } from "../state/editor";
+import { setViewFlags } from "../state/view";
+import { brushOf, slotColor } from "../state/toolOptions";
 import type {
-  BlurSettings,
-  CloneSettings,
-  CropGrid,
   CropQuad,
-  DodgeSettings,
-  SmudgeSettings,
-  SpongeSettings,
-  HealSettings,
-  RedEyeSettings,
-  MarqueeShape,
   MeasureLine,
   QuickSelectSettings,
   TextSettings,
-  GradientStop,
-  GradientType,
-  MoveMode,
   PenAnchor,
-  PenSettings,
-  SelectResizeMode,
   ShapeKind,
   TextRun,
   ToolId,
   VectorData,
   VectorText,
 } from "../lib/tools";
+import { SAMPLE_SIZE_PX, cropAspect as cropAspectOf } from "../lib/tools";
 import { warpActive } from "../lib/textwarp";
 import {
   STAR_DEFAULT,
@@ -105,10 +94,7 @@ import {
 } from "../lib/shapes";
 import {
   PaintEngine,
-  type BrushSettings,
   type EngineHandle,
-  type HistorySummary,
-  type PendingPaste,
   type WandSelection,
 } from "../lib/paint";
 import {
@@ -121,10 +107,8 @@ import {
   linkedLeafIds,
   type LayerNode,
 } from "../lib/layers";
-import type { MixerSettings } from "../lib/mixer";
 import { builtinShapes, loadSavedShapes } from "../lib/shape-library";
 import { deleteAnchors } from "../lib/path-edit";
-import type { PendingLoad } from "../lib/project";
 import {
   createToolControllers,
   type OverlayLayer,
@@ -140,11 +124,6 @@ const ZOOM_STEPS = [
   12, 25, 33, 50, 67, 100, 150, 200, 300, 400, 600, 800, 1200, 1600, 2400, 3200,
   4800, 6400, 10000,
 ];
-
-interface DocTab {
-  id: string;
-  name: string;
-}
 
 /** View commands exposed to the menu (zoom/fit live in the canvas stage). */
 export interface ViewApi {
@@ -534,8 +513,6 @@ function textSpecBase(t: TextSettings) {
 const TRAP_DEFAULT: TrapInsets = { l: 0.25, r: 0.25 };
 
 export default function CanvasArea({
-  docs,
-  activeId,
   onSelectDoc,
   onCloseDoc,
   onNewDoc,
@@ -551,40 +528,14 @@ export default function CanvasArea({
   statusHost,
   tool,
   panMode = false,
-  brush,
-  color,
-  foreground,
-  background,
-  bucket,
-  gradient,
-  pen,
-  shape,
-  onShapeRadius,
-  blur,
-  smudge,
-  mixer,
-  sponge,
-  historyBrush,
-  heal,
-  redEye,
-  clone,
-  dodge,
-  showTransform,
-  autoSelect,
-  autoSelectScope,
+  gradientSnap,
   onPickLayer,
-  text,
-  onText,
   onPlaceText,
   onUpdateText,
   cropBox,
   onCropBox,
   cropQuad,
   onCropQuad,
-  cropGrid,
-  cropShield,
-  cropStraighten,
-  cropAspect,
   onCropApply,
   layers,
   activeLayerId,
@@ -601,17 +552,6 @@ export default function CanvasArea({
   selectionPivot,
   onSelectionAngle,
   onSelectionPivot,
-  moveMode,
-  resizeMode,
-  resizeSmooth,
-  marqueeShape,
-  triangleApex,
-  wand,
-  quickSelect,
-  onQuickSelect,
-  sampleSize,
-  sampleAllLayers,
-  onPick,
   tonePick,
   onTonePick,
   curveTarget,
@@ -623,33 +563,20 @@ export default function CanvasArea({
   onPenPathCommit,
   onPathEdited,
   onFrameDrawn,
-  frameShape,
   recordStrokes,
   onStrokeRecord,
-  pendingPaste,
-  onPasteDone,
-  pendingLoads,
-  onLoadDone,
   colorSpace,
-  showRulers,
   unit = "px",
   docDpi = 300,
   checkerSize = "medium",
   checkerColors = "auto",
   checkerA = "#ffffff",
   checkerB = "#cccccc",
-  lassoMode = "free",
-  showGrid,
-  snap,
   docGrid,
   pixelGridColor,
   snapDistance,
   guides,
-  showGuides,
-  lockGuides,
-  smartGuides,
   onGuidesCommit,
-  onRevealGuides,
   penPressure,
   pressureCurve,
   palmRejection,
@@ -660,7 +587,6 @@ export default function CanvasArea({
   onBrushHud,
   viewApiRef,
   paintRef,
-  onHistory,
   onAdjustEnd,
   onCursor,
   onGesture,
@@ -668,8 +594,6 @@ export default function CanvasArea({
   samplers,
   samplerOps,
 }: {
-  docs: DocTab[];
-  activeId: string;
   onSelectDoc: (id: string) => void;
   onCloseDoc: (id: string) => void;
   onNewDoc: () => void;
@@ -693,69 +617,11 @@ export default function CanvasArea({
    *  otherwise means switching to the Hand tool and back for each adjustment.
    *  The tool itself is untouched — the toolbar still shows what it showed. */
   panMode?: boolean;
-  brush: BrushSettings;
-  color: string;
-  /** Primary / secondary colours — left-button paints with `foreground`, right with `background`. */
-  foreground: string;
-  background: string;
-  /** Paint-bucket settings (fill colour comes from `color`). */
-  bucket: { tolerance: number; opacity: number; contiguous: boolean; antialias: boolean };
-  /** Gradient settings + the colours used when no custom stops are set. */
-  gradient: {
-    type: GradientType;
-    reverse: boolean;
-    smooth: boolean;
-    snap: boolean;
-    stops: GradientStop[] | null;
-    fg: string;
-    bg: string;
-  };
-  /** Pen tool stroke options (stroke colour = the active `color`). */
-  pen: PenSettings;
-  /** Shape-tool settings + colours (fill = primary, stroke = secondary). */
-  shape: {
-    kind: ShapeKind;
-    strokeWidth: number;
-    radius: number;
-    fill: string;
-    stroke: string;
-    /** Custom shapes: which library preset to draw. */
-    customId?: string;
-    /** Star: how many points. */
-    starPoints?: number;
-  };
-  /** The rect corner-radius node writes back to the options-bar Radius value —
-   *  the node and the slider are the same number reached two ways. */
-  onShapeRadius: (r: number) => void;
-  /** Blur (focus) brush settings. */
-  blur: BlurSettings;
-  /** Smudge brush settings. */
-  smudge: SmudgeSettings;
-  mixer: MixerSettings;
-  /** Sponge (saturate/desaturate) brush settings. */
-  sponge: SpongeSettings;
-  /** History brush settings (brush controls; paints from the source state). */
-  historyBrush: BrushSettings;
-  heal: HealSettings;
-  /** Red-eye tool settings (search size + darken amount). */
-  redEye: RedEyeSettings;
-  /** Clone-stamp brush settings. */
-  clone: CloneSettings;
-  /** Dodge/Burn brush settings. */
-  dodge: DodgeSettings;
-  /** Move ▸ Transform controls: draw the active layer's box + handles, and let
-   *  a handle drag scale or rotate it through the ordinary transform session. */
-  showTransform: boolean;
-  /** Move tool: clicking the canvas picks the layer under the pointer. */
-  autoSelect: boolean;
-  /** Auto-select target: the layer itself, or the group it lives in. */
-  autoSelectScope: "layer" | "group";
+  /** Gradient: its handles snap (Preferences). The tools' other options and
+   *  the colours come from the editor's stores (TODO 1.5). */
+  gradientSnap: boolean;
   /** Make `id` the active layer (auto-select's pick). */
   onPickLayer: (id: string) => void;
-  /** Text tool settings (styling for the live editor + rasterization). */
-  text: TextSettings;
-  /** Patch the text settings (used by the in-editor Ctrl+B/I/U shortcuts). */
-  onText: (patch: Partial<TextSettings>) => void;
   /** Commit a finished text block: creates a layer and rasterizes it (Editor). */
   onPlaceText: (p: { x: number; y: number; boxW: number | null; value: string; runs?: TextRun[] }) => void;
   /** Commit a re-edit of an existing text (vector) layer, in place (Editor). */
@@ -769,13 +635,6 @@ export default function CanvasArea({
   /** Perspective-crop quad (tl,tr,br,bl) — non-null only in Perspective mode. */
   cropQuad: CropQuad | null;
   onCropQuad: (q: CropQuad | null) => void;
-  cropGrid: CropGrid;
-  /** Dimming (0–90%) of the area outside the crop box. */
-  cropShield: number;
-  /** Straighten / rotate angle of the crop, −45…45°. */
-  cropStraighten: number;
-  /** Locked aspect ratio (w/h) while resizing, or null for a free crop. */
-  cropAspect: number | null;
   /** Commit the pending crop (double-click inside the box). */
   onCropApply: () => void;
   layers: LayerNode[];
@@ -801,19 +660,6 @@ export default function CanvasArea({
   selectionPivot: { x: number; y: number } | null;
   onSelectionAngle: (angle: number) => void;
   onSelectionPivot: (pivot: { x: number; y: number } | null) => void;
-  moveMode: MoveMode;
-  resizeMode: SelectResizeMode;
-  resizeSmooth: boolean;
-  /** Rectangular-marquee region shape (rectangle / ellipse / triangle). */
-  marqueeShape: MarqueeShape;
-  /** Triangle-marquee apex position as a fraction of width (0.5 = isosceles). */
-  triangleApex: number;
-  wand: { tolerance: number; contiguous: boolean; sampleAll: boolean };
-  quickSelect: QuickSelectSettings;
-  onQuickSelect: (patch: Partial<QuickSelectSettings>) => void;
-  sampleSize: number;
-  sampleAllLayers: boolean;
-  onPick: (hex: string) => void;
   /** While a Levels eyedropper is armed, the next canvas click samples a colour. */
   tonePick: boolean;
   onTonePick: (rgb: { r: number; g: number; b: number }) => void;
@@ -839,17 +685,10 @@ export default function CanvasArea({
   onPathEdited?: (id: string, anchors: PenAnchor[], closed: boolean) => void;
   /** The Frame tool finished dragging out a new frame. */
   onFrameDrawn?: (rect: { x: number; y: number; w: number; h: number }, shape: "rect" | "ellipse") => void;
-  /** Which shape the Frame tool draws. */
-  frameShape: "rect" | "ellipse";
   /** Actions recorder: capture brush/pencil/eraser strokes while armed. */
   recordStrokes: boolean;
   onStrokeRecord: (stroke: StrokeStep) => void;
-  pendingPaste: PendingPaste | null;
-  onPasteDone: () => void;
-  pendingLoads: PendingLoad[];
-  onLoadDone: (docId: string) => void;
   colorSpace: WorkingSpace;
-  showRulers: boolean;
   unit?: MeasureUnit;
   docDpi?: number;
   /** Transparency grid (Preferences ▸ Transparency): square size + colours. */
@@ -857,9 +696,6 @@ export default function CanvasArea({
   checkerColors?: CheckerColors;
   checkerA?: string;
   checkerB?: string;
-  lassoMode?: LassoMode;
-  showGrid: boolean;
-  snap: boolean;
   /** Document grid overlay (View ▸ Document grid) — null = hidden. */
   docGrid: { spacing: number; subdivisions: number; color: string } | null;
   /** Pixel-grid line colour (Preferences ▸ Guides & grid). */
@@ -868,16 +704,8 @@ export default function CanvasArea({
   snapDistance: number;
   /** This document's ruler guides (View ▸ Show guides). */
   guides: Guide[];
-  /** Hidden guides are inert: not drawn, not grabbable, and they pull on nothing. */
-  showGuides: boolean;
-  /** Locked guides still draw and still snap — they just can't be dragged. */
-  lockGuides: boolean;
-  /** Smart guides: align hints against other layers while moving. */
-  smartGuides: boolean;
   /** Commit a guide edit as one undoable step (label shows in the History panel). */
   onGuidesCommit: (label: string, next: Guide[]) => void;
-  /** Turn View ▸ Show guides on (dragging one off a ruler implies wanting it). */
-  onRevealGuides: () => void;
   /** Honour stylus pressure (Preferences ▸ Touch & pen). */
   penPressure: boolean;
   /** How hard you must press for full size/flow. */
@@ -896,7 +724,6 @@ export default function CanvasArea({
   onBrushHud: (size: number, hardness: number | null) => void;
   viewApiRef: RefObject<ViewApi | null>;
   paintRef: RefObject<EngineHandle | null>;
-  onHistory: (s: HistorySummary) => void;
   /** Called when a live adjustment session ends (so the panel resets its sliders). */
   onAdjustEnd: () => void;
   /** Reports the doc-space cursor position (null when off the canvas). */
@@ -916,6 +743,98 @@ export default function CanvasArea({
     hit: (x: number, y: number, tol: number) => ColorSampler | null;
   };
 }) {
+  // The View menu's toggles: the editor's view store (TODO 1.5).
+  const {
+    rulers: showRulers,
+    grid: showGrid,
+    snap,
+    guides: showGuides,
+    lockguides: lockGuides,
+    smartguides: smartGuides,
+  } = useView((v) => v);
+  /** A guide dragged out while guides are hidden shows them (and remembers it). */
+  const onRevealGuides = () => setViewFlags(view, { guides: true });
+  // The tools' options and the colours: the editor's stores (TODO 1.5).
+  const { tools, colors, view, documents } = useEditorStores();
+  // The open documents (TODO 1.5): the tabs, what is queued for the engine, and
+  // the history the engine reports.
+  const docs = useDocuments((d) => d.docs);
+  const activeId = useDocuments((d) => d.activeId);
+  const pendingPaste = useDocuments((d) => d.pendingPaste);
+  const pendingLoads = useDocuments((d) => d.pendingLoads);
+  // Stable, so the effects that call them re-run only when what they apply
+  // changes (as props they were new every Editor render, and a load in flight
+  // was cancelled and started again each time).
+  const onPasteDone = useCallback(() => documents.set({ pendingPaste: null }), [documents]);
+  const onLoadDone = useCallback(
+    (docId: string) => documents.set((d) => ({ pendingLoads: d.pendingLoads.filter((p) => p.docId !== docId) })),
+    [documents],
+  );
+  const onHistory = documents.setter("history");
+  const opts = useToolOptions((t) => t);
+  const { foreground, background, activeSlot } = useColors((c) => c);
+  /** The active slot's colour: what the paint tools use and the Eyedropper sets. */
+  const color = activeSlot === "primary" ? foreground : background;
+  const onPick = colors.setter(slotColor(activeSlot));
+  const brush = opts[brushOf(tool)];
+  const {
+    bucket,
+    pen,
+    blur,
+    smudge,
+    mixer,
+    sponge,
+    historyBrush,
+    heal,
+    redEye,
+    clone,
+    dodge,
+    showTransform,
+    autoSelect,
+    autoSelectScope,
+    text,
+    moveMode,
+    resizeMode,
+    resizeSmooth,
+    marqueeShape,
+    triangleApex,
+    wand,
+    quickSelect,
+    frameShape,
+    lassoMode,
+  } = opts;
+  /** The gradient's settings, and the colours it runs between when it has no stops. */
+  const gradient = {
+    type: opts.gradient.type,
+    reverse: opts.gradient.reverse,
+    smooth: opts.gradient.smooth,
+    snap: gradientSnap,
+    stops: opts.gradient.stops,
+    fg: foreground,
+    bg: background,
+  };
+  /** The shape's settings: filled with the primary colour, stroked with the secondary. */
+  const shape = {
+    kind: opts.shape.kind,
+    strokeWidth: opts.shape.strokeWidth,
+    radius: opts.shape.radius,
+    customId: opts.shape.customId,
+    starPoints: opts.shape.starPoints,
+    fill: foreground,
+    stroke: background,
+  };
+  /** The rect corner-radius node writes back to the options-bar Radius value —
+   *  the node and the slider are the same number reached two ways. */
+  const onShapeRadius = (r: number) => tools.set((t) => ({ shape: { ...t.shape, radius: r } }));
+  /** Patch the text settings (the in-editor Ctrl+B/I/U shortcuts). */
+  const onText = (patch: Partial<TextSettings>) => tools.set((t) => ({ text: { ...t.text, ...patch } }));
+  const onQuickSelect = (patch: Partial<QuickSelectSettings>) =>
+    tools.set((t) => ({ quickSelect: { ...t.quickSelect, ...patch } }));
+  const { grid: cropGrid, shield: cropShield, straighten: cropStraighten } = opts.crop;
+  /** Locked aspect ratio (w/h) while resizing, or null for a free crop. */
+  const cropAspect = cropAspectOf(opts.crop, height ? width / height : 1);
+  const sampleSize = SAMPLE_SIZE_PX[opts.sampleSize] ?? 1;
+  const sampleAllLayers = opts.sampleScope === "All layers";
   const viewportRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);

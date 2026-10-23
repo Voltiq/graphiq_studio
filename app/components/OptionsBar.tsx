@@ -49,6 +49,8 @@ import {
 } from "lucide-react";
 import { Check, PressureIcon } from "../lib/icons";
 import styles from "./OptionsBar.module.scss";
+import { useColors, useEditorStores, useToolOptions, useView } from "../state/editor";
+import { brushOf, slotColor, type ToolOptions } from "../state/toolOptions";
 import { Presence, exitProps } from "../lib/use-presence";
 import {
   CROP_RATIOS,
@@ -1034,6 +1036,24 @@ function TextFillControl({ text, onText }: TextProps) {
   );
 }
 
+/** The options a change patches (the rest are set whole). */
+type PatchedOption =
+  | "wand"
+  | "quickSelect"
+  | "bucket"
+  | "gradient"
+  | "pen"
+  | "shape"
+  | "blur"
+  | "smudge"
+  | "mixer"
+  | "sponge"
+  | "heal"
+  | "redEye"
+  | "clone"
+  | "dodge"
+  | "crop";
+
 interface ShapeProps {
   shape: ShapeSettings;
   onShape: (patch: Partial<ShapeSettings>) => void;
@@ -1294,6 +1314,32 @@ interface CropProps {
   docHeight: number;
 }
 
+/** What only Editor knows: the rest of the bar is the tools' options and the
+ *  colours, which it reads from the editor's stores (TODO 1.5). */
+type OptionsBarProps = {
+  tool: ToolId;
+  paintSurface: ActiveSurface;
+  /** Quick Mask outranks the per-layer surface pill: while it is on, every tool
+   *  paints the document's quick mask whatever surface the layer has selected. */
+  quickMask: boolean;
+  onExitQuickMask: () => void;
+  onExitMaskEdit: () => void;
+  /** Numeric selection transform: the current box + angle, null when nothing is
+   *  selected. Absent ⇒ the fields are hidden. */
+  selBox: { x: number; y: number; w: number; h: number; angle: number } | null;
+  onSelBox: (next: { x: number; y: number; w: number; h: number; angle: number }) => void;
+  /** A change styles the live text selection when there is one, else the block. */
+  onText: TextProps["onText"];
+  measure: MeasureLine | null;
+  onMeasureClear: () => void;
+  onStraighten: () => void;
+  /** Touch: the controls move into a sheet and the bar keeps the essentials. */
+  mobile?: boolean;
+} & Pick<MixerProps, "onCleanMixer"> &
+  Omit<FrameProps, "frameShape" | "onFrameShape"> &
+  Pick<MoveProps, "onAlign" | "onDistribute"> &
+  Omit<CropProps, "crop" | "onCrop">;
+
 export default function OptionsBar({
   mobile = false,
   tool,
@@ -1301,58 +1347,11 @@ export default function OptionsBar({
   quickMask,
   onExitQuickMask,
   onExitMaskEdit,
-  foreground,
-  onForeground,
-  brush,
-  onBrush,
-  moveMode,
-  onMoveMode,
-  snap,
-  onSnap,
-  autoSelect,
-  onAutoSelect,
-  autoSelectScope,
-  onAutoSelectScope,
-  showTransform,
-  onShowTransform,
-  alignToCanvas,
-  onAlignToCanvas,
   onAlign,
   onDistribute,
-  resizeMode,
-  onResizeMode,
-  resizeSmooth,
-  onResizeSmooth,
-  marqueeShape,
-  onMarqueeShape,
-  lassoMode,
-  onLassoMode,
-  triangleApex,
-  onTriangleApex,
   selBox,
   onSelBox,
-  wand,
-  onWand,
-  quickSelect,
-  onQuickSelect,
-  bucket,
-  onBucket,
-  gradient,
-  onGradient,
-  pen,
-  onPen,
-  eyedropper,
-  onEyedropper,
-  shape,
-  onShape,
-  blur,
-  onBlur,
-  smudge,
-  onSmudge,
-  mixer,
-  onMixer,
   onCleanMixer,
-  frameShape,
   frameFit,
   onFrameFit,
   frameSelected,
@@ -1361,96 +1360,101 @@ export default function OptionsBar({
   onFrameScale,
   onFrameNudge,
   onFrameReset,
-  onFrameShape,
-  sponge,
-  onSponge,
-  historyBrush,
-  onHistoryBrush,
-  heal,
-  onHeal,
-  redEye,
-  onRedEye,
-  clone,
-  onClone,
-  text,
   onText,
-  dodge,
-  onDodge,
-  crop,
-  onCrop,
   cropBox,
   onCropBox,
   onCropApply,
   onCropReset,
   docWidth,
   docHeight,
-  fill,
-  onFill,
-  stroke,
-  onStroke,
   measure,
   onMeasureClear,
   onStraighten,
-}: {
-  tool: ToolId;
-  paintSurface: ActiveSurface;
-  /** Quick Mask outranks the per-layer surface pill: while it is on, every tool
-   *  paints the document's quick mask whatever surface the layer has selected. */
-  quickMask: boolean;
-  onExitQuickMask: () => void;
-  onExitMaskEdit: () => void;
-  foreground: string;
-  onForeground: (c: string) => void;
-  brush: BrushSettings;
-  onBrush: (b: BrushSettings) => void;
-  moveMode: MoveMode;
-  onMoveMode: (m: MoveMode) => void;
-  resizeMode: SelectResizeMode;
-  onResizeMode: (m: SelectResizeMode) => void;
-  resizeSmooth: boolean;
-  onResizeSmooth: (v: boolean) => void;
-  marqueeShape: MarqueeShape;
-  lassoMode: LassoMode;
-  onLassoMode: (m: LassoMode) => void;
-  onMarqueeShape: (s: MarqueeShape) => void;
-  triangleApex: number;
-  onTriangleApex: (v: number) => void;
-  /** Numeric selection transform: the current box + angle, null when nothing is
-   *  selected. Absent ⇒ the fields are hidden. */
-  selBox: { x: number; y: number; w: number; h: number; angle: number } | null;
-  onSelBox: (next: { x: number; y: number; w: number; h: number; angle: number }) => void;
-  wand: { tolerance: number; contiguous: boolean; sampleAll: boolean };
-  onWand: (patch: Partial<{ tolerance: number; contiguous: boolean; sampleAll: boolean }>) => void;
-  quickSelect: QuickSelectSettings;
-  onQuickSelect: (patch: Partial<QuickSelectSettings>) => void;
-  bucket: { tolerance: number; opacity: number; contiguous: boolean; antialias: boolean };
-  onBucket: (patch: Partial<{ tolerance: number; opacity: number; contiguous: boolean; antialias: boolean }>) => void;
-  gradient: GradientSettings;
-  onGradient: (patch: Partial<GradientSettings>) => void;
-  pen: PenSettings;
-  onPen: (patch: Partial<PenSettings>) => void;
-  eyedropper: { size: string; scope: string };
-  onEyedropper: (patch: { size?: string; scope?: string }) => void;
-  measure: MeasureLine | null;
-  onMeasureClear: () => void;
-  onStraighten: () => void;
-} & ShapeProps &
-  BlurProps &
-  SmudgeProps &
-  MixerProps &
-  FrameProps &
-  SpongeProps &
-  HistoryBrushProps &
-  HealProps &
-  RedEyeProps &
-  CloneProps &
-  TextProps &
-  DodgeProps &
-  MoveProps &
-  CropProps & {
-    /** Touch: the controls move into a sheet and the bar keeps the essentials. */
-    mobile?: boolean;
-  }) {
+}: OptionsBarProps) {
+  const { tools, colors, view } = useEditorStores();
+  const opts = useToolOptions((t) => t);
+  const { foreground: primary, background: secondary, activeSlot } = useColors((c) => c);
+  /** A setter that merges a patch into one tool's settings. */
+  const patch =
+    <K extends PatchedOption>(k: K) =>
+    (p: Partial<ToolOptions[K]>) =>
+      tools.set((t) => ({ [k]: { ...t[k], ...p } }) as Partial<ToolOptions>);
+  // The paint tools and the Eyedropper work in the active slot's colour.
+  const foreground = activeSlot === "primary" ? primary : secondary;
+  const onForeground = colors.setter(slotColor(activeSlot));
+  const brush = opts[brushOf(tool)];
+  const onBrush = tools.setter(brushOf(tool));
+  const {
+    moveMode,
+    resizeMode,
+    resizeSmooth,
+    marqueeShape,
+    lassoMode,
+    triangleApex,
+    wand,
+    quickSelect,
+    bucket,
+    gradient,
+    pen,
+    shape,
+    blur,
+    smudge,
+    mixer,
+    frameShape,
+    sponge,
+    historyBrush,
+    heal,
+    redEye,
+    clone,
+    text,
+    dodge,
+    crop,
+    autoSelect,
+    autoSelectScope,
+    showTransform,
+    alignToCanvas,
+  } = opts;
+  const onMoveMode = tools.setter("moveMode");
+  const onResizeMode = tools.setter("resizeMode");
+  const onResizeSmooth = tools.setter("resizeSmooth");
+  const onMarqueeShape = tools.setter("marqueeShape");
+  const onLassoMode = tools.setter("lassoMode");
+  const onTriangleApex = tools.setter("triangleApex");
+  const onWand = patch("wand");
+  const onQuickSelect = patch("quickSelect");
+  const onBucket = patch("bucket");
+  const onGradient = patch("gradient");
+  const onPen = patch("pen");
+  const eyedropper = { size: opts.sampleSize, scope: opts.sampleScope };
+  const onEyedropper = (p: { size?: string; scope?: string }) => {
+    if (p.size !== undefined) tools.set({ sampleSize: p.size });
+    if (p.scope !== undefined) tools.set({ sampleScope: p.scope });
+  };
+  const onShape = patch("shape");
+  // A shape is filled with the primary colour and stroked with the secondary.
+  const fill = primary;
+  const onFill = colors.setter("foreground");
+  const stroke = secondary;
+  const onStroke = colors.setter("background");
+  const onBlur = patch("blur");
+  const onSmudge = patch("smudge");
+  const onMixer = patch("mixer");
+  const onFrameShape = tools.setter("frameShape");
+  const onSponge = patch("sponge");
+  const onHistoryBrush = tools.setter("historyBrush");
+  const onHeal = patch("heal");
+  const onRedEye = patch("redEye");
+  const onClone = patch("clone");
+  const onDodge = patch("dodge");
+  const onCrop = patch("crop");
+  // The Move tool's Snap is View ▸ Snap — switched here, but (unlike the menu)
+  // not remembered for the next session.
+  const snap = useView((v) => v.snap);
+  const onSnap = view.setter("snap");
+  const onAutoSelect = tools.setter("autoSelect");
+  const onAutoSelectScope = tools.setter("autoSelectScope");
+  const onShowTransform = tools.setter("showTransform");
+  const onAlignToCanvas = tools.setter("alignToCanvas");
   const meta = getTool(tool);
   const Icon = meta.icon;
 
