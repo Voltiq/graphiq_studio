@@ -51,6 +51,7 @@ test("a project opened from a file keeps what is done to it after — through a 
   await (await saved).saveAs(path);
   await app.page.locator('input[type="file"][accept*="gproj"]').setInputFiles(path);
   await expect.poll(async () => (await docs(app)).length, { message: "it opens as a tab of its own" }).toBe(3);
+  expect((await docs(app)).find((d) => d.active)!.name, "under the name it was saved as").toBe("kept");
   await app.settle(1_500);
   expect(await pixel(app, 30, 30), "its pixels arrived").toEqual([208, 32, 96, 255]);
   // Worked on after it opened — on the very layer the file brought...

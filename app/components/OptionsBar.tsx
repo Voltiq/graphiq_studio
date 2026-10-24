@@ -51,6 +51,7 @@ import { Check, PressureIcon } from "../lib/icons";
 import styles from "./OptionsBar.module.scss";
 import { useColors, useEditorStores, useToolOptions, useView } from "../state/editor";
 import { brushOf, slotColor, type ToolOptions } from "../state/toolOptions";
+import { setViewFlags } from "../state/view";
 import { Presence, exitProps } from "../lib/use-presence";
 import {
   CROP_RATIOS,
@@ -1447,10 +1448,10 @@ export default function OptionsBar({
   const onClone = patch("clone");
   const onDodge = patch("dodge");
   const onCrop = patch("crop");
-  // The Move tool's Snap is View ▸ Snap — switched here, but (unlike the menu)
-  // not remembered for the next session.
+  // The Move tool's Snap is View ▸ Snap — switched here, and remembered as the
+  // menu's is.
   const snap = useView((v) => v.snap);
-  const onSnap = view.setter("snap");
+  const onSnap = (on: boolean) => setViewFlags(view, { snap: on });
   const onAutoSelect = tools.setter("autoSelect");
   const onAutoSelectScope = tools.setter("autoSelectScope");
   const onShowTransform = tools.setter("showTransform");

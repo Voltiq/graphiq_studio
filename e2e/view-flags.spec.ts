@@ -61,6 +61,18 @@ test("the menus' toggles survive a reload, and the Move tool's Snap is View ▸ 
   await expect(app.page.locator('[data-panel-id="layers"]'), "Window ▸ Reset brings it back").toHaveCount(1);
 });
 
+test("the Move tool's Snap, switched there, is kept as the menu's is", async ({ app }) => {
+  await app.pickTool("Move");
+  const sw = () => app.page.locator('[data-tour="options"]:visible').getByRole("switch", { name: "Snap" }).first();
+  await expect(sw(), "on by default").toHaveAttribute("aria-checked", "true");
+  await sw().click();
+  await expect(sw()).toHaveAttribute("aria-checked", "false");
+  await app.boot();
+  expect((await viewChecks(app))["Snap"], "off in the menu after a reload").toBe(false);
+  await app.pickTool("Move");
+  await expect(sw(), "and on the switch").toHaveAttribute("aria-checked", "false");
+});
+
 test("a guide pulled from a ruler shows the guides if they were hidden; locked, the rulers are inert", async ({
   app,
 }) => {

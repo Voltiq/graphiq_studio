@@ -1,10 +1,10 @@
 // What the editor lets a command do. TODO 1.1.
 //
 // The registry (registry.ts) says WHICH operation each command performs; this is
-// the editor surface those operations come from. The operations themselves still
-// live in Editor, because they close over its React state — moving their bodies
-// out is the state store's job (TODO 1.5). What moved here is the mapping, and
-// the decision of when a command applies, so neither is buried in the component.
+// the editor surface those operations come from. The operations themselves live
+// in the families beside it (layers.ts, selection.ts, workspace.ts, … — TODO
+// 1.10), each handed what it needs of the editor on every render; Editor builds
+// that context and fills this table with what they return.
 
 import type { FxKey } from "../lib/effects";
 import type { FilterType } from "../lib/filters";
