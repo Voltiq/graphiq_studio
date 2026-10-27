@@ -61,7 +61,7 @@ height.
 ### 4. Real performance, and heat
 
 **Covers:** `app/lib/budgets.ts` (`BY_CLASS`), and `DRAFT_MAX_PIXELS` in
-`app/lib/paint.ts`.
+`app/lib/engine/smart-filters.ts`.
 
 `e2e/mobile-profile.spec.ts` throttles the CPU 4×, which slows *script* only. It does not
 model a slower GPU, lower memory bandwidth, or a thermal ceiling — so it
@@ -87,7 +87,7 @@ device *class* leads and the hardware hints may only shrink a budget. On iOS
 ### 6. iOS's canvas ceiling and its tab killer
 
 **Covers:** `app/lib/canvas-ceiling.ts`, and `checkAllocation` in
-`app/lib/paint.ts`.
+`app/lib/engine/canvas.ts`.
 
 Desktop Chromium's ceiling is far higher than iOS Safari's, and only a real
 device reproduces the failure this code exists for: an over-limit canvas that

@@ -1,42 +1,14 @@
 ﻿import { parseColor, toHex8 } from "./color";
-import {
-  DUAL_VARIANTS,
-  dualMask,
-  textureAlpha,
-  tipShapingActive,
-  type DualTipSettings,
-  type TextureSettings,
-  makeRng,
-  scatterActive,
-  scatterOffsets,
-  tipRadius,
-  tipShapeActive,
-  type ScatterSettings,
-  type TipShapeSettings,
-} from "./brush-tip";
-import {
-  afterStroke as mixerAfterStroke,
-  averageColor,
-  initialMixerState,
-  mixerBlend,
-  mixerDab,
-  type MixerSettings,
-  type MixerState,
-  type Rgba,
-} from "./mixer";
+import type { DualTipSettings, ScatterSettings, TextureSettings, TipShapeSettings } from "./brush-tip";
+import type { MixerSettings } from "./mixer";
 import type { Rect } from "./view";
-import { blendInto } from "./blend";
-import { sentinelPasses } from "./canvas-ceiling";
-import { budgets } from "./budgets";
 import { blendOp, clipGroupsOf, filterMaskKey, findNode, type ClipGroup } from "./layers";
 import type { ActiveSurface, LayerAdjustment, LayerGroup, LayerLeaf, LayerNode } from "./layers";
 import { applyAdjustments, applyAdjustments16, isDefaultAdjust, type Adjustments } from "./adjust";
 import { applyExtraAdjustment, extraIsDefault, isExtraSpec, type ExtraAdjustment } from "./adjust-extra";
 import { removeRedEyeInPlace } from "./redeye";
 import { renderShape, type ShapeGeom } from "./shapes";
-import { maskToRects, maskToSegments } from "./mask-trace";
 
-import { boxBlurPass } from "./blur";
 import {
   blendIfActive,
   buildLut,
@@ -44,26 +16,17 @@ import {
   rangeActive,
   type BlendIf,
 } from "./blendif";
-import { clampBudgetMB, overBudget, totalBytes } from "./history-budget";
 import { DocumentScoped, DocumentState, type Entry, type Layer } from "./doc-state";
-import {
-  ROOT,
-  ancestry,
-  newestChild,
-  offPath,
-  removeNodes,
-  transition,
-  trimVictim,
-} from "./history-tree";
-import {
-  DEFAULT_DYNAMICS,
-  PRESSURE_BUCKETS,
-  bucketPressure,
-  clamp01,
-  pressureBucket,
-  pressureScale,
-  type PressureDynamics,
-} from "./pointer";
+import { EngineBlurGallery } from "./engine/blur-gallery";
+import { checkAllocation, makeCanvas } from "./engine/canvas";
+import { EngineHeal } from "./engine/heal";
+import { EngineHistory } from "./engine/history";
+import { EngineMasks } from "./engine/masks";
+import { EngineRetouch } from "./engine/retouch";
+import { EngineSelection } from "./engine/selection";
+import { EngineSmartFilters } from "./engine/smart-filters";
+import { EngineStroke } from "./engine/stroke";
+import { ROOT } from "./history-tree";
 import { fxHash, hasEnabledFx, renderStyled } from "./effects";
 import {
   clampRect,
@@ -77,14 +40,7 @@ import {
   type RenderNodeCache,
   type TileGrid,
 } from "./render-graph";
-import {
-  applyFilter,
-  computeBlurFx,
-  filterStackHash,
-  hasEnabledFilters,
-  scaleFilterParams,
-  type SmartFilter,
-} from "./filters";
+import { filterStackHash, hasEnabledFilters, type SmartFilter } from "./filters";
 import {
   adobe16ToSrgbBytes,
   adobeToSrgbInPlace,
@@ -98,21 +54,10 @@ import {
 } from "./colorspace";
 import { GpuToneRenderer } from "./gpu";
 import { healPadding, healRegion } from "./heal";
-import { applyRefine, effectiveSoftness, type RefineEdge } from "./refine-edge";
+import type { RefineEdge } from "./refine-edge";
 import type { SavedSelectionMask } from "./project";
-import {
-  combine as combineMasks,
-  coverage as selectionCoverage,
-  feather as featherMask,
-  fromCoverage,
-  growSquare,
-  morphRound,
-  peakOf,
-  resample as resampleMask,
-  shift as shiftMask,
-  type SelectionMask,
-} from "./selection-mask";
-import { modifyMask, type ModifyOp } from "./select-modify";
+import type { SelectionMask } from "./selection-mask";
+import type { ModifyOp } from "./select-modify";
 import { vectorMaskActive, vectorMaskHash } from "./vector-mask";
 import { fillAlpha, fillOpacityActive, knockoutOf } from "./knockout";
 import {
@@ -136,7 +81,6 @@ import { flattenPath, layoutTextOnPath, type PathTextSpec } from "./textpath";
 import type { PatternPlacement } from "./patterns";
 import { parsePath } from "./svgpath";
 import { solveHomography } from "./homography";
-import { buildEdgeField, type EdgeField } from "./magnetic";
 import { warpActive, warpPoint, type TextWarp } from "./textwarp";
 import {
   applyToneLUTs,
@@ -219,14 +163,8 @@ export interface BrushSettings {
 }
 
 /** Dynamics for sessions that must not respond to pressure (the clone stamp). */
-const NO_DYNAMICS: PressureDynamics = { size: false, flow: false, min: 0 };
-
-/** A brush's pressure dynamics, with the defaults filled in. */
-export const brushDynamics = (b: BrushSettings): PressureDynamics => ({
-  size: b.pressureSize ?? DEFAULT_DYNAMICS.size,
-  flow: b.pressureFlow ?? DEFAULT_DYNAMICS.flow,
-  min: b.pressureMin ?? DEFAULT_DYNAMICS.min,
-});
+// brushDynamics moved to engine/stroke.ts (TODO 1.6); OptionsBar imports it from here.
+export { brushDynamics } from "./engine/stroke";
 
 /** A doc-space line segment (marching-ants outline edge). */
 export interface Seg {
@@ -243,7 +181,7 @@ export interface WandSelection {
 }
 
 /** Tight, half-open bounding box of a mask region: [x0,x1) × [y0,y1). */
-interface Bounds {
+export interface Bounds {
   x0: number;
   y0: number;
   x1: number;
@@ -690,82 +628,9 @@ export interface PendingPaste {
 
 // BLEND_MAP / blendOp moved to layers.ts (shared with the filters worker).
 
-/**
- * Running out of canvas memory is not an error anywhere. WebKit hands back a
- * canvas that draws, composites and reads — as transparent black, for ever. The
- * user does not see "your device ran out of room"; they see the photo they just
- * opened turn into nothing, which reads as this app having destroyed it.
- *
- * So every allocation big enough to be the one that fails is checked with a
- * sentinel: a pixel written and read back at the far corner. That cannot be
- * skipped or made read-only — an empty canvas and a dead canvas read identically
- * (see `sentinelPasses`).
- *
- * WHY THERE IS A THRESHOLD, measured rather than assumed. The sentinel costs
- * 0.7–0.8ms whatever the canvas size: it is a GPU→CPU readback stall, not work
- * proportional to pixels. And a census of a real session — boot, a 4000×3000
- * document, a brush stroke — found 27 allocations, of which 20 were under a
- * quarter of a megapixel and 4 were over four. Checking everything would spend
- * most of its time on canvases that could never be the one to exhaust memory;
- * checking only the large ones costs about 3ms per document and covers every
- * allocation that could produce a blank photograph.
- *
- * The accepted limit, stated plainly: a failure below the threshold goes
- * undetected. A device that cannot allocate 4 MB has already lost the tab.
- */
-const SENTINEL_MIN_PIXELS = 1_048_576;
-
-type CanvasFailure = { w: number; h: number };
-let onCanvasFailure: ((f: CanvasFailure) => void) | null = null;
-
-/**
- * Where to report an allocation that came back dead.
- *
- * Module-level rather than a constructor argument because `makeCanvas` is a free
- * function used by the engine, its workers' helpers and the paths that build
- * scratch buffers — there is no single instance to hang it off.
- */
-export function setCanvasFailureHandler(fn: ((f: CanvasFailure) => void) | null): void {
-  onCanvasFailure = fn;
-}
-
-/** Reported once. Fifty dead buffers are one event, not fifty. */
-let reportedFailure = false;
-
-/** Tests only. */
-export function resetCanvasFailureReport(): void {
-  reportedFailure = false;
-}
-
-/** True if the canvas is real. Reports the first failure it sees. */
-function checkAllocation(
-  ctx: CanvasRenderingContext2D | null,
-  w: number,
-  h: number,
-): boolean {
-  if (!ctx) return false;
-  if (w * h < SENTINEL_MIN_PIXELS) return true;
-  if (sentinelPasses(ctx, w, h)) return true;
-  if (!reportedFailure) {
-    reportedFailure = true;
-    onCanvasFailure?.({ w, h });
-  }
-  return false;
-}
-
-const makeCanvas = (
-  w: number,
-  h: number,
-  readFreq = false,
-  colorSpace: PredefinedColorSpace = "srgb",
-) => {
-  const c = document.createElement("canvas");
-  c.width = w;
-  c.height = h;
-  const ctx = c.getContext("2d", { willReadFrequently: readFreq, colorSpace })!;
-  checkAllocation(ctx, w, h);
-  return { c, ctx };
-};
+// The canvas allocator moved to engine/canvas.ts (TODO 1.6); its failure report
+// is still set from here.
+export { resetCanvasFailureReport, setCanvasFailureHandler } from "./engine/canvas";
 
 /** One resident tile of a tiled adjustment product (its own LRU entry). */
 interface AdjTile {
@@ -977,14 +842,7 @@ export class PaintEngine extends DocumentScoped {
   // and editable by the brush pipeline. Its derived alpha (`maskAlpha`: RGB=0,
   // A = R × maskAlpha/255, so eraser strokes read right) is recomputed only on
   // mask mutation, scoped to the changed rect — never per composite frame.
-  // True while the in-progress stroke paints the mask (set in beginStroke).
-  private strokeOnMask = false;
-  // Reused buffers for the live mask-paint preview (grayscale + derived alpha).
-  private maskPrevG: Layer | null = null;
-  private maskPrevA: Layer | null = null;
-  // Mask VIEW mode (Alt-click a mask chip / Channels panel): while set, the
-  // view canvas shows this mask's grayscale instead of the composite.
-  private maskView: { id: string; surface: "mask" | "filterMask" } | null = null;
+
   // Reused scratch for the per-node masked composite (src ⊗ mask alpha).
   private maskTmp: Layer | null = null;
   // Reused buffers for the adjustment-layer composite (offscreen accumulator that
@@ -1007,18 +865,6 @@ export class PaintEngine extends DocumentScoped {
   // it never activates and everything quietly takes the full pass.
   private regionHits = 0;
   private regionPx = 0;
-  // The same two questions for the LIVE half: how many draft frames the region
-  // path took over, how many pixels it filtered, and how many FILTER frames still
-  // fell through to a full-document draft (the effects draft is separate and not
-  // counted here). A stroke that reports 0 region frames proves the path never
-  // ran, whatever the pixels look like.
-  private liveRegionHits = 0;
-  private liveRegionPx = 0;
-  private liveDraftFrames = 0;
-  private liveRegionOn = true; // dev A/B (window.__gqRenderCache.regionOff())
-  /** Per-stroke full-resolution filter product: a copy of the settled one, with
-   *  the stroke's own region re-filtered into it each frame. */
-  private liveProduct: (Layer & { id: string; key: string }) | null = null;
   private renderTick = 0; // LRU clock
   private renderBytes = 0; // owned bytes currently cached
   private renderBudget = 256 * 1024 * 1024; // LRU eviction beyond this (Preferences ▸ Performance)
@@ -1032,10 +878,6 @@ export class PaintEngine extends DocumentScoped {
   private lastDirtyRect: Rect | null = null;
   private lastDirtyAt = 0;
   private lastFrameFull = false;
-  private historyLimit = 60; // max undoable steps kept (Preferences ▸ Performance)
-  /** Memory cap for those steps' pixel patches — the cap that actually bounds
-   *  RAM, since one full-canvas patch can outweigh a hundred brush dabs. */
-  private historyBudgetMB = 512;
   private workersOn = true; // background compute (blur/filters/heal) toggle
   private frameProtect = new Set<string>(); // entries used by the current frame
   private keyMemo = new Map<string, string>(); // per-composite effectiveKey memo
@@ -1316,113 +1158,6 @@ export class PaintEngine extends DocumentScoped {
     this.emitChange();
   }
 
-  /** Debug A/B toggle: off sends every live filter frame back through the
-   *  full-document draft, so the two arms can be measured in one sitting
-   *  (absolute wall-clock does not travel between runs on this machine). */
-  setLiveRegionEnabled(on: boolean) {
-    this.liveRegionOn = on;
-    this.liveProduct = null;
-  }
-
-  /**
-   * Debug: compare a node's CACHED filter product (computed by the worker)
-   * against the same stack computed inline by `renderFiltered`, pixel for pixel.
-   *
-   * The two are supposed to be interchangeable — that is the entire premise of
-   * handing the settled pass to a worker — but nothing checked it until a live
-   * region frame seeded from a cached product and inherited a discrepancy. Diffing
-   * whole composites cannot localise that: it drags in every group merge,
-   * adjustment and blend on the way to the canvas. This compares the products
-   * themselves and nothing else.
-   *
-   * Returns null when there is no cached product to compare against.
-   */
-  compareFilterProduct(id?: string): {
-    differing: number;
-    worst: number;
-    channels: [number, number, number, number];
-    total: number;
-    quality: "preview" | "full";
-    /** Checksum of the inline product, so a caller can prove a configuration
-     *  change actually reached the pixels rather than comparing two identical
-     *  renders and calling the agreement meaningful. */
-    digest: number;
-    sample: {
-      at: number;
-      cached: number[];
-      inline: number[];
-      preFilter: number[];
-      postFilter: number[];
-      opacity: number;
-      blendMode: string;
-    } | null;
-  } | null {
-    const pick = (nodes: LayerNode[]): LayerNode | null => {
-      for (const n of nodes) {
-        if (n.type === "group") {
-          const hit = pick(n.children);
-          if (hit) return hit;
-        } else if (n.type === "layer" && hasEnabledFilters(n.filters)) return n;
-      }
-      return null;
-    };
-    const node = !this.curTree ? null : id ? findNode(this.curTree, id) : pick(this.curTree);
-    if (!node || node.type !== "layer" || !hasEnabledFilters(node.filters)) return null;
-    id = node.id;
-    const ent = this.filteredCache.get(id);
-    if (!ent || ent.canvas.width !== this.w || ent.canvas.height !== this.h) return null;
-    // A product whose key has moved on is simply STALE — a worker job is still in
-    // flight. Comparing it would report a huge difference that says nothing about
-    // whether the two paths agree, so say "not ready" and let the caller wait.
-    if (ent.key !== this.nodeKey(node)) return null;
-    const src = node.fill ? this.renderFill(node) : this.leafDisplay(id);
-    if (!src) return null;
-    // The stack's INPUT and its post-filter pixels, so a caller can do the blend
-    // arithmetic by hand and say which of the two paths rounded it differently.
-    const pre = this.mk(this.w, this.h, true);
-    pre.ctx.drawImage(src, 0, 0);
-    const preData = pre.ctx.getImageData(0, 0, this.w, this.h);
-    const first = node.filters!.find((f) => f.enabled)!;
-    const postData = applyFilter(preData, first, this.cs);
-    const inline = this.renderFiltered(src, node.filters!, this.filterMaskAlpha(node));
-    const a = ent.canvas.getContext("2d", { willReadFrequently: true })!.getImageData(0, 0, this.w, this.h).data;
-    const b = inline.getContext("2d", { willReadFrequently: true })!.getImageData(0, 0, this.w, this.h).data;
-    const channels: [number, number, number, number] = [0, 0, 0, 0];
-    let differing = 0;
-    let worst = 0;
-    let sample: {
-      at: number;
-      cached: number[];
-      inline: number[];
-      preFilter: number[];
-      postFilter: number[];
-      opacity: number;
-      blendMode: string;
-    } | null = null;
-    for (let i = 0; i < a.length; i++) {
-      const d = Math.abs(a[i] - b[i]);
-      if (!d) continue;
-      differing++;
-      channels[i & 3]++;
-      if (d > worst) worst = d;
-      if (!sample) {
-        const px = (i >> 2) * 4;
-        sample = {
-          at: i >> 2,
-          cached: [a[px], a[px + 1], a[px + 2], a[px + 3]],
-          inline: [b[px], b[px + 1], b[px + 2], b[px + 3]],
-          preFilter: [preData.data[px], preData.data[px + 1], preData.data[px + 2], preData.data[px + 3]],
-          postFilter: [postData.data[px], postData.data[px + 1], postData.data[px + 2], postData.data[px + 3]],
-          opacity: first.opacity,
-          blendMode: first.blendMode,
-        };
-      }
-    }
-    let digest = 0;
-    for (let i = 0; i < b.length; i += 4) digest = (digest * 31 + b[i] * 7 + b[i + 1] * 5 + b[i + 2] * 3 + b[i + 3]) >>> 0;
-    return { differing, worst, channels, total: a.length, quality: ent.quality, digest, sample };
-  }
-
   /** Cache occupancy (dev overlay / console). */
   renderCacheStats(): {
     enabled: boolean;
@@ -1510,64 +1245,6 @@ export class PaintEngine extends DocumentScoped {
     };
   }
 
-  /** Cap the undo history (Preferences ▸ Performance): oldest steps drop off
-   *  the far end — their pixel patches are the biggest memory holders. */
-  setHistoryLimit(n: number): void {
-    this.historyLimit = Math.max(10, Math.min(200, Math.round(n)));
-    this.trimHistory();
-  }
-
-  /** Cap the undo history by MEMORY as well as by step count. A step count is a
-   *  poor proxy for bytes — one full-canvas patch can outweigh a hundred brush
-   *  dabs — so whichever cap binds first wins. */
-  setHistoryBudgetMB(mb: number): void {
-    this.historyBudgetMB = clampBudgetMB(mb);
-    this.trimHistory();
-  }
-
-  /** Bytes held by the undo stacks' pixel patches, across every open document. */
-  historyBytes(): number {
-    let n = 0;
-    for (const d of this.everyDoc()) n += totalBytes(d.entries);
-    return n;
-  }
-
-  /** The step cap is per document (each tab keeps its own N states, as in
-   *  Photoshop); the memory cap is for the whole session, since it is what
-   *  bounds RAM. Background documents give up their steps first — the ones you
-   *  are most likely to want back are in the document in front of you. */
-  private trimHistory(): void {
-    const budget = this.historyBudgetMB;
-    for (const d of [...this.everyDoc()].slice(1)) {
-      const others = this.historyBytes() - totalBytes(d.entries);
-      if (!overBudget(others + totalBytes(d.entries), budget)) break;
-      this.withDocument(d, () => this.dropTrimVictims(() => overBudget(others + totalBytes(this.entries), budget)));
-    }
-    const elsewhere = this.historyBytes() - totalBytes(this.entries);
-    const dropped = this.dropTrimVictims(
-      () =>
-        this.entries.length > this.historyLimit ||
-        overBudget(totalBytes(this.entries) + elsewhere, budget),
-    );
-    if (dropped) this.emitHistory();
-  }
-
-  /** Drop states from the CURRENT document while `over()` holds; returns how many. */
-  private dropTrimVictims(over: () => boolean): number {
-    let dropped = 0;
-    while (over()) {
-      // `trimVictim` picks a state nothing still depends on — an abandoned
-      // branch tip first, otherwise the oldest step when it is the only branch
-      // off the original. It returns -1 when every remaining state is load-
-      // bearing, which makes the cap soft rather than corrupting a branch.
-      const victim = trimVictim(this.parents(), this.cur, this.historySourceIndex - 1);
-      if (victim < 0) break;
-      this.dropNodes([victim]);
-      dropped++;
-    }
-    return dropped;
-  }
-
   /** Finish whatever live session is open, so its commit lands in the history
    *  of the document it was started in. */
   private endLiveSessions(): void {
@@ -1651,14 +1328,6 @@ export class PaintEngine extends DocumentScoped {
     return this.withDocument(d, () => this.exportComposite(tree));
   }
 
-  /** Any document's history labels (creation order) and position — so a file
-   *  written from an inactive tab still carries what was done to it. */
-  historyOf(docId: string): { labels: string[]; index: number } | null {
-    const d = this.docFor(docId);
-    if (!d) return null;
-    return { labels: d.entries.map((e) => e.label), index: d.cur + 1 };
-  }
-
   /** Route heavy compute through workers (on) or the synchronous fallbacks
    *  (off — a debugging aid). In-flight jobs still land; new work obeys. */
   setWorkersEnabled(on: boolean): void {
@@ -1677,176 +1346,6 @@ export class PaintEngine extends DocumentScoped {
   private mk(w: number, h: number, readFreq = false) {
     return makeCanvas(w, h, readFreq, this.cs);
   }
-
-  /** Make a colour-agnostic (sRGB) buffer for mask data — masks are coverage,
-   *  not colour, so they never participate in gamut conversion. */
-  private mkMask(readFreq = true): Layer {
-    return makeCanvas(this.w, this.h, readFreq, "srgb");
-  }
-
-  private painting = false;
-  private strokeLayer: string | null = null;
-  private brush: BrushSettings | null = null;
-  private mode: StrokeMode = "paint";
-  // Per-layer edit locks (the document's `layerLocks`) are enforced at the
-  // pixel-commit chokepoint (pushEntry), kept in sync from the layer tree via
-  // syncLayerLocks(). Position lock is a UI-level guard and isn't tracked.
-  private strokeLabel = "Brush"; // history label for the current stroke
-  private clip: Rect[] | null = null;
-  private clipAngle = 0;
-  private clipPivot: { x: number; y: number } | null = null;
-  /** A stroke inside a soft selection is masked through this each frame. */
-  private softStrokeBuf: Layer | null = null;
-  /** Last soft selection mask built, reused while nothing it depends on moves —
-   *  a live gradient or brush asks for it every frame. */
-  private softMaskMemo: {
-    rects: Rect[];
-    cov: SelectionMask | null;
-    angle: number;
-    px: number | null;
-    py: number | null;
-    w: number;
-    h: number;
-    c: HTMLCanvasElement;
-  } | null = null;
-  private col = { r: 0, g: 0, b: 0, a: 1 };
-  // Pre-baked brush tip for the current stroke (rebuilt per beginStroke). Hard
-  // tips are stamped crisp on the integer grid; soft tips at sub-pixel with
-  // smoothing. Baking once avoids re-dithering a gradient on every stamp.
-  private tip: HTMLCanvasElement | null = null;
-  private tipHard = false;
-  // Pen-pressure dynamics for the live stroke. Tips are baked ONE PER PRESSURE
-  // BUCKET and cached for the stroke, so a pressure-varying stroke costs the
-  // same per dab as a flat one and stays free of the per-stamp gradient dither
-  // the baked-tip design exists to avoid. `tipSpec` is what a bucket's tip is
-  // derived from; `pressFrom`/`pressTo` bracket the current segment so pressure
-  // is interpolated between samples rather than stepping at each pointer event.
-  private tipCache = new Map<number, HTMLCanvasElement>();
-  // Tip shaping (brush-tip.ts). The DUAL TIP is baked into the cached tips —
-  // one mask per variant, cycled per dab so the bristle pattern does not repeat
-  // identically down the stroke. TEXTURE is applied at stamp time instead,
-  // because it is anchored to the DOCUMENT: baking it into the tip would stamp
-  // the same swatch over and over.
-  private tipTexture: TextureSettings | null = null;
-  private tipDual: DualTipSettings | null = null;
-  private tipShape: TipShapeSettings | null = null;
-  private tipScatter: ScatterSettings | null = null;
-  /** Per-stroke generator, so a stroke's scatter is stable while it is drawn. */
-  private scatterRng: (() => number) | null = null;
-  /** Which bristle pattern this stroke is using (see DUAL_VARIANTS). */
-  private dualVariant = 0;
-  /** Scratch surfaces for the textured stamp path (allocated on first use). */
-  private texDab: Layer | null = null;
-  private texPatch: Layer | null = null;
-  private tipSpec: { r: number; flow: number; hardness: number; cr: number; cg: number; cb: number } | null = null;
-  private dyn: PressureDynamics = DEFAULT_DYNAMICS;
-  private pressFrom = 1;
-  private pressTo = 1;
-
-  // Blur-brush session. We never destroy the original pixels mid-stroke: `blurOrig`
-  // holds them, `blurCov` accumulates per-pixel brush coverage (0–1), and the live
-  // result is always lerp(orig, blur(orig), cov × strength). This keeps a stroke
-  // even (no blotches on slow drags) while still compounding across strokes (each
-  // new stroke re-reads the layer, i.e. the previous result).
-  private blurring = false;
-  private blurLayer: string | null = null;
-  private blurOnMask = false;
-  private blurOrig: ImageData | null = null; // layer pixels at stroke start
-  private blurSrc: ImageData | null = null; // blur source (orig, or composite for sampleAll)
-  private blurCov: Float32Array | null = null; // per-pixel coverage 0–1, doc-sized
-  private blurTip: { data: Float32Array; size: number; r: number } | null = null;
-  private blurOpts: BlurSettings | null = null;
-  private blurDirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
-  private blurStep = 1;
-  private blurResidual = 0;
-  private blurLast = { x: 0, y: 0 };
-  private blurLastRaw = { x: 0, y: 0 };
-  private blurSmoothPt = { x: 0, y: 0 };
-  private blurSelMask: Uint8ClampedArray | null = null;
-
-  // Dodge/Burn session. Same coverage-mask model as blur (orig snapshot + a 0–1
-  // coverage buffer, re-baked as effect(orig, coverage × exposure)), so a stroke
-  // stays even and compounds across strokes. `bakeDodge` applies the tonal curve.
-  private dodging = false;
-  private dodgeLayer: string | null = null;
-  private dodgeOnMask = false;
-  private dodgeOrig: ImageData | null = null;
-  private dodgeCov: Float32Array | null = null;
-  private dodgeTip: { data: Float32Array; size: number; r: number } | null = null;
-  private dodgeOpts: DodgeSettings | null = null;
-  private dodgeDirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
-  private dodgeStep = 1;
-  private dodgeResidual = 0;
-  private dodgeLast = { x: 0, y: 0 };
-  private dodgeLastRaw = { x: 0, y: 0 };
-  private dodgeSmoothPt = { x: 0, y: 0 };
-  private dodgeSelMask: Uint8ClampedArray | null = null;
-
-  // Sponge session — the exact dodge/burn coverage-mask model (orig snapshot +
-  // 0–1 coverage, re-baked as saturate/desaturate(orig, coverage × flow)).
-  private sponging = false;
-  private spongeLayer: string | null = null;
-  private spongeOnMask = false;
-  private spongeOrig: ImageData | null = null;
-  private spongeCov: Float32Array | null = null;
-  private spongeTip: { data: Float32Array; size: number; r: number } | null = null;
-  private spongeOpts: SpongeSettings | null = null;
-  private spongeDirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
-  private spongeStep = 1;
-  private spongeResidual = 0;
-  private spongeLast = { x: 0, y: 0 };
-  private spongeLastRaw = { x: 0, y: 0 };
-  private spongeSmoothPt = { x: 0, y: 0 };
-  private spongeSelMask: Uint8ClampedArray | null = null;
-
-  // Smudge session — NOT the coverage model: a stateful smear. `smudgeData` is a
-  // live working copy of the layer bytes (mutated in place, blitted per segment);
-  // `smudgeCarried` is a tip-sized RGBA buffer of the colour the finger drags,
-  // updated each dab (pickup) and laid back down (deposit). `smudgeImage` wraps
-  // smudgeData so a dirty-rect putImageData repaints only the touched region.
-  private smudging = false;
-  private smudgeLayer: string | null = null;
-  private smudgeOnMask = false;
-  private smudgeOrig: ImageData | null = null; // for the history before-image
-  private smudgeData: Uint8ClampedArray | null = null; // live working bytes
-  private smudgeImage: ImageData | null = null; // wraps smudgeData for blitting
-  private smudgePickup: Uint8ClampedArray | null = null; // sampleAll composite, or null → smudgeData
-  private smudgeCarried: Float32Array | null = null; // tip-sized RGBA the finger carries
-  private smudgeTip: { data: Float32Array; size: number; r: number } | null = null;
-  private smudgeOpts: SmudgeSettings | null = null;
-  private smudgeDirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
-  private smudgeStep = 1;
-  private smudgeResidual = 0;
-  private smudgeLast = { x: 0, y: 0 };
-  private smudgeLastRaw = { x: 0, y: 0 };
-  private smudgeSmoothPt = { x: 0, y: 0 };
-  private smudgeSelMask: Uint8ClampedArray | null = null;
-  // Mixer-brush mode for the smudge session. The scaffolding — working buffer,
-  // carried tip buffer, sampleAll pickup, dirty-rect blit, history — is
-  // identical; only the per-pixel kernel differs, so the session carries an
-  // optional mixer config rather than being duplicated. See mixer.ts: smudge IS
-  // a mixer with Mix 100 and no reservoir.
-  private smudgeMix: { m: MixerSettings; blend: number } | null = null;
-  /** The loaded brush, kept BETWEEN strokes — that is what Clean / Load after
-   *  each stroke are about, and it has to outlive the session to mean anything. */
-  private mixerState: MixerState | null = null;
-
-  // Blur Gallery (Effects ▸ Blur Gallery) live preview session: the affected
-  // layers' original pixels + a selection mask + the zoom/spin centre.
-  private blurFx: {
-    ids: string[];
-    orig: Map<string, ImageData>;
-    mask: Uint8ClampedArray | null;
-  } | null = null;
-
-  // Clone-stamp session. Reuses the brush stroke buffer/flow/opacity pipeline, but
-  // each dab paints pixels sampled from `cloneSample` at (brushPoint + cloneOff)
-  // instead of a solid colour. `cloneSample` is snapshotted at stroke start so the
-  // clone never feeds back on itself mid-stroke.
-  private cloneActive = false;
-  private cloneSample: Layer | null = null;
-  private cloneDab: Layer | null = null;
-  private cloneOff: { x: number; y: number } | null = null;
 
   // Move session
   private moving = false;
@@ -1927,109 +1426,12 @@ export class PaintEngine extends DocumentScoped {
   private fillOrig: Layer | null = null;
   private fillState: { rects: Rect[]; color: string; antialias: boolean } | null = null;
   private fillOnMask = false; // the live bucket fill targets the active layer's mask
-  // The last history summary said a fill or a path was open, so its end is told too.
-  private openTold = false;
-  // Cached magic-wand source pixels, reused across live (tolerance) re-runs and
-  // dropped on any layer mutation (see invalidateWandSrc).
-  private wandSrc: {
-    data: Uint8ClampedArray;
-    w: number;
-    h: number;
-    layerId: string;
-    sampleAll: boolean;
-  } | null = null;
-  // Reused magic-wand scratch buffers (mask / flood-fill stack / visited).
-  private wandBuf: { mask: Uint8Array; stack: Int32Array; n: number } | null = null;
-  // Quick-select session: source pixels + edge field snapshotted at stroke start,
-  // an accumulating selection mask, per-dab visit stamps, the running brushed-colour
-  // mean, and the selection's growing bounds. Grows incrementally per brush dab.
-  private qs: {
-    data: Uint8ClampedArray;
-    edge: EdgeField;
-    mask: Uint8Array; // 1 = selected
-    stamp: Int32Array; // last dab index that visited a pixel (avoids re-clearing)
-    stack: Int32Array;
-    dab: number;
-    subtract: boolean;
-    tol: number;
-    mr: number; // running brushed-colour mean
-    mg: number;
-    mb: number;
-    count: number;
-    x0: number;
-    y0: number;
-    x1: number;
-    y1: number;
-  } | null = null;
   // When set, adjustments only affect this (possibly rotated) selection region.
   private adjSel: Rect[] | null = null;
   private adjSelAngle = 0;
   private adjSelPivot: { x: number; y: number } | null = null;
   // Whether scaled float content is interpolated (smooth) or nearest-neighbour.
   private floatSmooth = true;
-  private last = { x: 0, y: 0 };
-  private lastRaw = { x: 0, y: 0 };
-  private smooth = { x: 0, y: 0 };
-  private residual = 0;
-  private step = 1;
-  private dirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
-
-  // History is an UNDO TREE (see history-tree.ts), one per document: every
-  // entry records its parent, and `cur` is the node the document currently
-  // shows (ROOT = the original). A linear history is the degenerate case where
-  // every parent is the previous entry, so this behaves exactly as the old
-  // array + index did.
-  /** Photoshop's "Allow Non-Linear History": keep the states a new edit would
-   *  otherwise discard, as a branch, instead of truncating them. */
-  private nonLinear = false;
-  /** The parent table the pure tree helpers work on. */
-  private parents(): number[] {
-    return this.entries.map((e) => e.parent);
-  }
-  /** Items index (0 = the original state) ⇄ node index. */
-  private get pos(): number {
-    return this.cur + 1;
-  }
-
-  /**
-   * Attach a freshly built entry to the tree and move onto it. In LINEAR mode
-   * anything that was reachable only by redo is discarded first — the old
-   * `entries.length = pos` truncation, expressed as "drop everything off the
-   * path". In non-linear mode nothing is dropped and the new entry simply
-   * branches off wherever you are.
-   */
-  private linkEntry(e: Omit<Entry, "parent">): void {
-    if (!this.nonLinear) {
-      const stale = offPath(this.parents(), this.cur);
-      if (stale.length) this.dropNodes(stale);
-    }
-    const entry = e as Entry;
-    entry.parent = this.cur;
-    this.entries.push(entry);
-    this.cur = this.entries.length - 1;
-  }
-
-  /** Remove entries and renumber everything that points at them. Callers must
-   *  never drop the current node's ancestry — the document is showing it. */
-  private dropNodes(list: number[]): void {
-    if (!list.length) return;
-    const gone = new Set(list);
-    const { parents, remap } = removeNodes(this.parents(), list);
-    this.entries = this.entries.filter((_, i) => !gone.has(i));
-    this.entries.forEach((e, i) => (e.parent = parents[i]));
-    this.cur = this.cur >= 0 && !gone.has(this.cur) ? remap[this.cur] : ROOT;
-    // The History-brush source is an ITEMS index (node + 1); a dropped source
-    // falls back to the original state rather than silently sliding elsewhere.
-    const src = this.historySourceIndex - 1;
-    this.historySourceIndex = src < 0 || gone.has(src) ? 0 : remap[src] + 1;
-  }
-  // History brush source (the document's `historySourceIndex`): the state the
-  // brush repaints from (0 = the original). The active layer's pixels AT that
-  // index are reconstructed from its patch entries on demand (beginHistory), so
-  // no full snapshots are stored. Pinned snapshots (`snapshots`, TODO §10) are
-  // full pixel captures the user can restore to and point the History brush at;
-  // the editor pairs each with the layer TREE it was taken with.
-  private snapSeq = 0;
 
   onChange: () => void = () => {};
   onHistory: (s: HistorySummary) => void = () => {};
@@ -2653,204 +2055,71 @@ export class PaintEngine extends DocumentScoped {
     return l;
   }
 
-  // ---- Layer-mask surface resolution & alpha derivation --------------------
-
-  /** The UI-facing surface of `id` — the selected surface, but only while its
-   *  raster actually exists (a deleted mask falls back to pixels). */
-  getActiveSurface(id: string): ActiveSurface {
-    const s = this.surfaces.get(id);
-    if (s === "mask" && this.masks.has(id)) return "mask";
-    if (s === "filterMask" && this.masks.has(filterMaskKey(id))) return "filterMask";
-    return "pixels";
+  // ---- masks ----
+  // Layer, filter and quick masks and the saved channels, the alpha each
+  // derives, which surface a paint op edits, and a mask's lifecycle:
+  // engine/masks.ts. These are its doors.
+  private readonly masking = new EngineMasks(this.cursor, {
+    bumpMask: (id, rect) => this.bumpMask(id, rect),
+    emitChange: () => this.emitChange(),
+    layer: (id) => this.layer(id),
+    selectionMask: (rects, angle, pivot) => this.selectionMask(rects, angle, pivot),
+    selectionFromCoverage: (at) => this.selectionFromCoverage(at),
+    maskStrokeLayer: () => (this.painting && this.strokeOnMask && this.stroke && this.strokeLayer) || null,
+    drawStroke: (ctx) => this.drawStroke(ctx),
+    dirtyRect: () => this.dirtyRect(),
+  });
+  /** The quick mask's key while it is on — the render graph skips it. */
+  private get qmKey(): string | null {
+    return this.masking.qmKey;
   }
-
-  /** Binary form for paint routing: EITHER mask kind ⇒ "mask" — the stroke /
-   *  fill / blur pipelines treat the two identically and resolve which raster
-   *  via maskKeyOf(). Quick Mask overrides it for EVERY layer: while it is on,
-   *  every paint tool edits the quick mask instead of any layer's pixels. */
+  /** Mask view: the composite shows this mask's grayscale instead. */
+  private get maskView(): EngineMasks["maskView"] {
+    return this.masking.maskView;
+  }
+  /** The mask brush's live grayscale, which mask view previews through too. */
+  private get maskPrevG(): Layer | null {
+    return this.masking.maskPrevG;
+  }
+  private set maskPrevG(v: Layer | null) {
+    this.masking.maskPrevG = v;
+  }
+  private mkMask(readFreq = true): Layer {
+    return this.masking.mkMask(readFreq);
+  }
   private activeSurface(id: string): "pixels" | "mask" {
-    if (this.qmKey) return "mask";
-    return this.getActiveSurface(id) === "pixels" ? "pixels" : "mask";
+    return this.masking.activeSurface(id);
   }
-
-  /** The masks-map key `id`'s current mask surface resolves to: the node id for
-   *  the layer mask, `filterMaskKey(id)` for the filter mask. History entries for
-   *  mask paint record THIS key as their layerId, so undo lands on the right raster. */
   private maskKeyOf(id: string): string {
-    if (this.qmKey) return this.qmKey; // Quick Mask claims every layer's strokes
-    return this.surfaces.get(id) === "filterMask" ? filterMaskKey(id) : id;
+    return this.masking.maskKeyOf(id);
   }
-
-  // ---- Quick Mask (TODO §3) -----------------------------------------------
-  //
-  // A quick mask is a grayscale raster in the SAME masks map as layer and filter
-  // masks, so every paint tool, fill, blur and history path works on it with no
-  // per-tool change — activeSurface()/maskKeyOf() above are the whole routing.
-  // What makes it "quick" is that nothing composites it: the document renders
-  // exactly as if the mask were not there, and the canvas paints the red overlay
-  // from quickMaskCoverage(). Coverage means SELECTED (white = inside), matching
-  // allocMask("selection"), so the overlay inverts it to shade what is masked.
-  private qmKey: string | null = null;
-
-  /** Is a quick mask live (and its raster still present)? */
-  quickMaskActive(): boolean {
-    return this.qmKey !== null && this.masks.has(this.qmKey);
-  }
-
-  /** Turn Quick Mask on for `key`, seeding coverage from the current selection.
-   *
-   *  No selection seeds it all-WHITE, not all-black: everywhere else in the app
-   *  an empty selection means "the whole document is editable", so entering the
-   *  mode with nothing selected has to start from everything selected — i.e. no
-   *  red at all — and let the first black stroke carve the mask out. Seeding it
-   *  black would open the mode with the entire canvas shaded, which reads as a
-   *  bug and inverts what every subsequent stroke does. */
-  enterQuickMask(
-    key: string,
-    rects: Rect[] | null = null,
-    angle = 0,
-    pivot: { x: number; y: number } | null = null,
-  ): void {
-    // Set the key FIRST: allocMask derives the alpha cache, and bumpMask has to
-    // already know this raster is a quick mask so it skips composite invalidation.
-    this.qmKey = key;
-    this.allocMask(key, rects && rects.length ? "selection" : "reveal", rects, angle, pivot);
-  }
-
-  /** Point at an existing quick-mask raster, or off with null. Used by document
-   *  switches and by undo/redo of the mode toggle — never allocates, so the
-   *  painted coverage survives leaving and re-entering the mode. */
-  setQuickMask(key: string | null): void {
-    this.qmKey = key && this.masks.has(key) ? key : null;
-    this.emitChange();
-  }
-
-  /** The selection the live quick mask describes (coverage ≥ 50%). */
-  quickMaskRects(): Rect[] {
-    return this.qmKey ? this.maskSelectionRects(this.qmKey) : [];
-  }
-
-  /** Coverage canvas for the red overlay (alpha = selected). Routes through
-   *  maskDisplay so an IN-PROGRESS stroke shows immediately — without it the
-   *  overlay would only catch up on pointer-up. */
-  quickMaskCoverage(): HTMLCanvasElement | null {
-    return this.qmKey ? this.maskDisplay(this.qmKey) : null;
-  }
-
-  setActiveSurface(id: string, surface: ActiveSurface): void {
-    if (surface === "mask" && !this.masks.has(id)) return; // no mask to paint
-    if (surface === "filterMask" && !this.masks.has(filterMaskKey(id))) return;
-    this.surfaces.set(id, surface);
-    this.emitChange();
-  }
-
-  /** The canvas a paint op should draw into for `id`: the active mask (layer or
-   *  filter) when one is targeted, otherwise the layer. The single chokepoint
-   *  that lets every tool paint either mask with no per-tool changes. */
-  private surfaceTarget(id: string): Layer {
-    if (this.activeSurface(id) === "mask") return this.masks.get(this.maskKeyOf(id))!;
-    return this.layer(id);
-  }
-
-  /** Recompute the alpha cache from the grayscale mask, scoped to `rect` (whole
-   *  mask if omitted): out.A = R × maskAlpha / 255, out.RGB = 0. Runs only on
-   *  mask mutation, never per composite frame. */
   private deriveMaskAlpha(id: string, rect?: Rect): void {
-    const mask = this.masks.get(id);
-    if (!mask) return;
-    this.bumpMask(id, rect); // every mask mutation funnels through here
-    let cache = this.maskAlpha.get(id);
-    if (!cache || cache.c.width !== this.w || cache.c.height !== this.h) {
-      cache = this.mkMask(false);
-      this.maskAlpha.set(id, cache);
-    }
-    const r = rect ?? { x: 0, y: 0, w: this.w, h: this.h };
-    const x = Math.max(0, Math.floor(r.x));
-    const y = Math.max(0, Math.floor(r.y));
-    const w = Math.min(this.w, Math.ceil(r.x + r.w)) - x;
-    const h = Math.min(this.h, Math.ceil(r.y + r.h)) - y;
-    if (w < 1 || h < 1) return;
-    const img = mask.ctx.getImageData(x, y, w, h);
-    const d = img.data;
-    for (let i = 0; i < d.length; i += 4) {
-      d[i + 3] = (d[i] * d[i + 3]) / 255;
-      d[i] = 0;
-      d[i + 1] = 0;
-      d[i + 2] = 0;
-    }
-    cache.ctx.putImageData(img, x, y);
+    this.masking.deriveMaskAlpha(id, rect);
   }
-
-  /** Alpha buffer to multiply into a layer/group when compositing. Returns the
-   *  committed cache, or — while a mask stroke is live on this layer — a preview
-   *  derived from (committed grayscale + in-progress stroke), bounded to the
-   *  stroke's dirty rect so the mask brush previews live without a full re-derive. */
   private maskDisplay(id: string): HTMLCanvasElement | null {
-    // `id` here is a masks-map key: a node id (layer mask) or fm:<id> (filter
-    // mask) — resolve the live stroke's target key so either previews live.
-    if (this.painting && this.strokeOnMask && this.stroke && this.strokeLayer && this.maskKeyOf(this.strokeLayer) === id) {
-      const mask = this.masks.get(id);
-      if (mask) {
-        if (!this.maskPrevG || this.maskPrevG.c.width !== this.w || this.maskPrevG.c.height !== this.h)
-          this.maskPrevG = this.mkMask(true);
-        if (!this.maskPrevA || this.maskPrevA.c.width !== this.w || this.maskPrevA.c.height !== this.h)
-          this.maskPrevA = this.mkMask(false);
-        const g = this.maskPrevG;
-        g.ctx.globalAlpha = 1;
-        g.ctx.globalCompositeOperation = "source-over";
-        g.ctx.clearRect(0, 0, this.w, this.h);
-        g.ctx.drawImage(mask.c, 0, 0);
-        this.drawStroke(g.ctx); // live stroke onto the grayscale preview
-        const a = this.maskPrevA;
-        a.ctx.globalAlpha = 1;
-        a.ctx.globalCompositeOperation = "source-over";
-        a.ctx.clearRect(0, 0, this.w, this.h);
-        const cache = this.maskAlpha.get(id);
-        if (cache) a.ctx.drawImage(cache.c, 0, 0); // seed with committed alpha (GPU)
-        const r = this.dirtyRect();
-        if (r) {
-          const img = g.ctx.getImageData(r.x, r.y, r.w, r.h);
-          const d = img.data;
-          for (let i = 0; i < d.length; i += 4) {
-            d[i + 3] = (d[i] * d[i + 3]) / 255;
-            d[i] = 0;
-            d[i + 1] = 0;
-            d[i + 2] = 0;
-          }
-          a.ctx.putImageData(img, r.x, r.y);
-        }
-        return a.c;
-      }
-    }
-    return this.maskAlpha.get(id)?.c ?? null;
+    return this.masking.maskDisplay(id);
   }
-
-  // ---- Layer-mask pixel lifecycle (history is coordinated by the caller) ----
-
-  /** True when `id` currently carries a mask. */
+  private transformMasks(
+    ids: string[] | undefined,
+    fn: (ctx: CanvasRenderingContext2D, src: HTMLCanvasElement) => void,
+  ): void {
+    this.masking.transformMasks(ids, fn);
+  }
+  getActiveSurface(id: string): ActiveSurface {
+    return this.masking.getActiveSurface(id);
+  }
+  setActiveSurface(id: string, surface: ActiveSurface): void {
+    this.masking.setActiveSurface(id, surface);
+  }
   hasMask(id: string): boolean {
-    return this.masks.has(id);
+    return this.masking.hasMask(id);
   }
-
-  /** Toggle the mask-view render mode (null = back to the normal composite). */
   setMaskView(id: string | null, surface: "mask" | "filterMask" = "mask") {
-    this.maskView = id ? { id, surface } : null;
-    this.emitChange();
+    this.masking.setMaskView(id, surface);
   }
-
-  /** Tonal distribution of a mask's effective grayscale (R×A/255); null = no mask. */
   maskHistogram(id: string, surface: "mask" | "filterMask" = "mask"): Uint32Array | null {
-    const key = surface === "filterMask" ? filterMaskKey(id) : id;
-    const mask = this.masks.get(key);
-    if (!mask) return null;
-    const out = new Uint32Array(256);
-    const d = mask.ctx.getImageData(0, 0, this.w, this.h).data;
-    for (let i = 0; i < d.length; i += 4) out[((d[i] * d[i + 3]) / 255) | 0]++;
-    return out;
+    return this.masking.maskHistogram(id, surface);
   }
-
-  /** Allocate a grayscale mask for `id`: white (reveal-all), black (hide-all), or
-   *  the current selection rasterized white-on-black. Derives the alpha cache. */
   allocMask(
     id: string,
     init: "reveal" | "hide" | "selection",
@@ -2858,585 +2127,193 @@ export class PaintEngine extends DocumentScoped {
     angle = 0,
     pivot: { x: number; y: number } | null = null,
   ): void {
-    const m = this.mkMask(true);
-    m.ctx.globalCompositeOperation = "source-over";
-    if (init === "selection" && rects && rects.length) {
-      m.ctx.fillStyle = "#000"; // hidden outside the selection
-      m.ctx.fillRect(0, 0, this.w, this.h);
-      m.ctx.drawImage(this.selectionMask(rects, angle, pivot), 0, 0); // white inside
-    } else {
-      m.ctx.fillStyle = init === "hide" ? "#000" : "#fff";
-      m.ctx.fillRect(0, 0, this.w, this.h);
-    }
-    this.masks.set(id, m);
-    this.deriveMaskAlpha(id);
-    this.emitChange();
+    this.masking.allocMask(id, init, rects, angle, pivot);
   }
-
-  /** Free a mask + its alpha cache, resetting the active surface to pixels.
-   *  Accepts either a node id (layer mask) or a filterMaskKey (filter mask). */
   freeMask(id: string): void {
-    this.masks.delete(id);
-    this.maskAlpha.delete(id);
-    this.bumpMask(id); // the node's masked render changed
-    if (this.surfaces.get(id) === "mask") this.surfaces.set(id, "pixels");
-    if (id.startsWith("fm:")) {
-      const base = id.slice(3);
-      if (this.surfaces.get(base) === "filterMask") this.surfaces.set(base, "pixels");
-    }
-    this.emitChange();
+    this.masking.freeMask(id);
   }
-
-  /** Snapshot the grayscale mask (for history); null if the layer has no mask. */
   captureMask(id: string): ImageData | null {
-    const m = this.masks.get(id);
-    return m ? m.ctx.getImageData(0, 0, this.w, this.h) : null;
+    return this.masking.captureMask(id);
   }
-
-  /** Recreate a mask from a grayscale snapshot and derive its alpha cache. */
   restoreMask(id: string, img: ImageData): void {
-    const m = this.mkMask(true);
-    m.ctx.putImageData(img, 0, 0);
-    this.masks.set(id, m);
-    this.deriveMaskAlpha(id);
-    this.emitChange();
+    this.masking.restoreMask(id, img);
   }
-
-  /** Bake an enabled mask into the layer's own alpha (destructive), then free it.
-   *  The caller snapshots layer pixels + mask around this for one history step. */
   applyMaskToLayer(id: string): void {
-    const cache = this.maskAlpha.get(id);
-    const l = this.layers.get(id);
-    if (cache && l) {
-      l.ctx.globalCompositeOperation = "destination-in";
-      l.ctx.drawImage(cache.c, 0, 0);
-      l.ctx.globalCompositeOperation = "source-over";
-    }
-    this.freeMask(id);
+    this.masking.applyMaskToLayer(id);
   }
-
-  /** A small grayscale PNG of a mask, for the Channels panel's thumbnails.
-   *  Null when the key holds no raster. Scaled on the GPU rather than by
-   *  reading pixels back — a thumbnail is redrawn whenever the list re-renders. */
-  maskPreviewURL(id: string, maxW = 48): string | null {
-    const m = this.masks.get(id);
-    if (!m) return null;
-    const scale = Math.min(1, maxW / Math.max(1, this.w));
-    const w = Math.max(1, Math.round(this.w * scale));
-    const h = Math.max(1, Math.round(this.h * scale));
-    const t = makeCanvas(w, h, false, "srgb");
-    t.ctx.imageSmoothingEnabled = true;
-    t.ctx.imageSmoothingQuality = "low";
-    t.ctx.drawImage(m.c, 0, 0, w, h);
-    try {
-      return t.c.toDataURL("image/png");
-    } catch {
-      return null; // tainted canvas (shouldn't happen — masks are engine-made)
-    }
-  }
-
-  /** Threshold a mask's coverage (≥ 50%) into run-length selection rects. */
-  maskSelectionRects(id: string): Rect[] {
-    const cache = this.maskAlpha.get(id);
-    if (!cache) return [];
-    const d = cache.ctx.getImageData(0, 0, this.w, this.h).data;
-    return this.selectionFromCoverage((i) => d[i * 4 + 3]);
-  }
-
-  /**
-   * A selection from per-pixel coverage (`at(i)` for pixel i, 0–255): its ≥50%
-   * outline as rects, with the coverage kept behind them when it is soft (see
-   * selection-mask.ts). `softness` is how far a feather made the edge reach.
-   */
-  private selectionFromCoverage(at: (i: number) => number, softness?: number): Rect[] {
-    const { rects, mask } = fromCoverage(at, this.w, this.h);
-    if (mask) this.selectionMasks.set(rects, softness ? { ...mask, softness } : mask);
-    return rects;
-  }
-
-  /** A selection's coverage over the whole canvas, unrotated: its mask where it
-   *  has one, otherwise its rects as 0 / 255. One byte per pixel. */
-  private coverageFull(rects: Rect[]): Uint8Array {
-    return selectionCoverage(rects, this.coverageOf(rects), this.w, this.h);
-  }
-
-  /** A selection's coverage over the whole canvas with its rotation applied —
-   *  what a fill through it would see. */
-  private coverageImage(rects: Rect[], angle: number, pivot: { x: number; y: number } | null): Uint8Array {
-    if (!angle) return this.coverageFull(rects);
-    const c = this.selectionMask(rects, angle, pivot);
-    const d = c.getContext("2d", { willReadFrequently: true })!.getImageData(0, 0, this.w, this.h).data;
-    const out = new Uint8Array(this.w * this.h);
-    for (let i = 0; i < out.length; i++) out[i] = d[i * 4 + 3];
-    return out;
-  }
-
-  /**
-   * Combine selections KEEPING soft coverage (TODO 0.2a): add = max(a, b),
-   * subtract = min(a, 255 − b), intersect = min(a, b), invert = 255 − a — the
-   * usual mask algebra, which for 0/255 inputs is exactly union, difference,
-   * intersection and complement. Returns null when no operand is soft, so hard
-   * selections keep their existing paths (and rect layout) untouched. Unrotated
-   * selections only: the caller falls back for a rotated one.
-   */
-  combineSelectionSoft(
-    a: Rect[],
-    b: Rect[] | null,
-    op: "add" | "subtract" | "intersect" | "invert",
-  ): Rect[] | null {
-    if (!this.coverageOf(a) && !(b && this.coverageOf(b))) return null;
-    const r = combineMasks(this.coverageFull(a), b ? this.coverageFull(b) : null, op);
-    return this.selectionFromCoverage((i) => r[i]);
-  }
-
-  /** The mask behind a selection, if it has one that still fits the canvas. */
-  private coverageOf(rects: Rect[] | null | undefined): SelectionMask | null {
-    const c = rects ? this.selectionMasks.get(rects) : undefined;
-    return c && c.w === this.w && c.h === this.h ? c : null;
-  }
-
-  /** Does this selection carry partial coverage (not just its ≥50% rects)? */
-  isSoftSelection(rects: Rect[]): boolean {
-    return !!this.coverageOf(rects);
-  }
-
-  // ---- Selection operations on the mask (TODO 1.3) ----------------------------
-  // Each makes a new selection from an old one by working on its COVERAGE, so a
-  // soft selection stays soft. They return the new outline rects (the mask is
-  // registered behind them); a result with nothing at 50% or more is empty.
-
-  /** Select ▸ Feather: blur the selection's coverage by `px`. Rotation is baked
-   *  in, so the result is unrotated. */
-  featherSelection(rects: Rect[], angle: number, pivot: { x: number; y: number } | null, px: number): Rect[] {
-    if (!rects.length || !(px > 0)) return rects;
-    const f = featherMask(this.coverageImage(rects, angle, pivot), this.w, this.h, px);
-    const softness =
-      (this.coverageOf(rects)?.softness ?? 0) + effectiveSoftness({ smooth: 0, contrast: 0, shift: 0, feather: px });
-    return this.selectionFromCoverage((i) => f[i], softness);
-  }
-
-  /** Refine Edge, applied to the selection it was made for: smooth, feather,
-   *  contrast and shift, baked into its coverage. Rotation is baked in too. */
-  refineSelection(rects: Rect[], angle: number, pivot: { x: number; y: number } | null, r: RefineEdge): Rect[] {
-    if (!rects.length) return rects;
-    const c = this.coverageImage(rects, angle, pivot);
-    const a = new Float32Array(c.length);
-    for (let i = 0; i < c.length; i++) a[i] = c[i];
-    applyRefine(a, this.w, this.h, r);
-    const out = new Uint8ClampedArray(a); // rounded the way a canvas stores it
-    return this.selectionFromCoverage((i) => out[i], effectiveSoftness(r) || undefined);
-  }
-
-  /** Select ▸ Grow on a SOFT selection: its coverage pushed out by `px` with a
-   *  square kernel (a hard selection grows rect by rect). Null for a hard one. */
-  growSoftSelection(rects: Rect[], px: number): Rect[] | null {
-    const m = this.coverageOf(rects);
-    if (!m) return null;
-    const g = growSquare(this.coverageFull(rects), this.w, this.h, px);
-    return this.selectionFromCoverage((i) => g[i], m.softness);
-  }
-
-  /** The outline moved by (dx, dy) — a nudge or a drag — with its mask moved too. */
-  shiftSelection(rects: Rect[], dx: number, dy: number): Rect[] {
-    const moved = rects.map((r) => ({ ...r, x: r.x + dx, y: r.y + dy }));
-    const m = this.coverageOf(rects);
-    const next = m ? shiftMask(m, dx, dy) : null;
-    if (next) this.selectionMasks.set(moved, next);
-    return moved;
-  }
-
-  /** `to` is `from` resized from box `fromBox` to `toBox` (the transform
-   *  handles, Transform-by-numbers): give it `from`'s mask, resampled to fit. */
-  carryResizedSelection(from: Rect[], to: Rect[], fromBox: Rect, toBox: Rect): void {
-    const m = this.coverageOf(from);
-    const next = m ? resampleMask(m, fromBox, toBox) : null;
-    if (next) this.selectionMasks.set(to, next);
-  }
-
-  /** A selection's coverage as a canvas (white, alpha = coverage), rotation
-   *  applied — a copy the caller may keep (Refine Edge previews it). */
-  selectionCoverageCanvas(rects: Rect[], angle: number, pivot: { x: number; y: number } | null): HTMLCanvasElement {
-    const src = this.selectionMask(rects, angle, pivot);
-    const out = this.mk(this.w, this.h, true);
-    out.ctx.drawImage(src, 0, 0);
-    return out.c;
-  }
-
-  /**
-   * A selection's outline as merged boundary segments — what the ants trace.
-   * Traced once from its raster, in time linear in its area, and kept with the
-   * selection (by its rects, like its mask). The trace it replaces was a union
-   * of the rects, cubic in their number: Select ▸ Inverse of a large ellipse
-   * froze the page for over two seconds, and again on every undo and redo.
-   */
-  selectionOutline(rects: Rect[]): Seg[] {
-    const hit = this.doc.selectionOutlines.get(rects);
-    if (hit) return hit;
-    let x0 = Infinity;
-    let y0 = Infinity;
-    let x1 = -Infinity;
-    let y1 = -Infinity;
-    for (const r of rects) {
-      x0 = Math.min(x0, Math.floor(r.x));
-      y0 = Math.min(y0, Math.floor(r.y));
-      x1 = Math.max(x1, Math.ceil(r.x + r.w));
-      y1 = Math.max(y1, Math.ceil(r.y + r.h));
-    }
-    let segs: Seg[] = [];
-    if (x1 > x0 && y1 > y0) {
-      const bw = x1 - x0;
-      const bh = y1 - y0;
-      const on = new Uint8Array(bw * bh);
-      for (const r of rects) {
-        const rx0 = Math.floor(r.x) - x0;
-        const rx1 = Math.ceil(r.x + r.w) - x0;
-        for (let y = Math.floor(r.y) - y0; y < Math.ceil(r.y + r.h) - y0; y++) on.fill(1, y * bw + rx0, y * bw + rx1);
-      }
-      segs = maskToSegments(on, bw, bh, { x0: 0, y0: 0, x1: bw, y1: bh }).map((g) => ({
-        x1: g.x1 + x0,
-        y1: g.y1 + y0,
-        x2: g.x2 + x0,
-        y2: g.y2 + y0,
-      }));
-    }
-    this.doc.selectionOutlines.set(rects, segs);
-    return segs;
-  }
-
-  /** Is this a FAINT selection — partly selected everywhere, nowhere 50%? Its
-   *  outline then marks half its peak strength (see selection-mask.ts). */
-  isFaintSelection(rects: Rect[]): boolean {
-    const m = this.coverageOf(rects);
-    return !!m && peakOf(m) < 128;
-  }
-
-  /** How far a selection's soft edge reaches either side of its outline, in
-   *  px, when an operation that knows it made it (0 otherwise). */
-  selectionSoftness(rects: Rect[]): number {
-    return this.coverageOf(rects)?.softness ?? 0;
-  }
-
-  /** A soft selection's coverage as a grayscale PNG over its bounds, for the
-   *  project file; null for a hard one (its rects say everything). */
-  selectionMaskImage(rects: Rect[]): SavedSelectionMask | null {
-    // Any open document's: a tab you have just left is saved after the switch.
-    let m: SelectionMask | null = null;
-    for (const d of this.everyDoc()) {
-      const c = d.selectionMasks.get(rects);
-      if (c && c.w === d.w && c.h === d.h) {
-        m = c;
-        break;
-      }
-    }
-    if (!m) return null;
-    const { bounds: b, alpha } = m;
-    const c = makeCanvas(b.w, b.h, true, "srgb");
-    const img = c.ctx.createImageData(b.w, b.h);
-    for (let i = 0; i < alpha.length; i++) {
-      const o = i * 4;
-      img.data[o] = img.data[o + 1] = img.data[o + 2] = alpha[i];
-      img.data[o + 3] = 255;
-    }
-    c.ctx.putImageData(img, 0, 0);
-    return { ...b, data: c.c.toDataURL("image/png"), ...(m.softness ? { softness: m.softness } : {}) };
-  }
-
-  /** Put a saved soft selection's coverage back behind its outline (project load). */
-  adoptSelectionMask(
-    rects: Rect[],
-    at: { x: number; y: number; softness?: number },
-    source: CanvasImageSource & { width: number; height: number },
-  ): void {
-    const w = source.width;
-    const h = source.height;
-    if (!(w > 0 && h > 0)) return;
-    const c = makeCanvas(w, h, true, "srgb");
-    c.ctx.drawImage(source, 0, 0);
-    const d = c.ctx.getImageData(0, 0, w, h).data;
-    const alpha = new Uint8Array(w * h);
-    for (let i = 0; i < alpha.length; i++) alpha[i] = d[i * 4];
-    this.selectionMasks.set(rects, {
-      w: this.w,
-      h: this.h,
-      bounds: { x: at.x, y: at.y, w, h },
-      alpha,
-      ...(at.softness ? { softness: at.softness } : {}),
-    });
-  }
-
-  /** Translate a mask's pixels by (dx,dy) for an unlinked mask move; re-derives. */
   offsetMask(id: string, dx: number, dy: number): void {
-    const m = this.masks.get(id);
-    if (!m || (dx === 0 && dy === 0)) return;
-    const snap = m.ctx.getImageData(0, 0, this.w, this.h);
-    m.ctx.globalCompositeOperation = "source-over";
-    m.ctx.fillStyle = "#000";
-    m.ctx.fillRect(0, 0, this.w, this.h); // vacated area = hidden
-    m.ctx.putImageData(snap, Math.round(dx), Math.round(dy));
-    this.deriveMaskAlpha(id);
-    this.emitChange();
+    this.masking.offsetMask(id, dx, dy);
   }
-
-  /** Re-make every owned mask through `fn` (which draws the old mask canvas into a
-   *  fresh, current-doc-sized target ctx) and re-derive its alpha cache. Used by
-   *  the resize / rotate / flip / crop paths so masks track their layers exactly.
-   *  Callers must have set this.w/this.h to the new dimensions first. */
-  private transformMasks(
-    ids: string[] | undefined,
-    fn: (ctx: CanvasRenderingContext2D, src: HTMLCanvasElement) => void,
-  ): void {
-    for (const [id, m] of this.masks) {
-      // A filter mask (fm:<id>) is owned by its base layer — transform with it.
-      const owner = id.startsWith("fm:") ? id.slice(3) : id;
-      if (ids && !ids.includes(owner)) continue;
-      const next = this.mkMask(true);
-      fn(next.ctx, m.c);
-      this.masks.set(id, next);
-      this.deriveMaskAlpha(id);
-    }
+  getMaskImage(id: string): string | null {
+    return this.masking.getMaskImage(id);
   }
-
-  /** Final alpha the whole stroke is composited at. Erasing ignores colour alpha. */
-  private strokeAlpha() {
-    const o = this.brush!.opacity / 100;
-    return this.mode === "erase" ? o : o * this.col.a;
+  getMaskImageCanvas(id: string): HTMLCanvasElement | null {
+    return this.masking.getMaskImageCanvas(id);
   }
-  /** Composite op for stroke → layer: erase removes alpha, paint uses the blend mode. */
-  private strokeComposite(): GlobalCompositeOperation {
-    return this.mode === "erase" ? "destination-out" : blendOp(this.brush!.blend);
+  setMaskImage(id: string, source: CanvasImageSource): void {
+    this.masking.setMaskImage(id, source);
   }
-
-  /** Geometric centre of the rects' bounding box (un-clamped). */
-  private centerOf(rects: Rect[]): { x: number; y: number } {
-    let x0 = Infinity;
-    let y0 = Infinity;
-    let x1 = -Infinity;
-    let y1 = -Infinity;
-    for (const r of rects) {
-      x0 = Math.min(x0, r.x);
-      y0 = Math.min(y0, r.y);
-      x1 = Math.max(x1, r.x + r.w);
-      y1 = Math.max(y1, r.y + r.h);
-    }
-    return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+  maskPreviewURL(id: string, maxW = 48): string | null {
+    return this.masking.maskPreviewURL(id, maxW);
   }
-
-  /** Clip to the selection — a rotated quad path about `pivot` when `angle` ≠ 0. */
-  /** Trace the selection rects (optionally rotated about `pivot`) into a path. */
-  private pathOf(
-    ctx: CanvasRenderingContext2D,
-    rects: Rect[],
+  maskSelectionRects(id: string): Rect[] {
+    return this.masking.maskSelectionRects(id);
+  }
+  quickMaskActive(): boolean {
+    return this.masking.quickMaskActive();
+  }
+  enterQuickMask(
+    key: string,
+    rects: Rect[] | null = null,
     angle = 0,
     pivot: { x: number; y: number } | null = null,
-  ) {
-    ctx.beginPath();
-    if (!angle) {
-      for (const r of rects) ctx.rect(r.x, r.y, r.w, r.h);
-    } else {
-      const c = pivot ?? this.centerOf(rects);
-      const cos = Math.cos(angle);
-      const sin = Math.sin(angle);
-      const rx = (x: number, y: number) => c.x + (x - c.x) * cos - (y - c.y) * sin;
-      const ry = (x: number, y: number) => c.y + (x - c.x) * sin + (y - c.y) * cos;
-      for (const r of rects) {
-        ctx.moveTo(rx(r.x, r.y), ry(r.x, r.y));
-        ctx.lineTo(rx(r.x + r.w, r.y), ry(r.x + r.w, r.y));
-        ctx.lineTo(rx(r.x + r.w, r.y + r.h), ry(r.x + r.w, r.y + r.h));
-        ctx.lineTo(rx(r.x, r.y + r.h), ry(r.x, r.y + r.h));
-        ctx.closePath();
-      }
-    }
+  ): void {
+    this.masking.enterQuickMask(key, rects, angle, pivot);
+  }
+  setQuickMask(key: string | null): void {
+    this.masking.setQuickMask(key);
+  }
+  quickMaskRects(): Rect[] {
+    return this.masking.quickMaskRects();
+  }
+  quickMaskCoverage(): HTMLCanvasElement | null {
+    return this.masking.quickMaskCoverage();
   }
 
+  // ---- selection ----
+  // A selection's coverage and outline, the shape the other areas clip and
+  // mask through, the operations on it and the tools that make one:
+  // engine/selection.ts. These are its doors.
+  private readonly selection = new EngineSelection(this.cursor, {
+    mk: (w, h, readFreq) => this.mk(w, h, readFreq),
+    cs: () => this.cs,
+    viewContext: () => this.vctx,
+  });
+  /** The magic wand's cached source: dropped by any layer mutation. */
+  private get wandSrc(): EngineSelection["wandSrc"] {
+    return this.selection.wandSrc;
+  }
+  private set wandSrc(v: EngineSelection["wandSrc"]) {
+    this.selection.wandSrc = v;
+  }
+  private selectionFromCoverage(at: (i: number) => number, softness?: number): Rect[] {
+    return this.selection.selectionFromCoverage(at, softness);
+  }
+  private coverageOf(rects: Rect[] | null | undefined): SelectionMask | null {
+    return this.selection.coverageOf(rects);
+  }
   private clipTo(
     ctx: CanvasRenderingContext2D,
     rects: Rect[] | null,
     angle = 0,
     pivot: { x: number; y: number } | null = null,
   ) {
-    if (!rects || !rects.length) return;
-    this.pathOf(ctx, rects, angle, pivot);
-    ctx.clip();
+    this.selection.clipTo(ctx, rects, angle, pivot);
   }
-
-  /**
-   * Render the selection to an opaque-white alpha mask (full doc size), used via
-   * destination-in / -out instead of clip() when lifting content.
-   *
-   * For a ROTATED irregular selection the shape is filled AXIS-ALIGNED first and
-   * then the bitmap is rotated — the same way the content itself is baked. Filling
-   * hundreds of thin *rotated* scanline rects directly leaves hairline interior
-   * seams (rasterizers don't perfectly cancel adjacent rotated edges) and a
-   * rotated complex clip path drops whole rows; rotating one solid bitmap can do
-   * neither, and it lines up pixel-for-pixel with the rotated pixels.
-   */
   private selectionMask(
     rects: Rect[],
     angle: number,
     pivot: { x: number; y: number } | null,
   ): HTMLCanvasElement {
-    const cov = this.coverageOf(rects);
-    const memo = this.softMaskMemo;
-    if (
-      memo &&
-      memo.rects === rects &&
-      memo.cov === cov &&
-      memo.angle === angle &&
-      memo.px === (pivot?.x ?? null) &&
-      memo.py === (pivot?.y ?? null) &&
-      memo.w === this.w &&
-      memo.h === this.h
-    ) {
-      return memo.c; // callers only ever read it or draw from it
-    }
-    const out = this.buildSelectionMask(rects, cov, angle, pivot);
-    // Kept for every selection, hard ones too: an edit asks for it again and
-    // again while nothing it depends on moves (a live gradient every frame).
-    {
-      this.softMaskMemo = {
-        rects,
-        cov,
-        angle,
-        px: pivot?.x ?? null,
-        py: pivot?.y ?? null,
-        w: this.w,
-        h: this.h,
-        c: out,
-      };
-    }
-    return out;
+    return this.selection.selectionMask(rects, angle, pivot);
   }
-
-  /** The shape of a selection, unrotated: its coverage if it is soft, else its rects. */
-  private paintSelectionShape(ctx: CanvasRenderingContext2D, rects: Rect[], cov: SelectionMask | null) {
-    if (!cov) {
-      this.pathOf(ctx, rects, 0, null);
-      ctx.fill();
-      return;
-    }
-    const { bounds: b, alpha } = cov;
-    const img = new ImageData(b.w, b.h, { colorSpace: this.cs });
-    const d = img.data;
-    for (let i = 0; i < alpha.length; i++) {
-      const o = i * 4;
-      d[o] = d[o + 1] = d[o + 2] = 255;
-      d[o + 3] = alpha[i];
-    }
-    ctx.putImageData(img, b.x, b.y);
-  }
-
-  private buildSelectionMask(
-    rects: Rect[],
-    cov: SelectionMask | null,
-    angle: number,
-    pivot: { x: number; y: number } | null,
-  ): HTMLCanvasElement {
-    const base = this.mk(this.w, this.h);
-    base.ctx.fillStyle = "#fff";
-    if (!angle) {
-      this.paintSelectionShape(base.ctx, rects, cov);
-    } else {
-      // Solid axis-aligned shape (abutting upright rects fill without seams)…
-      const flat = this.mk(this.w, this.h);
-      flat.ctx.fillStyle = "#fff";
-      this.paintSelectionShape(flat.ctx, rects, cov);
-      // …then rotate that bitmap about the same pivot as the content.
-      const c = pivot ?? this.centerOf(rects);
-      base.ctx.save();
-      base.ctx.translate(c.x, c.y);
-      base.ctx.rotate(angle);
-      base.ctx.translate(-c.x, -c.y);
-      base.ctx.imageSmoothingEnabled = true;
-      base.ctx.drawImage(flat.c, 0, 0);
-      base.ctx.restore();
-    }
-    return base.c;
-  }
-
-  /** Draw the current stroke buffer onto a context, clipped to the selection. */
-  private drawStroke(ctx: CanvasRenderingContext2D) {
-    ctx.save();
-    let src: HTMLCanvasElement = this.stroke!.c;
-    if (this.clip && this.coverageOf(this.clip)) {
-      // A clip path is all-or-nothing; a soft selection masks the stroke instead.
-      // The mask is memoized, so this is two blits a frame, not a rebuild.
-      const m = this.selectionMask(this.clip, this.clipAngle, this.clipPivot);
-      let buf = this.softStrokeBuf;
-      if (!buf || buf.c.width !== this.w || buf.c.height !== this.h) {
-        buf = this.softStrokeBuf = this.mk(this.w, this.h);
-      }
-      buf.ctx.globalCompositeOperation = "copy";
-      buf.ctx.drawImage(src, 0, 0);
-      buf.ctx.globalCompositeOperation = "destination-in";
-      buf.ctx.drawImage(m, 0, 0);
-      buf.ctx.globalCompositeOperation = "source-over";
-      src = buf.c;
-    } else {
-      this.clipTo(ctx, this.clip, this.clipAngle, this.clipPivot);
-    }
-    ctx.globalAlpha = this.strokeAlpha();
-    // On a transparency-locked layer, paint clips to the existing opacity live via
-    // source-atop so the preview matches the alpha-frozen commit (freezeAlpha).
-    // Erasing keeps its normal composite here; the commit still freezes its alpha.
-    const transpLock =
-      !this.strokeOnMask &&
-      this.strokeLayer != null &&
-      !!this.layerLocks.get(this.strokeLayer)?.transparency;
-    ctx.globalCompositeOperation =
-      transpLock && this.mode !== "erase" ? "source-atop" : this.strokeComposite();
-    ctx.drawImage(src, 0, 0);
-    ctx.restore();
-  }
-
   private boundsOf(
     rects: Rect[],
     angle = 0,
     pivot: { x: number; y: number } | null = null,
   ): Rect | null {
-    let x0 = Infinity;
-    let y0 = Infinity;
-    let x1 = -Infinity;
-    let y1 = -Infinity;
-    // Soft coverage reaches past the ≥50% rects; the pivot stays the rects'.
-    const cov = this.coverageOf(rects);
-    const extent = cov ? [cov.bounds] : rects;
-    if (!angle) {
-      for (const r of extent) {
-        x0 = Math.min(x0, r.x);
-        y0 = Math.min(y0, r.y);
-        x1 = Math.max(x1, r.x + r.w);
-        y1 = Math.max(y1, r.y + r.h);
-      }
-    } else {
-      const c = pivot ?? this.centerOf(rects);
-      const cos = Math.cos(angle);
-      const sin = Math.sin(angle);
-      for (const r of extent) {
-        for (const [x, y] of [
-          [r.x, r.y],
-          [r.x + r.w, r.y],
-          [r.x + r.w, r.y + r.h],
-          [r.x, r.y + r.h],
-        ]) {
-          const px = c.x + (x - c.x) * cos - (y - c.y) * sin;
-          const py = c.y + (x - c.x) * sin + (y - c.y) * cos;
-          x0 = Math.min(x0, px);
-          y0 = Math.min(y0, py);
-          x1 = Math.max(x1, px);
-          y1 = Math.max(y1, py);
-        }
-      }
-    }
-    x0 = Math.max(0, Math.floor(x0));
-    y0 = Math.max(0, Math.floor(y0));
-    x1 = Math.min(this.w, Math.ceil(x1));
-    y1 = Math.min(this.h, Math.ceil(y1));
-    const w = x1 - x0;
-    const h = y1 - y0;
-    if (w <= 0 || h <= 0) return null;
-    return { x: x0, y: y0, w, h };
+    return this.selection.boundsOf(rects, angle, pivot);
+  }
+  isSoftSelection(rects: Rect[]): boolean {
+    return this.selection.isSoftSelection(rects);
+  }
+  isFaintSelection(rects: Rect[]): boolean {
+    return this.selection.isFaintSelection(rects);
+  }
+  selectionSoftness(rects: Rect[]): number {
+    return this.selection.selectionSoftness(rects);
+  }
+  selectionOutline(rects: Rect[]): Seg[] {
+    return this.selection.selectionOutline(rects);
+  }
+  selectionCoverageCanvas(rects: Rect[], angle: number, pivot: { x: number; y: number } | null): HTMLCanvasElement {
+    return this.selection.selectionCoverageCanvas(rects, angle, pivot);
+  }
+  selectionMaskImage(rects: Rect[]): SavedSelectionMask | null {
+    return this.selection.selectionMaskImage(rects);
+  }
+  adoptSelectionMask(
+    rects: Rect[],
+    at: { x: number; y: number; softness?: number },
+    source: CanvasImageSource & { width: number; height: number },
+  ): void {
+    this.selection.adoptSelectionMask(rects, at, source);
+  }
+  combineSelectionSoft(
+    a: Rect[],
+    b: Rect[] | null,
+    op: "add" | "subtract" | "intersect" | "invert",
+  ): Rect[] | null {
+    return this.selection.combineSelectionSoft(a, b, op);
+  }
+  featherSelection(rects: Rect[], angle: number, pivot: { x: number; y: number } | null, px: number): Rect[] {
+    return this.selection.featherSelection(rects, angle, pivot, px);
+  }
+  refineSelection(rects: Rect[], angle: number, pivot: { x: number; y: number } | null, r: RefineEdge): Rect[] {
+    return this.selection.refineSelection(rects, angle, pivot, r);
+  }
+  growSoftSelection(rects: Rect[], px: number): Rect[] | null {
+    return this.selection.growSoftSelection(rects, px);
+  }
+  modifySelection(
+    rects: Rect[],
+    angle: number,
+    pivot: { x: number; y: number } | null,
+    op: ModifyOp,
+    px: number,
+  ): Rect[] {
+    return this.selection.modifySelection(rects, angle, pivot, op, px);
+  }
+  shiftSelection(rects: Rect[], dx: number, dy: number): Rect[] {
+    return this.selection.shiftSelection(rects, dx, dy);
+  }
+  carryResizedSelection(from: Rect[], to: Rect[], fromBox: Rect, toBox: Rect): void {
+    this.selection.carryResizedSelection(from, to, fromBox, toBox);
+  }
+  magicWand(
+    layerId: string,
+    x: number,
+    y: number,
+    opts: { tolerance: number; contiguous: boolean; sampleAll: boolean },
+    reuseSource = false,
+    add: Rect[] | null = null, // existing selection to union with (Ctrl-add)
+  ): WandSelection | null {
+    return this.selection.magicWand(layerId, x, y, opts, reuseSource, add);
+  }
+  beginQuickSelect(
+    layerId: string,
+    opts: { tolerance: number; sampleAll: boolean },
+    base: Rect[] | null,
+    subtract: boolean,
+  ): void {
+    this.selection.beginQuickSelect(layerId, opts, base, subtract);
+  }
+  quickSelectDab(x: number, y: number, r: number): WandSelection | null {
+    return this.selection.quickSelectDab(x, y, r);
+  }
+  endQuickSelect(): void {
+    this.selection.endQuickSelect();
+  }
+  lassoSelect(points: { x: number; y: number }[]): WandSelection | null {
+    return this.selection.lassoSelect(points);
+  }
+  combineSelection(base: Rect[], region: Rect[], mode: "add" | "subtract"): WandSelection | null {
+    return this.selection.combineSelection(base, region, mode);
   }
 
+  // Per-layer edit locks (the document's `layerLocks`) are enforced at the
+  // pixel-commit chokepoint (pushEntry), kept in sync from the layer tree via
+  // syncLayerLocks(). Position lock is a UI-level guard and isn't tracked.
   /** Replace the engine's view of which layers are transparency/pixels locked.
    *  Called from the editor whenever the layer tree changes; position lock is a
    *  UI-level guard and isn't tracked here. */
@@ -3509,14 +2386,6 @@ export class PaintEngine extends DocumentScoped {
     this.linkEntry({ layerId, rect, before, after, label, side, surface });
     this.trimHistory();
     if (surface !== "mask") this.bumpPixel(layerId, rect); // layer pixels changed → restyle
-    this.emitHistory();
-  }
-
-  /** Push a structural undo step (no pixel payload — `undo`/`redo` do the work). */
-  pushStructural(label: string, undo: () => void, redo: () => void) {
-    this.endLive();
-    this.linkEntry({ label, side: { undo, redo } });
-    this.trimHistory();
     this.emitHistory();
   }
 
@@ -4104,54 +2973,44 @@ export class PaintEngine extends DocumentScoped {
     this.emitChange();
   }
 
-  // ---- Spot heal / content-aware fill ---------------------------------------
-  /** Shared tail: crop the padded region, heal `coverage`, bake + one entry.
-   *  The solve runs in the heal worker (UI stays responsive on big blobs);
-   *  finishHeal validates + bakes the reply, or computes synchronously when
-   *  workers are unavailable. */
-  private healApply(
-    layerId: string,
-    coverage: Uint8ClampedArray,
-    rx: number,
-    ry: number,
-    rw: number,
-    rh: number,
-    label: string,
-  ) {
-    const l = this.layers.get(layerId);
-    if (!l) return;
-    const src = l.ctx.getImageData(rx, ry, rw, rh);
-    const job = {
-      layerId,
-      rx,
-      ry,
-      rw,
-      rh,
-      label,
-      epoch: this.docEpoch,
-      docW: this.w,
-      docH: this.h,
-      doc: this.doc,
-      before: src,
-      coverage,
-    };
-    const w = this.ensureHealWorker();
-    if (!w) {
-      this.finishHeal(job, null); // sync path
-      return;
-    }
-    const id = ++this.healJobSeq;
-    this.healPending.set(id, job);
-    // Ship COPIES: `before`/`coverage` stay usable for history + the fallback.
-    const srcCopy = src.data.slice();
-    const covCopy = coverage.slice();
-    w.postMessage(
-      { id, w: rw, h: rh, src: srcCopy.buffer, coverage: covCopy.buffer },
-      [srcCopy.buffer, covCopy.buffer],
-    );
+  // ---- heal ----
+  // Spot heal and content-aware fill, the region and coverage each heals, the
+  // heal worker and the bake: engine/heal.ts. These are its doors.
+  private readonly healing = new EngineHeal(this.cursor, {
+    selectionMask: (rects, angle, pivot) => this.selectionMask(rects, angle, pivot),
+    boundsOf: (rects, angle, pivot) => this.boundsOf(rects, angle, pivot),
+    pushEntry: (layerId, rect, before, after, label) => this.pushEntry(layerId, rect, before, after, label),
+    landInBackground: (d, layerId, rect, before, after, label) =>
+      this.landInBackground(d, layerId, rect, before, after, label),
+    bumpPixel: (id, rect) => this.bumpPixel(id, rect),
+    emitChange: () => this.emitChange(),
+    cs: () => this.cs,
+    workersOn: () => this.workersOn,
+  });
+  /** The heals out to the worker (the stats count them as jobs). */
+  private get healPending(): EngineHeal["healPending"] {
+    return this.healing.healPending;
   }
-
-  /** Multiply a region-space coverage by the current selection's mask. */
+  healSpots(
+    layerId: string,
+    pts: { x: number; y: number }[],
+    size: number,
+    hardness: number,
+    sel: Rect[] | null = null,
+    selAngle = 0,
+    selPivot: { x: number; y: number } | null = null,
+  ) {
+    this.healing.healSpots(layerId, pts, size, hardness, sel, selAngle, selPivot);
+  }
+  contentAwareFill(
+    layerId: string,
+    sel: Rect[],
+    selAngle = 0,
+    selPivot: { x: number; y: number } | null = null,
+  ) {
+    this.healing.contentAwareFill(layerId, sel, selAngle, selPivot);
+  }
+  /** Red-eye clips its coverage the same way. */
   private clipCoverageToSelection(
     coverage: Uint8ClampedArray,
     rx: number,
@@ -4162,84 +3021,7 @@ export class PaintEngine extends DocumentScoped {
     selAngle: number,
     selPivot: { x: number; y: number } | null,
   ) {
-    const m = this.selectionMask(sel, selAngle, selPivot);
-    const md = m.getContext("2d")!.getImageData(rx, ry, rw, rh).data;
-    for (let i = 0; i < coverage.length; i++) coverage[i] = (coverage[i] * md[i * 4 + 3]) / 255;
-  }
-
-  /**
-   * Spot-heal the blob painted by the heal brush: `pts` (doc space) stamp soft
-   * discs into a coverage mask; the blob heals in one pass on release —
-   * texture from the best-matching surroundings, tone-matched seamlessly.
-   */
-  healSpots(
-    layerId: string,
-    pts: { x: number; y: number }[],
-    size: number,
-    hardness: number,
-    sel: Rect[] | null = null,
-    selAngle = 0,
-    selPivot: { x: number; y: number } | null = null,
-  ) {
-    if (!pts.length || !this.layers.has(layerId)) return;
-    const r = Math.max(1, size / 2);
-    let x0 = Infinity;
-    let y0 = Infinity;
-    let x1 = -Infinity;
-    let y1 = -Infinity;
-    for (const p of pts) {
-      x0 = Math.min(x0, p.x - r);
-      y0 = Math.min(y0, p.y - r);
-      x1 = Math.max(x1, p.x + r);
-      y1 = Math.max(y1, p.y + r);
-    }
-    const pad = healPadding(x1 - x0, y1 - y0);
-    const rx = Math.max(0, Math.floor(x0 - pad));
-    const ry = Math.max(0, Math.floor(y0 - pad));
-    const rw = Math.min(this.w, Math.ceil(x1 + pad)) - rx;
-    const rh = Math.min(this.h, Math.ceil(y1 + pad)) - ry;
-    if (rw <= 0 || rh <= 0) return;
-    // Rasterize the blob (soft discs honouring hardness) into region space.
-    const cov = makeCanvas(rw, rh, true, "srgb");
-    const cctx = cov.ctx;
-    for (const p of pts) {
-      const cx = p.x - rx;
-      const cy = p.y - ry;
-      const g = cctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-      g.addColorStop(Math.max(0, Math.min(1, hardness / 100)), "rgba(255,255,255,1)");
-      g.addColorStop(1, "rgba(255,255,255,0)");
-      cctx.fillStyle = g;
-      cctx.beginPath();
-      cctx.arc(cx, cy, r, 0, Math.PI * 2);
-      cctx.fill();
-    }
-    const cd = cctx.getImageData(0, 0, rw, rh).data;
-    const coverage = new Uint8ClampedArray(rw * rh);
-    for (let i = 0; i < coverage.length; i++) coverage[i] = cd[i * 4 + 3];
-    if (sel && sel.length) this.clipCoverageToSelection(coverage, rx, ry, rw, rh, sel, selAngle, selPivot);
-    this.healApply(layerId, coverage, rx, ry, rw, rh, "Spot Heal");
-  }
-
-  /** Fill the selection with synthesized surrounding content (Edit menu). */
-  contentAwareFill(
-    layerId: string,
-    sel: Rect[],
-    selAngle = 0,
-    selPivot: { x: number; y: number } | null = null,
-  ) {
-    if (!sel.length || !this.layers.has(layerId)) return;
-    const b = this.boundsOf(sel);
-    if (!b) return;
-    const pad = healPadding(b.w, b.h);
-    const rx = Math.max(0, Math.floor(b.x - pad));
-    const ry = Math.max(0, Math.floor(b.y - pad));
-    const rw = Math.min(this.w, Math.ceil(b.x + b.w + pad)) - rx;
-    const rh = Math.min(this.h, Math.ceil(b.y + b.h + pad)) - ry;
-    if (rw <= 0 || rh <= 0) return;
-    const coverage = new Uint8ClampedArray(rw * rh);
-    coverage.fill(255);
-    this.clipCoverageToSelection(coverage, rx, ry, rw, rh, sel, selAngle, selPivot);
-    this.healApply(layerId, coverage, rx, ry, rw, rh, "Content-Aware Fill");
+    this.healing.clipCoverageToSelection(coverage, rx, ry, rw, rh, sel, selAngle, selPivot);
   }
 
   /** Red-eye click: find the red pupil blob near (x, y) and neutralize +
@@ -4410,50 +3192,6 @@ export class PaintEngine extends DocumentScoped {
     return this.holderOf((d) => d.layers, id)?.c ?? null;
   }
 
-  /** A doc-sized COPY of a layer's raster as a canvas (blank if it has none
-   *  yet — a fresh empty layer simply liquifies/reads as transparency). */
-  modifySelection(
-    rects: Rect[],
-    angle: number,
-    pivot: { x: number; y: number } | null,
-    op: ModifyOp,
-    px: number,
-  ): Rect[] {
-    if (!rects.length) return [];
-    // A SOFT selection expands and contracts as a whole: the max / min over the
-    // same round kernel moves its soft edge without hardening it. (Smooth and
-    // Border make a crisp edge by definition — they take the path below.)
-    if (this.coverageOf(rects) && (op === "expand" || op === "contract")) {
-      const out = morphRound(this.coverageImage(rects, angle, pivot), this.w, this.h, px, op === "expand");
-      return this.selectionFromCoverage((i) => out[i], this.coverageOf(rects)?.softness);
-    }
-    // Rasterise through the existing mask builder so rotation is handled once,
-    // in the place that already gets it right — then the morphology is plain
-    // grid work and the result comes back as axis-aligned rects.
-    const canvas = this.selectionMask(rects, angle, pivot);
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return rects;
-    const id = ctx.getImageData(0, 0, this.w, this.h);
-    const n = this.w * this.h;
-    const mask = new Uint8Array(n);
-    for (let i = 0; i < n; i++) mask[i] = id.data[i * 4 + 3] >= 128 ? 1 : 0;
-    const outMask = modifyMask(mask, this.w, this.h, op, px);
-    let x0 = this.w;
-    let y0 = this.h;
-    let x1 = 0;
-    let y1 = 0;
-    for (let y = 0; y < this.h; y++)
-      for (let x = 0; x < this.w; x++)
-        if (outMask[y * this.w + x]) {
-          if (x < x0) x0 = x;
-          if (y < y0) y0 = y;
-          if (x + 1 > x1) x1 = x + 1;
-          if (y + 1 > y1) y1 = y + 1;
-        }
-    if (x1 <= x0 || y1 <= y0) return [];
-    return maskToRects(outMask, this.w, { x0, y0, x1, y1 });
-  }
-
   setGlobalLight(l: GlobalLight) {
     this.globalLight = l;
     this.clearRenderCaches();
@@ -4463,6 +3201,8 @@ export class PaintEngine extends DocumentScoped {
     return this.globalLight;
   }
 
+  /** A doc-sized COPY of a layer's raster as a canvas (blank if it has none
+   *  yet — a fresh empty layer simply liquifies/reads as transparency). */
   getLayerCanvas(id: string): HTMLCanvasElement {
     const c = document.createElement("canvas");
     c.width = this.w;
@@ -4471,26 +3211,6 @@ export class PaintEngine extends DocumentScoped {
     const l = this.layers.get(id);
     if (l) c.getContext("2d")!.drawImage(l.c, 0, 0);
     return c;
-  }
-
-  /** A layer's grayscale mask as a PNG data URL (null if it has no mask). */
-  getMaskImage(id: string): string | null {
-    const m = this.holderOf((d) => d.masks, id);
-    return m ? m.c.toDataURL("image/png") : null;
-  }
-
-  /** Exactly the canvas `getMaskImage` would encode — see getLayerImageCanvas. */
-  getMaskImageCanvas(id: string): HTMLCanvasElement | null {
-    return this.holderOf((d) => d.masks, id)?.c ?? null;
-  }
-
-  /** Restore a mask from a decoded image (project load) + derive its alpha. */
-  setMaskImage(id: string, source: CanvasImageSource): void {
-    const m = this.mkMask(true);
-    m.ctx.drawImage(source, 0, 0);
-    this.masks.set(id, m);
-    this.deriveMaskAlpha(id);
-    this.emitChange();
   }
 
   // ---- Adjustments (live preview on a leaf, baked on commit) ----
@@ -5203,12 +3923,6 @@ export class PaintEngine extends DocumentScoped {
       : filtered;
   }
 
-  /** The alpha buffer confining a node's smart-filter stack (null = unmasked).
-   *  Routed through maskDisplay so painting the filter mask previews live. */
-  private filterMaskAlpha(node: LayerNode): HTMLCanvasElement | null {
-    return node.filterMask?.enabled ? this.maskDisplay(filterMaskKey(node.id)) : null;
-  }
-
   /** The display source for a single leaf/group node WITH its effects (but without
    *  its mask / opacity / blend). Null when a leaf has no canvas. */
   private styledSource(node: LayerNode): HTMLCanvasElement | null {
@@ -5479,87 +4193,6 @@ export class PaintEngine extends DocumentScoped {
     out.ctx.imageSmoothingQuality = "high"; // the upscale is what the user sees
     out.ctx.drawImage(styled, 0, 0, styled.width, styled.height, 0, 0, this.w, this.h);
     return out.c;
-  }
-
-  /** Smart filters (Spec 07): run a node's enabled filter stack over `src`
-   *  (its raw pixels / merged group buffer), each filter blended back over the
-   *  pre-filter result with its own blend mode + opacity. Returns a fresh
-   *  layer-sized canvas; the node's stored pixels are never touched. Only
-   *  reached on a render-cache miss — the product is cached by renderNode. */
-  private renderFiltered(
-    src: HTMLCanvasElement,
-    filters: SmartFilter[],
-    fmAlpha: HTMLCanvasElement | null = null,
-  ): HTMLCanvasElement {
-    const out = this.mk(this.w, this.h, true);
-    out.ctx.drawImage(src, 0, 0);
-    const cur = this.filterStack(
-      out.ctx.getImageData(0, 0, this.w, this.h),
-      filters,
-      fmAlpha ? () => fmAlpha.getContext("2d")!.getImageData(0, 0, this.w, this.h).data : null,
-    );
-    out.ctx.putImageData(cur, 0, 0);
-    return out.c;
-  }
-
-  /**
-   * Run an enabled filter stack over the top-left `w`×`h` of `buf`, which already
-   * holds the source pixels, and return the result. The caller decides where it
-   * lands, which is what lets the same code serve a whole document and a single
-   * region of one.
-   *
-   * `fm` is called LAZILY so a stack that turns out to be a no-op never pays for
-   * a filter-mask readback it will not use.
-   *
-   * Both the full-canvas path and the live region path route through here on
-   * purpose: the premultiplied mask interpolation at the bottom is subtle enough
-   * that two copies of it would eventually disagree.
-   */
-  private filterStack(
-    input: ImageData,
-    filters: SmartFilter[],
-    fm: (() => Uint8ClampedArray) | null,
-  ): ImageData {
-    let cur = input;
-    const base = fm ? cur : null; // pristine pixels; never mutated by the loop below
-    for (const f of filters) {
-      if (!f.enabled) continue;
-      const applied = applyFilter(cur, f, this.cs);
-      const op = blendOp(f.blendMode);
-      const alpha = Math.max(0, Math.min(1, f.opacity / 100));
-      if (op === "source-over" && alpha >= 1) {
-        cur = applied; // the common case: full replace
-        continue;
-      }
-      // Blend the filtered result back over the pre-filter pixels, in exact
-      // arithmetic rather than through a canvas — see app/lib/blend.ts for why
-      // the canvas is not trustworthy here. `applied` is always a fresh buffer
-      // out of applyFilter, so it is safe to blend into (`cur` is not: `base`
-      // aliases it).
-      blendInto(applied.data, cur.data, applied.data, op, alpha);
-      cur = applied;
-    }
-    // Filter mask: confine the WHOLE stack — result = orig + (filtered − orig) ×
-    // mask, interpolated premultiplied so partially-covered edge pixels don't
-    // tint. The mask alpha lives in the fm buffer's A channel (the derived cache).
-    if (base && cur !== base) {
-      const m = fm!();
-      const a = base.data;
-      const b = cur.data;
-      for (let i = 0; i < b.length; i += 4) {
-        const t = m[i + 3] / 255;
-        if (t >= 1) continue; // fully filtered — the common (white) case
-        const aa = a[i + 3];
-        const ba = b[i + 3];
-        const na = aa + (ba - aa) * t;
-        const inv = na > 0 ? 1 / na : 0;
-        b[i] = (a[i] * aa * (1 - t) + b[i] * ba * t) * inv;
-        b[i + 1] = (a[i + 1] * aa * (1 - t) + b[i + 1] * ba * t) * inv;
-        b[i + 2] = (a[i + 2] * aa * (1 - t) + b[i + 2] * ba * t) * inv;
-        b[i + 3] = na;
-      }
-    }
-    return cur;
   }
 
   /** Borrow a reusable doc-sized buffer (lazily (re)allocated on size change). */
@@ -6870,528 +5503,6 @@ export class PaintEngine extends DocumentScoped {
     return toHex8({ r: sr / sa, g: sg / sa, b: sb / sa, a: sa / count });
   }
 
-  /**
-   * Magic-wand select: pick the region of similar colour around (x,y). Returns a
-   * run-length rect decomposition (reused by the whole selection pipeline) plus
-   * the traced mask boundary as marching-ants segments (cheap to draw). Source
-   * is the active layer or, with `sampleAll`, the composite.
-   */
-  magicWand(
-    layerId: string,
-    x: number,
-    y: number,
-    opts: { tolerance: number; contiguous: boolean; sampleAll: boolean },
-    reuseSource = false,
-    add: Rect[] | null = null, // existing selection to union with (Ctrl-add)
-  ): WandSelection | null {
-    const w = this.w;
-    const h = this.h;
-    const px = Math.floor(x);
-    const py = Math.floor(y);
-    if (px < 0 || py < 0 || px >= w || py >= h) return null;
-    // Source pixels: cached between live re-runs (dragging Tolerance doesn't
-    // change the layer), so we skip the costly getImageData each time.
-    const cache = this.wandSrc;
-    let data: Uint8ClampedArray;
-    if (
-      reuseSource &&
-      cache &&
-      cache.w === w &&
-      cache.h === h &&
-      cache.layerId === layerId &&
-      cache.sampleAll === opts.sampleAll
-    ) {
-      data = cache.data;
-    } else {
-      const ctx = opts.sampleAll ? this.vctx : this.layers.get(layerId)?.ctx;
-      if (!ctx) return null;
-      data = ctx.getImageData(0, 0, w, h, { colorSpace: "srgb" }).data;
-      this.wandSrc = { data, w, h, layerId, sampleAll: opts.sampleAll };
-    }
-    const t = Math.max(0, opts.tolerance);
-    const si = (py * w + px) * 4;
-    const sr = data[si];
-    const sg = data[si + 1];
-    const sb = data[si + 2];
-    const sa = data[si + 3];
-    // Match on PREMULTIPLIED colour (the visible contribution) + alpha, rather
-    // than straight RGBA. So the flood spreads by how a pixel actually looks: an
-    // opaque pixel matches on its colour and joins early, while the more
-    // transparent a pixel is, the less colour it contributes and the more
-    // tolerance it needs to match an opaque seed. (For fully opaque pixels this
-    // reduces to the plain RGB test, so opaque artwork is unchanged.) Premult is
-    // scaled by 255 to keep it integer and avoid a per-pixel divide.
-    const tScaled = t * 255;
-    const spr = sr * sa;
-    const spg = sg * sa;
-    const spb = sb * sa;
-
-    // Reuse big scratch buffers across (live) re-runs — allocating ~12MB of
-    // typed arrays per slider tick was a major source of GC-driven jank.
-    const n = w * h;
-    let buf = this.wandBuf;
-    if (!buf || buf.n !== n) {
-      // The scanline flood uses `mask` itself as the visited marker, so the old
-      // `seen` byte-map is gone, and it packs each seed into ONE int (x in the
-      // low 16 bits, y in the high) so the stack stays n ints rather than 2n.
-      // Worst case is a checkerboard: n/2 spans, each seedable from the row
-      // above and below, so n seeds — exactly what this holds. Packing is safe
-      // because both axes are capped well under 65536 (the New Document dialog
-      // allows 8192, and no canvas this app can allocate comes close).
-      buf = { mask: new Uint8Array(n), stack: new Int32Array(n), n };
-      this.wandBuf = buf;
-    }
-    const mask = buf.mask;
-    mask.fill(0);
-    let minX = w;
-    let minY = h;
-    let maxX = -1;
-    let maxY = -1;
-    // Ctrl-add: rasterise the existing selection into the mask first, so the
-    // result is the union (its rects + boundary segments cover both regions).
-    if (add) {
-      for (const r of add) {
-        const x0 = Math.max(0, r.x);
-        const y0 = Math.max(0, r.y);
-        const x1 = Math.min(w, r.x + r.w);
-        const y1 = Math.min(h, r.y + r.h);
-        for (let yy = y0; yy < y1; yy++) {
-          const row = yy * w;
-          for (let xx = x0; xx < x1; xx++) mask[row + xx] = 1;
-        }
-        if (x0 < x1 && y0 < y1) {
-          if (x0 < minX) minX = x0;
-          if (x1 - 1 > maxX) maxX = x1 - 1;
-          if (y0 < minY) minY = y0;
-          if (y1 - 1 > maxY) maxY = y1 - 1;
-        }
-      }
-    }
-    if (opts.contiguous) {
-      /* SCANLINE flood. The per-pixel version walked one cell at a time with a
-         parallel `seen` map, and paid a modulo AND a divide per pixel just to
-         recover (x, y) from the packed index. This fills a whole horizontal RUN
-         per pop and seeds only the runs above and below it, so the index maths
-         disappears, the visited map is `mask` itself, and the stack carries
-         spans rather than pixels. */
-      const stack = buf.stack;
-      let sp = 0;
-      const match = (q: number): boolean => {
-        const i2 = q * 4;
-        const a3 = data[i2 + 3];
-        return (
-          Math.abs(data[i2] * a3 - spr) <= tScaled &&
-          Math.abs(data[i2 + 1] * a3 - spg) <= tScaled &&
-          Math.abs(data[i2 + 2] * a3 - spb) <= tScaled &&
-          Math.abs(a3 - sa) <= t
-        );
-      };
-      if (match(py * w + px)) {
-        stack[sp++] = px | (py << 16);
-        while (sp > 0) {
-          const seed = stack[--sp];
-          const cx = seed & 0xffff;
-          const cy = seed >>> 16;
-          const row = cy * w;
-          if (mask[row + cx]) continue; // a later span already covered this seed
-          let xl = cx;
-          while (xl > 0 && !mask[row + xl - 1] && match(row + xl - 1)) xl--;
-          let xr = cx;
-          while (xr < w - 1 && !mask[row + xr + 1] && match(row + xr + 1)) xr++;
-          for (let x = xl; x <= xr; x++) mask[row + x] = 1;
-          if (xl < minX) minX = xl;
-          if (xr > maxX) maxX = xr;
-          if (cy < minY) minY = cy;
-          if (cy > maxY) maxY = cy;
-          // One seed per contiguous sub-run in the neighbouring rows.
-          if (cy > 0) {
-            const up = row - w;
-            let inRun = false;
-            for (let x = xl; x <= xr; x++) {
-              const ok = !mask[up + x] && match(up + x);
-              if (ok && !inRun) {
-                stack[sp++] = x | ((cy - 1) << 16);
-                inRun = true;
-              } else if (!ok) inRun = false;
-            }
-          }
-          if (cy < h - 1) {
-            const dn = row + w;
-            let inRun = false;
-            for (let x = xl; x <= xr; x++) {
-              const ok = !mask[dn + x] && match(dn + x);
-              if (ok && !inRun) {
-                stack[sp++] = x | ((cy + 1) << 16);
-                inRun = true;
-              } else if (!ok) inRun = false;
-            }
-          }
-        }
-      }
-    } else {
-      let p = 0;
-      for (let cy = 0; cy < h; cy++) {
-        for (let cx = 0; cx < w; cx++, p++) {
-          const i = p * 4;
-          const a3 = data[i + 3];
-          if (
-            Math.abs(data[i] * a3 - spr) <= tScaled &&
-            Math.abs(data[i + 1] * a3 - spg) <= tScaled &&
-            Math.abs(data[i + 2] * a3 - spb) <= tScaled &&
-            Math.abs(a3 - sa) <= t
-          ) {
-            mask[p] = 1;
-            if (cx < minX) minX = cx;
-            if (cx > maxX) maxX = cx;
-            if (cy < minY) minY = cy;
-            if (cy > maxY) maxY = cy;
-          }
-        }
-      }
-    }
-
-    if (maxX < 0) return null; // nothing matched
-    const b: Bounds = { x0: minX, y0: minY, x1: maxX + 1, y1: maxY + 1 };
-    const rects = maskToRects(mask, w, b);
-    if (!rects.length) return null;
-    return { rects, segments: maskToSegments(mask, w, h, b) };
-  }
-
-  // ---- Quick selection (edge-aware region grow) ----------------------------
-  /** Begin a quick-selection stroke: snapshot the sampled surface + its edge
-   *  field, and seed the accumulating mask with the current selection. */
-  beginQuickSelect(
-    layerId: string,
-    opts: { tolerance: number; sampleAll: boolean },
-    base: Rect[] | null,
-    subtract: boolean,
-  ): void {
-    const w = this.w;
-    const h = this.h;
-    const ctx = opts.sampleAll ? this.vctx : this.layers.get(layerId)?.ctx;
-    if (!ctx) {
-      this.qs = null;
-      return;
-    }
-    const data = ctx.getImageData(0, 0, w, h, { colorSpace: "srgb" }).data;
-    const n = w * h;
-    const mask = new Uint8Array(n);
-    let x0 = w;
-    let y0 = h;
-    let x1 = -1;
-    let y1 = -1;
-    if (base) {
-      for (const r of base) {
-        const rx0 = Math.max(0, r.x);
-        const ry0 = Math.max(0, r.y);
-        const rx1 = Math.min(w, r.x + r.w);
-        const ry1 = Math.min(h, r.y + r.h);
-        for (let yy = ry0; yy < ry1; yy++) {
-          const row = yy * w;
-          for (let xx = rx0; xx < rx1; xx++) mask[row + xx] = 1;
-        }
-        if (rx0 < rx1 && ry0 < ry1) {
-          x0 = Math.min(x0, rx0);
-          y0 = Math.min(y0, ry0);
-          x1 = Math.max(x1, rx1 - 1);
-          y1 = Math.max(y1, ry1 - 1);
-        }
-      }
-    }
-    this.qs = {
-      data,
-      edge: buildEdgeField(data, w, h),
-      mask,
-      stamp: new Int32Array(n),
-      stack: new Int32Array(n),
-      dab: 0,
-      subtract,
-      tol: Math.max(1, opts.tolerance),
-      mr: 0,
-      mg: 0,
-      mb: 0,
-      count: 0,
-      x0,
-      y0,
-      x1,
-      y1,
-    };
-  }
-
-  /** One brush dab (centre `x,y`, pixel radius `r`): grows (add) or shrinks
-   *  (subtract) the selection through the edge-aware colour region. */
-  quickSelectDab(x: number, y: number, r: number): WandSelection | null {
-    const qs = this.qs;
-    if (!qs) return null;
-    const w = this.w;
-    const h = this.h;
-    const { data, edge, mask, stamp, stack } = qs;
-    const sub = qs.subtract;
-    const dab = ++qs.dab;
-    const cx = Math.round(x);
-    const cy = Math.round(y);
-    const rad = Math.max(1, Math.round(r));
-    const rr = rad * rad;
-    // Seed from the brush footprint: select those pixels outright (user intent),
-    // fold their colour into the running region mean, and queue them to grow from.
-    let sp = 0;
-    const bx0 = Math.max(0, cx - rad);
-    const bx1 = Math.min(w - 1, cx + rad);
-    const by0 = Math.max(0, cy - rad);
-    const by1 = Math.min(h - 1, cy + rad);
-    for (let yy = by0; yy <= by1; yy++) {
-      const dy = yy - cy;
-      for (let xx = bx0; xx <= bx1; xx++) {
-        const dx = xx - cx;
-        if (dx * dx + dy * dy > rr) continue;
-        const p = yy * w + xx;
-        const i = p * 4;
-        qs.mr += data[i];
-        qs.mg += data[i + 1];
-        qs.mb += data[i + 2];
-        qs.count++;
-        if (sub) {
-          mask[p] = 0;
-        } else {
-          mask[p] = 1;
-          if (xx < qs.x0) qs.x0 = xx;
-          if (xx > qs.x1) qs.x1 = xx;
-          if (yy < qs.y0) qs.y0 = yy;
-          if (yy > qs.y1) qs.y1 = yy;
-        }
-        if (stamp[p] !== dab) {
-          stamp[p] = dab;
-          stack[sp++] = p;
-        }
-      }
-    }
-    if (qs.count === 0) return this.qsResult();
-    const mr = qs.mr / qs.count;
-    const mg = qs.mg / qs.count;
-    const mb = qs.mb / qs.count;
-    const tol = qs.tol * 1.6; // UI 0–100 → colour distance
-    const edgeW = 0.35; // strong edges raise the colour bar
-    const EDGE_STOP = 46; // an edge this strong is a wall (don't expand across it)
-    // BFS grow: only step into pixels not yet handled by this dab, and — to keep
-    // the whole stroke ~O(final selection) — only into pixels not already in the
-    // right state (unselected for add, selected for subtract).
-    while (sp > 0) {
-      const p = stack[--sp];
-      if (edge.mag[p] > EDGE_STOP) continue; // edge pixel: a boundary, no expansion
-      const px = p % w;
-      const py = (p - px) / w;
-      const step = (q: number) => {
-        if (stamp[q] === dab) return;
-        stamp[q] = dab;
-        if (sub ? mask[q] === 0 : mask[q] === 1) return; // already in target state
-        const iq = q * 4;
-        const cd = Math.max(
-          Math.abs(data[iq] - mr),
-          Math.abs(data[iq + 1] - mg),
-          Math.abs(data[iq + 2] - mb),
-        );
-        if (cd + edgeW * edge.mag[q] > tol) return; // too far / across an edge
-        if (sub) {
-          mask[q] = 0;
-        } else {
-          mask[q] = 1;
-          const qx = q % w;
-          const qy = (q - qx) / w;
-          if (qx < qs.x0) qs.x0 = qx;
-          if (qx > qs.x1) qs.x1 = qx;
-          if (qy < qs.y0) qs.y0 = qy;
-          if (qy > qs.y1) qs.y1 = qy;
-        }
-        stack[sp++] = q;
-      };
-      if (px > 0) step(p - 1);
-      if (px < w - 1) step(p + 1);
-      if (py > 0) step(p - w);
-      if (py < h - 1) step(p + w);
-    }
-    return this.qsResult();
-  }
-
-  private qsResult(): WandSelection | null {
-    const qs = this.qs;
-    if (!qs || qs.x1 < 0) return null;
-    const b: Bounds = { x0: qs.x0, y0: qs.y0, x1: qs.x1 + 1, y1: qs.y1 + 1 };
-    const rects = maskToRects(qs.mask, this.w, b);
-    if (!rects.length) return null;
-    return { rects, segments: maskToSegments(qs.mask, this.w, this.h, b) };
-  }
-
-  /** End the quick-selection stroke (free the session buffers). */
-  endQuickSelect(): void {
-    this.qs = null;
-  }
-
-  /**
-   * Freeform lasso selection: rasterizes the (auto-closed) polygon into a pixel
-   * mask, then reuses the wand's mask→rects + mask→ants decomposition. The
-   * polygon is closed start↔end with a straight edge by the canvas fill.
-   */
-  lassoSelect(points: { x: number; y: number }[]): WandSelection | null {
-    const w = this.w;
-    const h = this.h;
-    if (points.length < 3 || w < 1 || h < 1) return null;
-    // Bounding box of the path, clamped to the canvas (the mask region to scan).
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const p of points) {
-      if (p.x < minX) minX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y > maxY) maxY = p.y;
-    }
-    const x0 = Math.max(0, Math.floor(minX));
-    const y0 = Math.max(0, Math.floor(minY));
-    const x1 = Math.min(w, Math.ceil(maxX));
-    const y1 = Math.min(h, Math.ceil(maxY));
-    if (x1 <= x0 || y1 <= y0) return null;
-    // Fill the polygon into a bbox-sized scratch canvas (vertices outside the
-    // box are simply clipped by the canvas), then threshold its alpha to a mask.
-    const bw = x1 - x0;
-    const bh = y1 - y0;
-    const { ctx } = this.mk(bw, bh, true);
-    ctx.translate(-x0, -y0);
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-    ctx.closePath();
-    ctx.fillStyle = "#fff";
-    ctx.fill();
-    const data = ctx.getImageData(0, 0, bw, bh).data;
-    const mask = new Uint8Array(w * h);
-    for (let yy = 0; yy < bh; yy++) {
-      for (let xx = 0; xx < bw; xx++) {
-        if (data[(yy * bw + xx) * 4 + 3] >= 128) mask[(y0 + yy) * w + (x0 + xx)] = 1;
-      }
-    }
-    const b: Bounds = { x0, y0, x1, y1 };
-    const rects = maskToRects(mask, w, b);
-    if (!rects.length) return null;
-    return { rects, segments: maskToSegments(mask, w, h, b) };
-  }
-
-  /**
-   * Combine an existing selection with a new region (both as rects) via a pixel
-   * mask: "add" = union, "subtract" = base minus region. Returns the merged
-   * selection (rects + ants); an empty `rects` means the result is now empty
-   * (e.g. the subtraction removed everything).
-   */
-  // Reusable scratch for combineSelection, plus the bounds the last call left
-  // 1s in — clearing just that beats both allocating a zeroed buffer and wiping
-  // the whole one.
-  private combineBuf: Uint8Array | null = null;
-  private combineBufW = 0;
-  private combineBufH = 0;
-  private combineDirty: Bounds | null = null;
-
-  /** The shared combine buffer for a `w × h` document, cleared and ready. */
-  private combineScratch(w: number, h: number): Uint8Array {
-    if (!this.combineBuf || this.combineBufW !== w || this.combineBufH !== h) {
-      // Keyed on BOTH dimensions, not the length: a 1920×1080 and a 1080×1920
-      // document have the same cell count but different row strides, and reusing
-      // one for the other would smear every row.
-      this.combineBuf = new Uint8Array(w * h);
-      this.combineBufW = w;
-      this.combineBufH = h;
-      this.combineDirty = null;
-      return this.combineBuf;
-    }
-    const d = this.combineDirty;
-    if (d) {
-      for (let y = d.y0; y < d.y1; y++) this.combineBuf.fill(0, y * w + d.x0, y * w + d.x1);
-      this.combineDirty = null;
-    }
-    return this.combineBuf;
-  }
-
-  combineSelection(base: Rect[], region: Rect[], mode: "add" | "subtract"): WandSelection | null {
-    const w = this.w;
-    const h = this.h;
-    if (w < 1 || h < 1) return null;
-    // Adding to or taking from a SOFT selection is mask algebra on its coverage,
-    // so its soft edge survives a Shift- or Alt-drag (TODO 0.2a / 1.3).
-    const soft = this.combineSelectionSoft(base, region, mode);
-    if (soft) {
-      if (!soft.length) return { rects: [], segments: [] };
-      const on = selectionCoverage(soft, null, w, h);
-      for (let i = 0; i < on.length; i++) on[i] = on[i] ? 1 : 0;
-      const b = this.boundsOf(soft)!;
-      const bb = { x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.h };
-      return { rects: soft, segments: maskToSegments(on, w, h, bb) };
-    }
-    const clamp4 = (r: Rect) => ({
-      x0: Math.max(0, Math.floor(r.x)),
-      y0: Math.max(0, Math.floor(r.y)),
-      x1: Math.min(w, Math.ceil(r.x + r.w)),
-      y1: Math.min(h, Math.ceil(r.y + r.h)),
-    });
-    const paint = (rects: Rect[], mask: Uint8Array, v: 0 | 1) => {
-      for (const r of rects) {
-        const c = clamp4(r);
-        for (let yy = c.y0; yy < c.y1; yy++) {
-          const row = yy * w;
-          mask.fill(v, row + c.x0, row + c.x1); // whole run per row, not per pixel
-        }
-      }
-    };
-    const fill = (rects: Rect[], mask: Uint8Array) => paint(rects, mask, 1);
-    const boundsOf = (rects: Rect[]): Bounds | null => {
-      let x0 = Infinity;
-      let y0 = Infinity;
-      let x1 = -Infinity;
-      let y1 = -Infinity;
-      for (const r of rects) {
-        const c = clamp4(r);
-        if (c.x0 >= c.x1 || c.y0 >= c.y1) continue;
-        if (c.x0 < x0) x0 = c.x0;
-        if (c.y0 < y0) y0 = c.y0;
-        if (c.x1 > x1) x1 = c.x1;
-        if (c.y1 > y1) y1 = c.y1;
-      }
-      return x1 > x0 && y1 > y0 ? { x0, y0, x1, y1 } : null;
-    };
-    const unionBounds = (a: Bounds | null, b: Bounds | null): Bounds | null =>
-      !a ? b : !b ? a : {
-        x0: Math.min(a.x0, b.x0),
-        y0: Math.min(a.y0, b.y0),
-        x1: Math.max(a.x1, b.x1),
-        y1: Math.max(a.y1, b.y1),
-      };
-
-    // One scratch buffer reused across calls, cleared only over what the LAST
-    // call wrote. Allocating (and zeroing) a fresh 2 MB Uint8Array per call —
-    // two of them for a subtract — was pure overhead on a path that runs on
-    // every wand click, quick-select segment and live re-shape tick.
-    const out = this.combineScratch(w, h);
-    const bBase = boundsOf(base);
-    const bRegion = boundsOf(region);
-    fill(base, out);
-    let b: Bounds | null;
-    if (mode === "add") {
-      fill(region, out);
-      b = unionBounds(bBase, bRegion);
-    } else {
-      // Subtract used to build a SECOND full-document mask for `region` and then
-      // scan all 2M cells looking for it. Zeroing the region's own rects in place
-      // is exactly equivalent — only cells the region covers can be cleared —
-      // and touches the region's area instead of the whole document.
-      paint(region, out, 0);
-      b = bBase; // the result is a subset of the base
-    }
-    // Record what may still hold 1s, so the next call clears only that. Set
-    // BEFORE the tracing below so an early return can't leave it stale.
-    this.combineDirty = unionBounds(bBase, mode === "add" ? bRegion : null);
-    if (!b) return { rects: [], segments: [] };
-    const rects = maskToRects(out, w, b);
-    return { rects, segments: rects.length ? maskToSegments(out, w, h, b) : [] };
-  }
-
   moveTo(dx: number, dy: number) {
     if (!this.moving) return;
     this.moveOff = { x: Math.round(dx), y: Math.round(dy) };
@@ -7511,6 +5622,45 @@ export class PaintEngine extends DocumentScoped {
     this.emitChange();
   }
 
+  // ---- strokes ----
+  // A brush or eraser stroke, its tips and dabs, the dirty region, the stroke
+  // drawn through the selection, and the clone stamp: engine/stroke.ts. These
+  // are its doors; its buffer stays here, remade with the document.
+  private readonly stroking = new EngineStroke(this.cursor, {
+    ensureOpBuffers: () => this.ensureOpBuffers(),
+    strokeBuf: () => this.stroke,
+    view: () => this.view,
+    mk: (w, h, readFreq) => this.mk(w, h, readFreq),
+    layer: (id) => this.layer(id),
+    activeSurface: (id) => this.activeSurface(id),
+    maskKeyOf: (id) => this.maskKeyOf(id),
+    deriveMaskAlpha: (id, rect) => this.deriveMaskAlpha(id, rect),
+    clipTo: (ctx, rects, angle, pivot) => this.clipTo(ctx, rects, angle, pivot),
+    coverageOf: (rects) => this.coverageOf(rects),
+    selectionMask: (rects, angle, pivot) => this.selectionMask(rects, angle, pivot),
+    pushEntry: (layerId, rect, before, after, label, side, surface) =>
+      this.pushEntry(layerId, rect, before, after, label, side, surface),
+    dropLiveProduct: () => {
+      this.liveProduct = null;
+    },
+    emitChange: () => this.emitChange(),
+  });
+  /** A stroke is live, on this layer, painting its mask: the compositor shows it. */
+  private get painting(): boolean {
+    return this.stroking.painting;
+  }
+  private get strokeLayer(): string | null {
+    return this.stroking.strokeLayer;
+  }
+  private get strokeOnMask(): boolean {
+    return this.stroking.strokeOnMask;
+  }
+  private dirtyRect() {
+    return this.stroking.dirtyRect();
+  }
+  private drawStroke(ctx: CanvasRenderingContext2D) {
+    this.stroking.drawStroke(ctx);
+  }
   beginStroke(
     layerId: string,
     brush: BrushSettings,
@@ -7524,229 +5674,17 @@ export class PaintEngine extends DocumentScoped {
     label: string = mode === "erase" ? "Erase" : "Brush",
     pressure = 1,
   ) {
-    this.ensureOpBuffers();
-    if (!this.stroke) return;
-    this.layer(layerId); // ensure the target layer has a canvas so the live stroke composites
-    this.painting = true;
-    this.strokeLayer = layerId;
-    this.strokeOnMask = this.activeSurface(layerId) === "mask"; // paint the mask when it's active
-    this.brush = brush;
-    this.mode = mode;
-    this.strokeLabel = label;
-    this.clip = clip && clip.length ? clip : null;
-    this.clipAngle = clipAngle;
-    this.clipPivot = clipPivot;
-    const c = parseColor(colorHex);
-    this.col = { r: c.r, g: c.g, b: c.b, a: c.a };
-    const r = Math.max(0.5, brush.size / 2);
-    const flow = Math.max(0, Math.min(1, brush.flow / 100));
-    // The tip is BAKED once per stroke and reused for every stamp. A fully hard
-    // (or 1px) brush is a crisp aliased disc; softer brushes get an analytic
-    // radial falloff. Baking avoids re-dithering a canvas gradient on each stamp
-    // — that per-stamp dither, accumulated over the overlapping stamps in the
-    // stroke buffer, is what made solid strokes look grainy inside.
-    this.tipHard = brush.hardness >= 100 || brush.size <= 1;
-    this.tipSpec = { r, flow, hardness: brush.hardness, cr: c.r, cg: c.g, cb: c.b };
-    this.dyn = brushDynamics(brush);
-    // Only pay for shaping when it would change something (see tipShapingActive).
-    const shaping = tipShapingActive(brush.texture, brush.dualTip);
-    this.tipTexture = shaping && brush.texture?.enabled ? { ...brush.texture } : null;
-    this.tipDual = shaping && brush.dualTip?.enabled ? { ...brush.dualTip } : null;
-    this.tipShape = tipShapeActive(brush.tipShape) ? { ...brush.tipShape! } : null;
-    this.tipScatter = scatterActive(brush.scatter) ? { ...brush.scatter! } : null;
-    this.scatterRng = this.tipScatter ? makeRng((Math.random() * 0x7fffffff) | 0) : null;
-    // One pattern for the whole stroke — see DUAL_VARIANTS for why per-dab
-    // cycling produced a stroke indistinguishable from an ordinary brush.
-    this.dualVariant = Math.floor(Math.random() * DUAL_VARIANTS);
-    this.tipCache.clear();
-    this.tip = this.tipFor(PRESSURE_BUCKETS); // full-pressure tip (what clone stamps use)
-    this.pressFrom = clamp01(pressure);
-    this.pressTo = this.pressFrom;
-    this.stroke.ctx.clearRect(0, 0, this.w, this.h);
-    this.step = Math.max(1, brush.size * 0.1);
-    this.last = { x, y };
-    this.lastRaw = { x, y };
-    this.smooth = { x, y };
-    this.residual = 0;
-    this.dirty = null;
-    this.stamp(x, y, this.pressFrom);
-    this.residual = this.step;
-    this.emitChange();
+    this.stroking.beginStroke(layerId, brush, colorHex, x, y, mode, clip, clipAngle, clipPivot, label, pressure);
   }
-
-  private dynActive(): boolean {
-    return this.dyn.size || this.dyn.flow;
-  }
-
-  /** Dab spacing at a given pressure. Spacing is a fraction of the tip DIAMETER,
-   *  so when pressure narrows the tip the spacing has to narrow with it — else a
-   *  light passage breaks into a row of beads. With size dynamics off this is
-   *  exactly the spacing the session set (which is how the clone tool keeps its
-   *  own configurable spacing). */
-  /** The tip DIAMETER at this pressure — scatter is expressed as a % of it, so
-   *  a pressure-tapered stroke scatters proportionally rather than at a fixed
-   *  width. */
-  private tipDiameter(p: number): number {
-    const base = this.brush?.size ?? 1;
-    return this.dyn.size ? Math.max(1, base * pressureScale(p, this.dyn.min / 100)) : base;
-  }
-
-  private stepFor(p: number): number {
-    if (!this.dyn.size) return this.step;
-    return Math.max(1, this.step * pressureScale(p, this.dyn.min / 100));
-  }
-
-  /** The baked tip for one pressure bucket (built on first use, cached per stroke). */
-  private tipFor(bucket: number, variant = 0): HTMLCanvasElement | null {
-    const spec = this.tipSpec;
-    if (!spec) return null;
-    // One cache slot per (pressure bucket, bristle pattern). The pattern is
-    // fixed for the stroke, so in practice this is one slot per bucket.
-    const key = bucket * DUAL_VARIANTS + (this.tipDual ? variant % DUAL_VARIANTS : 0);
-    const hit = this.tipCache.get(key);
-    if (hit) return hit;
-    const p = bucketPressure(bucket);
-    const min = this.dyn.min / 100;
-    const r = this.dyn.size ? Math.max(0.5, spec.r * pressureScale(p, min)) : spec.r;
-    const flow = this.dyn.flow ? spec.flow * pressureScale(p, min) : spec.flow;
-    const size = this.tipHard ? Math.max(1, Math.ceil(r * 2)) : Math.max(2, Math.ceil(r * 2) + 2);
-    const mask = this.tipDual ? dualMask(size, r, this.tipDual, variant % DUAL_VARIANTS) : null;
-    const tip = this.tipHard
-      ? this.buildHardTip(r, spec.cr, spec.cg, spec.cb, flow, mask)
-      : this.buildSoftTip(r, spec.cr, spec.cg, spec.cb, flow, spec.hardness, mask);
-    this.tipCache.set(key, tip);
-    return tip;
-  }
-
   moveStroke(rawX: number, rawY: number, pressure = 1) {
-    if (!this.painting || !this.brush) return;
-    this.lastRaw = { x: rawX, y: rawY };
-    this.pressTo = clamp01(pressure);
-    const alpha = 1 - (this.brush.smoothing / 100) * 0.85;
-    this.smooth.x += (rawX - this.smooth.x) * alpha;
-    this.smooth.y += (rawY - this.smooth.y) * alpha;
-    this.lineTo(this.smooth.x, this.smooth.y);
-    this.pressFrom = this.pressTo;
-    this.emitChange();
+    this.stroking.moveStroke(rawX, rawY, pressure);
   }
-
-  private lineTo(x: number, y: number) {
-    const dx = x - this.last.x;
-    const dy = y - this.last.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist === 0) return;
-    const p0 = this.pressFrom;
-    const dp = this.pressTo - p0;
-    let d = this.residual;
-    while (d <= dist) {
-      const t = d / dist;
-      // Pressure ramps across the segment, so a fast stroke between two widely
-      // spaced samples still tapers smoothly instead of jumping a whole step.
-      const p = p0 + dp * t;
-      const bx = this.last.x + dx * t;
-      const by = this.last.y + dy * t;
-      if (this.tipScatter && this.scatterRng) {
-        // Offsets come back in the stroke's own frame (along/across), so they
-        // are rotated by the segment direction here: scatter is defined
-        // relative to the stroke, not to the screen.
-        const ux = dx / dist;
-        const uy = dy / dist;
-        for (const o of scatterOffsets(this.tipScatter, this.tipDiameter(p), this.scatterRng)) {
-          this.stamp(bx + ux * o.along - uy * o.across, by + uy * o.along + ux * o.across, p);
-        }
-      } else {
-        this.stamp(bx, by, p);
-      }
-      d += this.stepFor(p);
-    }
-    this.residual = d - dist;
-    this.last = { x, y };
-  }
-
   endStroke() {
-    if (!this.painting || !this.brush || !this.stroke) return;
-    this.lineTo(this.lastRaw.x, this.lastRaw.y);
-
-    const layerId = this.strokeLayer!;
-    const mid = this.maskKeyOf(layerId);
-    const onMask = this.strokeOnMask && this.masks.has(mid);
-    const target = onMask ? this.masks.get(mid)! : this.layer(layerId);
-    const rect = this.dirtyRect();
-    if (rect) {
-      const before = target.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
-      this.drawStroke(target.ctx);
-      const after = target.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
-      this.pushEntry(
-        onMask ? mid : layerId,
-        rect,
-        before,
-        after,
-        onMask ? `Mask ${this.strokeLabel}` : this.strokeLabel,
-        undefined,
-        onMask ? "mask" : "layer",
-      );
-      if (onMask) this.deriveMaskAlpha(mid, rect); // refresh the alpha cache for the painted region
-    }
-
-    this.stroke.ctx.clearRect(0, 0, this.w, this.h);
-    this.painting = false;
-    this.strokeLayer = null;
-    this.strokeOnMask = false;
-    this.brush = null;
-    this.clip = null;
-    this.tip = null;
-    this.tipSpec = null;
-    this.tipCache.clear(); // per-stroke cache — the next stroke bakes fresh tips
-    this.tipTexture = null;
-    this.tipDual = null;
-    this.tipShape = null;
-    this.tipScatter = null;
-    this.scatterRng = null;
-    this.dirty = null;
-    this.liveProduct = null; // a document-sized buffer; the next stroke reseeds
-    if (this.cloneActive) {
-      this.cloneActive = false;
-      this.cloneSample = null;
-      this.cloneDab = null;
-      this.cloneOff = null;
-    }
-    this.emitChange();
+    this.stroking.endStroke();
   }
-
-  /** Abandon the in-progress stroke WITHOUT committing it to the layer or the
-   *  history — used when a gesture takes over (e.g. a second finger begins a
-   *  pinch-zoom). Resets the same state endStroke() does, minus the bake. */
   cancelStroke() {
-    if (!this.painting) return;
-    this.stroke?.ctx.clearRect(0, 0, this.w, this.h);
-    this.painting = false;
-    this.strokeLayer = null;
-    this.strokeOnMask = false;
-    this.brush = null;
-    this.clip = null;
-    this.tip = null;
-    this.tipSpec = null;
-    this.tipCache.clear(); // per-stroke cache — the next stroke bakes fresh tips
-    this.tipTexture = null;
-    this.tipDual = null;
-    this.dirty = null;
-    this.liveProduct = null;
-    if (this.cloneActive) {
-      this.cloneActive = false;
-      this.cloneSample = null;
-      this.cloneDab = null;
-      this.cloneOff = null;
-    }
-    this.emitChange();
+    this.stroking.cancelStroke();
   }
-
-  // ---- Clone stamp ---------------------------------------------------------
-  /**
-   * Begin a clone-stamp stroke. `offset` is the source→destination vector (source
-   * point = brush point + offset). The sample source (active layer, or the merged
-   * composite when `sampleAll`) is snapshotted now so painting can't feed back on
-   * itself. Reuses the brush stroke buffer so flow/opacity/blend work identically.
-   */
   beginClone(
     layerId: string,
     brush: BrushSettings,
@@ -7759,114 +5697,43 @@ export class PaintEngine extends DocumentScoped {
     clipAngle = 0,
     clipPivot: { x: number; y: number } | null = null,
   ) {
-    this.ensureOpBuffers();
-    if (!this.stroke) return;
-    this.layer(layerId);
-    this.painting = true;
-    this.strokeLayer = layerId;
-    this.brush = brush;
-    this.mode = "paint";
-    this.strokeLabel = "Clone Stamp";
-    this.clip = clip && clip.length ? clip : null;
-    this.clipAngle = clipAngle;
-    this.clipPivot = clipPivot;
-    this.col = { r: 0, g: 0, b: 0, a: 1 };
-    const r = Math.max(0.5, brush.size / 2);
-    const flow = Math.max(0, Math.min(1, brush.flow / 100));
-    this.tipHard = brush.hardness >= 100 || brush.size <= 1;
-    this.tip = this.tipHard
-      ? this.buildHardTip(r, 0, 0, 0, flow)
-      : this.buildSoftTip(r, 0, 0, 0, flow, brush.hardness);
-    // Clone stamps a SAMPLED region through the tip, not the tip itself, so it
-    // opts out of pressure dynamics (and keeps its own configurable spacing).
-    this.dyn = NO_DYNAMICS;
-    this.tipSpec = null;
-    this.tipCache.clear();
-    this.pressFrom = 1;
-    this.pressTo = 1;
-    // Snapshot the source so the clone reads a stable image, not its own output.
-    const sample = this.mk(this.w, this.h, true);
-    if (sampleAll && this.view) sample.ctx.drawImage(this.view, 0, 0);
-    else sample.ctx.drawImage(this.layer(layerId).c, 0, 0);
-    this.cloneSample = sample;
-    this.cloneDab = this.mk(this.tip.width, this.tip.height, true);
-    this.cloneOff = offset;
-    this.cloneActive = true;
-    this.stroke.ctx.clearRect(0, 0, this.w, this.h);
-    this.step = Math.max(1, brush.size * (spacing / 100));
-    this.last = { x, y };
-    this.lastRaw = { x, y };
-    this.smooth = { x, y };
-    this.residual = 0;
-    this.dirty = null;
-    this.stamp(x, y);
-    this.residual = this.step;
-    this.emitChange();
+    this.stroking.beginClone(layerId, brush, x, y, offset, sampleAll, spacing, clip, clipAngle, clipPivot);
   }
 
-  /** One clone dab: sampled source region, masked by the brush tip, into the buffer. */
-  private cloneStamp(x: number, y: number) {
-    const tip = this.tip;
-    const sample = this.cloneSample;
-    const dab = this.cloneDab;
-    const off = this.cloneOff;
-    if (!tip || !sample || !dab || !off) return;
-    const tw = tip.width;
-    const th = tip.height;
-    const dctx = dab.ctx;
-    // Draw the source so its (x+off, y+off) point lands at the dab centre, then
-    // intersect with the tip's alpha (its flow-scaled soft falloff).
-    dctx.globalCompositeOperation = "source-over";
-    dctx.clearRect(0, 0, tw, th);
-    dctx.imageSmoothingEnabled = true;
-    dctx.drawImage(sample.c, -(x + off.x - tw / 2), -(y + off.y - th / 2));
-    dctx.globalCompositeOperation = "destination-in";
-    dctx.drawImage(tip, 0, 0);
-    dctx.globalCompositeOperation = "source-over";
-    // Composite the finished dab into the stroke buffer at the brush position.
-    const ctx = this.stroke!.ctx;
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = "source-over";
-    if (this.tipHard) {
-      ctx.imageSmoothingEnabled = false;
-      const ix = Math.round(x - tw / 2);
-      const iy = Math.round(y - th / 2);
-      ctx.drawImage(dab.c, ix, iy);
-      this.expandDirty(ix, iy, ix + tw, iy + th);
-    } else {
-      ctx.imageSmoothingEnabled = true;
-      const dx = x - tw / 2;
-      const dy = y - th / 2;
-      ctx.drawImage(dab.c, dx, dy);
-      this.expandDirty(Math.floor(dx), Math.floor(dy), Math.ceil(dx + tw), Math.ceil(dy + th));
-    }
+  // ---- retouch brushes ----
+  // The History brush, blur, dodge and burn, sponge, and smudge with the mixer:
+  // engine/retouch.ts. These are its doors.
+  private readonly retouching = new EngineRetouch(this.cursor, {
+    layer: (id) => this.layer(id),
+    activeSurface: (id) => this.activeSurface(id),
+    maskKeyOf: (id) => this.maskKeyOf(id),
+    deriveMaskAlpha: (id, rect) => this.deriveMaskAlpha(id, rect),
+    selectionMask: (rects, angle, pivot) => this.selectionMask(rects, angle, pivot),
+    reconstructLayerAt: (layerId, index) => this.reconstructLayerAt(layerId, index),
+    snapshotLayer: (snapId, layerId) => this.snapshotLayer(snapId, layerId),
+    endAdjust: () => this.endAdjust(),
+    pushEntry: (layerId, rect, before, after, label, side, surface) =>
+      this.pushEntry(layerId, rect, before, after, label, side, surface),
+    dropWandSource: () => {
+      this.wandSrc = null;
+    },
+    cs: () => this.cs,
+    viewContext: () => this.vctx,
+    emitChange: () => this.emitChange(),
+  });
+  /** A blur or dodge stroke is live on this layer: the render graph bypasses it. */
+  private get blurring(): boolean {
+    return this.retouching.blurring;
   }
-
-  // ---- History brush -------------------------------------------------------
-  // Repaints the active layer from its OWN pixels at the source history state.
-  // Reverting must be able to REDUCE alpha (e.g. back to the blank original), so
-  // it can't use source-over compositing — it uses the same coverage-mask model
-  // as blur/dodge: an original snapshot + a 0–1 coverage buffer that builds with
-  // flow, re-baked as a premultiplied LERP from `orig` toward the source pixels
-  // by coverage × opacity. Always targets the LAYER (not a mask surface).
-  private historying = false;
-  private historyLayer: string | null = null;
-  private historyOrig: ImageData | null = null;
-  private historySource: ImageData | null = null; // pixels at the source state
-  private historyCov: Float32Array | null = null;
-  private historyTip: { data: Float32Array; size: number; r: number } | null = null;
-  private historyOpacity = 1;
-  private historyFlow = 1;
-  private historySmoothing = 0;
-  private historyDirty: { x0: number; y0: number; x1: number; y1: number } | null = null;
-  private historyStep = 1;
-  private historyResidual = 0;
-  private historyLast = { x: 0, y: 0 };
-  private historyLastRaw = { x: 0, y: 0 };
-  private historySmoothPt = { x: 0, y: 0 };
-  private historySelMask: Uint8ClampedArray | null = null;
-  private historyLabel = "History Brush";
-
+  private get blurLayer(): string | null {
+    return this.retouching.blurLayer;
+  }
+  private get dodging(): boolean {
+    return this.retouching.dodging;
+  }
+  private get dodgeLayer(): string | null {
+    return this.retouching.dodgeLayer;
+  }
   beginHistory(
     layerId: string,
     brush: BrushSettings,
@@ -7879,222 +5746,97 @@ export class PaintEngine extends DocumentScoped {
      *  stroke, and the undo list should name the tool the user actually used. */
     label = "History Brush",
   ) {
-    if (this.w < 1 || this.h < 1) return;
-    this.endAdjust();
-    const l = this.layer(layerId);
-    this.historying = true;
-    this.historyLabel = label;
-    this.historyLayer = layerId;
-    this.historyOrig = l.ctx.getImageData(0, 0, this.w, this.h);
-    // The source: a pinned snapshot when one is selected (exact pixels), else
-    // this layer's pixels reconstructed at the source history state.
-    const src = this.historySourceSnap
-      ? this.snapshotLayer(this.historySourceSnap, layerId)
-      : this.reconstructLayerAt(layerId, this.historySourceIndex);
-    this.historySource = src.ctx.getImageData(0, 0, this.w, this.h);
-    this.historyCov = new Float32Array(this.w * this.h);
-    this.historyOpacity = Math.max(0, Math.min(1, brush.opacity / 100));
-    this.historyFlow = Math.max(0, Math.min(1, brush.flow / 100));
-    this.historySmoothing = brush.smoothing;
-    this.historySelMask = null;
-    if (clip && clip.length) {
-      const mask = this.selectionMask(clip, clipAngle, clipPivot);
-      const md = mask.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
-      const sa = new Uint8ClampedArray(this.w * this.h);
-      for (let i = 0; i < sa.length; i++) sa[i] = md[i * 4 + 3];
-      this.historySelMask = sa;
-    }
-    this.historyTip = this.buildCoverageTip(Math.max(0.5, brush.size / 2), brush.hardness);
-    this.historyStep = Math.max(1, brush.size * 0.1);
-    this.historyResidual = 0;
-    this.historyDirty = null;
-    this.historyLast = { x, y };
-    this.historyLastRaw = { x, y };
-    this.historySmoothPt = { x, y };
-    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    this.stampHistory(x, y, seg);
-    this.historyResidual = this.historyStep;
-    if (seg.x1 >= seg.x0) this.bakeHistory(seg.x0, seg.y0, seg.x1, seg.y1);
-    this.emitChange();
+    this.retouching.beginHistory(layerId, brush, x, y, clip, clipAngle, clipPivot, label);
   }
-
   moveHistory(rawX: number, rawY: number) {
-    if (!this.historying) return;
-    this.historyLastRaw = { x: rawX, y: rawY };
-    const alpha = 1 - (this.historySmoothing / 100) * 0.85;
-    this.historySmoothPt.x += (rawX - this.historySmoothPt.x) * alpha;
-    this.historySmoothPt.y += (rawY - this.historySmoothPt.y) * alpha;
-    this.historyLineTo(this.historySmoothPt.x, this.historySmoothPt.y);
-    this.emitChange();
+    this.retouching.moveHistory(rawX, rawY);
   }
-
-  private historyLineTo(x: number, y: number) {
-    const dx = x - this.historyLast.x;
-    const dy = y - this.historyLast.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist === 0) return;
-    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    let d = this.historyResidual;
-    while (d <= dist) {
-      const t = d / dist;
-      this.stampHistory(this.historyLast.x + dx * t, this.historyLast.y + dy * t, seg);
-      d += this.historyStep;
-    }
-    this.historyResidual = d - dist;
-    this.historyLast = { x, y };
-    if (seg.x1 >= seg.x0) this.bakeHistory(seg.x0, seg.y0, seg.x1, seg.y1);
-  }
-
-  /** Build coverage with flow: each dab adds `tip × flow` toward 1 (opacity caps
-   *  the effect at bake time), so overlapping dabs build up like a real brush. */
-  private stampHistory(
-    cx: number,
-    cy: number,
-    seg: { x0: number; y0: number; x1: number; y1: number },
-  ) {
-    const tip = this.historyTip;
-    const cov = this.historyCov;
-    if (!tip || !cov) return;
-    const size = tip.size;
-    const half = size / 2;
-    const left = Math.floor(cx - half);
-    const top = Math.floor(cy - half);
-    const flow = this.historyFlow;
-    for (let py = 0; py < size; py++) {
-      const gy = top + py;
-      if (gy < 0 || gy >= this.h) continue;
-      for (let px = 0; px < size; px++) {
-        const gx = left + px;
-        if (gx < 0 || gx >= this.w) continue;
-        const f = tip.data[py * size + px];
-        if (f <= 0) continue;
-        const idx = gy * this.w + gx;
-        const c = cov[idx];
-        const nc = c + (1 - c) * f * flow;
-        if (nc > cov[idx]) cov[idx] = nc;
-        if (gx < seg.x0) seg.x0 = gx;
-        if (gy < seg.y0) seg.y0 = gy;
-        if (gx > seg.x1) seg.x1 = gx;
-        if (gy > seg.y1) seg.y1 = gy;
-        const D = this.historyDirty;
-        if (!D) this.historyDirty = { x0: gx, y0: gy, x1: gx, y1: gy };
-        else {
-          if (gx < D.x0) D.x0 = gx;
-          if (gy < D.y0) D.y0 = gy;
-          if (gx > D.x1) D.x1 = gx;
-          if (gy > D.y1) D.y1 = gy;
-        }
-      }
-    }
-  }
-
-  /** Re-bake a region as a premultiplied lerp orig → source by coverage×opacity. */
-  private bakeHistory(x0: number, y0: number, x1: number, y1: number) {
-    const orig = this.historyOrig;
-    const src = this.historySource;
-    const cov = this.historyCov;
-    if (!orig || !src || !cov || this.historyLayer == null) return;
-    const ix = Math.max(0, x0);
-    const iy = Math.max(0, y0);
-    const ax = Math.min(this.w - 1, x1);
-    const ay = Math.min(this.h - 1, y1);
-    const iw = ax - ix + 1;
-    const ih = ay - iy + 1;
-    if (iw <= 0 || ih <= 0) return;
-    const od = orig.data;
-    const sd = src.data;
-    const sel = this.historySelMask;
-    const opacity = this.historyOpacity;
-    const out = new Uint8ClampedArray(iw * ih * 4);
-    for (let yy = 0; yy < ih; yy++) {
-      for (let xx = 0; xx < iw; xx++) {
-        const gx = ix + xx;
-        const gy = iy + yy;
-        const ci = gy * this.w + gx;
-        const oi = ci * 4;
-        let m = cov[ci] * opacity;
-        if (sel) m *= sel[ci] / 255;
-        const doI = (yy * iw + xx) * 4;
-        if (m <= 0) {
-          out[doI] = od[oi];
-          out[doI + 1] = od[oi + 1];
-          out[doI + 2] = od[oi + 2];
-          out[doI + 3] = od[oi + 3];
-          continue;
-        }
-        // Premultiplied lerp orig → source (so reducing alpha reads clean).
-        const oa = od[oi + 3];
-        const sa = sd[oi + 3];
-        const na = oa + (sa - oa) * m;
-        const opr = od[oi] * oa + (sd[oi] * sa - od[oi] * oa) * m;
-        const opg = od[oi + 1] * oa + (sd[oi + 1] * sa - od[oi + 1] * oa) * m;
-        const opb = od[oi + 2] * oa + (sd[oi + 2] * sa - od[oi + 2] * oa) * m;
-        const inv = na > 0 ? 1 / na : 0;
-        out[doI] = opr * inv;
-        out[doI + 1] = opg * inv;
-        out[doI + 2] = opb * inv;
-        out[doI + 3] = na;
-      }
-    }
-    this.layer(this.historyLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
-  }
-
-  /**
-   * The end of a retouch stroke — history brush, blur, dodge/burn, sponge,
-   * smudge/mixer. Each paints its target LIVE over a snapshot of how it was
-   * (`orig`), tracking the touched box (`D`). Committed, that box becomes one
-   * history step. Abandoned (`commit` false: a second finger began a pinch),
-   * it goes back to the snapshot and nothing is recorded — what cancelStroke
-   * is to the brush, whose stroke lives in a scratch buffer instead.
-   */
-  private settleRetouch(
-    layerId: string | null,
-    onMask: boolean,
-    orig: ImageData | null,
-    D: { x0: number; y0: number; x1: number; y1: number } | null,
-    label: string,
-    commit: boolean,
-  ) {
-    if (!D || layerId == null || !orig) return;
-    const x = Math.max(0, D.x0);
-    const y = Math.max(0, D.y0);
-    const w = Math.min(this.w - 1, D.x1) - x + 1;
-    const h = Math.min(this.h - 1, D.y1) - y + 1;
-    if (w <= 0 || h <= 0) return;
-    const mid = onMask ? this.maskKeyOf(layerId) : layerId;
-    const target = onMask ? this.masks.get(mid)! : this.layer(layerId);
-    if (!commit) {
-      // The snapshot was read from this very canvas: same size, same colour
-      // space, so putting its sub-rect back is exact. A mask's alpha cache was
-      // refreshed as the stroke went, so it is refreshed back. The pixel
-      // version is left alone: the pixels are again exactly what it describes,
-      // and nothing was cached under it mid-stroke (a live layer bypasses the
-      // cache) — a bump would only throw good caches away.
-      target.ctx.putImageData(orig, 0, 0, x, y, w, h);
-      if (onMask) this.deriveMaskAlpha(mid, { x, y, w, h });
-      return;
-    }
-    const before = this.subImage(orig, x, y, w, h);
-    const after = target.ctx.getImageData(x, y, w, h);
-    this.pushEntry(mid, { x, y, w, h }, before, after, label, undefined, onMask ? "mask" : "layer");
-  }
-
-  /** End the history-brush stroke: one step — or, with `commit` false, none,
-   *  and the layer as it was (see settleRetouch). */
   endHistory(commit = true) {
-    if (!this.historying) return;
-    if (commit) this.historyLineTo(this.historyLastRaw.x, this.historyLastRaw.y);
-    this.settleRetouch(this.historyLayer, false, this.historyOrig, this.historyDirty, this.historyLabel, commit);
-    this.historying = false;
-    this.historyLayer = null;
-    this.historyOrig = null;
-    this.historySource = null;
-    this.historyCov = null;
-    this.historyTip = null;
-    this.historyDirty = null;
-    this.historySelMask = null;
-    this.wandSrc = null;
-    this.emitChange();
+    this.retouching.endHistory(commit);
+  }
+  beginBlur(
+    layerId: string,
+    blur: BlurSettings,
+    x: number,
+    y: number,
+    clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
+  ) {
+    this.retouching.beginBlur(layerId, blur, x, y, clip, clipAngle, clipPivot);
+  }
+  moveBlur(rawX: number, rawY: number) {
+    this.retouching.moveBlur(rawX, rawY);
+  }
+  endBlur(commit = true) {
+    this.retouching.endBlur(commit);
+  }
+  beginDodge(
+    layerId: string,
+    opts: DodgeSettings,
+    x: number,
+    y: number,
+    clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
+  ) {
+    this.retouching.beginDodge(layerId, opts, x, y, clip, clipAngle, clipPivot);
+  }
+  moveDodge(rawX: number, rawY: number) {
+    this.retouching.moveDodge(rawX, rawY);
+  }
+  endDodge(commit = true) {
+    this.retouching.endDodge(commit);
+  }
+  beginSponge(
+    layerId: string,
+    opts: SpongeSettings,
+    x: number,
+    y: number,
+    clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
+  ) {
+    this.retouching.beginSponge(layerId, opts, x, y, clip, clipAngle, clipPivot);
+  }
+  moveSponge(rawX: number, rawY: number) {
+    this.retouching.moveSponge(rawX, rawY);
+  }
+  endSponge(commit = true) {
+    this.retouching.endSponge(commit);
+  }
+  beginSmudge(
+    layerId: string,
+    opts: SmudgeSettings,
+    x: number,
+    y: number,
+    fingerColor: { r: number; g: number; b: number; a: number } | null = null,
+    clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
+  ) {
+    this.retouching.beginSmudge(layerId, opts, x, y, fingerColor, clip, clipAngle, clipPivot);
+  }
+  moveSmudge(rawX: number, rawY: number) {
+    this.retouching.moveSmudge(rawX, rawY);
+  }
+  endSmudge(commit = true) {
+    this.retouching.endSmudge(commit);
+  }
+  beginMixer(
+    layerId: string,
+    opts: MixerSettings,
+    x: number,
+    y: number,
+    fg: { r: number; g: number; b: number; a: number },
+    clip: Rect[] | null = null,
+    clipAngle = 0,
+    clipPivot: { x: number; y: number } | null = null,
+  ) {
+    this.retouching.beginMixer(layerId, opts, x, y, fg, clip, clipAngle, clipPivot);
+  }
+  cleanMixer() {
+    this.retouching.cleanMixer();
   }
 
   /** Erase a layer's pixels (used to hide a vector layer while it's re-edited). */
@@ -8774,1701 +6516,37 @@ export class PaintEngine extends DocumentScoped {
     }
   }
 
-  // ---- Coverage brushes (blur, dodge/burn) ---------------------------------
-  /** A soft falloff tip (coverage 0–1, no colour) for the coverage brushes. */
-  private buildCoverageTip(r: number, hardness: number): { data: Float32Array; size: number; r: number } {
-    const size = Math.max(2, Math.ceil(r * 2) + 2);
-    const data = new Float32Array(size * size);
-    const center = size / 2;
-    const inner = Math.max(0, Math.min(0.999, hardness / 100)) * r;
-    const span = Math.max(0.0001, r - inner);
-    for (let py = 0; py < size; py++) {
-      for (let px = 0; px < size; px++) {
-        const dx = px + 0.5 - center;
-        const dy = py + 0.5 - center;
-        const dist = Math.hypot(dx, dy);
-        data[py * size + px] = dist <= inner ? 1 : dist >= r ? 0 : 1 - (dist - inner) / span;
-      }
-    }
-    return { data, size, r };
-  }
-
-  /** Copy a rectangular sub-region of a full-doc ImageData into a new one. */
-  private subImage(img: ImageData, x: number, y: number, w: number, h: number): ImageData {
-    const out = new Uint8ClampedArray(w * h * 4);
-    const sw = img.width;
-    for (let yy = 0; yy < h; yy++) {
-      const srcStart = ((y + yy) * sw + x) * 4;
-      out.set(img.data.subarray(srcStart, srcStart + w * 4), yy * w * 4);
-    }
-    return new ImageData(out, w, h, { colorSpace: this.cs });
-  }
-
-  beginBlur(
-    layerId: string,
-    blur: BlurSettings,
-    x: number,
-    y: number,
-    clip: Rect[] | null = null,
-    clipAngle = 0,
-    clipPivot: { x: number; y: number } | null = null,
-  ) {
-    if (this.w < 1 || this.h < 1) return;
-    this.endAdjust();
-    // Mask surface active → the blur brush softens the MASK's pixels instead
-    // (same session; grayscale target, history lands on the mask surface).
-    this.blurOnMask = this.activeSurface(layerId) === "mask";
-    const l = this.blurOnMask ? this.masks.get(this.maskKeyOf(layerId))! : this.layer(layerId);
-    this.blurring = true;
-    this.blurLayer = layerId;
-    this.blurOpts = { ...blur };
-    this.blurOrig = l.ctx.getImageData(0, 0, this.w, this.h);
-    if (blur.sampleAll && !this.blurOnMask && this.vctx) {
-      try {
-        this.blurSrc = this.vctx.getImageData(0, 0, this.w, this.h);
-      } catch {
-        this.blurSrc = this.blurOrig;
-      }
-    } else {
-      this.blurSrc = this.blurOrig;
-    }
-    this.blurCov = new Float32Array(this.w * this.h);
-    this.blurSelMask = null;
-    if (clip && clip.length) {
-      const mask = this.selectionMask(clip, clipAngle, clipPivot);
-      const md = mask.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
-      const sa = new Uint8ClampedArray(this.w * this.h);
-      for (let i = 0; i < sa.length; i++) sa[i] = md[i * 4 + 3];
-      this.blurSelMask = sa;
-    }
-    this.blurTip = this.buildCoverageTip(Math.max(0.5, blur.size / 2), blur.hardness);
-    this.blurStep = Math.max(1, blur.size * (blur.spacing / 100));
-    this.blurResidual = 0;
-    this.blurDirty = null;
-    this.blurLast = { x, y };
-    this.blurLastRaw = { x, y };
-    this.blurSmoothPt = { x, y };
-    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    this.stampBlur(x, y, seg);
-    this.blurResidual = this.blurStep;
-    if (seg.x1 >= seg.x0) this.bakeBlur(seg.x0, seg.y0, seg.x1, seg.y1);
-    this.emitChange();
-  }
-
-  moveBlur(rawX: number, rawY: number) {
-    if (!this.blurring || !this.blurOpts) return;
-    this.blurLastRaw = { x: rawX, y: rawY };
-    const alpha = 1 - (this.blurOpts.smoothing / 100) * 0.85;
-    this.blurSmoothPt.x += (rawX - this.blurSmoothPt.x) * alpha;
-    this.blurSmoothPt.y += (rawY - this.blurSmoothPt.y) * alpha;
-    this.blurLineTo(this.blurSmoothPt.x, this.blurSmoothPt.y);
-    this.emitChange();
-  }
-
-  private blurLineTo(x: number, y: number) {
-    const dx = x - this.blurLast.x;
-    const dy = y - this.blurLast.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist === 0) return;
-    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    let d = this.blurResidual;
-    while (d <= dist) {
-      const t = d / dist;
-      this.stampBlur(this.blurLast.x + dx * t, this.blurLast.y + dy * t, seg);
-      d += this.blurStep;
-    }
-    this.blurResidual = d - dist;
-    this.blurLast = { x, y };
-    if (seg.x1 >= seg.x0) this.bakeBlur(seg.x0, seg.y0, seg.x1, seg.y1);
-  }
-
-  /** Accumulate one dab's coverage into blurCov, growing the seg + total bounds. */
-  private stampBlur(
-    cx: number,
-    cy: number,
-    seg: { x0: number; y0: number; x1: number; y1: number },
-  ) {
-    const tip = this.blurTip;
-    const cov = this.blurCov;
-    if (!tip || !cov) return;
-    const size = tip.size;
-    const half = size / 2;
-    const left = Math.floor(cx - half);
-    const top = Math.floor(cy - half);
-    for (let py = 0; py < size; py++) {
-      const gy = top + py;
-      if (gy < 0 || gy >= this.h) continue;
-      for (let px = 0; px < size; px++) {
-        const gx = left + px;
-        if (gx < 0 || gx >= this.w) continue;
-        const f = tip.data[py * size + px];
-        if (f <= 0) continue;
-        const idx = gy * this.w + gx;
-        if (f > cov[idx]) cov[idx] = f;
-        if (gx < seg.x0) seg.x0 = gx;
-        if (gy < seg.y0) seg.y0 = gy;
-        if (gx > seg.x1) seg.x1 = gx;
-        if (gy > seg.y1) seg.y1 = gy;
-        const D = this.blurDirty;
-        if (!D) this.blurDirty = { x0: gx, y0: gy, x1: gx, y1: gy };
-        else {
-          if (gx < D.x0) D.x0 = gx;
-          if (gy < D.y0) D.y0 = gy;
-          if (gx > D.x1) D.x1 = gx;
-          if (gy > D.y1) D.y1 = gy;
-        }
-      }
-    }
-  }
-
-  /** Re-bake one region of the layer as lerp(orig, blur(src), coverage×strength). */
-  private bakeBlur(x0: number, y0: number, x1: number, y1: number) {
-    const orig = this.blurOrig;
-    const src = this.blurSrc;
-    const cov = this.blurCov;
-    const opts = this.blurOpts;
-    if (!orig || !src || !cov || !opts || this.blurLayer == null) return;
-    const ix = Math.max(0, x0);
-    const iy = Math.max(0, y0);
-    const ax = Math.min(this.w - 1, x1);
-    const ay = Math.min(this.h - 1, y1);
-    const iw = ax - ix + 1;
-    const ih = ay - iy + 1;
-    if (iw <= 0 || ih <= 0) return;
-    const R = Math.max(0, Math.round(opts.radius));
-    const br = Math.max(1, Math.round(R / 2));
-    // Read an R-wide margin so the blur over the inner region is seam-free.
-    const rx = Math.max(0, ix - R);
-    const ry = Math.max(0, iy - R);
-    const ax2 = Math.min(this.w - 1, ax + R);
-    const ay2 = Math.min(this.h - 1, ay + R);
-    const rw = ax2 - rx + 1;
-    const rh = ay2 - ry + 1;
-    const sd = src.data;
-    const sw = this.w;
-    const n = rw * rh;
-    const Rc = new Float32Array(n);
-    const Gc = new Float32Array(n);
-    const Bc = new Float32Array(n);
-    const Ac = new Float32Array(n);
-    for (let yy = 0; yy < rh; yy++) {
-      for (let xx = 0; xx < rw; xx++) {
-        const si = ((ry + yy) * sw + (rx + xx)) * 4;
-        const a = sd[si + 3];
-        const af = a / 255;
-        const di = yy * rw + xx;
-        Rc[di] = sd[si] * af;
-        Gc[di] = sd[si + 1] * af;
-        Bc[di] = sd[si + 2] * af;
-        Ac[di] = a;
-      }
-    }
-    if (R > 0) {
-      for (let p = 0; p < 3; p++) {
-        boxBlurPass(Rc, rw, rh, br, true);
-        boxBlurPass(Gc, rw, rh, br, true);
-        boxBlurPass(Bc, rw, rh, br, true);
-        boxBlurPass(Ac, rw, rh, br, true);
-        boxBlurPass(Rc, rw, rh, br, false);
-        boxBlurPass(Gc, rw, rh, br, false);
-        boxBlurPass(Bc, rw, rh, br, false);
-        boxBlurPass(Ac, rw, rh, br, false);
-      }
-    }
-    const od = orig.data;
-    const sel = this.blurSelMask;
-    const strength = opts.strength / 100;
-    const out = new Uint8ClampedArray(iw * ih * 4);
-    for (let yy = 0; yy < ih; yy++) {
-      for (let xx = 0; xx < iw; xx++) {
-        const gx = ix + xx;
-        const gy = iy + yy;
-        const ci = gy * this.w + gx;
-        let m = cov[ci] * strength;
-        if (sel) m *= sel[ci] / 255;
-        const oi = ci * 4;
-        const ri = (gy - ry) * rw + (gx - rx);
-        const a = Ac[ri];
-        const inv = a > 0 ? 255 / a : 0;
-        const tr = Rc[ri] * inv;
-        const tg = Gc[ri] * inv;
-        const tb = Bc[ri] * inv;
-        const doI = (yy * iw + xx) * 4;
-        out[doI] = od[oi] + (tr - od[oi]) * m;
-        out[doI + 1] = od[oi + 1] + (tg - od[oi + 1]) * m;
-        out[doI + 2] = od[oi + 2] + (tb - od[oi + 2]) * m;
-        out[doI + 3] = od[oi + 3] + (a - od[oi + 3]) * m;
-      }
-    }
-    if (this.blurOnMask) {
-      // Masks are colour-agnostic (sRGB) — untagged ImageData, then refresh the
-      // alpha cache for the baked rect so the softened mask previews live.
-      this.masks.get(this.maskKeyOf(this.blurLayer))!.ctx.putImageData(new ImageData(out, iw, ih), ix, iy);
-      this.deriveMaskAlpha(this.maskKeyOf(this.blurLayer), { x: ix, y: iy, w: iw, h: ih });
-    } else {
-      this.layer(this.blurLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
-    }
-  }
-
-  /** End the blur stroke (`commit` false: abandon it — see settleRetouch). */
-  endBlur(commit = true) {
-    if (!this.blurring) return;
-    if (commit) this.blurLineTo(this.blurLastRaw.x, this.blurLastRaw.y);
-    this.settleRetouch(this.blurLayer, this.blurOnMask, this.blurOrig, this.blurDirty, "Blur", commit);
-    this.blurring = false;
-    this.blurOnMask = false;
-    this.blurLayer = null;
-    this.blurOrig = null;
-    this.blurSrc = null;
-    this.blurCov = null;
-    this.blurTip = null;
-    this.blurOpts = null;
-    this.blurDirty = null;
-    this.blurSelMask = null;
-    this.wandSrc = null;
-    this.emitChange();
-  }
-
-  // ---- Dodge / Burn brush --------------------------------------------------
-  beginDodge(
-    layerId: string,
-    opts: DodgeSettings,
-    x: number,
-    y: number,
-    clip: Rect[] | null = null,
-    clipAngle = 0,
-    clipPivot: { x: number; y: number } | null = null,
-  ) {
-    if (this.w < 1 || this.h < 1) return;
-    this.endAdjust();
-    // Mask surface active → dodge/burn lightens/darkens the MASK (reveal/hide).
-    this.dodgeOnMask = this.activeSurface(layerId) === "mask";
-    const l = this.dodgeOnMask ? this.masks.get(this.maskKeyOf(layerId))! : this.layer(layerId);
-    this.dodging = true;
-    this.dodgeLayer = layerId;
-    this.dodgeOpts = { ...opts };
-    this.dodgeOrig = l.ctx.getImageData(0, 0, this.w, this.h);
-    this.dodgeCov = new Float32Array(this.w * this.h);
-    this.dodgeSelMask = null;
-    if (clip && clip.length) {
-      const mask = this.selectionMask(clip, clipAngle, clipPivot);
-      const md = mask.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
-      const sa = new Uint8ClampedArray(this.w * this.h);
-      for (let i = 0; i < sa.length; i++) sa[i] = md[i * 4 + 3];
-      this.dodgeSelMask = sa;
-    }
-    this.dodgeTip = this.buildCoverageTip(Math.max(0.5, opts.size / 2), opts.hardness);
-    this.dodgeStep = Math.max(1, opts.size * (opts.spacing / 100));
-    this.dodgeResidual = 0;
-    this.dodgeDirty = null;
-    this.dodgeLast = { x, y };
-    this.dodgeLastRaw = { x, y };
-    this.dodgeSmoothPt = { x, y };
-    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    this.stampDodge(x, y, seg);
-    this.dodgeResidual = this.dodgeStep;
-    if (seg.x1 >= seg.x0) this.bakeDodge(seg.x0, seg.y0, seg.x1, seg.y1);
-    this.emitChange();
-  }
-
-  moveDodge(rawX: number, rawY: number) {
-    if (!this.dodging || !this.dodgeOpts) return;
-    this.dodgeLastRaw = { x: rawX, y: rawY };
-    const alpha = 1 - (this.dodgeOpts.smoothing / 100) * 0.85;
-    this.dodgeSmoothPt.x += (rawX - this.dodgeSmoothPt.x) * alpha;
-    this.dodgeSmoothPt.y += (rawY - this.dodgeSmoothPt.y) * alpha;
-    this.dodgeLineTo(this.dodgeSmoothPt.x, this.dodgeSmoothPt.y);
-    this.emitChange();
-  }
-
-  private dodgeLineTo(x: number, y: number) {
-    const dx = x - this.dodgeLast.x;
-    const dy = y - this.dodgeLast.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist === 0) return;
-    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    let d = this.dodgeResidual;
-    while (d <= dist) {
-      const t = d / dist;
-      this.stampDodge(this.dodgeLast.x + dx * t, this.dodgeLast.y + dy * t, seg);
-      d += this.dodgeStep;
-    }
-    this.dodgeResidual = d - dist;
-    this.dodgeLast = { x, y };
-    if (seg.x1 >= seg.x0) this.bakeDodge(seg.x0, seg.y0, seg.x1, seg.y1);
-  }
-
-  private stampDodge(
-    cx: number,
-    cy: number,
-    seg: { x0: number; y0: number; x1: number; y1: number },
-  ) {
-    const tip = this.dodgeTip;
-    const cov = this.dodgeCov;
-    if (!tip || !cov) return;
-    const size = tip.size;
-    const half = size / 2;
-    const left = Math.floor(cx - half);
-    const top = Math.floor(cy - half);
-    for (let py = 0; py < size; py++) {
-      const gy = top + py;
-      if (gy < 0 || gy >= this.h) continue;
-      for (let px = 0; px < size; px++) {
-        const gx = left + px;
-        if (gx < 0 || gx >= this.w) continue;
-        const f = tip.data[py * size + px];
-        if (f <= 0) continue;
-        const idx = gy * this.w + gx;
-        if (f > cov[idx]) cov[idx] = f;
-        if (gx < seg.x0) seg.x0 = gx;
-        if (gy < seg.y0) seg.y0 = gy;
-        if (gx > seg.x1) seg.x1 = gx;
-        if (gy > seg.y1) seg.y1 = gy;
-        const D = this.dodgeDirty;
-        if (!D) this.dodgeDirty = { x0: gx, y0: gy, x1: gx, y1: gy };
-        else {
-          if (gx < D.x0) D.x0 = gx;
-          if (gy < D.y0) D.y0 = gy;
-          if (gx > D.x1) D.x1 = gx;
-          if (gy > D.y1) D.y1 = gy;
-        }
-      }
-    }
-  }
-
-  /** Re-bake one region as the dodge/burn of the original, by coverage×exposure. */
-  private bakeDodge(x0: number, y0: number, x1: number, y1: number) {
-    const orig = this.dodgeOrig;
-    const cov = this.dodgeCov;
-    const opts = this.dodgeOpts;
-    if (!orig || !cov || !opts || this.dodgeLayer == null) return;
-    const ix = Math.max(0, x0);
-    const iy = Math.max(0, y0);
-    const ax = Math.min(this.w - 1, x1);
-    const ay = Math.min(this.h - 1, y1);
-    const iw = ax - ix + 1;
-    const ih = ay - iy + 1;
-    if (iw <= 0 || ih <= 0) return;
-    const od = orig.data;
-    const sel = this.dodgeSelMask;
-    const exposure = opts.exposure / 100;
-    const dodge = opts.mode === "dodge";
-    const protect = opts.protect;
-    const range = opts.range;
-    const MASTER = 0.5; // exposure 100% in-range ≈ a 50% push per pass
-    const out = new Uint8ClampedArray(iw * ih * 4);
-    for (let yy = 0; yy < ih; yy++) {
-      for (let xx = 0; xx < iw; xx++) {
-        const gx = ix + xx;
-        const gy = iy + yy;
-        const ci = gy * this.w + gx;
-        const oi = ci * 4;
-        const r = od[oi];
-        const g = od[oi + 1];
-        const b = od[oi + 2];
-        const doI = (yy * iw + xx) * 4;
-        let m = cov[ci];
-        if (sel) m *= sel[ci] / 255;
-        if (m <= 0) {
-          out[doI] = r;
-          out[doI + 1] = g;
-          out[doI + 2] = b;
-          out[doI + 3] = od[oi + 3];
-          continue;
-        }
-        const L = (0.299 * r + 0.587 * g + 0.114 * b) / 255; // 0..1
-        const w =
-          range === "shadows" ? 1 - L : range === "highlights" ? L : 1 - Math.abs(2 * L - 1);
-        let a = m * exposure * w * MASTER;
-        if (a > 0.95) a = 0.95;
-        let nr = r;
-        let ng = g;
-        let nb = b;
-        if (dodge) {
-          if (protect && L > 0.02) {
-            const scale = (L + (1 - L) * a) / L;
-            nr = r * scale;
-            ng = g * scale;
-            nb = b * scale;
-          } else {
-            nr = r + (255 - r) * a;
-            ng = g + (255 - g) * a;
-            nb = b + (255 - b) * a;
-          }
-        } else {
-          // Burn (multiplicative toward black preserves hue inherently).
-          const k = 1 - a;
-          nr = r * k;
-          ng = g * k;
-          nb = b * k;
-        }
-        out[doI] = nr;
-        out[doI + 1] = ng;
-        out[doI + 2] = nb;
-        out[doI + 3] = od[oi + 3];
-      }
-    }
-    if (this.dodgeOnMask) {
-      this.masks.get(this.maskKeyOf(this.dodgeLayer))!.ctx.putImageData(new ImageData(out, iw, ih), ix, iy);
-      this.deriveMaskAlpha(this.maskKeyOf(this.dodgeLayer), { x: ix, y: iy, w: iw, h: ih });
-    } else {
-      this.layer(this.dodgeLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
-    }
-  }
-
-  /** End the dodge/burn stroke (`commit` false: abandon it — see settleRetouch). */
-  endDodge(commit = true) {
-    if (!this.dodging) return;
-    if (commit) this.dodgeLineTo(this.dodgeLastRaw.x, this.dodgeLastRaw.y);
-    const label = this.dodgeOpts?.mode === "burn" ? "Burn" : "Dodge";
-    this.settleRetouch(this.dodgeLayer, this.dodgeOnMask, this.dodgeOrig, this.dodgeDirty, label, commit);
-    this.dodging = false;
-    this.dodgeOnMask = false;
-    this.dodgeLayer = null;
-    this.dodgeOrig = null;
-    this.dodgeCov = null;
-    this.dodgeTip = null;
-    this.dodgeOpts = null;
-    this.dodgeDirty = null;
-    this.dodgeSelMask = null;
-    this.wandSrc = null;
-    this.emitChange();
-  }
-
-  // ---- Sponge brush (saturate / desaturate) --------------------------------
-  // Structurally identical to dodge/burn: an original snapshot plus a 0–1
-  // coverage buffer, each affected region re-baked from the original so a
-  // stroke stays even and repeated strokes compound. `bakeSponge` is the only
-  // difference — it pushes chroma toward or away from luma.
-  beginSponge(
-    layerId: string,
-    opts: SpongeSettings,
-    x: number,
-    y: number,
-    clip: Rect[] | null = null,
-    clipAngle = 0,
-    clipPivot: { x: number; y: number } | null = null,
-  ) {
-    if (this.w < 1 || this.h < 1) return;
-    this.endAdjust();
-    this.spongeOnMask = this.activeSurface(layerId) === "mask";
-    const l = this.spongeOnMask ? this.masks.get(this.maskKeyOf(layerId))! : this.layer(layerId);
-    this.sponging = true;
-    this.spongeLayer = layerId;
-    this.spongeOpts = { ...opts };
-    this.spongeOrig = l.ctx.getImageData(0, 0, this.w, this.h);
-    this.spongeCov = new Float32Array(this.w * this.h);
-    this.spongeSelMask = null;
-    if (clip && clip.length) {
-      const mask = this.selectionMask(clip, clipAngle, clipPivot);
-      const md = mask.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
-      const sa = new Uint8ClampedArray(this.w * this.h);
-      for (let i = 0; i < sa.length; i++) sa[i] = md[i * 4 + 3];
-      this.spongeSelMask = sa;
-    }
-    this.spongeTip = this.buildCoverageTip(Math.max(0.5, opts.size / 2), opts.hardness);
-    this.spongeStep = Math.max(1, opts.size * (opts.spacing / 100));
-    this.spongeResidual = 0;
-    this.spongeDirty = null;
-    this.spongeLast = { x, y };
-    this.spongeLastRaw = { x, y };
-    this.spongeSmoothPt = { x, y };
-    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    this.stampSponge(x, y, seg);
-    this.spongeResidual = this.spongeStep;
-    if (seg.x1 >= seg.x0) this.bakeSponge(seg.x0, seg.y0, seg.x1, seg.y1);
-    this.emitChange();
-  }
-
-  moveSponge(rawX: number, rawY: number) {
-    if (!this.sponging || !this.spongeOpts) return;
-    this.spongeLastRaw = { x: rawX, y: rawY };
-    const alpha = 1 - (this.spongeOpts.smoothing / 100) * 0.85;
-    this.spongeSmoothPt.x += (rawX - this.spongeSmoothPt.x) * alpha;
-    this.spongeSmoothPt.y += (rawY - this.spongeSmoothPt.y) * alpha;
-    this.spongeLineTo(this.spongeSmoothPt.x, this.spongeSmoothPt.y);
-    this.emitChange();
-  }
-
-  private spongeLineTo(x: number, y: number) {
-    const dx = x - this.spongeLast.x;
-    const dy = y - this.spongeLast.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist === 0) return;
-    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    let d = this.spongeResidual;
-    while (d <= dist) {
-      const t = d / dist;
-      this.stampSponge(this.spongeLast.x + dx * t, this.spongeLast.y + dy * t, seg);
-      d += this.spongeStep;
-    }
-    this.spongeResidual = d - dist;
-    this.spongeLast = { x, y };
-    if (seg.x1 >= seg.x0) this.bakeSponge(seg.x0, seg.y0, seg.x1, seg.y1);
-  }
-
-  private stampSponge(
-    cx: number,
-    cy: number,
-    seg: { x0: number; y0: number; x1: number; y1: number },
-  ) {
-    const tip = this.spongeTip;
-    const cov = this.spongeCov;
-    if (!tip || !cov) return;
-    const size = tip.size;
-    const half = size / 2;
-    const left = Math.floor(cx - half);
-    const top = Math.floor(cy - half);
-    for (let py = 0; py < size; py++) {
-      const gy = top + py;
-      if (gy < 0 || gy >= this.h) continue;
-      for (let px = 0; px < size; px++) {
-        const gx = left + px;
-        if (gx < 0 || gx >= this.w) continue;
-        const f = tip.data[py * size + px];
-        if (f <= 0) continue;
-        const idx = gy * this.w + gx;
-        if (f > cov[idx]) cov[idx] = f;
-        if (gx < seg.x0) seg.x0 = gx;
-        if (gy < seg.y0) seg.y0 = gy;
-        if (gx > seg.x1) seg.x1 = gx;
-        if (gy > seg.y1) seg.y1 = gy;
-        const D = this.spongeDirty;
-        if (!D) this.spongeDirty = { x0: gx, y0: gy, x1: gx, y1: gy };
-        else {
-          if (gx < D.x0) D.x0 = gx;
-          if (gy < D.y0) D.y0 = gy;
-          if (gx > D.x1) D.x1 = gx;
-          if (gy > D.y1) D.y1 = gy;
-        }
-      }
-    }
-  }
-
-  /** Re-bake one region as saturate/desaturate(orig) by coverage × flow. */
-  private bakeSponge(x0: number, y0: number, x1: number, y1: number) {
-    const orig = this.spongeOrig;
-    const cov = this.spongeCov;
-    const opts = this.spongeOpts;
-    if (!orig || !cov || !opts || this.spongeLayer == null) return;
-    const ix = Math.max(0, x0);
-    const iy = Math.max(0, y0);
-    const ax = Math.min(this.w - 1, x1);
-    const ay = Math.min(this.h - 1, y1);
-    const iw = ax - ix + 1;
-    const ih = ay - iy + 1;
-    if (iw <= 0 || ih <= 0) return;
-    const od = orig.data;
-    const sel = this.spongeSelMask;
-    const flow = opts.flow / 100;
-    const desat = opts.mode === "desaturate";
-    const vibrance = opts.vibrance;
-    const MASTER = 0.6; // flow 100% in-range ≈ a 60% push per full-coverage pass
-    const out = new Uint8ClampedArray(iw * ih * 4);
-    for (let yy = 0; yy < ih; yy++) {
-      for (let xx = 0; xx < iw; xx++) {
-        const gx = ix + xx;
-        const gy = iy + yy;
-        const ci = gy * this.w + gx;
-        const oi = ci * 4;
-        const r = od[oi];
-        const g = od[oi + 1];
-        const b = od[oi + 2];
-        const doI = (yy * iw + xx) * 4;
-        let m = cov[ci];
-        if (sel) m *= sel[ci] / 255;
-        if (m <= 0) {
-          out[doI] = r;
-          out[doI + 1] = g;
-          out[doI + 2] = b;
-          out[doI + 3] = od[oi + 3];
-          continue;
-        }
-        const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-        let k = m * flow * MASTER;
-        if (k > 0.95) k = 0.95;
-        let nr: number;
-        let ng: number;
-        let nb: number;
-        if (desat) {
-          nr = r + (gray - r) * k;
-          ng = g + (gray - g) * k;
-          nb = b + (gray - b) * k;
-        } else {
-          // Saturate: push chroma away from luma. Vibrance eases the push on
-          // already-saturated pixels so they don't clip to a flat primary.
-          if (vibrance) {
-            const maxc = r > g ? (r > b ? r : b) : g > b ? g : b;
-            const minc = r < g ? (r < b ? r : b) : g < b ? g : b;
-            const s = maxc > 0 ? (maxc - minc) / maxc : 0; // 0..1
-            k *= 1 - s;
-          }
-          nr = r + (r - gray) * k;
-          ng = g + (g - gray) * k;
-          nb = b + (b - gray) * k;
-        }
-        out[doI] = nr;
-        out[doI + 1] = ng;
-        out[doI + 2] = nb;
-        out[doI + 3] = od[oi + 3];
-      }
-    }
-    if (this.spongeOnMask) {
-      this.masks.get(this.maskKeyOf(this.spongeLayer))!.ctx.putImageData(new ImageData(out, iw, ih), ix, iy);
-      this.deriveMaskAlpha(this.maskKeyOf(this.spongeLayer), { x: ix, y: iy, w: iw, h: ih });
-    } else {
-      this.layer(this.spongeLayer).ctx.putImageData(new ImageData(out, iw, ih, { colorSpace: this.cs }), ix, iy);
-    }
-  }
-
-  /** End the sponge stroke (`commit` false: abandon it — see settleRetouch). */
-  endSponge(commit = true) {
-    if (!this.sponging) return;
-    if (commit) this.spongeLineTo(this.spongeLastRaw.x, this.spongeLastRaw.y);
-    this.settleRetouch(this.spongeLayer, this.spongeOnMask, this.spongeOrig, this.spongeDirty, "Sponge", commit);
-    this.sponging = false;
-    this.spongeOnMask = false;
-    this.spongeLayer = null;
-    this.spongeOrig = null;
-    this.spongeCov = null;
-    this.spongeTip = null;
-    this.spongeOpts = null;
-    this.spongeDirty = null;
-    this.spongeSelMask = null;
-    this.wandSrc = null;
-    this.emitChange();
-  }
-
-  // ---- Smudge brush (drag colour along the stroke) -------------------------
-  // A stateful smear, so NOT the coverage model: the layer bytes are mutated in
-  // place (a working copy blitted per segment), and a tip-sized "carried" RGBA
-  // buffer holds the colour the finger drags — deposited each dab, then refreshed
-  // from the pixels beneath (pickup). `strength` sets how long the colour is
-  // carried (pickup = 1 − strength); premultiplied blending keeps soft edges clean.
-  beginSmudge(
-    layerId: string,
-    opts: SmudgeSettings,
-    x: number,
-    y: number,
-    fingerColor: { r: number; g: number; b: number; a: number } | null = null,
-    clip: Rect[] | null = null,
-    clipAngle = 0,
-    clipPivot: { x: number; y: number } | null = null,
-  ) {
-    if (this.w < 1 || this.h < 1) return;
-    this.endAdjust();
-    this.smudgeOnMask = this.activeSurface(layerId) === "mask";
-    const l = this.smudgeOnMask ? this.masks.get(this.maskKeyOf(layerId))! : this.layer(layerId);
-    this.smudging = true;
-    this.smudgeLayer = layerId;
-    this.smudgeOpts = { ...opts };
-    this.smudgeOrig = l.ctx.getImageData(0, 0, this.w, this.h);
-    const data = new Uint8ClampedArray(this.smudgeOrig.data);
-    this.smudgeData = data;
-    // Wrap the SAME buffer so a dirty-rect putImageData repaints only the dab.
-    this.smudgeImage = this.smudgeOnMask
-      ? new ImageData(data, this.w, this.h)
-      : new ImageData(data, this.w, this.h, { colorSpace: this.cs });
-    // Sample-all pickup source (static composite snapshot); layer smudging only.
-    this.smudgePickup = null;
-    if (opts.sampleAll && !this.smudgeOnMask && this.vctx) {
-      try {
-        this.smudgePickup = this.vctx.getImageData(0, 0, this.w, this.h).data;
-      } catch {
-        this.smudgePickup = null;
-      }
-    }
-    this.smudgeSelMask = null;
-    if (clip && clip.length) {
-      const mask = this.selectionMask(clip, clipAngle, clipPivot);
-      const md = mask.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
-      const sa = new Uint8ClampedArray(this.w * this.h);
-      for (let i = 0; i < sa.length; i++) sa[i] = md[i * 4 + 3];
-      this.smudgeSelMask = sa;
-    }
-    const tip = this.buildCoverageTip(Math.max(0.5, opts.size / 2), opts.hardness);
-    this.smudgeTip = tip;
-    this.smudgeStep = Math.max(1, opts.size * (opts.spacing / 100));
-    this.smudgeResidual = 0;
-    this.smudgeDirty = null;
-    this.smudgeLast = { x, y };
-    this.smudgeLastRaw = { x, y };
-    this.smudgeSmoothPt = { x, y };
-    // Seed the carried colour: the foreground (finger painting) or the pixels
-    // under the brush at the start point.
-    const size = tip.size;
-    const carried = new Float32Array(size * size * 4);
-    this.smudgeCarried = carried;
-    const src = this.smudgePickup ?? data;
-    const half = size / 2;
-    const left = Math.floor(x - half);
-    const top = Math.floor(y - half);
-    for (let py = 0; py < size; py++) {
-      const gy = top + py;
-      for (let px = 0; px < size; px++) {
-        const gx = left + px;
-        const coff = (py * size + px) * 4;
-        if (fingerColor) {
-          carried[coff] = fingerColor.r;
-          carried[coff + 1] = fingerColor.g;
-          carried[coff + 2] = fingerColor.b;
-          carried[coff + 3] = fingerColor.a;
-        } else if (gx >= 0 && gx < this.w && gy >= 0 && gy < this.h) {
-          const gi = (gy * this.w + gx) * 4;
-          carried[coff] = src[gi];
-          carried[coff + 1] = src[gi + 1];
-          carried[coff + 2] = src[gi + 2];
-          carried[coff + 3] = src[gi + 3];
-        } // else off-canvas → stays transparent (0)
-      }
-    }
-    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    this.stampSmudge(x, y, seg);
-    this.smudgeResidual = this.smudgeStep;
-    if (seg.x1 >= seg.x0) this.blitSmudge(seg.x0, seg.y0, seg.x1, seg.y1);
-    this.emitChange();
-  }
-
-  moveSmudge(rawX: number, rawY: number) {
-    if (!this.smudging || !this.smudgeOpts) return;
-    this.smudgeLastRaw = { x: rawX, y: rawY };
-    const alpha = 1 - (this.smudgeOpts.smoothing / 100) * 0.85;
-    this.smudgeSmoothPt.x += (rawX - this.smudgeSmoothPt.x) * alpha;
-    this.smudgeSmoothPt.y += (rawY - this.smudgeSmoothPt.y) * alpha;
-    this.smudgeLineTo(this.smudgeSmoothPt.x, this.smudgeSmoothPt.y);
-    this.emitChange();
-  }
-
-  private smudgeLineTo(x: number, y: number) {
-    const dx = x - this.smudgeLast.x;
-    const dy = y - this.smudgeLast.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist === 0) return;
-    const seg = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
-    let d = this.smudgeResidual;
-    while (d <= dist) {
-      const t = d / dist;
-      this.stampSmudge(this.smudgeLast.x + dx * t, this.smudgeLast.y + dy * t, seg);
-      d += this.smudgeStep;
-    }
-    this.smudgeResidual = d - dist;
-    this.smudgeLast = { x, y };
-    if (seg.x1 >= seg.x0) this.blitSmudge(seg.x0, seg.y0, seg.x1, seg.y1);
-  }
-
-  /** One dab: deposit the carried colour (premultiplied), then refresh it from
-   *  the underlying pixels. Mutates smudgeData; grows the segment + total dirty. */
-  private stampSmudge(
-    cx: number,
-    cy: number,
-    seg: { x0: number; y0: number; x1: number; y1: number },
-  ) {
-    const tip = this.smudgeTip;
-    const carried = this.smudgeCarried;
-    const data = this.smudgeData;
-    const opts = this.smudgeOpts;
-    if (!tip || !carried || !data || !opts) return;
-    const size = tip.size;
-    const half = size / 2;
-    const left = Math.floor(cx - half);
-    const top = Math.floor(cy - half);
-    const w = this.w;
-    const h = this.h;
-    const pick = this.smudgePickup; // sampleAll composite, else the live layer
-    const sel = this.smudgeSelMask;
-    const mixCfg = this.smudgeMix;
-    // Mixer mode: the reservoir is updated ONCE per dab from the tip-weighted
-    // average under the tip (premultiplied — see averageColor), and supplies the
-    // dab's strength. Smudge mode keeps its own pickup rate.
-    let deposit = 1;
-    let mixBlend = 0;
-    let paint: Rgba | null = null;
-    let pickup = 0;
-    if (mixCfg) {
-      const src = pick ?? data;
-      const avg = averageColor(src, tip.data, size, this.w, left, top, this.w, h);
-      const step = mixerDab(this.mixerState!, avg, avg, mixCfg.m);
-      this.mixerState = step.next;
-      deposit = step.alpha;
-      mixBlend = mixCfg.blend;
-      paint = this.mixerState.paint;
-      pickup = Math.max(0, Math.min(1, mixCfg.m.wet / 100));
-    } else {
-      const strength = opts.strength / 100;
-      pickup = 1 - strength; // high strength → carried persists → long smear
-    }
-    for (let py = 0; py < size; py++) {
-      const gy = top + py;
-      if (gy < 0 || gy >= h) continue;
-      for (let px = 0; px < size; px++) {
-        const gx = left + px;
-        if (gx < 0 || gx >= w) continue;
-        const f = tip.data[py * size + px];
-        if (f <= 0) continue;
-        const coff = (py * size + px) * 4;
-        const gi = (gy * w + gx) * 4;
-        // Underlying colour (pre-deposit) — the pickup source.
-        const ur = pick ? pick[gi] : data[gi];
-        const ug = pick ? pick[gi + 1] : data[gi + 1];
-        const ub = pick ? pick[gi + 2] : data[gi + 2];
-        const ua = pick ? pick[gi + 3] : data[gi + 3];
-        let lay = f * deposit;
-        if (sel) lay *= sel[gy * w + gx] / 255;
-        if (lay > 0) {
-          // Mixer: the paint laid down is the reservoir pulled toward what this
-          // part of the tip picked up. Blended per pixel because the carried
-          // buffer varies across the tip — a soft edge that dragged through two
-          // colours must lay both back down, not one averaged smear.
-          const cr = paint ? paint.r + (carried[coff] - paint.r) * mixBlend : carried[coff];
-          const cg = paint ? paint.g + (carried[coff + 1] - paint.g) * mixBlend : carried[coff + 1];
-          const cb = paint ? paint.b + (carried[coff + 2] - paint.b) * mixBlend : carried[coff + 2];
-          const ca = paint ? paint.a + (carried[coff + 3] - paint.a) * mixBlend : carried[coff + 3];
-          const dr = data[gi];
-          const dg = data[gi + 1];
-          const db = data[gi + 2];
-          const da = data[gi + 3];
-          // Premultiplied lerp: data → carried by `lay`.
-          const oa = da + (ca - da) * lay;
-          const opr = dr * da + (cr * ca - dr * da) * lay;
-          const opg = dg * da + (cg * ca - dg * da) * lay;
-          const opb = db * da + (cb * ca - db * da) * lay;
-          const inv = oa > 0 ? 1 / oa : 0;
-          data[gi] = opr * inv;
-          data[gi + 1] = opg * inv;
-          data[gi + 2] = opb * inv;
-          data[gi + 3] = oa;
-        }
-        // Pickup: the finger absorbs some of the underlying colour.
-        const pk = pickup * f;
-        if (pk > 0) {
-          carried[coff] += (ur - carried[coff]) * pk;
-          carried[coff + 1] += (ug - carried[coff + 1]) * pk;
-          carried[coff + 2] += (ub - carried[coff + 2]) * pk;
-          carried[coff + 3] += (ua - carried[coff + 3]) * pk;
-        }
-        if (gx < seg.x0) seg.x0 = gx;
-        if (gy < seg.y0) seg.y0 = gy;
-        if (gx > seg.x1) seg.x1 = gx;
-        if (gy > seg.y1) seg.y1 = gy;
-        const D = this.smudgeDirty;
-        if (!D) this.smudgeDirty = { x0: gx, y0: gy, x1: gx, y1: gy };
-        else {
-          if (gx < D.x0) D.x0 = gx;
-          if (gy < D.y0) D.y0 = gy;
-          if (gx > D.x1) D.x1 = gx;
-          if (gy > D.y1) D.y1 = gy;
-        }
-      }
-    }
-  }
-
-  /** Blit only the touched sub-rect of the working buffer to the layer/mask. */
-  private blitSmudge(x0: number, y0: number, x1: number, y1: number) {
-    const img = this.smudgeImage;
-    if (!img || this.smudgeLayer == null) return;
-    const ix = Math.max(0, x0);
-    const iy = Math.max(0, y0);
-    const ax = Math.min(this.w - 1, x1);
-    const ay = Math.min(this.h - 1, y1);
-    const iw = ax - ix + 1;
-    const ih = ay - iy + 1;
-    if (iw <= 0 || ih <= 0) return;
-    if (this.smudgeOnMask) {
-      const mid = this.maskKeyOf(this.smudgeLayer);
-      this.masks.get(mid)!.ctx.putImageData(img, 0, 0, ix, iy, iw, ih);
-      this.deriveMaskAlpha(mid, { x: ix, y: iy, w: iw, h: ih });
-    } else {
-      this.layer(this.smudgeLayer).ctx.putImageData(img, 0, 0, ix, iy, iw, ih);
-    }
-  }
-
-  /**
-   * Begin a mixer-brush stroke.
-   *
-   * Runs the smudge session with a mixer kernel: the tip drags a picked-up
-   * colour buffer exactly as smudge does, but what it lays down is a blend of
-   * that with a paint reservoir, and the reservoir is spent and replenished as
-   * it goes (mixer.ts owns all of that arithmetic).
-   */
-  beginMixer(
-    layerId: string,
-    opts: MixerSettings,
-    x: number,
-    y: number,
-    fg: { r: number; g: number; b: number; a: number },
-    clip: Rect[] | null = null,
-    clipAngle = 0,
-    clipPivot: { x: number; y: number } | null = null,
-  ) {
-    // A stroke always starts from a defined reservoir; without a previous one
-    // (first stroke of the session) that means a freshly loaded brush.
-    // Clean / Load are resolved HERE, at the start of the next stroke, rather
-    // than when the previous one ended. Same rule, but evaluated against the
-    // CURRENT foreground — resolving it at lift meant the brush reloaded with
-    // whatever colour was selected then, so picking a new colour and painting
-    // again silently kept using the old one.
-    this.mixerState = this.mixerState
-      ? mixerAfterStroke(this.mixerState, fg, opts)
-      : initialMixerState(fg, opts);
-    this.smudgeMix = { m: { ...opts }, blend: mixerBlend(opts) };
-    // The shared scaffolding only reads the mechanical fields. `strength` is
-    // unused in mixer mode (the kernel branches before it), and fingerColor is
-    // null so the carried buffer seeds from the canvas — a mixer picks up what
-    // it is passing over, and the reservoir is what supplies the paint.
-    this.beginSmudge(
-      layerId,
-      {
-        size: opts.size,
-        hardness: opts.hardness,
-        strength: 50,
-        spacing: opts.spacing,
-        smoothing: opts.smoothing,
-        sampleAll: opts.sampleAll,
-        fingerPaint: false,
-      },
-      x,
-      y,
-      null,
-      clip,
-      clipAngle,
-      clipPivot,
-    );
-  }
-
-  /** Reset the loaded brush (tool switch / explicit Clean). */
-  cleanMixer() {
-    this.mixerState = null;
-  }
-
-  /** End the smudge / mixer stroke (`commit` false: abandon it — see
-   *  settleRetouch). */
-  endSmudge(commit = true) {
-    if (!this.smudging) return;
-    if (commit) this.smudgeLineTo(this.smudgeLastRaw.x, this.smudgeLastRaw.y);
-    const label = this.smudgeMix ? "Mixer Brush" : "Smudge";
-    this.settleRetouch(this.smudgeLayer, this.smudgeOnMask, this.smudgeOrig, this.smudgeDirty, label, commit);
-    this.smudging = false;
-    this.smudgeOnMask = false;
-    this.smudgeLayer = null;
-    this.smudgeOrig = null;
-    this.smudgeData = null;
-    this.smudgeImage = null;
-    this.smudgePickup = null;
-    this.smudgeCarried = null;
-    this.smudgeTip = null;
-    this.smudgeOpts = null;
-    this.smudgeDirty = null;
-    this.smudgeSelMask = null;
-    this.smudgeMix = null;
-    this.wandSrc = null;
-    this.emitChange();
-  }
-
-  // ---- Blur Gallery (Effects) ----------------------------------------------
-  // Preview compute runs in a dedicated Worker when available (the kernel in
-  // filters.ts is pure), so slider drags never block the UI thread. Replies
-  // are session- and sequence-guarded: stale results are dropped, and nothing
-  // is ever applied after cancel/commit. Falls back to the sync path.
-  private blurWorker: Worker | null = null;
-
-  // ---- Heal worker (one-shot jobs; sync fallback if workers are unavailable) --
-  private healWorker: Worker | null = null;
-  private healWorkerBroken = false;
-  private healJobSeq = 0;
-  private healPending = new Map<
-    number,
-    {
-      layerId: string;
-      rx: number;
-      ry: number;
-      rw: number;
-      rh: number;
-      label: string;
-      epoch: number;
-      docW: number;
-      docH: number;
-      /** The document it heals, which may not be in front when it lands. */
-      doc: DocumentState;
-      before: ImageData;
-      coverage: Uint8ClampedArray; // kept for the sync fallback on worker error
-    }
-  >();
-
-  private ensureHealWorker(): Worker | null {
-    if (!this.workersOn || this.healWorkerBroken) return null;
-    if (this.healWorker) return this.healWorker;
-    if (typeof Worker === "undefined") {
-      this.healWorkerBroken = true;
-      return null;
-    }
-    try {
-      const w = new Worker(new URL("../workers/heal.worker.ts", import.meta.url), {
-        type: "module",
-      });
-      w.onmessage = (e) => this.onHealWorkerMessage(e);
-      w.onerror = () => {
-        // Permanent sync fallback — and finish anything already in flight
-        // synchronously so no released heal blob is silently lost.
-        this.healWorkerBroken = true;
-        try {
-          w.terminate();
-        } catch {
-          /* ignore */
-        }
-        this.healWorker = null;
-        const pending = [...this.healPending.values()];
-        this.healPending.clear();
-        for (const job of pending) this.finishHeal(job, null);
-      };
-      this.healWorker = w;
-      return w;
-    } catch {
-      this.healWorkerBroken = true;
-      return null;
-    }
-  }
-
-  private onHealWorkerMessage(e: MessageEvent<{ id: number; data: ArrayBuffer }>) {
-    const job = this.healPending.get(e.data.id);
-    if (!job) return;
-    this.healPending.delete(e.data.id);
-    this.finishHeal(job, new Uint8ClampedArray(e.data.data));
-  }
-
-  /** Bake a finished heal (worker bytes, or recompute sync when bytes = null).
-   *  Discards the result if the document was reframed while it was in flight —
-   *  the captured coordinates would no longer be valid — or closed. */
-  private finishHeal(
-    job: {
-      layerId: string;
-      rx: number;
-      ry: number;
-      rw: number;
-      rh: number;
-      label: string;
-      epoch: number;
-      docW: number;
-      docH: number;
-      doc: DocumentState;
-      before: ImageData;
-      coverage: Uint8ClampedArray;
+  // ---- Blur Gallery ----
+  // Effects ▸ Blur Gallery: the session over the chosen layers, its worker, the
+  // preview, the commit and the cancel: engine/blur-gallery.ts. These are its doors.
+  private readonly blurGallery = new EngineBlurGallery(this.cursor, {
+    layer: (id) => this.layer(id),
+    bumpPixel: (id) => this.bumpPixel(id),
+    emitChange: () => this.emitChange(),
+    endLive: () => this.endLive(),
+    selectionMask: (rects, angle, pivot) => this.selectionMask(rects, angle, pivot),
+    pushStructural: (label, undo, redo) => this.pushStructural(label, undo, redo),
+    dropWandSource: () => {
+      this.wandSrc = null;
     },
-    bytes: Uint8ClampedArray<ArrayBuffer> | null,
-  ) {
-    const d = job.doc;
-    if (job.epoch !== d.epoch || job.docW !== d.w || job.docH !== d.h) return;
-    if (!this.isOpen(d)) return; // closed meanwhile
-    const l = d.layers.get(job.layerId);
-    if (!l) return; // layer deleted while healing
-    let healed: ImageData;
-    if (bytes) {
-      try {
-        healed = new ImageData(bytes, job.rw, job.rh, { colorSpace: this.cs });
-      } catch {
-        healed = new ImageData(bytes, job.rw, job.rh);
-      }
-    } else {
-      healed = healRegion({ src: job.before, coverage: job.coverage });
-    }
-    if (d !== this.doc) {
-      this.landInBackground(
-        d,
-        job.layerId,
-        { x: job.rx, y: job.ry, w: job.rw, h: job.rh },
-        job.before,
-        healed,
-        job.label,
-      );
-      return;
-    }
-    l.ctx.putImageData(healed, job.rx, job.ry);
-    this.pushEntry(
-      job.layerId,
-      { x: job.rx, y: job.ry, w: job.rw, h: job.rh },
-      job.before,
-      healed,
-      job.label,
-    );
-    this.bumpPixel(job.layerId, { x: job.rx, y: job.ry, w: job.rw, h: job.rh });
-    this.emitChange();
+    cs: () => this.cs,
+    workersOn: () => this.workersOn,
+  });
+  /** The session live now (the render graph bypasses its layers), and its renders out. */
+  private get blurFx(): EngineBlurGallery["blurFx"] {
+    return this.blurGallery.blurFx;
   }
-
-  // ---- Smart-filter worker (stale-while-refresh product cache) ---------------
-  // A node's filtered pixels are cached per node id, keyed by its nodeKey. On a
-  // key miss WITH a stale product available, the recompute runs in the worker
-  // while the stale product draws this frame — so param drags stay fluid; the
-  // fresh result lands via onFilterWorkerMessage and triggers a recomposite.
-  private filterWorker: Worker | null = null;
-  private filterWorkerBroken = false;
-  private filterJobSeq = 0;
-  private filterWorkerResults = 0;
-  /** Per-node newest in-flight job (older replies are dropped). */
-  private filterPending = new Map<
-    string,
-    { seq: number; key: string; quality: "preview" | "full"; docW: number; docH: number }
-  >();
-  private filteredCache = new Map<
-    string,
-    { key: string; canvas: HTMLCanvasElement; quality: "preview" | "full" }
-  >();
-
-  /** Progressive preview kicks in above this many document pixels — below it a
-   *  half-res pass saves nothing worth the resample. */
-  private static PREVIEW_MIN_PIXELS = 2_000_000;
-  /** True while exportComposite runs: exports must never contain half-res
-   *  preview or stale-param products, so anything but an exact full-quality
-   *  cache hit computes synchronously at full resolution. */
-  private exporting = false;
-
-  private ensureFilterWorker(): Worker | null {
-    if (!this.workersOn || this.filterWorkerBroken) return null;
-    if (this.filterWorker) return this.filterWorker;
-    if (typeof Worker === "undefined") {
-      this.filterWorkerBroken = true;
-      return null;
-    }
-    try {
-      const w = new Worker(new URL("../workers/filters.worker.ts", import.meta.url), {
-        type: "module",
-      });
-      w.onmessage = (e) => this.onFilterWorkerMessage(e);
-      w.onerror = () => {
-        // Permanent sync fallback: pending stale frames self-heal because the
-        // next composite misses the product cache and recomputes in-line.
-        this.filterWorkerBroken = true;
-        try {
-          w.terminate();
-        } catch {
-          /* ignore */
-        }
-        this.filterWorker = null;
-        this.filterPending.clear();
-        this.clearRenderCaches();
-        this.emitChange();
-      };
-      this.filterWorker = w;
-      return w;
-    } catch {
-      this.filterWorkerBroken = true;
-      return null;
-    }
+  private get blurPending(): EngineBlurGallery["blurPending"] {
+    return this.blurGallery.blurPending;
   }
-
-  private onFilterWorkerMessage(
-    e: MessageEvent<{ id: number; nodeId: string; key: string; w: number; h: number; data: ArrayBuffer }>,
-  ) {
-    const { id, nodeId, key, w, h, data } = e.data;
-    const pend = this.filterPending.get(nodeId);
-    if (!pend || pend.seq !== id) return; // superseded by a newer job
-    this.filterPending.delete(nodeId);
-    if (pend.docW !== this.w || pend.docH !== this.h) return; // reframed mid-flight
-    const bytes = new Uint8ClampedArray(data);
-    let img: ImageData;
-    try {
-      img = new ImageData(bytes, w, h, { colorSpace: this.cs });
-    } catch {
-      img = new ImageData(bytes, w, h);
-    }
-    let out: HTMLCanvasElement;
-    if (w === this.w && h === this.h) {
-      const cv = this.mk(w, h);
-      cv.ctx.putImageData(img, 0, 0);
-      out = cv.c;
-    } else {
-      // Half-res preview → upscale to document size so consumers stay agnostic.
-      const small = this.mk(w, h);
-      small.ctx.putImageData(img, 0, 0);
-      const cv = this.mk(this.w, this.h);
-      cv.ctx.imageSmoothingEnabled = true;
-      cv.ctx.imageSmoothingQuality = "high";
-      cv.ctx.drawImage(small.c, 0, 0, w, h, 0, 0, this.w, this.h);
-      out = cv.c;
-    }
-    this.storeFiltered(nodeId, key, out, pend.quality);
-    this.filterWorkerResults++;
-    // Frames composited while this was in flight cached STALE products under
-    // fresh keys (the node itself, its ancestors, clip groups, adjustment
-    // accumulators — tiled ones included). One cache clear is the safe, cheap
-    // invalidation — the expensive part (the filter product) is warm in
-    // filteredCache.
-    this.clearRenderCaches();
-    this.emitChange();
-  }
-
-  private storeFiltered(id: string, key: string, canvas: HTMLCanvasElement, quality: "preview" | "full") {
-    this.filteredCache.delete(id); // re-insert to refresh Map order (LRU-ish)
-    this.filteredCache.set(id, { key, canvas, quality });
-    this.noteShared(id);
-    while (this.filteredCache.size > 8) {
-      const oldest = this.filteredCache.keys().next().value;
-      if (oldest === undefined) break;
-      this.filteredCache.delete(oldest);
-    }
-  }
-
-  /** Queue an async recompute of `node`'s filter stack (true = queued/running).
-   *  `quality: "preview"` runs at half resolution — ¼ the pixels AND ¼ the
-   *  main-thread readback (the source downscales on the GPU before the read);
-   *  spatial filter params scale with it so the look matches full res. */
-  private kickFilterJob(
-    node: LayerNode,
-    src: HTMLCanvasElement,
-    key: string,
-    quality: "preview" | "full",
-  ): boolean {
-    const w = this.ensureFilterWorker();
-    if (!w) return false;
-    const pend = this.filterPending.get(node.id);
-    // Same state already queued at this quality (or better) → nothing to do.
-    if (pend && pend.key === key && (pend.quality === "full" || pend.quality === quality))
-      return true;
-    const scale = quality === "preview" ? 0.5 : 1;
-    const sw = Math.max(1, Math.round(this.w * scale));
-    const sh = Math.max(1, Math.round(this.h * scale));
-    const seq = ++this.filterJobSeq;
-    this.filterPending.set(node.id, { seq, key, quality, docW: this.w, docH: this.h });
-    this.noteShared(node.id);
-    const readScaled = (source: HTMLCanvasElement): ImageData => {
-      if (scale === 1) return source.getContext("2d")!.getImageData(0, 0, this.w, this.h);
-      const small = this.mk(sw, sh, true);
-      small.ctx.imageSmoothingEnabled = true;
-      small.ctx.imageSmoothingQuality = "high";
-      small.ctx.drawImage(source, 0, 0, this.w, this.h, 0, 0, sw, sh);
-      return small.ctx.getImageData(0, 0, sw, sh);
-    };
-    const img = readScaled(src);
-    const transfers: ArrayBuffer[] = [img.data.buffer];
-    let fm: ArrayBuffer | null = null;
-    const fmCanvas = this.filterMaskAlpha(node);
-    if (fmCanvas) {
-      const fmImg = readScaled(fmCanvas as HTMLCanvasElement);
-      fm = fmImg.data.buffer;
-      transfers.push(fm);
-    }
-    const filters =
-      scale === 1 ? node.filters : node.filters!.map((f) => (f.enabled ? scaleFilterParams(f, scale) : f));
-    w.postMessage(
-      { id: seq, nodeId: node.id, key, w: sw, h: sh, cs: this.cs, src: img.data.buffer, fm, filters },
-      transfers,
-    );
-    return true;
-  }
-
-  /** The node's filtered pixels via the product cache: hit → cached canvas;
-   *  miss with a stale product → async worker refresh (HALF-RES during drags on
-   *  large documents; the stale product draws this frame); a hit on a
-   *  half-res product means the params settled → quietly refine to full res.
-   *  Cold, live-session, or cache-disabled → synchronous compute, as before. */
-  private filteredProduct(node: LayerNode, src: HTMLCanvasElement): HTMLCanvasElement {
-    // Cache-disabled covers the A/B toggle AND clean exports — both must never
-    // see a half-res preview product.
-    const live = this.liveBypass.has(node.id) || !this.renderCacheOn;
-    if (!live) {
-      const key = this.nodeKey(node);
-      const ent = this.filteredCache.get(node.id);
-      if (ent && ent.key === key && ent.quality === "full") return ent.canvas;
-      if (!this.exporting) {
-        if (ent && ent.key === key) {
-          // Settled on a preview → refine to full res in the background.
-          this.kickFilterJob(node, src, key, "full");
-          return ent.canvas;
-        }
-        if (ent) {
-          const quality =
-            this.w * this.h >= PaintEngine.PREVIEW_MIN_PIXELS ? ("preview" as const) : ("full" as const);
-          if (this.kickFilterJob(node, src, key, quality)) return ent.canvas; // stale + refresh
-        }
-      }
-      const out = this.renderFiltered(src, node.filters!, this.filterMaskAlpha(node));
-      this.storeFiltered(node.id, key, out, "full");
-      return out;
-    }
-    // A live paint/move session mutates `src` without version bumps — the key
-    // can't see those changes, so always compute in-line and never cache.
-    //
-    // In-line means SYNCHRONOUS and on the main thread: measured at ~190–250 ms
-    // per frame for one gaussian blur on a 1920×1080 document, which is why a
-    // brush stroke or a selection drag on a filtered layer blocked for seconds
-    // (≈3.9 s of long tasks over a 20-step stroke). The worker is no help here —
-    // it keys jobs by node key, and a live source has no key that describes it.
-    //
-    // So the live frames run at DRAFT resolution instead. Not a cache and not a
-    // stale product: a real filter pass over fewer pixels, with spatial params
-    // scaled to match, upscaled to document size. The moment the session ends
-    // the normal path resumes and recomputes at full resolution.
-    if (this.liveBypass.has(node.id) && !this.exporting) {
-      // Better than a draft when it applies: the same kernel over the stroke's
-      // own rect, at FULL resolution, patched into the settled product.
-      const region = this.liveFilterRegion(node, src);
-      if (region) return region;
-      const draft = this.draftScale();
-      if (draft < 1) {
-        this.liveDraftFrames++;
-        return this.renderFilteredDraft(src, node, draft);
-      }
-    }
-    return this.renderFiltered(src, node.filters!, this.filterMaskAlpha(node));
-  }
-
-  /**
-   * A live filter frame that re-filters only the stroke's dirty rect at FULL
-   * resolution, patched into a per-session copy of the settled product.
-   *
-   * WHAT IT REPLACES. renderFilteredDraft runs the stack over the whole document
-   * at quarter resolution. Measured on a 12 MP document carrying one gaussian
-   * blur, that is 58.6 ms a frame — 52.5 ms of it inside applyFilter over 750k
-   * draft pixels — and it accounted for 100% of the ~1.2 s a five-stroke session
-   * blocked. A stroke touches a few hundred pixels square, so filtering the dirty
-   * rect instead is both far cheaper AND full quality: the draft's downscale /
-   * upscale softness disappears from the preview.
-   *
-   * THE TWO RECTS, exactly as repaintRegion:
-   *   OUT — the dirty rect grown by the stack's reach. Nothing further out can
-   *     have changed, so the seeded product is still right there.
-   *   IN  — OUT grown by the reach again: every input pixel that can influence
-   *     OUT. The IN border is computed without ITS neighbours and is discarded.
-   *
-   * THE SEED. There is no cache to patch into during a live session (liveBypass
-   * deliberately holds none), so the session copies the settled product out of
-   * filteredCache once per stroke. That is only sound because the product's key
-   * still describes the layer: pixelVersion does not move until endStroke bakes
-   * the stroke, so the pre-stroke key IS the current key. Anything else — a
-   * half-res product, a stale key, a resized document — declines.
-   *
-   * Returns null rather than guessing whenever it cannot prove the frame would
-   * match a full pass; the caller then takes the draft, as before.
-   */
-  private liveFilterRegion(node: LayerNode, src: HTMLCanvasElement): HTMLCanvasElement | null {
-    if (!this.liveRegionOn) return null;
-    // The render-cache A/B toggle promises that "off" uses no cached product at
-    // all. This path seeds from one, so it has to honour that too — otherwise
-    // the always-correct reference the rails diff against would quietly stop
-    // being always-correct.
-    if (!this.renderCacheOn) return null;
-    // A brush stroke is the only live session that tracks a dirty rect, and only
-    // a PIXEL stroke changes what the filters read — a mask stroke leaves the
-    // layer's pixels alone and previews through maskDisplay instead.
-    if (!this.painting || this.strokeOnMask || this.strokeLayer !== node.id) return null;
-    const dirty = this.dirtyRect();
-    if (!dirty) return null;
-    const reach = stackReach(node.filters);
-    if (reach === null) return null; // unbounded or position-dependent
-    const out = padRect(dirty, reach, this.w, this.h);
-    const inn = padRect(out, reach, this.w, this.h);
-    if (out.w <= 0 || out.h <= 0 || inn.w <= 0 || inn.h <= 0) return null;
-    // The alternative here is the DRAFT, not a full pass, so the test is against
-    // the draft's pixel count — regionWorthIt's "share of the document" would
-    // happily accept a region twelve times the draft's size. Ties go to the
-    // region: same pixels, better picture.
-    const draft = this.draftScale();
-    const draftPx =
-      Math.max(1, Math.round(this.w * draft)) * Math.max(1, Math.round(this.h * draft));
-    if (inn.w * inn.h > draftPx) return null;
-
-    const key = this.nodeKey(node);
-    let prod = this.liveProduct;
-    if (!prod || prod.c.width !== this.w || prod.c.height !== this.h) {
-      prod = this.liveProduct = { ...this.mk(this.w, this.h), id: "", key: "" };
-    }
-    if (prod.id !== node.id || prod.key !== key) {
-      const ent = this.filteredCache.get(node.id);
-      // "full" only: patching sharp full-res pixels into an upscaled half-res
-      // product would leave a visible seam around the stroke.
-      if (!ent || ent.key !== key || ent.quality !== "full") return null;
-      if (ent.canvas.width !== this.w || ent.canvas.height !== this.h) return null;
-      prod.ctx.globalAlpha = 1;
-      prod.ctx.globalCompositeOperation = "source-over";
-      prod.ctx.clearRect(0, 0, this.w, this.h);
-      prod.ctx.drawImage(ent.canvas, 0, 0);
-      prod.id = node.id;
-      prod.key = key;
-    }
-
-    /* Pixels in and out by getImageData / putImageData — exactly as the full
-       pass reads and writes them, so the two agree by construction, on any
-       rasterizer. This used to copy sub-rects through canvases (drawImage with a
-       source rect, in and out, and the filter mask likewise), which the full
-       pass never does. Windows reproduced the full pass to the byte that way;
-       Linux's software raster did not: 1-level rounding on opaque pixels over
-       the stroke's blur footprint, and Δ79 through a painted filter mask —
-       found only once CI could say which pixels and what values. */
-    const fmFull = this.filterMaskAlpha(node);
-    const cur = this.filterStack(
-      (src.getContext("2d") as CanvasRenderingContext2D).getImageData(inn.x, inn.y, inn.w, inn.h),
-      node.filters!,
-      fmFull ? () => fmFull.getContext("2d")!.getImageData(inn.x, inn.y, inn.w, inn.h).data : null,
-    );
-
-    // REPLACE, never blend: the region carries its own alpha. putImageData's
-    // dirty rect writes just OUT, and writes it rather than compositing it.
-    prod.ctx.putImageData(cur, inn.x, inn.y, out.x - inn.x, out.y - inn.y, out.w, out.h);
-    this.liveRegionHits++;
-    this.liveRegionPx += inn.w * inn.h;
-    return prod.c;
-  }
-
-  /** Working scale for live filter frames: enough of a reduction to keep the
-   *  pass under a per-frame pixel budget, never below a quarter (past that the
-   *  preview stops resembling the result). 1 = compute at full size.
-   *
-   *  Public because it is the only way to observe that the pixel budget is
-   *  actually being APPLIED. A harness can read the derived budget easily
-   *  enough; that it reaches the engine is a separate claim, and a mutation
-   *  that reverted the budget to its desktop constant went undetected until
-   *  this was checkable. */
-  draftScale(): number {
-    const px = this.w * this.h;
-    if (px <= PaintEngine.DRAFT_MAX_PIXELS) return 1;
-    return Math.max(0.25, Math.sqrt(PaintEngine.DRAFT_MAX_PIXELS / px));
-  }
-
-  /** Pixel budget for one live filter frame. A gaussian blur runs at roughly
-   *  100 MP/s here, so ~0.5 MP keeps a frame near 5 ms rather than 200 — on a
-   *  desktop. That figure was measured on one, and a phone does not run this
-   *  stack at the same rate, so the budget comes from the device rather than
-   *  from a constant. `budgets()` returns 500_000 on a desktop, so nothing
-   *  changes there. */
-  private static get DRAFT_MAX_PIXELS(): number {
-    return budgets().draftPixels;
-  }
-
-  /**
-   * Run the filter stack at `scale` and upscale the result to document size.
-   *
-   * `scaleFilterParams` shrinks the spatial params with the source (a radius of
-   * 8 over half as many pixels has to become 4 or the preview blurs twice as
-   * hard), which is the same contract the progressive half-res preview already
-   * relies on. The filter mask downsamples alongside so it still confines the
-   * same region.
-   */
-  private renderFilteredDraft(
-    src: HTMLCanvasElement,
-    node: LayerNode,
-    scale: number,
-  ): HTMLCanvasElement {
-    this.draftPainted = true; // the settled frame must repaint the whole view
-    const sw = Math.max(1, Math.round(this.w * scale));
-    const sh = Math.max(1, Math.round(this.h * scale));
-
-    // Downscale the source (GPU) — the readback below is then ¼-or-less the work.
-    const small = this.mk(sw, sh, true);
-    small.ctx.imageSmoothingEnabled = true;
-    small.ctx.imageSmoothingQuality = "low"; // a draft frame; "high" costs more than it shows
-    small.ctx.drawImage(src, 0, 0, sw, sh);
-
-    let cur = small.ctx.getImageData(0, 0, sw, sh);
-    const fmFull = this.filterMaskAlpha(node);
-    let base: ImageData | null = null;
-    let maskData: Uint8ClampedArray | null = null;
-    if (fmFull) {
-      base = new ImageData(new Uint8ClampedArray(cur.data), sw, sh);
-      const m = this.mk(sw, sh, true);
-      m.ctx.imageSmoothingEnabled = true;
-      m.ctx.drawImage(fmFull, 0, 0, sw, sh);
-      maskData = m.ctx.getImageData(0, 0, sw, sh).data;
-    }
-    for (const f of node.filters ?? []) {
-      if (!f.enabled) continue;
-      const applied = applyFilter(cur, scaleFilterParams(f, scale), this.cs);
-      const op = blendOp(f.blendMode);
-      const alpha = Math.max(0, Math.min(1, f.opacity / 100));
-      if (op === "source-over" && alpha >= 1) {
-        cur = applied; // the common case: full replace
-        continue;
-      }
-      // Same per-filter blend/opacity the full path applies, at draft size — a
-      // filter set to 40% Overlay must not preview as a full replacement.
-      small.ctx.putImageData(cur, 0, 0);
-      const tmp = this.mk(sw, sh);
-      tmp.ctx.putImageData(applied, 0, 0);
-      small.ctx.globalAlpha = alpha;
-      small.ctx.globalCompositeOperation = op;
-      small.ctx.drawImage(tmp.c, 0, 0);
-      small.ctx.globalAlpha = 1;
-      small.ctx.globalCompositeOperation = "source-over";
-      cur = small.ctx.getImageData(0, 0, sw, sh);
-    }
-    if (base && maskData) {
-      const aD = base.data;
-      const bD = cur.data;
-      for (let i = 0; i < bD.length; i += 4) {
-        const t = maskData[i + 3] / 255;
-        if (t >= 1) continue;
-        const aa = aD[i + 3];
-        const ba = bD[i + 3];
-        const na = aa + (ba - aa) * t;
-        const inv = na > 0 ? 1 / na : 0;
-        bD[i] = (aD[i] * aa * (1 - t) + bD[i] * ba * t) * inv;
-        bD[i + 1] = (aD[i + 1] * aa * (1 - t) + bD[i + 1] * ba * t) * inv;
-        bD[i + 2] = (aD[i + 2] * aa * (1 - t) + bD[i + 2] * ba * t) * inv;
-        bD[i + 3] = na;
-      }
-    }
-    small.ctx.putImageData(cur, 0, 0);
-
-    const out = this.mk(this.w, this.h);
-    out.ctx.imageSmoothingEnabled = true;
-    out.ctx.imageSmoothingQuality = "high"; // the upscale IS what the user sees
-    out.ctx.drawImage(small.c, 0, 0, sw, sh, 0, 0, this.w, this.h);
-    return out.c;
-  }
-  private blurWorkerBroken = false;
-  private blurSessionId = 0;
-  private blurRenderSeq = 0;
-  private blurPending = new Map<number, (applied: boolean) => void>();
-
-  private ensureBlurWorker(): Worker | null {
-    if (!this.workersOn || this.blurWorkerBroken) return null;
-    if (this.blurWorker) return this.blurWorker;
-    if (typeof Worker === "undefined") {
-      this.blurWorkerBroken = true;
-      return null;
-    }
-    try {
-      const w = new Worker(new URL("../workers/blurfx.worker.ts", import.meta.url), {
-        type: "module",
-      });
-      w.onmessage = (e) => this.onBlurWorkerMessage(e);
-      w.onerror = () => {
-        // Permanent sync fallback; release any awaiting previews.
-        this.blurWorkerBroken = true;
-        try {
-          w.terminate();
-        } catch {
-          /* ignore */
-        }
-        this.blurWorker = null;
-        for (const r of this.blurPending.values()) r(false);
-        this.blurPending.clear();
-      };
-      this.blurWorker = w;
-      return w;
-    } catch {
-      this.blurWorkerBroken = true;
-      return null;
-    }
-  }
-
-  private onBlurWorkerMessage(
-    e: MessageEvent<{
-      session: number;
-      seq: number;
-      results: { id: string; w: number; h: number; data: ArrayBuffer }[];
-    }>,
-  ) {
-    const { session, seq, results } = e.data;
-    const resolve = this.blurPending.get(seq);
-    this.blurPending.delete(seq);
-    // Stale session (cancelled/committed/new one) or superseded seq → drop.
-    if (session !== this.blurSessionId || !this.blurFx || seq !== this.blurRenderSeq) {
-      resolve?.(false);
-      return;
-    }
-    for (const r of results) {
-      if (!this.blurFx.ids.includes(r.id)) continue;
-      const bytes = new Uint8ClampedArray(r.data);
-      let img: ImageData;
-      try {
-        img = new ImageData(bytes, r.w, r.h, { colorSpace: this.cs });
-      } catch {
-        img = new ImageData(bytes, r.w, r.h);
-      }
-      this.layer(r.id).ctx.putImageData(img, 0, 0);
-      this.bumpPixel(r.id);
-    }
-    this.emitChange();
-    resolve?.(true);
-  }
-
-  /** Send the session's original pixels (+ selection mask) to the worker once. */
-  private blurWorkerInit() {
-    const fx = this.blurFx;
-    const w = fx ? this.ensureBlurWorker() : null;
-    if (!fx || !w) return;
-    this.blurSessionId++;
-    const layers: { id: string; w: number; h: number; data: ArrayBuffer }[] = [];
-    const transfers: ArrayBuffer[] = [];
-    for (const [id, img] of fx.orig) {
-      const copy = img.data.slice(); // keep the engine's own snapshot intact
-      layers.push({ id, w: img.width, h: img.height, data: copy.buffer });
-      transfers.push(copy.buffer);
-    }
-    let mask: ArrayBuffer | null = null;
-    if (fx.mask) {
-      const mc = fx.mask.slice();
-      mask = mc.buffer;
-      transfers.push(mc.buffer);
-    }
-    w.postMessage({ type: "init", session: this.blurSessionId, cs: this.cs, mask, layers }, transfers);
-  }
-
-  private blurWorkerEnd() {
-    this.blurWorker?.postMessage({ type: "end", session: this.blurSessionId });
-    this.blurSessionId++; // any in-flight replies become stale
-  }
-
-  /**
-   * Off-thread preview: resolves true when this render reached the layers,
-   * false when it was superseded/cancelled. Falls back to the synchronous
-   * path (and resolves true) when the worker is unavailable.
-   */
-  previewBlurFxAsync(
-    kind: string,
-    amount: number,
-    angle: number,
-    anchorX = 0.5,
-    anchorY = 0.5,
-    extra?: { band: number; feather: number; threshold: number },
-  ): Promise<boolean> {
-    if (!this.blurFx) return Promise.resolve(false);
-    const w = this.ensureBlurWorker();
-    if (!w) {
-      this.previewBlurFx(kind, amount, angle, anchorX, anchorY, extra);
-      return Promise.resolve(true);
-    }
-    const seq = ++this.blurRenderSeq;
-    return new Promise((resolve) => {
-      this.blurPending.set(seq, resolve);
-      w.postMessage({
-        type: "render",
-        session: this.blurSessionId,
-        seq,
-        kind,
-        amount,
-        angle,
-        ax: anchorX,
-        ay: anchorY,
-        extra: extra ?? { band: 20, feather: 30, threshold: 40 },
-      });
-    });
-  }
-
-  /** Begin a blur-effect preview session over `ids` (clipped to `sel` if given). */
   beginBlurFx(
     ids: string[],
     sel: Rect[] | null,
     selAngle = 0,
     selPivot: { x: number; y: number } | null = null,
   ) {
-    this.endLive();
-    const orig = new Map<string, ImageData>();
-    for (const id of ids) orig.set(id, this.layer(id).ctx.getImageData(0, 0, this.w, this.h));
-    let mask: Uint8ClampedArray | null = null;
-    if (sel && sel.length) {
-      const m = this.selectionMask(sel, selAngle, selPivot);
-      const md = m.getContext("2d")!.getImageData(0, 0, this.w, this.h).data;
-      const sa = new Uint8ClampedArray(this.w * this.h);
-      for (let i = 0; i < sa.length; i++) sa[i] = md[i * 4 + 3];
-      mask = sa;
-    }
-    this.blurFx = { ids, orig, mask };
-    this.blurWorkerInit(); // ship the originals off-thread once per session
+    this.blurGallery.beginBlurFx(ids, sel, selAngle, selPivot);
   }
-
-  /**
-   * Re-render the preview from the originals. `anchorX/anchorY` (0–1 of the doc)
-   * is the centre for zoom/spin blur; ignored by the other kinds.
-   */
   previewBlurFx(
     kind: string,
     amount: number,
@@ -10477,270 +6555,210 @@ export class PaintEngine extends DocumentScoped {
     anchorY = 0.5,
     extra?: { band: number; feather: number; threshold: number },
   ) {
-    const fx = this.blurFx;
-    if (!fx) return;
-    const cx = anchorX * this.w;
-    const cy = anchorY * this.h;
-    for (const id of fx.ids) {
-      const o = fx.orig.get(id);
-      if (!o) continue;
-      const out = computeBlurFx(o, kind, amount, angle, fx.mask, cx, cy, this.cs, extra);
-      this.layer(id).ctx.putImageData(out, 0, 0);
-      this.bumpPixel(id); // direct pixel write — keep render/styled caches honest
-    }
-    this.emitChange();
+    this.blurGallery.previewBlurFx(kind, amount, angle, anchorX, anchorY, extra);
   }
-
-  /** Keep the previewed blur as one undoable step (undo/redo swap the snapshots). */
+  previewBlurFxAsync(
+    kind: string,
+    amount: number,
+    angle: number,
+    anchorX = 0.5,
+    anchorY = 0.5,
+    extra?: { band: number; feather: number; threshold: number },
+  ): Promise<boolean> {
+    return this.blurGallery.previewBlurFxAsync(kind, amount, angle, anchorX, anchorY, extra);
+  }
   commitBlurFx(label: string) {
-    const fx = this.blurFx;
-    if (!fx) return;
-    const { ids, orig } = fx;
-    const after = new Map<string, ImageData>();
-    for (const id of ids) after.set(id, this.layer(id).ctx.getImageData(0, 0, this.w, this.h));
-    this.blurFx = null;
-    this.blurWorkerEnd();
-    this.wandSrc = null;
-    this.pushStructural(
-      label,
-      () => {
-        for (const id of ids) {
-          const o = orig.get(id);
-          if (o) this.layer(id).ctx.putImageData(o, 0, 0);
-        }
-        this.wandSrc = null;
-        this.emitChange();
-      },
-      () => {
-        for (const id of ids) {
-          const a = after.get(id);
-          if (a) this.layer(id).ctx.putImageData(a, 0, 0);
-        }
-        this.wandSrc = null;
-        this.emitChange();
-      },
-    );
+    this.blurGallery.commitBlurFx(label);
   }
-
-  /** Discard the blur preview, restoring the original pixels. */
   cancelBlurFx() {
-    const fx = this.blurFx;
-    if (!fx) return;
-    for (const id of fx.ids) {
-      const o = fx.orig.get(id);
-      if (o) {
-        this.layer(id).ctx.putImageData(o, 0, 0);
-        this.bumpPixel(id);
-      }
-    }
-    this.blurFx = null;
-    this.blurWorkerEnd();
-    this.emitChange();
+    this.blurGallery.cancelBlurFx();
   }
 
-  /** A crisp, aliased disc tip (no anti-aliasing, no feather). */
-  private buildHardTip(
-    r: number,
-    cr: number,
-    cg: number,
-    cb: number,
-    flow: number,
-    /** Dual-tip coverage, size×size, multiplied into the dab's alpha. */
-    mask: Float32Array | null = null,
+  /** True while exportComposite runs: exports must never contain half-res
+   *  preview or stale-param products, so anything but an exact full-quality
+   *  cache hit computes synchronously at full resolution. */
+  private exporting = false;
+
+  // ---- smart filters ----
+  // A node's filter stack, its product cache and worker, the half-res preview
+  // and the live frames: engine/smart-filters.ts. These are its doors.
+  private readonly smartFilters = new EngineSmartFilters(this.cursor, {
+    mk: (w, h, readFreq) => this.mk(w, h, readFreq),
+    cs: () => this.cs,
+    nodeKey: (node) => this.nodeKey(node),
+    noteShared: (id) => this.noteShared(id),
+    clearRenderCaches: () => this.clearRenderCaches(),
+    emitChange: () => this.emitChange(),
+    maskDisplay: (id) => this.maskDisplay(id),
+    renderFill: (node) => this.renderFill(node),
+    leafDisplay: (id) => this.leafDisplay(id),
+    curTree: () => this.curTree,
+    liveBypass: () => this.liveBypass,
+    renderCacheOn: () => this.renderCacheOn,
+    exporting: () => this.exporting,
+    workersOn: () => this.workersOn,
+    painting: () => this.painting,
+    strokeLayer: () => this.strokeLayer,
+    strokeOnMask: () => this.strokeOnMask,
+    dirtyRect: () => this.dirtyRect(),
+    markDraftPainted: () => {
+      this.draftPainted = true;
+    },
+  });
+  /** The products and jobs every document shares; the counters the stats report. */
+  private get filteredCache(): EngineSmartFilters["filteredCache"] {
+    return this.smartFilters.filteredCache;
+  }
+  private get filterPending(): EngineSmartFilters["filterPending"] {
+    return this.smartFilters.filterPending;
+  }
+  private get filterWorkerResults(): number {
+    return this.smartFilters.filterWorkerResults;
+  }
+  private get liveRegionHits(): number {
+    return this.smartFilters.liveRegionHits;
+  }
+  private get liveRegionPx(): number {
+    return this.smartFilters.liveRegionPx;
+  }
+  private get liveDraftFrames(): number {
+    return this.smartFilters.liveDraftFrames;
+  }
+  /** The per-stroke product, dropped as a stroke ends. */
+  private get liveProduct(): EngineSmartFilters["liveProduct"] {
+    return this.smartFilters.liveProduct;
+  }
+  private set liveProduct(v: EngineSmartFilters["liveProduct"]) {
+    this.smartFilters.liveProduct = v;
+  }
+  setLiveRegionEnabled(on: boolean) {
+    this.smartFilters.setLiveRegionEnabled(on);
+  }
+  compareFilterProduct(id?: string): {
+    differing: number;
+    worst: number;
+    channels: [number, number, number, number];
+    total: number;
+    quality: "preview" | "full";
+    /** Checksum of the inline product, so a caller can prove a configuration
+     *  change actually reached the pixels rather than comparing two identical
+     *  renders and calling the agreement meaningful. */
+    digest: number;
+    sample: {
+      at: number;
+      cached: number[];
+      inline: number[];
+      preFilter: number[];
+      postFilter: number[];
+      opacity: number;
+      blendMode: string;
+    } | null;
+  } | null {
+    return this.smartFilters.compareFilterProduct(id);
+  }
+  draftScale(): number {
+    return this.smartFilters.draftScale();
+  }
+  private filteredProduct(node: LayerNode, src: HTMLCanvasElement): HTMLCanvasElement {
+    return this.smartFilters.filteredProduct(node, src);
+  }
+  private renderFiltered(
+    src: HTMLCanvasElement,
+    filters: SmartFilter[],
+    fmAlpha: HTMLCanvasElement | null = null,
   ): HTMLCanvasElement {
-    const size = Math.max(1, Math.ceil(r * 2));
-    const { c, ctx } = makeCanvas(size, size);
-    const img = ctx.createImageData(size, size);
-    const data = img.data;
-    const center = size / 2;
-    const rr = r * r;
-    const a = Math.round(flow * 255);
-    // An angled/squashed tip is the same disc measured in elliptical units, so
-    // only the membership test changes — the long axis still spans r, which is
-    // what keeps a stroke's width the same when roundness is turned down.
-    const shape = this.tipShape;
-    for (let py = 0; py < size; py++) {
-      for (let px = 0; px < size; px++) {
-        const dx = px + 0.5 - center;
-        const dy = py + 0.5 - center;
-        const inside = shape
-          ? tipRadius(dx, dy, r, shape.angle, shape.roundness) <= 1
-          : dx * dx + dy * dy <= rr;
-        if (inside) {
-          const m = mask ? mask[py * size + px] : 1;
-          if (m <= 0) continue;
-          const i = (py * size + px) * 4;
-          data[i] = cr;
-          data[i + 1] = cg;
-          data[i + 2] = cb;
-          data[i + 3] = Math.round(a * m);
-        }
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-    return c;
-  }
-
-  /**
-   * A soft disc tip with an analytic radial falloff (solid core out to the
-   * hardness radius, then a linear fade to the edge). Computed per-pixel so it
-   * carries NO gradient dithering — overlapping stamps then accumulate smoothly
-   * instead of compounding dither noise into grain.
-   */
-  private buildSoftTip(
-    r: number,
-    cr: number,
-    cg: number,
-    cb: number,
-    flow: number,
-    hardness: number,
-    /** Dual-tip coverage, size×size, multiplied into the dab's alpha. */
-    mask: Float32Array | null = null,
-  ): HTMLCanvasElement {
-    const size = Math.max(2, Math.ceil(r * 2) + 2); // +1px each side for the rim
-    const { c, ctx } = makeCanvas(size, size);
-    const img = ctx.createImageData(size, size);
-    const data = img.data;
-    const center = size / 2;
-    const inner = Math.max(0, Math.min(0.999, hardness / 100)) * r; // solid core radius
-    const span = Math.max(0.0001, r - inner);
-    const shape = this.tipShape;
-    for (let py = 0; py < size; py++) {
-      for (let px = 0; px < size; px++) {
-        const dx = px + 0.5 - center;
-        const dy = py + 0.5 - center;
-        // In elliptical units the rim sits at 1, so scaling back by r reuses the
-        // existing core/rim profile unchanged — the falloff squashes with the
-        // tip instead of needing an elliptical version of its own.
-        const dist = shape ? tipRadius(dx, dy, r, shape.angle, shape.roundness) * r : Math.hypot(dx, dy);
-        let a: number;
-        if (dist <= inner) a = flow;
-        else if (dist >= r) a = 0;
-        else a = flow * (1 - (dist - inner) / span);
-        if (mask) a *= mask[py * size + px];
-        if (a <= 0) continue;
-        const i = (py * size + px) * 4;
-        data[i] = cr;
-        data[i + 1] = cg;
-        data[i + 2] = cb;
-        data[i + 3] = Math.round(a * 255);
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-    return c;
-  }
-
-  private stamp(x: number, y: number, pressure = 1) {
-    if (this.cloneActive) {
-      this.cloneStamp(x, y);
-      return;
-    }
-    // Pick the tip baked for this pressure; with dynamics off every dab lands on
-    // the top bucket, i.e. the single tip the stroke started with.
-    const tip =
-      this.dynActive() || this.tipDual
-        ? this.tipFor(pressureBucket(pressure), this.dualVariant)
-        : this.tip;
-    if (!tip) return;
-    const ctx = this.stroke!.ctx;
-    ctx.globalAlpha = 1;
-    ctx.globalCompositeOperation = "source-over";
-    if (this.tipTexture) {
-      this.stampTextured(tip, x, y);
-      return;
-    }
-    if (this.tipHard) {
-      // Crisp hard brush: stamp the aliased tip on the integer pixel grid.
-      ctx.imageSmoothingEnabled = false;
-      const ix = Math.round(x - tip.width / 2);
-      const iy = Math.round(y - tip.height / 2);
-      ctx.drawImage(tip, ix, iy);
-      this.expandDirty(ix, iy, ix + tip.width, iy + tip.height);
-    } else {
-      // Soft brush: stamp the baked tip at sub-pixel position (smoothed).
-      ctx.imageSmoothingEnabled = true;
-      const dx = x - tip.width / 2;
-      const dy = y - tip.height / 2;
-      ctx.drawImage(tip, dx, dy);
-      this.expandDirty(Math.floor(dx), Math.floor(dy), Math.ceil(dx + tip.width), Math.ceil(dy + tip.height));
-    }
-  }
-
-  /**
-   * Stamp a tip through the surface texture.
-   *
-   * The texture is evaluated at DOCUMENT coordinates for every pixel of the dab
-   * rather than baked into the tip or tiled into a pattern. Baking it into the
-   * tip would move the grain with the brush — the same swatch stamped over and
-   * over, which reads as a rubber stamp. Tiling a fixed-size pattern would work
-   * but seams wherever the (non-periodic) noise wraps. Evaluating per dab is
-   * exact, and the cost is only paid when the option is switched on.
-   *
-   * Two scratch surfaces: the dab itself, and an alpha-only patch of texture
-   * that is composited into it with `destination-in`. Building the patch by hand
-   * avoids a `getImageData` read-back per dab.
-   */
-  private stampTextured(tip: HTMLCanvasElement, x: number, y: number) {
-    const t = this.tipTexture!;
-    const w = tip.width;
-    const h = tip.height;
-    const left = this.tipHard ? Math.round(x - w / 2) : Math.floor(x - w / 2);
-    const top = this.tipHard ? Math.round(y - h / 2) : Math.floor(y - h / 2);
-    if (!this.texDab || this.texDab.c.width < w || this.texDab.c.height < h) {
-      this.texDab = this.mk(Math.max(w, 8), Math.max(h, 8), true);
-      this.texPatch = this.mk(Math.max(w, 8), Math.max(h, 8), true);
-    }
-    const dab = this.texDab!;
-    const patch = this.texPatch!;
-    const img = patch.ctx.createImageData(w, h);
-    const d = img.data;
-    for (let py = 0; py < h; py++) {
-      const gy = top + py;
-      for (let px = 0; px < w; px++) {
-        // Alpha-only: RGB is irrelevant under destination-in.
-        d[(py * w + px) * 4 + 3] = Math.round(255 * textureAlpha(t, left + px, gy));
-      }
-    }
-    patch.ctx.globalCompositeOperation = "copy";
-    patch.ctx.putImageData(img, 0, 0);
-    dab.ctx.globalCompositeOperation = "copy";
-    dab.ctx.clearRect(0, 0, dab.c.width, dab.c.height);
-    dab.ctx.globalCompositeOperation = "source-over";
-    dab.ctx.imageSmoothingEnabled = false;
-    dab.ctx.drawImage(tip, 0, 0);
-    dab.ctx.globalCompositeOperation = "destination-in";
-    dab.ctx.drawImage(patch.c, 0, 0, w, h, 0, 0, w, h);
-    dab.ctx.globalCompositeOperation = "source-over";
-
-    const ctx = this.stroke!.ctx;
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(dab.c, 0, 0, w, h, left, top, w, h);
-    this.expandDirty(left, top, left + w, top + h);
-  }
-
-  private expandDirty(x0: number, y0: number, x1: number, y1: number) {
-    if (!this.dirty) this.dirty = { x0, y0, x1, y1 };
-    else {
-      this.dirty.x0 = Math.min(this.dirty.x0, x0);
-      this.dirty.y0 = Math.min(this.dirty.y0, y0);
-      this.dirty.x1 = Math.max(this.dirty.x1, x1);
-      this.dirty.y1 = Math.max(this.dirty.y1, y1);
-    }
-  }
-
-  private dirtyRect() {
-    if (!this.dirty) return null;
-    const x = Math.max(0, Math.floor(this.dirty.x0));
-    const y = Math.max(0, Math.floor(this.dirty.y0));
-    const x1 = Math.min(this.w, Math.ceil(this.dirty.x1));
-    const y1 = Math.min(this.h, Math.ceil(this.dirty.y1));
-    const w = x1 - x;
-    const h = y1 - y;
-    if (w <= 0 || h <= 0) return null;
-    return { x, y, w, h };
+    return this.smartFilters.renderFiltered(src, filters, fmAlpha);
   }
 
   // ---- history ----
+  // Each document's undo tree, the caps that bound it, what the History panel
+  // is told, the History brush's source and the snapshots: engine/history.ts.
+  // These are its doors; the pixel side of a step stays here (putPatch below,
+  // and pushEntry, the pixel-commit chokepoint), and so do the live sessions.
+  private readonly history = new EngineHistory(this.cursor, {
+    endLive: () => this.endLive(),
+    putPatch: (e, img) => this.putPatch(e, img),
+    emitChange: () => this.emitChange(),
+    onHistory: (s) => this.onHistory(s),
+    dropWandSource: () => {
+      this.wandSrc = null;
+    },
+    sessionOpen: () => !!this.fillLayer || !!this.pathLayer,
+    cropSnapshot: (ids) => this.cropSnapshot(ids),
+    cropRestore: (snap) => this.cropRestore(snap),
+    mk: (w, h, readFreq) => this.mk(w, h, readFreq),
+    layer: (id) => this.layer(id),
+  });
+  private trimHistory(): void {
+    this.history.trimHistory();
+  }
+  private linkEntry(e: Omit<Entry, "parent">): void {
+    this.history.linkEntry(e);
+  }
+  private dropNodes(list: number[]): void {
+    this.history.dropNodes(list);
+  }
+  private emitHistory(stale = true) {
+    this.history.emitHistory(stale);
+  }
+  /** The last summary told the History panel a fill or a path was open. */
+  private get openTold(): boolean {
+    return this.history.openTold;
+  }
+  private snapshotLayer(snapId: string, layerId: string): Layer {
+    return this.history.snapshotLayer(snapId, layerId);
+  }
+  private reconstructLayerAt(layerId: string, index: number): Layer {
+    return this.history.reconstructLayerAt(layerId, index);
+  }
+  setHistoryLimit(n: number): void {
+    this.history.setHistoryLimit(n);
+  }
+  setHistoryBudgetMB(mb: number): void {
+    this.history.setHistoryBudgetMB(mb);
+  }
+  historyBytes(): number {
+    return this.history.historyBytes();
+  }
+  historyOf(docId: string): { labels: string[]; index: number } | null {
+    return this.history.historyOf(docId);
+  }
+  pushStructural(label: string, undo: () => void, redo: () => void) {
+    this.history.pushStructural(label, undo, redo);
+  }
+  jumpTo(target: number) {
+    this.history.jumpTo(target);
+  }
+  undo() {
+    this.history.undo();
+  }
+  redo() {
+    this.history.redo();
+  }
+  setNonLinearHistory(on: boolean) {
+    this.history.setNonLinearHistory(on);
+  }
+  syncHistory() {
+    this.history.syncHistory();
+  }
+  setHistorySourceIndex(index: number) {
+    this.history.setHistorySourceIndex(index);
+  }
+  createSnapshot(label: string, ownLayerIds: string[]): string {
+    return this.history.createSnapshot(label, ownLayerIds);
+  }
+  getSnapshot(id: string): DocSnapshot | null {
+    return this.history.getSnapshot(id);
+  }
+  deleteSnapshot(id: string): void {
+    this.history.deleteSnapshot(id);
+  }
+  restoreSnapshot(id: string): boolean {
+    return this.history.restoreSnapshot(id);
+  }
+  setHistorySourceSnapshot(id: string | null): void {
+    this.history.setHistorySourceSnapshot(id);
+  }
   /** Put a pixel patch onto the entry's surface (layer or mask), re-deriving the
    *  mask alpha cache for the patched rect when it targets a mask. */
   private putPatch(e: Entry, img: ImageData) {
@@ -10755,12 +6773,6 @@ export class PaintEngine extends DocumentScoped {
       this.bumpPixel(e.layerId, e.rect); // invalidate + bound the repaint region
     }
   }
-  private apply(e: Entry) {
-    if (e.after) this.putPatch(e, e.after);
-  }
-  private revert(e: Entry) {
-    if (e.before) this.putPatch(e, e.before);
-  }
   /** Finalize every live session — adjustment, shape, gradient, path, fill —
    *  so each is the history step it stands for. */
   private endLive() {
@@ -10769,163 +6781,5 @@ export class PaintEngine extends DocumentScoped {
     this.endGradient();
     this.endPath();
     this.endFill();
-  }
-  jumpTo(target: number) {
-    this.endLive(); // finalize a live session before navigating history
-    // `target` is an ITEMS index (0 = the original document) — node + 1.
-    const node = Math.max(ROOT, Math.min(this.entries.length - 1, target - 1));
-    // Walk to the states' common ancestor and back down the other side. For a
-    // linear history that is exactly the old two loops; for a branched one it
-    // is what lets you jump between branches without replaying the whole tree.
-    const { revert, apply } = transition(this.parents(), this.cur, node);
-    for (const k of revert) {
-      const e = this.entries[k];
-      this.revert(e);
-      e.side?.undo();
-    }
-    for (const k of apply) {
-      const e = this.entries[k];
-      e.side?.redo();
-      this.apply(e);
-    }
-    this.cur = node;
-    this.emitHistory();
-    this.emitChange();
-  }
-  /* Both end the live sessions BEFORE they work out where to go. A fill or a
-     path becomes its step only as it ends; asked first, the step before it
-     was taken as the one to undo, and one Undo took both. */
-  undo() {
-    this.endLive();
-    if (this.cur >= 0) this.jumpTo(this.entries[this.cur].parent + 1);
-  }
-  redo() {
-    this.endLive();
-    // With branches, "forward" is the most recently created continuation of
-    // where you are — the branch you were last working on.
-    const next = newestChild(this.parents(), this.cur);
-    if (next >= 0) this.jumpTo(next + 1);
-  }
-  /** Photoshop's History Options ▸ Allow Non-Linear History. Turning it OFF
-   *  prunes the branches you are not on, since they can no longer be reached. */
-  setNonLinearHistory(on: boolean) {
-    if (this.nonLinear === on) return;
-    this.nonLinear = on;
-    if (!on) {
-      const prune = () => {
-        const stale = offPath(this.parents(), this.cur);
-        if (stale.length) this.dropNodes(stale);
-      };
-      for (const d of this.everyDoc()) this.withDocument(d, prune);
-    }
-    this.emitHistory();
-  }
-  syncHistory() {
-    this.emitHistory();
-  }
-  private emitHistory(stale = true) {
-    // Any history change means layer pixels changed → wand source is stale.
-    // (Not as a fill opens: it re-runs from the wand's source, the ORIGINAL.)
-    if (stale) this.wandSrc = null;
-    this.historySourceIndex = Math.max(0, Math.min(this.entries.length, this.historySourceIndex));
-    const parents = this.parents();
-    const live = new Set(ancestry(parents, this.cur));
-    this.openTold = !!this.fillLayer || !!this.pathLayer;
-    this.onHistory({
-      items: [
-        { label: "New", onPath: true }, // the original state is on every path
-        ...this.entries.map((e, i) => ({ label: e.label, onPath: live.has(i) })),
-      ],
-      index: this.pos,
-      nonLinear: this.nonLinear,
-      bytes: this.historyBytes(),
-      sourceIndex: this.historySourceIndex,
-      snapshots: this.snapshots.map((s) => ({ id: s.id, label: s.label })),
-      sourceSnapshotId: this.historySourceSnap,
-      open: this.openTold,
-    });
-  }
-
-  /** Point the History brush at a history state (0 = the original document). */
-  setHistorySourceIndex(index: number) {
-    this.historySourceIndex = Math.max(0, Math.min(this.entries.length, Math.round(index)));
-    this.historySourceSnap = null; // a step and a snapshot are mutually exclusive
-    this.emitHistory();
-  }
-
-  // ---- Snapshots (TODO §10) ------------------------------------------------
-  /** Pin the current pixels of `ownLayerIds` (+ their masks + the doc size) as a
-   *  named snapshot. Returns its id. Costs one full copy of those layers. */
-  createSnapshot(label: string, ownLayerIds: string[]): string {
-    const base = this.cropSnapshot(ownLayerIds); // same capture the crop path uses
-    const id = `snap-${Date.now().toString(36)}-${(this.snapSeq += 1)}`;
-    this.snapshots.push({ ...base, id, label: label.trim() || `Snapshot ${this.snapshots.length + 1}` });
-    this.emitHistory();
-    return id;
-  }
-
-  getSnapshot(id: string): DocSnapshot | null {
-    return this.snapshots.find((s) => s.id === id) ?? null;
-  }
-
-  deleteSnapshot(id: string): void {
-    this.snapshots = this.snapshots.filter((s) => s.id !== id);
-    if (this.historySourceSnap === id) this.historySourceSnap = null;
-    this.emitHistory();
-  }
-
-  /** Restore a snapshot's PIXELS + document size (the caller restores the layer
-   *  tree and journals the step — mirrors how crop undo/redo is wired). */
-  restoreSnapshot(id: string): boolean {
-    const snap = this.getSnapshot(id);
-    if (!snap) return false;
-    this.cropRestore(snap);
-    return true;
-  }
-
-  /** Point the History brush at a snapshot (null = back to a history step). */
-  setHistorySourceSnapshot(id: string | null): void {
-    this.historySourceSnap = id && this.getSnapshot(id) ? id : null;
-    this.emitHistory();
-  }
-
-  /** Reconstruct one layer's pixels AT a history state, by replaying only that
-   *  layer's pixel patches between the current position and `index` onto a copy
-   *  of its live canvas — non-destructive and O(patches for this layer). Mask-
-   *  surface and purely-structural entries are skipped (documented: sourcing
-   *  across a canvas-size change or a layer's own creation is approximate). */
-  /** A doc-sized copy of `layerId`'s pixels as captured in snapshot `snapId`.
-   *  A layer missing from the snapshot (created later) yields a TRANSPARENT
-   *  source — which is what it looked like then, so the brush erases it back.
-   *  A snapshot from a differently-sized document is drawn top-left aligned. */
-  private snapshotLayer(snapId: string, layerId: string): Layer {
-    const out = this.mk(this.w, this.h, true);
-    const snap = this.getSnapshot(snapId);
-    const hit = snap?.layers.find((l) => l.id === layerId);
-    if (hit) out.ctx.drawImage(hit.c, 0, 0);
-    return out;
-  }
-
-  private reconstructLayerAt(layerId: string, index: number): Layer {
-    const snap = this.mk(this.w, this.h, true);
-    snap.ctx.drawImage(this.layer(layerId).c, 0, 0);
-    // Same walk `jumpTo` uses, but replaying only this layer's patches onto a
-    // scratch copy — so a source state on ANOTHER branch reconstructs correctly
-    // instead of replaying an index range that no longer describes a path.
-    const node = Math.max(ROOT, Math.min(this.entries.length - 1, index - 1));
-    const { revert, apply } = transition(this.parents(), this.cur, node);
-    for (const k of revert) {
-      const e = this.entries[k];
-      if (e.layerId === layerId && e.surface !== "mask" && e.before && e.rect) {
-        snap.ctx.putImageData(e.before, e.rect.x, e.rect.y);
-      }
-    }
-    for (const k of apply) {
-      const e = this.entries[k];
-      if (e.layerId === layerId && e.surface !== "mask" && e.after && e.rect) {
-        snap.ctx.putImageData(e.after, e.rect.x, e.rect.y);
-      }
-    }
-    return snap;
   }
 }

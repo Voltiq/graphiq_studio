@@ -114,18 +114,42 @@ export class DocumentState {
   historySourceSnap: string | null = null;
 }
 
+/** Which open document is in front, and every open one. */
+export class DocCursor {
+  doc = new DocumentState();
+  /** Every open document's state, by editor document id. */
+  readonly docs = new Map<string, DocumentState>();
+  /** The id `doc` is filed under — null until the editor names one, and again
+   *  after the document in front is closed. */
+  docId: string | null = null;
+}
+
 /**
  * The document in front, as fields. PaintEngine extends this, so its code keeps
  * reading `this.layers` or `this.w` — and each of those now reads the document
  * the engine is working on. Switching documents is one assignment to `doc`.
  */
 export abstract class DocumentScoped {
-  protected doc = new DocumentState();
-  /** Every open document's state, by editor document id. */
-  protected readonly docs = new Map<string, DocumentState>();
-  /** The id `doc` is filed under — null until the editor names one, and again
-   *  after the document in front is closed. */
-  protected docId: string | null = null;
+  /** The engine and its parts (TODO 1.6) share one cursor: whatever one of
+   *  them brings to the front — `setDocument`, `withDocument` — every one of
+   *  them then reads. */
+  constructor(protected readonly cursor: DocCursor = new DocCursor()) {}
+
+  protected get doc(): DocumentState {
+    return this.cursor.doc;
+  }
+  protected set doc(d: DocumentState) {
+    this.cursor.doc = d;
+  }
+  protected get docs(): Map<string, DocumentState> {
+    return this.cursor.docs;
+  }
+  protected get docId(): string | null {
+    return this.cursor.docId;
+  }
+  protected set docId(v: string | null) {
+    this.cursor.docId = v;
+  }
 
   /** The state of open document `docId`, if the engine holds it. */
   protected docFor(docId: string): DocumentState | undefined {
